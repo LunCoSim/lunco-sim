@@ -36,15 +36,9 @@ fn test_shift_click_selects_entity() {
 #[test]
 fn test_selection_blocks_possession() {
     let drag_mode = DragModeActive { active: true };
-    let mut possession_triggered = false;
-
-    // Simulate avatar_raycast_possession logic:
-    if drag_mode.active {
-        // BLOCKED - early return, no POSSESS command sent
-        possession_triggered = false;
-    } else {
-        possession_triggered = true;
-    }
+    // Simulate avatar_raycast_possession logic: active drag mode returns before
+    // issuing a possession command.
+    let possession_triggered = !drag_mode.active;
 
     assert!(
         !possession_triggered,
@@ -76,12 +70,7 @@ fn test_deselection_allows_possession() {
     );
 
     // Verify possession is now allowed
-    let mut possession_triggered = false;
-    if drag_mode.active {
-        possession_triggered = false; // blocked
-    } else {
-        possession_triggered = true; // allowed
-    }
+    let possession_triggered = !drag_mode.active;
     assert!(
         possession_triggered,
         "Possession MUST be allowed after deselection"

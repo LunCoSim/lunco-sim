@@ -477,10 +477,9 @@ impl Default for TerrainLayerParserRegistry {
             "rock".to_string(),
             rocks::parse_rock_instance as TerrainLayerParser,
         );
-        parsers.insert(
-            "shader".to_string(),
-            shader::parse_shader_layer as TerrainLayerParser,
-        );
+        parsers.insert("shader".to_string(), |attrs| {
+            Some(shader::parse_shader_layer(attrs))
+        });
         Self { parsers }
     }
 }

@@ -9,8 +9,8 @@ use lunco_experiments::solver::{SolverId, SolverSpec};
 
 /// Live Modelica stepper selected by the authoritative solver capability.
 pub enum LiveStepper {
-    Adaptive(rumoca_solver_rk45::SimulationSession),
-    Fixed(FixedStepSession),
+    Adaptive(Box<rumoca_solver_rk45::SimulationSession>),
+    Fixed(Box<FixedStepSession>),
 }
 
 fn adaptive_error(error: rumoca_solver_rk45::SimError) -> SimulationDiagnosticError {
@@ -105,10 +105,11 @@ pub fn live_from_solve_model(
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
     if spec.id == SolverId::from("fixedrk4") {
-        FixedStepSession::from_solve_model(solve_model, options, None).map(LiveStepper::Fixed)
+        FixedStepSession::from_solve_model(solve_model, options, None)
+            .map(|session| LiveStepper::Fixed(Box::new(session)))
     } else {
         rumoca_solver_rk45::SimulationSession::new(solve_model, options)
-            .map(LiveStepper::Adaptive)
+            .map(|session| LiveStepper::Adaptive(Box::new(session)))
             .map_err(adaptive_error)
     }
 }

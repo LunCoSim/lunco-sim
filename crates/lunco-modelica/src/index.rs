@@ -798,8 +798,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // Description from the class header (`model X "desc"`).
     let description = class_def
         .description
-        .iter()
-        .next()
+        .first()
         .map(|t| t.text.as_ref().trim_matches('"').to_string())
         .unwrap_or_default();
 

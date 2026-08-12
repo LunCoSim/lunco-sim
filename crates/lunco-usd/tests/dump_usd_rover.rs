@@ -163,7 +163,7 @@ fn test_dump_usd_rover_state() {
     let mut wheel_details: Vec<(String, Vec3, Quat, Option<Dir3>)> = Vec::new();
     if let Some(children) = app.world().get::<Children>(rover) {
         for child in children.iter() {
-            if let Some(wheel) = app.world().get::<WheelRaycast>(child) {
+            if app.world().get::<WheelRaycast>(child).is_some() {
                 wheel_count += 1;
                 let name = app
                     .world()

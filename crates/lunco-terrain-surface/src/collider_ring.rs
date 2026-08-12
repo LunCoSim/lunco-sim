@@ -1178,8 +1178,8 @@ pub fn hold_physics_until_dem_ready(
                 // fully-Dynamic (physical) wheel free-fell through the not-yet-live
                 // collider — the tunnel. Require every footprint tile to be truly
                 // collidable.
-                for coord in required_nodes.iter().copied() {
-                    let live = tiles.map.get(&coord).is_some_and(|&e| {
+                for coord in required_nodes.iter() {
+                    let live = tiles.map.get(coord).is_some_and(|&e| {
                         q_live
                             .get(e)
                             .is_ok_and(|aabb| aabb.min.x.is_finite() && aabb.max.x.is_finite())

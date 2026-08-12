@@ -52,7 +52,7 @@ fn link(
     trigger: On<LinkStart>,
     query: Query<(Entity, &WtUrlClientIo), (Without<Linking>, Without<Linked>)>,
     mut commands: Commands,
-) -> Result {
+) {
     if let Ok((entity, io)) = query.get(trigger.entity) {
         let url = io.url.clone();
         let digest = io.certificate_digest.clone();
@@ -75,7 +75,6 @@ fn link(
             Ok(())
         });
     }
-    Ok(())
 }
 
 /// Build the `ClientConfig` for the given URL.

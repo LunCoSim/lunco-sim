@@ -549,7 +549,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 .values()
                 .filter(|c| !matches!(c.kind, crate::index::ClassKind::Package))
                 .filter(|c| {
-                    class_filter.as_ref().map_or(true, |f| {
+                    class_filter.as_ref().is_none_or(|f| {
                         c.name == *f || c.name.rsplit('.').next() == Some(f.as_str())
                     })
                 })

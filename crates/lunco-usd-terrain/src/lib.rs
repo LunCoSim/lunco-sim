@@ -318,7 +318,9 @@ fn sync_obstacle_spec_from_usd(
                 spec.rocks.enabled = a.get_bool("enabled") != Some(false) && density > 0.0;
                 spec.rocks.density = density;
                 let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
-                let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
+                let size_max = a
+                    .get_f32("sizeMax")
+                    .unwrap_or_else(|| (mode * 4.0).max(2.5));
                 spec.rocks.size = SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
                 spec.rocks.dynamic_fraction = a.get_f32("dynamicFrac").unwrap_or(0.0);
             }
@@ -1508,7 +1510,7 @@ fn bridge_dem_prim_read(
     // (`size`). The namespace split is now by prim: a LAYER prim carries
     // `lunco:layer:*`, the terrain SURFACE carries `lunco:terrain:*`.
     use lunco_terrain_surface::LayerAttrSource;
-    let dem = dem_layer_sdf.clone();
+    let dem = dem_layer_sdf;
     let dem_attrs = dem.as_ref().map(|d| UsdLayerAttrs {
         reader,
         sdf: d.clone(),
@@ -1551,7 +1553,7 @@ fn bridge_dem_prim_read(
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
     let half_window = match attr_f32("windowM") {
-        Some(w) if w == 0.0 => f64::INFINITY,
+        Some(0.0) => f64::INFINITY,
         Some(w) if w > 0.0 => (w * 0.5) as f64,
         _ => 2048.0,
     };

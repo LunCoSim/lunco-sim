@@ -119,13 +119,12 @@ fn beam_len(
     if dist <= near_m {
         return dist as f32;
     }
-    let camera_term = match camera_distances {
+    match camera_distances {
         Some((source, peer)) if cam_frac > 0.0 => {
             (source.min(peer) * cam_frac as f64).max(1.0) as f32
         }
-        _ => return stub,
-    };
-    camera_term
+        _ => stub,
+    }
 }
 
 /// World distances from the active camera to the source and peer, or `None` when
@@ -329,7 +328,7 @@ fn reconcile_link_beams(
         let origin = q_parents
             .get(parent.parent())
             .map(ChildOf::parent)
-            .unwrap_or(parent.parent());
+            .unwrap_or_else(|_| parent.parent());
         let get = |k: &str, d: f64| params.and_then(|p| p.0.get(k).copied()).unwrap_or(d);
         let nb = nodes.entry(node).or_default();
         nb.origin = Some(origin);

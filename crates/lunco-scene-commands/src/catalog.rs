@@ -51,24 +51,9 @@ pub struct BalloonModelMarker;
 pub struct PythonBalloonMarker;
 
 /// Registry of all spawnable object types.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct SpawnCatalog {
     pub entries: Vec<SpawnableEntry>,
-}
-
-impl Default for SpawnCatalog {
-    fn default() -> Self {
-        // No hardcoded entries. Everything spawnable is a `*.usda` file
-        // (rovers, components, props, Twin structures) discovered at runtime by
-        // `populate_dynamic_spawn_catalog` from the project's USD — drop a file
-        // in `assets/` or an open Twin and it's spawnable with no rebuild.
-        // Per-asset data (category from its folder, `spawn_lift` from a
-        // `float lunco:spawnLift` attribute) is read from the USD, so no Rust
-        // code is aware of any specific content type.
-        Self {
-            entries: Vec::new(),
-        }
-    }
 }
 
 impl SpawnCatalog {
@@ -238,7 +223,7 @@ pub fn spawn_usd_entry(
     // own top-level prims (see [`SpawnAnchor`]). `world_pos` is grid-absolute at
     // cell 0 and the scene root sits at cell 0 / identity, so it is already the
     // correct scene-root-relative local transform.
-    ent.insert(ChildOf(anchor.entity()));
+    ent.try_insert(ChildOf(anchor.entity()));
 
     SpawnResult {
         root_entity: ent.id(),

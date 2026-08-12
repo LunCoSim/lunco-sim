@@ -573,7 +573,7 @@ impl Scene {
         let mut best: Option<(usize, f32)> = None;
         for i in 0..pts.len() - 1 {
             let d = perpendicular_dist_sq(world_pos, pts[i], pts[i + 1]);
-            if best.as_ref().map_or(true, |(_, bd)| d < *bd) {
+            if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
                 best = Some((i, d));
             }
         }

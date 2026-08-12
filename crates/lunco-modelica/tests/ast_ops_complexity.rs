@@ -512,13 +512,13 @@ fn remove_connection_deletes_single_connect() {
     let out = host.document().source();
     // The removed connect is gone, the other survives, and it still parses.
     // Compare on content (not layout — `to_modelica` re-emits canonical spacing).
-    assert!(reparse_ok(&out), "reparse: {out}");
+    assert!(reparse_ok(out), "reparse: {out}");
     assert!(
-        has_nospace(&out, "connect(a.n,b.p)"),
+        has_nospace(out, "connect(a.n,b.p)"),
         "kept connection: {out}"
     );
     assert!(
-        !has_nospace(&out, "connect(a.p,b.n)"),
+        !has_nospace(out, "connect(a.p,b.n)"),
         "removed connection: {out}"
     );
 }
@@ -593,11 +593,11 @@ fn set_placement_replaces_existing_placement() {
     .unwrap();
     let out = host.document().source();
     assert!(
-        has_nospace(&out, "{{40,-30},{60,-10}}"),
+        has_nospace(out, "{{40,-30},{60,-10}}"),
         "new placement extent: {}",
         out
     );
-    assert!(reparse_ok(&out));
+    assert!(reparse_ok(out));
 }
 
 #[test]
@@ -654,8 +654,8 @@ fn set_parameter_inserts_when_list_missing() {
     })
     .unwrap();
     let out = host.document().source();
-    assert!(has_nospace(&out, "R1(R=100)"), "list created: {}", out);
-    assert!(reparse_ok(&out));
+    assert!(has_nospace(out, "R1(R=100)"), "list created: {}", out);
+    assert!(reparse_ok(out));
 }
 
 #[test]
@@ -669,9 +669,9 @@ fn set_parameter_appends_when_list_present_but_param_missing() {
     })
     .unwrap();
     let out = host.document().source();
-    assert!(has_nospace(&out, "R=100"), "original param kept: {}", out);
-    assert!(has_nospace(&out, "T=293"), "new param appended: {}", out);
-    assert!(reparse_ok(&out));
+    assert!(has_nospace(out, "R=100"), "original param kept: {}", out);
+    assert!(has_nospace(out, "T=293"), "new param appended: {}", out);
+    assert!(reparse_ok(out));
 }
 
 #[test]

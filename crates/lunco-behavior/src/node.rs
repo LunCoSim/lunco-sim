@@ -594,6 +594,9 @@ mod tests {
         left: u32,
         end: Status,
     }
+    // This test factory deliberately returns the trait-object bundle consumed by
+    // the composite nodes, rather than exposing the private leaf type.
+    #[allow(clippy::new_ret_no_self)]
     impl Countdown {
         fn new(delay: u32, end: Status) -> BoxNode<()> {
             Box::new(Self {

@@ -344,8 +344,7 @@ pub(super) fn empty_overlay_class_info(
     };
     let description: Option<String> = class
         .description
-        .iter()
-        .next()
+        .first()
         .map(|t| t.text.as_ref().trim_matches('"').to_string())
         .filter(|s| !s.is_empty());
 

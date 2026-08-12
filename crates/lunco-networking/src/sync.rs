@@ -179,13 +179,13 @@ pub fn decode_quat(packed: u32) -> Quat {
     let mut comps = [0.0f32; 4];
     let mut shift = 20i32;
     let mut sum_sq = 0.0f32;
-    for i in 0..4 {
+    for (i, comp) in comps.iter_mut().enumerate() {
         if i == m {
             continue;
         }
         let q10 = (packed >> shift) & 0x3FF;
         let c = (q10 as f32 / 1023.0 * 2.0 - 1.0) * INV_SQRT2;
-        comps[i] = c;
+        *comp = c;
         sum_sq += c * c;
         shift -= 10;
     }
@@ -516,7 +516,7 @@ pub struct RequestManifestRebuild(pub bool);
 /// persist across boots (you should never boot already teaching/following, with
 /// a stale target, or with a sticky free-movement choice). Every field is
 /// `#[serde(skip)]`, so a saved config always reloads as `Default`.
-#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct TutorialSettings {
     /// Whether the local user is running as the tutor (streaming state).
     #[serde(skip)]
@@ -540,24 +540,6 @@ pub struct TutorialSettings {
     /// selection and is honored regardless of this flag. Session-transient (`skip`).
     #[serde(skip)]
     pub follow_opt_in: bool,
-}
-
-impl Default for TutorialSettings {
-    fn default() -> Self {
-        Self {
-            teach_mode: false,
-            follow_mode: false,
-            target_client: None,
-            observe_mode: false,
-            // Default to LOCKED follow: when a tutor activates teach mode,
-            // targeted clients auto-enter follow mode (`follow_mode =
-            // !allow_free_movement`). The tutor can opt into free movement.
-            allow_free_movement: false,
-            // Opt-out by default: a broadcast tutor must not seize a peer that
-            // hasn't consented. See `follow_opt_in`.
-            follow_opt_in: false,
-        }
-    }
 }
 
 impl SettingsSection for TutorialSettings {
@@ -2577,7 +2559,7 @@ fn perspective_inputs_blocked(
         return false;
     }
     let is_targeted = tutor_status.target_client.is_none()
-        || local.map_or(false, |loc| tutor_status.target_client == Some(loc.0 .0));
+        || local.is_some_and(|loc| tutor_status.target_client == Some(loc.0 .0));
     if !is_targeted {
         return false;
     }
@@ -2624,7 +2606,7 @@ pub fn apply_tutorial_mirroring(
         let is_targeted = tutor_status.target_client.is_none()
             || local
                 .as_ref()
-                .map_or(false, |loc| tutor_status.target_client == Some(loc.0 .0));
+                .is_some_and(|loc| tutor_status.target_client == Some(loc.0 .0));
 
         if is_targeted {
             // Mirror active document (no-op on a headless host with no workspace)
@@ -2665,44 +2647,40 @@ pub fn apply_tutorial_mirroring(
     }
 
     // Case 2: Tutor is in teach mode and observe mode is enabled, mirroring target student
-    if settings.teach_mode && settings.observe_mode {
-        if settings.target_client.is_some() {
-            // Mirror active document from the observed student
-            if let Some(ws) = workspace.as_mut() {
-                if ws.active_document != tutor_status.observed_student_doc {
-                    ws.active_document = tutor_status.observed_student_doc;
+    if settings.teach_mode && settings.observe_mode && settings.target_client.is_some() {
+        // Mirror active document from the observed student
+        if let Some(ws) = workspace.as_mut() {
+            if ws.active_document != tutor_status.observed_student_doc {
+                ws.active_document = tutor_status.observed_student_doc;
+            }
+        }
+
+        // Mirror active perspective from the observed student
+        #[cfg(feature = "workbench")]
+        if let Some(ref target_persp) = tutor_status.observed_student_perspective {
+            if let Some(ref l) = layout {
+                let current_persp = l.active_perspective().map(|pid| pid.as_str());
+                if current_persp != Some(target_persp) {
+                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                        id: target_persp.clone(),
+                    });
                 }
             }
+        }
 
-            // Mirror active perspective from the observed student
-            #[cfg(feature = "workbench")]
-            if let Some(ref target_persp) = tutor_status.observed_student_perspective {
-                if let Some(ref l) = layout {
-                    let current_persp = l.active_perspective().map(|pid| pid.as_str());
-                    if current_persp != Some(target_persp) {
-                        commands.trigger(
-                            lunco_workbench::perspective_command::ActivatePerspective {
-                                id: target_persp.clone(),
-                            },
-                        );
-                    }
-                }
-            }
-
-            // Mirror avatar transform, cell coordinate, and grid parent from the observed student
-            if let Some((pos, rot, cell, grid_ephemeris_id)) =
-                tutor_status.observed_student_avatar_state
-            {
-                snap_avatars_to(
-                    &mut commands,
-                    &mut q_avatar,
-                    &q_reference_frames,
-                    pos,
-                    rot,
-                    cell,
-                    grid_ephemeris_id,
-                );
-            }
+        // Mirror avatar transform, cell coordinate, and grid parent from the observed student
+        if let Some((pos, rot, cell, grid_ephemeris_id)) =
+            tutor_status.observed_student_avatar_state
+        {
+            snap_avatars_to(
+                &mut commands,
+                &mut q_avatar,
+                &q_reference_frames,
+                pos,
+                rot,
+                cell,
+                grid_ephemeris_id,
+            );
         }
     }
 

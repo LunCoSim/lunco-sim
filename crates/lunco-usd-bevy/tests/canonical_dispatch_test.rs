@@ -143,7 +143,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     app.world_mut().spawn((
         Name::new("World"),
         UsdPrimPath {
-            stage_handle: handle.clone(),
+            stage_handle: handle,
             path: "/World".to_string(),
         },
     ));

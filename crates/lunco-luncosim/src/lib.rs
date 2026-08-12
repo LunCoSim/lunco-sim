@@ -1972,7 +1972,7 @@ fn on_set_rhai_policy(
         UsdOp::AddPrim {
             edit_target: root.clone(),
             parent_path: "/World/Policies".into(),
-            name: name.clone(),
+            name,
             type_name: Some("LunCoPolicy".into()),
             reference: None,
         },
@@ -3895,7 +3895,7 @@ impl Plugin for SandboxHeadlessPlugin {
         // ticks the app at the sim's fixed rate. (Windowed builds are paced by
         // winit / vsync.)
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
+            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
         ));
 
         info!("[luncosim] running HEADLESS (--no-ui): no window/GPU/egui; local simulation only");

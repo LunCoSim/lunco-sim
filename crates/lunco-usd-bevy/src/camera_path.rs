@@ -505,9 +505,7 @@ pub fn resolve_camera_paths(
         if keys.is_empty() {
             // No track: the whole-path rel, else tangent. One key, so `aim_at`
             // needs no empty case.
-            let source = reader
-                .rel_target(&path, "lunco:path:lookAt")
-                .map(|t| t.to_string());
+            let source = reader.rel_target(&path, "lunco:path:lookAt");
             keys.push((
                 AimKey {
                     t: 0.0,
@@ -622,7 +620,7 @@ pub fn resolve_camera_paths(
             ))
             .id();
 
-        commands.entity(entity).insert(CameraPath {
+        commands.entity(entity).try_insert(CameraPath {
             camera,
             domain,
             aim,
@@ -653,7 +651,7 @@ pub fn resolve_camera_paths(
         commands
             .entity(camera)
             .remove::<crate::camera_mount::MountedCamera>()
-            .insert((
+            .try_insert((
                 crate::camera::UsdCameraPose::Path,
                 CellCoord::default(),
                 lunco_core::GridAnchor,
@@ -784,7 +782,7 @@ pub fn drive_camera_paths(
         return;
     }
     *tick = tick.wrapping_add(1);
-    let chatty = *tick % 100 == 0;
+    let chatty = (*tick).is_multiple_of(100);
     for (curve_entity, path) in q_paths.iter() {
         let Ok(pb) = q_playback.get(path.domain) else {
             continue;
@@ -964,7 +962,7 @@ pub fn apply_camera_paths(
         return;
     }
     *tick = tick.wrapping_add(1);
-    let chatty = *tick % 100 == 0;
+    let chatty = (*tick).is_multiple_of(100);
     for (mut cell, mut tf, child_of, driven) in q.iter_mut() {
         if !driven.primed {
             continue;

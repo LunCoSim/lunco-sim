@@ -1107,8 +1107,8 @@ fn process_map(
             .collect();
         let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
         for (i, px) in png.pixels_mut().enumerate() {
-            for c in 0..3 {
-                px.0[c] = rgb[c][i].round().clamp(0.0, 255.0) as u8;
+            for (channel, plane) in px.0.iter_mut().zip(&rgb) {
+                *channel = plane[i].round().clamp(0.0, 255.0) as u8;
             }
         }
         png.save(output_path)
@@ -1167,7 +1167,7 @@ fn process_map(
     let (lo, hi) = if sorted.is_empty() {
         (0.0, 1.0)
     } else {
-        let lo = sorted[(sorted.len() - 1) * 1 / 100];
+        let lo = sorted[(sorted.len() - 1) / 100];
         let hi = sorted[(sorted.len() - 1) * 99 / 100];
         if (hi - lo).abs() < f64::EPSILON {
             (lo, lo + 1.0)
@@ -1341,13 +1341,9 @@ mod tests {
         let enc = |c: f64| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
         assert_eq!([enc(0.0), enc(1.0), enc(0.0)], [128u8, 255, 128]);
 
-        // And the failure mode being guarded against: NaN clamps to NaN, casts to 0.
+        // And the failure mode being guarded against: NaN clamps to NaN. The
+        // production encoder must therefore fill voids before quantisation.
         assert!(f64::NAN.clamp(0.0, 255.0).is_nan(), "clamp propagates NaN");
-        assert_eq!(
-            f64::NAN as u8,
-            0,
-            "the cast then saturates to the worst value"
-        );
     }
 
     /// A stereo DTM has voids where matching failed — shadowed crater floors

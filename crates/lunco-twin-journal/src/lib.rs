@@ -2122,7 +2122,10 @@ mod tests {
             j.get(&migrated_second).unwrap().parents,
             vec![migrated_first]
         );
-        assert_eq!(j.change_set_entries(change_set), &[migrated_second.clone()]);
+        assert_eq!(
+            j.change_set_entries(change_set),
+            std::slice::from_ref(&migrated_second)
+        );
         assert_eq!(j.marker(marker).unwrap().head, migrated_second);
     }
 
@@ -2320,26 +2323,32 @@ mod tests {
         }
     }
 
+    fn root_entry_id() -> EntryId {
+        EntryId {
+            author: AuthorId::new("alice"),
+            lamport: 1,
+        }
+    }
+
+    fn bob_branch_entry_id() -> EntryId {
+        EntryId {
+            author: AuthorId::new("bob"),
+            lamport: 2,
+        }
+    }
+
     /// The convergent merge order is a pure function of the entry SET — the same
     /// entries arriving in any order yield the identical linearization (so peers
     /// converge). Causality is respected; concurrent entries tie-break by
     /// (lamport, author).
     #[test]
     fn merged_order_is_deterministic_regardless_of_arrival() {
-        let r0 = EntryId {
-            author: AuthorId::new("alice"),
-            lamport: 1,
-        };
-        let b1 = EntryId {
-            author: AuthorId::new("bob"),
-            lamport: 2,
-        };
         // r0 <- alice@2 ; r0 <- bob@2 <- bob@3 (two concurrent branches off r0).
         let entries = vec![
             mk_entry("alice", 1, vec![]),
-            mk_entry("alice", 2, vec![r0.clone()]),
-            mk_entry("bob", 2, vec![r0.clone()]),
-            mk_entry("bob", 3, vec![b1.clone()]),
+            mk_entry("alice", 2, vec![root_entry_id()]),
+            mk_entry("bob", 2, vec![root_entry_id()]),
+            mk_entry("bob", 3, vec![bob_branch_entry_id()]),
         ];
 
         let mut j1 = new_journal();
@@ -2376,14 +2385,10 @@ mod tests {
     /// default behaviour.
     #[test]
     fn default_policy_matches_builtin_order() {
-        let r0 = EntryId {
-            author: AuthorId::new("alice"),
-            lamport: 1,
-        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
-            mk_entry("alice", 2, vec![r0.clone()]),
-            mk_entry("bob", 2, vec![r0.clone()]),
+            mk_entry("alice", 2, vec![root_entry_id()]),
+            mk_entry("bob", 2, vec![root_entry_id()]),
         ];
         let mut j = new_journal();
         for e in &entries {
@@ -2407,14 +2412,10 @@ mod tests {
                 b.id.author.cmp(&a.id.author)
             }
         }
-        let r0 = EntryId {
-            author: AuthorId::new("alice"),
-            lamport: 1,
-        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
-            mk_entry("alice", 2, vec![r0.clone()]),
-            mk_entry("bob", 2, vec![r0.clone()]),
+            mk_entry("alice", 2, vec![root_entry_id()]),
+            mk_entry("bob", 2, vec![root_entry_id()]),
         ];
         let mut j = new_journal();
         for e in &entries {
@@ -2473,14 +2474,10 @@ mod tests {
             hook: Arc::new(AuthorDescHook),
         });
 
-        let r0 = EntryId {
-            author: AuthorId::new("alice"),
-            lamport: 1,
-        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
-            mk_entry("alice", 2, vec![r0.clone()]),
-            mk_entry("bob", 2, vec![r0.clone()]),
+            mk_entry("alice", 2, vec![root_entry_id()]),
+            mk_entry("bob", 2, vec![root_entry_id()]),
         ];
         let mut j = new_journal();
         for e in &entries {

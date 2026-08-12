@@ -764,14 +764,13 @@ impl Panel for ExperimentsPanel {
                             if ui.small_button("✕").on_hover_text("Delete").clicked() {
                                 delete = Some(row.id);
                             }
-                        } else if !row.id.is_live() {
-                            if ui
+                        } else if !row.id.is_live()
+                            && ui
                                 .small_button("⊘")
                                 .on_hover_text("Cancel run")
                                 .clicked()
-                            {
-                                cancel = Some(row.id);
-                            }
+                        {
+                            cancel = Some(row.id);
                         }
                         ui.end_row();
                     }
@@ -1598,14 +1597,13 @@ impl ExperimentsPanel {
                                     ui.data_mut(|d| d.remove::<String>(cell_id));
                                 }
                             }
-                            if existing.is_some() {
-                                if ui
+                            if existing.is_some()
+                                && ui
                                     .small_button("×")
                                     .on_hover_text("Clear override")
                                     .clicked()
-                                {
-                                    updates.push((path, None));
-                                }
+                            {
+                                updates.push((path, None));
                             }
                         }
                         ui.end_row();
@@ -1824,6 +1822,7 @@ pub fn populate_experiments_view_model(world: &mut World) {
 /// - Y-axis label: shows the unit when every visible variable shares
 ///   one; otherwise blank (mixed-unit plots happen often when users
 ///   tick variables across components).
+///
 /// Extra line injected into the experiments plot — used by
 /// [`crate::ui::panels::graphs`] to overlay live `SignalRegistry`
 /// histories on top of the completed-run curves so users see a
@@ -2485,7 +2484,7 @@ fn render_experiments_plot_inner(
             // picked anything yet — mirrors the first-completion behavior.
             let latest_result = ctx.resource::<ExperimentRegistry>().and_then(|reg| {
                 reg.list_for_twin(&twin)
-                    .into_iter()
+                    .iter()
                     .rev()
                     .find(|e| e.result.is_some())
                     .and_then(|e| e.result.clone())

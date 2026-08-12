@@ -123,8 +123,7 @@ fn sparse_set_depth_distribution() {
     );
     let mut total = 0usize;
     let mut cumulative_bytes = 0usize;
-    for d in 0..=MAX_DEPTH as usize {
-        let n = per_depth[d];
+    for (d, &n) in per_depth.iter().enumerate().take(MAX_DEPTH as usize + 1) {
         if n == 0 {
             continue;
         }
@@ -148,8 +147,12 @@ fn sparse_set_depth_distribution() {
     // The always-resident coarse base: what does depth <= N cost?
     println!("\ncoarse base candidates (always resident, never evicted):");
     let mut running = 0usize;
-    for n in 0..=6usize.min(MAX_DEPTH as usize) {
-        running += per_depth[n];
+    for (n, &count) in per_depth
+        .iter()
+        .enumerate()
+        .take(6usize.min(MAX_DEPTH as usize) + 1)
+    {
+        running += count;
         println!(
             "  N={n}: {running:>6} tiles ≈ {:>7.1} MB",
             (running * tile_bytes(TILE_RES)) as f64 / (1024.0 * 1024.0)

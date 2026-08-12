@@ -119,6 +119,7 @@ fn marker_sensor_enter_marks_the_waypoint_reached_without_deleting_it() {
                 stage_handle: Default::default(),
                 path: "/SandboxScene/Skid_Raycast_2".to_string(),
             },
+            lunco_core::ControlBinding { binds: Vec::new() },
             Transform::from_xyz(10.0, 0.0, 20.0),
         ))
         .id();
@@ -194,6 +195,7 @@ fn runtime_marker_sensor_marks_the_bound_patrol_waypoint() {
         .world_mut()
         .spawn((
             lunco_core::InputPorts::new(&["throttle", "steer", "brake"]),
+            lunco_core::ControlBinding { binds: Vec::new() },
             lunco_usd_bevy::UsdPrimPath {
                 stage_handle: Default::default(),
                 path: "/Runtime/Rover".to_string(),

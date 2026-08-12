@@ -23,8 +23,8 @@ pub(crate) fn render_node_single_ro(
     node: &PackageNode,
     ui: &mut egui::Ui,
     active_path: Option<&str>,
-    active_drill: Option<&str>,
-    depth: usize,
+    _active_drill: Option<&str>,
+    _depth: usize,
     load_out: &mut Vec<(String, String)>,
     theme: &lunco_theme::Theme,
 ) -> Option<PackageAction> {
@@ -47,8 +47,8 @@ pub(crate) fn render_node_single_ro(
                                 kid,
                                 ui,
                                 active_path,
-                                active_drill,
-                                depth + 1,
+                                _active_drill,
+                                _depth + 1,
                                 load_out,
                                 theme,
                             ) {

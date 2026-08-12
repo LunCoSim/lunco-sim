@@ -62,7 +62,7 @@ impl Icon {
                 }
             }
         }
-        found.then(|| Extent {
+        found.then_some(Extent {
             p1: Point { x: xmin, y: ymin },
             p2: Point { x: xmax, y: ymax },
         })

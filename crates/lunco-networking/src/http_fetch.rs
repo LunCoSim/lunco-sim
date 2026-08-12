@@ -292,7 +292,7 @@ mod tests {
         assert_ne!(cid_a, cid_b);
 
         // B's real bytes offered where A was requested → rejected.
-        let wrong = verified(cid_a.clone(), "http://h/a".into(), Ok(b));
+        let wrong = verified(cid_a, "http://h/a".into(), Ok(b));
         assert!(wrong.bytes.is_none());
     }
 }

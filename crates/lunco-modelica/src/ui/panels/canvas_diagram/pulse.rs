@@ -308,12 +308,11 @@ impl lunco_canvas::Layer for PulseGlowLayer {
 ///   1. Hold the queue until the latest push is `BATCH_WINDOW` idle.
 ///   2. Try to match every queued entry. If any is unmatched and not
 ///      timed out, defer one more frame — keeps the batch atomic.
-///   3. Once all matched (or timed out): drain, pulse all, decide the
-///      camera move:
-///        a. New nodes already inside the viewport → no camera move
-///           (Figma/Miro convention — pulse alone signals the change).
-///        b. Otherwise → smooth FitVisible over the union of (current
-///           visible region ∪ new nodes), so context is preserved.
+///   3. Once all matched (or timed out), drain, pulse all, and decide the
+///      camera move. New nodes already inside the viewport cause no camera
+///      move (Figma/Miro convention — the pulse signals the change).
+///      Otherwise, smooth FitVisible uses the union of the current visible
+///      region and the new nodes, so context is preserved.
 pub fn drive_pending_api_focus(
     mut queue: ResMut<PendingApiFocusQueue>,
     mut state: ResMut<CanvasDiagramState>,

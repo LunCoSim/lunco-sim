@@ -511,12 +511,11 @@ impl lunco_twin_journal::OpPayload for UsdOp {
 
 /// The canonical Document representation of one USD source file.
 ///
-/// Owns the root layer's authored [`sdf::Data`] + a
-/// [`lunco_doc::DocumentOrigin`] (where it came from, whether it can be saved)
-/// + a generation counter that bumps on every successful op. The flattened,
-/// composed scene (references resolved) is a *separate* derived artifact built
-/// by the asset loader ([`lunco_usd_bevy::UsdStageAsset`]); the document layer
-/// never holds it.
+/// Owns the root layer's authored [`sdf::Data`], a [`lunco_doc::DocumentOrigin`]
+/// (where it came from and whether it can be saved), and a generation counter
+/// that bumps on every successful op. The flattened, composed scene (references
+/// resolved) is a *separate* derived artifact built by the asset loader
+/// ([`lunco_usd_bevy::UsdStageAsset`]); the document layer never holds it.
 #[derive(Debug, Clone)]
 pub struct UsdDocument {
     id: DocumentId,
@@ -1079,7 +1078,7 @@ fn scale_scalar_value(v: sdf::Value, f: impl Fn(f64) -> f64) -> sdf::Value {
         V::Float(x) => V::Float(f(x as f64) as f32),
         V::Double(x) => V::Double(f(x)),
         V::FloatVec(xs) => V::FloatVec(xs.into_iter().map(|x| f(x as f64) as f32).collect()),
-        V::DoubleVec(xs) => V::DoubleVec(xs.into_iter().map(|x| f(x)).collect()),
+        V::DoubleVec(xs) => V::DoubleVec(xs.into_iter().map(f).collect()),
         other => other,
     }
 }
@@ -1281,7 +1280,7 @@ impl Document for UsdDocument {
                     self.coarse_inverse(target, &id)
                 } else {
                     UsdOp::RemovePrim {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: prim_path.clone(),
                     }
                 };
@@ -1494,7 +1493,7 @@ impl Document for UsdDocument {
                              `'''`, which USDA cannot delimit (its lexer does not unescape)"
                         )));
                     }
-                    openusd::sdf::Value::String(value.clone())
+                    openusd::sdf::Value::String(value)
                 } else {
                     parse_attribute_value(&type_name, &value).map_err(|e| {
                         DocumentError::ValidationFailed(format!(
@@ -1573,7 +1572,7 @@ impl Document for UsdDocument {
                 };
                 let inverse = match recovered {
                     Some(v) => UsdOp::SetAttribute {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         type_name: type_name.clone(),
@@ -1671,7 +1670,7 @@ impl Document for UsdDocument {
                 let inverse = match prior_sample {
                     Some(old) => match author::value_to_literal(&type_name, old) {
                         Some(v) => UsdOp::SetTimeSample {
-                            edit_target: id.clone(),
+                            edit_target: id,
                             path: path.clone(),
                             name: name.clone(),
                             type_name: type_name.clone(),
@@ -1681,7 +1680,7 @@ impl Document for UsdDocument {
                         None => self.coarse_inverse(target, &id),
                     },
                     None => UsdOp::RemoveTimeSample {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         time,
@@ -1747,7 +1746,7 @@ impl Document for UsdDocument {
                 });
                 let inverse = match recovered {
                     Some((type_name, value)) => UsdOp::SetTimeSample {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         type_name,
@@ -1796,7 +1795,7 @@ impl Document for UsdDocument {
                     .and_then(|rel| self.layer(target).field(&rel, "targetPaths").cloned());
                 let inverse = match prior {
                     Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetRelationship {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         targets: op.explicit_items.iter().map(|p| p.to_string()).collect(),
@@ -1840,7 +1839,7 @@ impl Document for UsdDocument {
                     .and_then(|attr| self.layer(target).field(&attr, "connectionPaths").cloned());
                 let inverse = match prior {
                     Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetConnection {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         name: name.clone(),
                         type_name: type_name.clone(),
@@ -1872,9 +1871,9 @@ impl Document for UsdDocument {
                 let to_sdf = parse_prim_path(&to_path)?;
                 // Exact reverse move — a typed, cheap inverse.
                 let inverse = UsdOp::MovePrim {
-                    edit_target: id.clone(),
-                    from_path: to_path.clone(),
-                    to_path: from_path.clone(),
+                    edit_target: id,
+                    from_path: to_path,
+                    to_path: from_path,
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let mut editor = openusd::usd::NamespaceEditor::new(&stage);
@@ -1907,7 +1906,7 @@ impl Document for UsdDocument {
                             && op.ordered_items.is_empty() =>
                     {
                         UsdOp::SetApiSchemas {
-                            edit_target: id.clone(),
+                            edit_target: id,
                             path: path.clone(),
                             schemas: op
                                 .prepended_items
@@ -1957,7 +1956,7 @@ impl Document for UsdDocument {
                         if m.contains_key(&variant_set) =>
                     {
                         UsdOp::SetVariantSelection {
-                            edit_target: id.clone(),
+                            edit_target: id,
                             path: path.clone(),
                             variant_set: variant_set.clone(),
                             variant: m[&variant_set].clone(),
@@ -2005,7 +2004,7 @@ impl Document for UsdDocument {
                                 .all(|p| p.prim_path.is_empty() && p.layer_offset.is_none()) =>
                     {
                         UsdOp::SetPayload {
-                            edit_target: id.clone(),
+                            edit_target: id,
                             path: path.clone(),
                             asset_paths: op
                                 .explicit_items

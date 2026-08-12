@@ -520,7 +520,7 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<ShaderMaterial>>()
             .add(ShaderMaterial::default());
-        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+        app.world_mut().spawn(MeshMaterial3d(handle));
 
         #[derive(Resource, Default)]
         struct Modified(usize);

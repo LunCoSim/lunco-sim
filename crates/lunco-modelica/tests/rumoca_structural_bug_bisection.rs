@@ -74,9 +74,11 @@ fn try_run(label: &str, model_name: &str, source: &str) -> Result<(), String> {
     let dae = compiler
         .compile_str(model_name, source, "tier.mo")
         .map_err(|e| format!("{label}: compile failed: {e}"))?;
-    let mut opts = SimOptions::default();
-    opts.atol = 1e-2;
-    opts.rtol = 1e-2;
+    let opts = SimOptions {
+        atol: 1e-2,
+        rtol: 1e-2,
+        ..Default::default()
+    };
     let mut stepper = SimulationSession::new(&dae.dae, opts)
         .map_err(|e| format!("{label}: stepper build failed: {e}"))?;
     stepper

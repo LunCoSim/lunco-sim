@@ -45,7 +45,7 @@ mod tests {
         assert_eq!(out, OpenOutcome::Allocated);
 
         let edited = "#usda 1.0\ndef Xform \"World\" {}\ndef Xform \"POI\" {}\n";
-        let (second, out) = reg.open_file(path.clone(), edited.to_string());
+        let (second, out) = reg.open_file(path, edited.to_string());
 
         assert_eq!(
             second, first,

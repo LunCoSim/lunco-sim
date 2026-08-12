@@ -266,7 +266,7 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (-5.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </Rucheyok/Electrical.inputs:drive_left>
+        float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
         prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FL>
     }
@@ -286,7 +286,7 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (5.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </Rucheyok/Electrical.inputs:drive_right>
+        float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
         prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FR>
     }
@@ -306,7 +306,7 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (-5.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </Rucheyok/Electrical.inputs:drive_left>
+        float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
         prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RL>
     }
@@ -326,7 +326,7 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (5.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:demand.connect = </Rucheyok/Electrical.inputs:drive_right>
+        float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
         prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RR>
     }

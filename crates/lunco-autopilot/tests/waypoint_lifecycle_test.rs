@@ -76,22 +76,23 @@ fn appending_waypoints_while_running_resumes_route_and_drives_the_new_legs() {
     app.update();
     app.update();
 
-    let mut tree = app
-        .world_mut()
-        .get_mut::<AutopilotBehavior>(actor)
-        .expect("first compile inserts a tree onto the actor");
-    assert_eq!(route_cursor(&tree), 0, "route starts at leg 0");
+    {
+        let mut tree = app
+            .world_mut()
+            .get_mut::<AutopilotBehavior>(actor)
+            .expect("first compile inserts a tree onto the actor");
+        assert_eq!(route_cursor(&tree), 0, "route starts at leg 0");
 
-    // Drive: arrive at waypoint 0 (10,0,0) → advance to leg 1 (20,0,0) and be
-    // mid-drive there when the waypoint is appended — the classic "add a point
-    // while running" moment.
-    let mut c = ctx_at([10.0, 0.0, 0.0]);
-    tree.0.tick(&mut c); // leg 0 succeeds → leg 1 now running
-    assert_eq!(route_cursor(&tree), 1);
-    let mut c = ctx_at([15.0, 0.0, 0.0]);
-    tree.0.tick(&mut c); // en route to leg 1
-    assert_eq!(route_cursor(&tree), 1, "mid-drive to waypoint 1");
-    drop(tree);
+        // Drive: arrive at waypoint 0 (10,0,0) → advance to leg 1 (20,0,0) and be
+        // mid-drive there when the waypoint is appended — the classic "add a point
+        // while running" moment.
+        let mut c = ctx_at([10.0, 0.0, 0.0]);
+        tree.0.tick(&mut c); // leg 0 succeeds → leg 1 now running
+        assert_eq!(route_cursor(&tree), 1);
+        let mut c = ctx_at([15.0, 0.0, 0.0]);
+        tree.0.tick(&mut c); // en route to leg 1
+        assert_eq!(route_cursor(&tree), 1, "mid-drive to waypoint 1");
+    }
 
     // The user adds two more waypoints → the mission XML changes → recompile.
     app.world_mut().get_mut::<BehaviorXml>(vessel).unwrap().0 =

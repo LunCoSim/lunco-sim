@@ -344,8 +344,8 @@ pub fn remove_plot_node(
     let (_, annotation) = text::class_annotation_clause(source, class).ok_or_else(not_found)?;
     let section =
         clause::call_group(source, annotation.clone(), "__LunCo").ok_or_else(not_found)?;
-    let array = clause::arg_value(source, section.clone(), "plotNodes").ok_or_else(not_found)?;
-    let args = text::split_args(source, array.clone());
+    let array = clause::arg_value(source, section, "plotNodes").ok_or_else(not_found)?;
+    let args = text::split_args(source, array);
     let i = plot_node_arg(source, &args, signal_path).ok_or_else(not_found)?;
 
     // Removing the last plot node leaves `__LunCo(plotNodes={})`, which is just
@@ -477,23 +477,21 @@ fn read_plot_node_spec(expr: &Expression) -> pretty::LunCoPlotNodeSpec {
             spec.title = s;
         }
     }
-    if let Some(v) = graphic_entry_arg(expr, "extent") {
-        if let Expression::Array {
+    match graphic_entry_arg(expr, "extent") {
+        Some(Expression::Array {
             elements: outer, ..
-        } = v
-        {
-            if outer.len() == 2 {
-                if let (Some((x1, y1)), Some((x2, y2))) = (
-                    super::util::point_pair(&outer[0]),
-                    super::util::point_pair(&outer[1]),
-                ) {
-                    spec.x1 = x1;
-                    spec.y1 = y1;
-                    spec.x2 = x2;
-                    spec.y2 = y2;
-                }
+        }) if outer.len() == 2 => {
+            if let (Some((x1, y1)), Some((x2, y2))) = (
+                super::util::point_pair(&outer[0]),
+                super::util::point_pair(&outer[1]),
+            ) {
+                spec.x1 = x1;
+                spec.y1 = y1;
+                spec.x2 = x2;
+                spec.y2 = y2;
             }
         }
+        _ => {}
     }
     spec
 }

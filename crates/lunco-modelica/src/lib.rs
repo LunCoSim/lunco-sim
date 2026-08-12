@@ -310,6 +310,12 @@ pub struct ModelicaCompiler {
     library_input_defaults: std::collections::HashMap<String, f64>,
 }
 
+impl Default for ModelicaCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModelicaCompiler {
     /// Construct a compiler and preload MSL.
     ///
@@ -926,13 +932,14 @@ impl ModelicaCompiler {
         if result.is_err()
             && !self.installed_roots.contains("LunCo")
             && self.target_has_unresolved_refs(model_name)
+            && self.ensure_root_installed("LunCo")
         {
-            if self.ensure_root_installed("LunCo") {
-                log::info!("[ModelicaCompiler] `{model_name}` had unresolved refs — installed LunCo, retrying");
-                result = self
-                    .session
-                    .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
-            }
+            log::info!(
+                "[ModelicaCompiler] `{model_name}` had unresolved refs — installed LunCo, retrying"
+            );
+            result = self
+                .session
+                .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
         }
         if result.is_err()
             && !self.installed_roots.contains("Modelica")

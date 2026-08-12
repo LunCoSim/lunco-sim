@@ -93,7 +93,7 @@ impl Canvas {
             Box::new(EdgesLayer::new(registry.clone())),
             Box::new(NodesLayer::new(registry.clone())),
             Box::new(SelectionLayer),
-            Box::new(ToolPreviewLayer::default()),
+            Box::new(ToolPreviewLayer),
         ];
         Self {
             scene: Scene::new(),
@@ -496,12 +496,10 @@ impl Canvas {
                     self.viewport.zoom_at(*screen, factor, screen_rect);
                 }
             }
-            InputEvent::Key { name, .. } => {
-                if *name == "F" {
-                    if let Some(world_rect) = self.scene.bounds() {
-                        let (c, z) = self.viewport.fit_values(world_rect, screen_rect, 30.0);
-                        self.viewport.set_target(c, z);
-                    }
+            InputEvent::Key { name, .. } if *name == "F" => {
+                if let Some(world_rect) = self.scene.bounds() {
+                    let (c, z) = self.viewport.fit_values(world_rect, screen_rect, 30.0);
+                    self.viewport.set_target(c, z);
                 }
             }
             _ => {}

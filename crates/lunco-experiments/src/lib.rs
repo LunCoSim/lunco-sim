@@ -278,7 +278,7 @@ impl RunResult {
         // Handle variables we HAVE but the delta MISSED (solver
         // stopped reporting them). Pad the delta's span with NaN.
         let delta_len = delta.times.len();
-        for (_k, v) in &mut self.series {
+        for v in self.series.values_mut() {
             if v.len() == base_len {
                 v.resize(base_len + delta_len, f64::NAN);
             }
@@ -720,7 +720,7 @@ mod tests {
         );
         let id2 = reg.insert_new(
             twin.clone(),
-            model.clone(),
+            model,
             Default::default(),
             Default::default(),
             Default::default(),

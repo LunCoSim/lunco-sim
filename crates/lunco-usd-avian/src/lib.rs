@@ -662,7 +662,7 @@ fn collect_child_colliders_from_usd(
                 let q_axis = lunco_usd_bevy::stage_convention(reader)
                     .orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
                 if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                    child_tf.rotation = child_tf.rotation * q_axis;
+                    child_tf.rotation *= q_axis;
                 }
             }
         }
@@ -1670,18 +1670,16 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             .ok()
             .flatten()
             .map(to_dvec);
-        let (lp0, lp1) = if lp0_auth.is_none() || lp1_auth.is_none() {
+        let (lp0, lp1) = if let (Some(lp0), Some(lp1)) = (lp0_auth, lp1_auth) {
+            (lp0, lp1)
+        } else {
             // A world side has no prim to derive from; its unauthored anchor is
             // the world origin.
             let derived = (!b0.is_empty() && !b1.is_empty())
                 .then(|| derive_joint_anchor(reader, &b0, &b1))
-                .flatten();
-            (
-                lp0_auth.or(derived.map(|d| d.0)).unwrap_or(DVec3::ZERO),
-                lp1_auth.or(derived.map(|d| d.1)).unwrap_or(DVec3::ZERO),
-            )
-        } else {
-            (lp0_auth.unwrap(), lp1_auth.unwrap())
+                .flatten()
+                .unwrap_or((DVec3::ZERO, DVec3::ZERO));
+            (lp0_auth.unwrap_or(derived.0), lp1_auth.unwrap_or(derived.1))
         };
         Some(JointBaseRead {
             body0: b0,

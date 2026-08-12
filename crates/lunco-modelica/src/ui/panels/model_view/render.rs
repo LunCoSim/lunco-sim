@@ -243,7 +243,7 @@ impl InstancePanel for ModelViewPanel {
             .resource::<TabRenderContext>()
             .cloned()
             .unwrap_or_default();
-        let restore_ctx = prev_ctx.clone();
+        let restore_ctx = prev_ctx;
         ctx.resource_scope::<TabRenderContext, _>(|_ctx, trc| {
             trc.tab_id = Some(tab_id);
             trc.doc = Some(doc);
@@ -258,7 +258,6 @@ impl InstancePanel for ModelViewPanel {
         ctx.resource_scope::<TabRenderContext, _>(|_ctx, trc| {
             *trc = restore_ctx.clone();
         });
-        let _ = prev_ctx;
     }
 
     fn tab_context_menu(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {

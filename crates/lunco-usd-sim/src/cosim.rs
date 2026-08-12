@@ -2361,7 +2361,7 @@ pub fn rewire_usd_connections(
     for entity in earth_direction_required {
         commands
             .entity(entity)
-            .insert(lunco_environment::EarthDirectionRequired);
+            .try_insert(lunco_environment::EarthDirectionRequired);
     }
 }
 
@@ -3358,7 +3358,7 @@ fn stop_scene_owned_scripts(world: &mut World) {
 
     for (entity, document_id) in targets {
         ScenarioDriver::<RhaiScenarioRuntime>::stop_entity(world, entity);
-        if let Some(mut entity_mut) = world.get_entity_mut(entity).ok() {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove::<ScriptedModel>();
         }
         if let Some(document_id) = document_id {
@@ -3565,9 +3565,7 @@ pub fn spawn_scene_root_world(
     // Normalize to asset-server-relative. The asset server prepends
     // its configured `file_path` (the `assets/` root) to every load
     // string, so absolute paths must have that prefix stripped.
-    let Some(asset_path) = normalize_scene_asset_path(path_in) else {
-        return None;
-    };
+    let asset_path = normalize_scene_asset_path(path_in)?;
     // File-backed source: the AssetServer reads + composes the on-disk
     // stage. lunco-usd's E1 projection takes the other door
     // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
@@ -3764,6 +3762,14 @@ pub(crate) fn install(app: &mut App) {
     // panicking on a missing `Assets<…>` resource.
     app.init_asset::<ModelicaSource>()
         .init_asset::<PythonSource>()
+        // The USD simulation projection owns these derived registries and
+        // writes them even in a headless host.  Production Modelica setup also
+        // initializes them, but minimal USD/physics apps intentionally omit
+        // that plugin; keeping the resources here makes the projection
+        // plugin's system contract complete and idempotent.
+        .init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
+        .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+        .init_resource::<lunco_cosim::BindingRevision>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
@@ -4189,8 +4195,10 @@ mod tests {
             Some(&compiling),
         ))));
 
-        let mut compiled = ModelicaModel::default();
-        compiled.is_compiled = true;
+        let compiled = ModelicaModel {
+            is_compiled: true,
+            ..default()
+        };
         assert!(modelica_models_terminal(std::iter::once((
             Some(&compiled),
             Some(&compiling),
@@ -4200,8 +4208,10 @@ mod tests {
             status: SimStatus::Idle,
             ..default()
         };
-        let mut ready_model = ModelicaModel::default();
-        ready_model.is_compiled = true;
+        let ready_model = ModelicaModel {
+            is_compiled: true,
+            ..default()
+        };
         assert!(modelica_models_terminal(std::iter::once((
             Some(&ready_model),
             Some(&ready),

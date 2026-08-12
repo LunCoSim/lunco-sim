@@ -62,7 +62,7 @@ fn test_solar_panel_catalog_entry() {
     // via the compile-time manifest dir (same hop the USD-file tests above use).
     let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     let roots = TwinRoots::default();
-    roots.register("assets", assets);
+    assert_eq!(roots.register("assets", assets), "assets");
 
     // The workspace `assets/` is registered above as a Twin ROOT, so the Twin walk
     // discovers it with correct absolute paths regardless of cwd (`cargo test` runs

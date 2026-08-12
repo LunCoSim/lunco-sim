@@ -665,6 +665,7 @@ pub struct PendingDifferential {
 ///    `PhysicsRevoluteJoint` targets the wheel:
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the composed motor/gearbox)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
+///
 /// Run condition: true when any `UsdPrimPath` entity still lacks
 /// `UsdSimProcessed`. Lets `process_usd_sim_prims` stay dormant after
 /// scene-load is complete instead of running every frame.
@@ -1097,7 +1098,7 @@ fn process_usd_sim_prim_read(
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     active_sun: Option<&lunco_environment::LunarSun>,
-    mut commands: &mut Commands,
+    commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
 
@@ -1667,7 +1668,7 @@ fn process_usd_sim_prim_read(
                 .entity(entity)
                 .try_insert((
                     lunco_autopilot::usd_tree::BehaviorXml(xml),
-                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path.clone()),
+                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path),
                 ))
                 .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
                 .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
@@ -1966,7 +1967,7 @@ fn process_usd_sim_prim_read(
         };
         if topology.joint_targets.contains_key(&prim_path.path) {
             setup_physical_wheel(
-                &mut commands,
+                commands,
                 entity,
                 prim_path,
                 &existing_tf,
@@ -1983,8 +1984,8 @@ fn process_usd_sim_prim_read(
                         rotation: Quat::IDENTITY,
                         scale: existing_tf.scale,
                     },
-                    &all_prims,
-                    &q_child_of,
+                    all_prims,
+                    q_child_of,
                 ),
                 &params,
                 &motor_entities,
@@ -2013,7 +2014,7 @@ fn process_usd_sim_prim_read(
                 return;
             };
             setup_raycast_wheel(
-                &mut commands,
+                commands,
                 entity,
                 prim_path,
                 &existing_tf,
@@ -2363,10 +2364,10 @@ fn setup_raycast_wheel(
     // so `apply_wheel_suspension` can reposition it to ground-level
     // each frame — its `q_visual` query filters out `WheelRaycast`,
     // so it can only operate on a separate visual entity.
-    let wheel_mesh = maybe_mesh.map(|m| m.clone());
+    let wheel_mesh = maybe_mesh.cloned();
     let wheel_rotation = existing_tf.rotation;
 
-    if wheel_mesh.is_some() {
+    if let Some(wheel_mesh) = wheel_mesh {
         // Atomic spawn: `ChildOf(entity)` in the bundle so parent + transform
         // land together — same contract as `migrate_to_grid`.
         let mut visual = commands.spawn((
@@ -2382,7 +2383,7 @@ fn setup_raycast_wheel(
             Visibility::Inherited,
             InheritedVisibility::default(),
             ViewVisibility::default(),
-            wheel_mesh.unwrap(),
+            wheel_mesh,
             ChildOf(entity),
         ));
         // Move whichever appearance INTENT the prim received onto the visual child;
@@ -2661,7 +2662,7 @@ fn setup_physical_wheel(
     // angular inertia and sinks the rover through the terrain.
     let wheel_density = params.wheel_density();
 
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         PhysicalWheel {
             visual_entity: visual_id,
             wheel_radius: radius,
@@ -2752,7 +2753,7 @@ fn setup_physical_wheel(
     for (visual, transform) in suspension_visuals {
         commands
             .entity(visual)
-            .insert((transform, ChildOf(chassis)));
+            .try_insert((transform, ChildOf(chassis)));
     }
     // NOTE: `ArticulatedVehicle` (the articulated-root guard) is no longer stamped
     // here. It is derived declaratively from the USD joint graph in
@@ -2862,7 +2863,7 @@ fn setup_physical_wheel(
     // Project the complete authored tire contract onto the physical wheel.
     // `lunco-mobility` consumes this in the same fixed-step force system as the
     // raycast wheel; there is no physical-only lateral coefficient.
-    commands.entity(entity).insert(JointedWheelTire {
+    commands.entity(entity).try_insert(JointedWheelTire {
         drive_joint: joint_entity,
         radius: params.radius,
         axle_inertia: params.axle_inertia(),

@@ -116,9 +116,11 @@ fn sun_tracker_reacts_to_a_runtime_sun_vector() {
         )
         .expect("SunTracker compiles");
 
-    let mut opts = SimOptions::default();
-    opts.atol = 1e-3;
-    opts.rtol = 1e-3;
+    let mut opts = SimOptions {
+        atol: 1e-3,
+        rtol: 1e-3,
+        ..Default::default()
+    };
     // `SimulationSession::default()` ends at one second.  This regression
     // deliberately performs a post-settle input step, so it needs the same
     // non-trivial horizon that the live co-simulation session uses.

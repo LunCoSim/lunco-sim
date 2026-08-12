@@ -285,7 +285,7 @@ pub(crate) fn trigger_projection_if_needed(
                 || target_changed
                 || forced
                 || (!ast_stale && gen_advanced && {
-                    let new_hash = projection_relevant_source_hash(&*current_source);
+                    let new_hash = projection_relevant_source_hash(&current_source);
                     new_hash != docstate.last_seen_source_hash
                 }))
     };
@@ -293,7 +293,7 @@ pub(crate) fn trigger_projection_if_needed(
     if needs_project {
         spawn_projection_task(ctx, state, doc_id, gen, render_tab_id);
     } else {
-        let new_hash = projection_relevant_source_hash(&*current_source);
+        let new_hash = projection_relevant_source_hash(&current_source);
         let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
         if gen != docstate.last_seen_gen
             && gen > docstate.canvas_acked_gen
@@ -409,7 +409,7 @@ fn spawn_projection_task(
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_for_task = std::sync::Arc::clone(&cancel);
     let target_for_log = target_class.clone();
-    let source_hash = projection_relevant_source_hash(&*source);
+    let source_hash = projection_relevant_source_hash(&source);
     let label = match &target_class {
         Some(t) => format!("Projecting {t}"),
         None => "Projecting…".to_string(),
@@ -436,7 +436,7 @@ fn spawn_projection_task(
                 let mut diagram =
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                         ast_arc,
-                        &*source,
+                        &source,
                         max_nodes,
                         target_for_log.as_deref(),
                         &layout,
@@ -466,7 +466,7 @@ fn spawn_projection_task(
     docstate.projection_task = Some(ProjectionTask {
         gen_at_spawn: gen,
         doc_at_spawn: doc_id,
-        target_at_spawn: target_class.clone(),
+        target_at_spawn: target_class,
         spawned_at,
         deadline: max_duration,
         cancel,

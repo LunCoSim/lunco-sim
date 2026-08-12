@@ -400,7 +400,7 @@ mod tests {
         let twin = TwinId::new("t");
         let host = JournalResource::new(twin.clone(), AuthorId::new("host"));
         let c1 = JournalResource::new(twin.clone(), AuthorId::new("peer-1"));
-        let c2 = JournalResource::new(twin.clone(), AuthorId::new("peer-2"));
+        let c2 = JournalResource::new(twin, AuthorId::new("peer-2"));
 
         // Author a local USD op on `j` (EntryId.author = j's local_author).
         let author_usd = |j: &JournalResource, v: i32| {

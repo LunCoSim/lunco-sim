@@ -875,9 +875,9 @@ pub(super) fn render_target_ctx(
     Some((doc, drilled))
 }
 
-/// Insert a plot scene node anchored at `click_world`. `entity_bits = 0`
-/// + empty `signal_path` is the unbound form — the visual draws an
-/// empty card the user can resize and bind later from the inspector.
+// Insert a plot scene node anchored at `click_world`. `entity_bits = 0`
+// + empty `signal_path` is the unbound form — the visual draws an
+// empty card the user can resize and bind later from the inspector.
 
 // ─── Drill-in loading overlay ──────────────────────────────────────
 

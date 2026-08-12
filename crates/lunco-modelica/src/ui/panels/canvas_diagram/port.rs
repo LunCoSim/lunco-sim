@@ -41,6 +41,7 @@ pub(super) fn port_kind_str(kind: crate::visual_diagram::PortKind) -> &'static s
 ///   knob-style relative-drag widget for unbounded inputs and an
 ///   explicit `__LunCo_inputControl(target=...)` annotation for
 ///   model authors who want fine control over placement / kind.
+///
 /// Heuristic `[min, max]` for unbounded inputs. Picks a symmetric
 /// range around the current value's magnitude so dragging covers a
 /// sensible swing. Zero values get `[-1, 1]` to avoid a zero-width
@@ -290,7 +291,7 @@ pub(super) fn port_fallback_offset_for_size(
     icon_w: f32,
     icon_h: f32,
 ) -> (f32, f32) {
-    let side_left = index % 2 == 0;
+    let side_left = index.is_multiple_of(2);
     let row = index / 2;
     let cy = icon_h * 0.5 - (row as f32) * (icon_h * 0.25);
     let cx = if side_left { 0.0 } else { icon_w };

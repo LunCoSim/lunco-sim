@@ -190,7 +190,7 @@ impl ApiQueryProvider for TerrainFieldProvider {
                 "TerrainField: `x`, `z`, `half` required".to_string(),
             );
         };
-        if !(half > 0.0) {
+        if half.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
                 "TerrainField: `half` must be > 0".to_string(),
@@ -355,7 +355,7 @@ impl ApiQueryProvider for TerrainRaycastProvider {
                 0.05, // don't let a surface-sitting endpoint self-occlude
             );
             if let Some(t) = hit {
-                if best.map_or(true, |(bt, _, _)| t < bt) {
+                if best.is_none_or(|(bt, _, _)| t < bt) {
                     best = Some((t, origin + dir * t, entity));
                 }
             }

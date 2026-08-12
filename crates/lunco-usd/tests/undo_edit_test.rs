@@ -10,7 +10,7 @@
 //! the editor's old `Vec<UndoAction>` stack could not have: it knew exactly two verbs
 //! and never touched the document.
 
-use lunco_doc::{Document, DocumentHost, DocumentId, Mutation};
+use lunco_doc::{DocumentHost, DocumentId, Mutation};
 use lunco_usd::document::{LayerId, UsdDocument, UsdOp};
 
 const STAGE: &str = r#"#usda 1.0

@@ -59,7 +59,7 @@ pub fn call_group(source: &str, group: Range<usize>, name: &str) -> Option<Range
     let args = text::split_args(source, group);
     let i = text::find_arg(source, &args, name)?;
     let arg = args[i].clone();
-    let head_at = arg.start + source[arg.clone()].find(name)?;
+    let head_at = arg.start + source[arg].find(name)?;
     text::paren_group_at(source, head_at + name.len())
 }
 

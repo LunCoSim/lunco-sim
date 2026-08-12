@@ -134,7 +134,7 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
 
         Some(Value::IntVec(v)) if !v.is_empty() => json!(v),
         Some(Value::Int64Vec(v)) if !v.is_empty() => {
-            json!(v.iter().map(|&x| x as i64).collect::<Vec<_>>())
+            json!(v.to_vec())
         }
         _ => serde_json::Value::Null,
     }

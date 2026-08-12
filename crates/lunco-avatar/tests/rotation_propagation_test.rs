@@ -36,7 +36,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     // Compute tile position at equator on +X axis: (R, 0, 0) in body-local coords.
     // This tile WILL move when the Body rotates around Y axis.
     let tile_body_local = DVec3::new(moon_radius, 0.0, 0.0);
-    let cel = MOON_GRID_CELL_SIZE as f64;
+    let cel = MOON_GRID_CELL_SIZE;
     let tile_cell = CellCoord {
         x: (tile_body_local.x / cel).floor() as i64,
         y: (tile_body_local.y / cel).floor() as i64,

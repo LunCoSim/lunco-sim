@@ -299,7 +299,7 @@ fn pick_ground_world(
         .filter(|hit| !frame.terrain_colliders.contains(hit.entity));
     let phys = phys_hit.map(|hit| hit.distance);
     let terr = surface.raycast(origin, ray.direction, 1.0e6);
-    Some(select_ground_point(origin.0, dir, phys, terr)?)
+    select_ground_point(origin.0, dir, phys, terr)
 }
 
 /// Choose the nearest authored placement surface after streamed terrain
@@ -480,8 +480,7 @@ pub fn on_scene_click_checkpoint(
     // bail out. The leaf targets the marker PRIM, so the mission and the map
     // refer to the same object — a coordinate string could drift from the pin.
     let current = vessels.q_xml.get(vessel).ok().map(|(_, x)| x.0.as_str());
-    let wp_coord_str = marker_path.clone();
-    let xml = match append_waypoint_leaf(current, &wp_coord_str) {
+    let xml = match append_waypoint_leaf(current, &marker_path) {
         Ok(xml) => xml,
         Err(err) => {
             report_waypoint_failure(&mut commands, format!("Could not add waypoint: {err}"));
@@ -631,7 +630,7 @@ pub fn on_scene_click_place_waypoint(
             doc,
             op: UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
-                path: pending.coord_key.clone(),
+                path: pending.coord_key,
                 value: [world.x, world.y, world.z],
             },
         });
@@ -959,13 +958,7 @@ fn get_runtime_waypoint_positions(spec: &lunco_autopilot::AutopilotBehaviorSpec)
     spec.patrol_waypoints()
         .unwrap_or_default()
         .iter()
-        .map(|waypoint| {
-            DVec3::new(
-                waypoint.pos[0] as f64,
-                waypoint.pos[1] as f64,
-                waypoint.pos[2] as f64,
-            )
-        })
+        .map(|waypoint| DVec3::new(waypoint.pos[0], waypoint.pos[1], waypoint.pos[2]))
         .collect()
 }
 
@@ -2042,13 +2035,7 @@ pub fn sync_waypoint_path_mesh(
                 };
                 let points = waypoints
                     .iter()
-                    .map(|waypoint| {
-                        DVec3::new(
-                            waypoint.pos[0] as f64,
-                            waypoint.pos[1] as f64,
-                            waypoint.pos[2] as f64,
-                        )
-                    })
+                    .map(|waypoint| DVec3::new(waypoint.pos[0], waypoint.pos[1], waypoint.pos[2]))
                     .collect::<Vec<_>>();
                 let targets = (0..points.len())
                     .map(runtime_waypoint_key)
@@ -2064,13 +2051,7 @@ pub fn sync_waypoint_path_mesh(
             };
             let points = waypoints
                 .iter()
-                .map(|waypoint| {
-                    DVec3::new(
-                        waypoint.pos[0] as f64,
-                        waypoint.pos[1] as f64,
-                        waypoint.pos[2] as f64,
-                    )
-                })
+                .map(|waypoint| DVec3::new(waypoint.pos[0], waypoint.pos[1], waypoint.pos[2]))
                 .collect::<Vec<_>>();
             let targets = (0..points.len())
                 .map(runtime_waypoint_key)
@@ -2156,7 +2137,7 @@ pub fn sync_waypoint_path_mesh(
                 }
             }
             if let Some((old, _)) = existing.remove(&key) {
-                commands.entity(old).despawn();
+                commands.entity(old).try_despawn();
             }
             if slice.len() < 2 {
                 continue;
@@ -2259,7 +2240,7 @@ pub fn sync_waypoint_path_mesh(
 
     // Vessels/parts that no longer have a route.
     for (_, (entity, _)) in existing {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
 
@@ -2375,7 +2356,7 @@ pub(crate) fn sync_waypoint_marker_visuals(
             let authored = look.clone();
             commands
                 .entity(entity)
-                .insert(WaypointVisualBase(authored.clone()));
+                .try_insert(WaypointVisualBase(authored.clone()));
             authored
         };
         target = waypoint_look_for_visit(&target, visited);

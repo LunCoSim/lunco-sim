@@ -290,10 +290,11 @@ impl DomainSynthesizer for HookSynthesizer {
         if network.pending_sources {
             return Ok(SynthOutcome::Pending);
         }
+        let network_root = network.root.clone();
         let facts = network_facts(&network, model_name);
         let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
             vec![DomainProjectionError {
-                path: network.root.clone(),
+                path: network_root.clone(),
                 message: format!(
                     "synthesizer `{}` is selected but its hook `{}` is not registered",
                     self.name, self.hook_id
@@ -302,13 +303,13 @@ impl DomainSynthesizer for HookSynthesizer {
         })?;
         let value = result.map_err(|error| {
             vec![DomainProjectionError {
-                path: network.root.clone(),
+                path: network_root.clone(),
                 message: format!("synthesizer `{}` failed: {}", self.name, error.0),
             }]
         })?;
         let lunco_hooks::HookValue::Map(map) = &value else {
             return Err(vec![DomainProjectionError {
-                path: network.root.clone(),
+                path: network_root,
                 message: format!(
                     "synthesizer `{}` must return a map with a Modelica `source` key",
                     self.name
@@ -321,7 +322,7 @@ impl DomainSynthesizer for HookSynthesizer {
             .flatten()
         else {
             return Err(vec![DomainProjectionError {
-                path: network.root.clone(),
+                path: network_root,
                 message: format!(
                     "synthesizer `{}` returned a map with no string `source` key",
                     self.name
@@ -729,7 +730,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         }
         if actuators.is_empty() {
             return Err(vec![DomainProjectionError {
-                path: root_string.clone(),
+                path: root.to_string(),
                 message: "actuator-wrench collection contains no force actuators".into(),
             }]);
         }
@@ -749,7 +750,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         for name in inputs.iter().chain(outputs.iter()) {
             if !is_modelica_identifier(name) {
                 return Err(vec![DomainProjectionError {
-                    path: root_string.clone(),
+                    path: root.to_string(),
                     message: format!("public port `{name}` is not a valid Modelica identifier"),
                 }]);
             }
@@ -757,7 +758,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         let actuator_outputs: BTreeSet<_> = actuators.keys().cloned().collect();
         if actuator_outputs != outputs {
             return Err(vec![DomainProjectionError {
-                path: root_string.clone(),
+                path: root.to_string(),
                 message: format!(
                     "actuator command outputs {:?} do not match the authored network outputs {:?}",
                     actuator_outputs, outputs

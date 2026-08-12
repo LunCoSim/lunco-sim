@@ -37,7 +37,7 @@ impl DocumentSessionCodec for UsdSessionCodec {
         // open/close, without cloning text.
         let mut acc = 0u64;
         let mut count = 0u64;
-        for id in reg.ids().collect::<Vec<_>>() {
+        for id in reg.ids() {
             if let Some(host) = reg.host(id) {
                 acc ^= revision_term(id.raw(), host.generation());
                 count += 1;
@@ -62,7 +62,7 @@ impl DocumentSessionCodec for UsdSessionCodec {
                         DocumentSnapshot {
                             kind: KIND.to_string(),
                             title: origin.display_name(),
-                            source: doc.source().to_string(),
+                            source: doc.source(),
                             dirty: doc.is_dirty(),
                             origin,
                             id: id.raw(),

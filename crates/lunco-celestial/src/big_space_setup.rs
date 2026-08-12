@@ -135,7 +135,7 @@ pub fn adopt_authored_body_look(
                 continue;
             }
             lod.look = look.clone();
-            crate::imagery::apply_look_to_tiles(&tiles, &lod.look, &mut commands);
+            crate::imagery::apply_look_to_tiles(tiles, &lod.look, &mut commands);
             info!(
                 "[celestial] body {} adopted the look authored on its prim",
                 decl.naif
@@ -476,7 +476,7 @@ pub fn setup_big_space_hierarchy(
             // `shadow_max_distance` rendered fully shadowed (the pitch-black
             // site-anchored surface), while terrain beyond cascade range lit fine.
             bevy::light::NotShadowCaster,
-            Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
+            Mesh3d(meshes.add(Sphere::new(696.34e6_f32).mesh().ico(4).unwrap())),
             // `no_shadow_cast` mirrors the `NotShadowCaster` above and is NOT optional:
             // the binder's `Changed<PbrLook>` pass reconciles the marker from the look, so
             // a look that said `false` would STRIP the marker on the first frame and bring
@@ -523,8 +523,8 @@ pub fn setup_big_space_hierarchy(
         .map_or(lunco_render::RenderingQuality::Auto, |settings| {
             settings.quality
         });
-    let budget_bytes = shadow_budget.as_deref().map_or(
-        lunco_render::GpuShadowBudget::default().limit_bytes,
+    let budget_bytes = shadow_budget.as_deref().map_or_else(
+        || lunco_render::GpuShadowBudget::default().limit_bytes,
         |budget| budget.limit_bytes,
     );
     let sun_quality = requested_quality.effective_for_shadow_budget(budget_bytes, 1);

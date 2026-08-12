@@ -466,26 +466,26 @@ fn last_element_end(source: &str, class: &ClassDef) -> Option<usize> {
 /// Where a new component declaration goes: after the last existing component,
 /// else at the top of the class body (before `equation` / the annotation /
 /// `end`).
-pub fn component_insert_point(source: &str, class: &ClassDef) -> Option<usize> {
+pub fn component_insert_point(source: &str, class: &ClassDef) -> usize {
     if let Some(end) = class
         .components
         .values()
         .filter_map(|c| component_extent(source, c).map(|r| r.end))
         .max()
     {
-        return Some(end);
+        return end;
     }
     class_body_start(class)
 }
 
 /// Start of the class body — just past the header line (name, description).
-fn class_body_start(class: &ClassDef) -> Option<usize> {
+fn class_body_start(class: &ClassDef) -> usize {
     let mut pos = class.name.location.end as usize;
     // Skip the description string, if any.
     if let Some(tok) = class.description.last() {
         pos = pos.max(tok.location.end as usize);
     }
-    Some(pos)
+    pos
 }
 
 /// The point at the end of the class body that new *sections* must precede:

@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn reset_calendar_returns_warp_to_the_authored_mission_origin() {
-        let mut c = MissionClock::anchored(2_461_283.66746, 12);
+        let mut c = MissionClock::anchored(2_461_283.667_46, 12);
         let origin = c.epoch_jd(12, 0.0);
 
         advance_clock(&mut c, 12, 100_000.0, false, 0.0);

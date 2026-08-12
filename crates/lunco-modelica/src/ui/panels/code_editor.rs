@@ -1445,7 +1445,7 @@ pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJo
         // declarations. Strings that reach end-of-buffer are coloured
         // anyway so an unterminated literal in mid-edit looks sane.
         if remaining.starts_with('"') {
-            let after_quote = &remaining[1..];
+            let after_quote = remaining.strip_prefix('"').unwrap_or(remaining);
             let close_rel = after_quote
                 .find('"')
                 .map(|i| i + 2)
@@ -1467,7 +1467,7 @@ pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJo
             let word = &remaining[..word_end];
 
             let color = keyword_color(word, &palette).unwrap_or_else(|| {
-                if word.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if word.chars().next().is_some_and(|c| c.is_uppercase()) {
                     upper_ident_color
                 } else {
                     ident_color

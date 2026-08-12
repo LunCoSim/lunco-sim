@@ -16,18 +16,10 @@ use lunco_settings::SettingsSection;
 use serde::{Deserialize, Serialize};
 
 /// Persisted browser-visibility prefs.
-#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
 pub struct AssetVisibilitySettings {
     /// List scenes and scenarios under `tests/` in the asset browsers.
     pub show_test_assets: bool,
-}
-
-impl Default for AssetVisibilitySettings {
-    fn default() -> Self {
-        Self {
-            show_test_assets: false,
-        }
-    }
 }
 
 impl SettingsSection for AssetVisibilitySettings {

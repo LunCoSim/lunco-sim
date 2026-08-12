@@ -187,7 +187,7 @@ fn test_all_rover_files_match_procedural() {
     ];
 
     for (file, prim) in &files {
-        let label = format!("{file}");
+        let label = file.to_string();
         let mut app = compose_and_load(&Path::new("../../assets/").join(file), prim);
 
         // Find rover
@@ -205,7 +205,7 @@ fn test_all_rover_files_match_procedural() {
         let rb = app
             .world()
             .get::<RigidBody>(rover)
-            .expect(&format!("{label}: missing RigidBody"));
+            .unwrap_or_else(|| panic!("{label}: missing RigidBody"));
         assert!(
             *rb == RigidBody::Dynamic
                 || app
@@ -218,7 +218,7 @@ fn test_all_rover_files_match_procedural() {
         let mass = app
             .world()
             .get::<Mass>(rover)
-            .expect(&format!("{label}: missing Mass"));
+            .unwrap_or_else(|| panic!("{label}: missing Mass"));
         assert!(
             (mass.0 - 1000.0).abs() < 1.0,
             "{label}: Mass ~1000, got {}",
@@ -228,20 +228,20 @@ fn test_all_rover_files_match_procedural() {
         let ld = app
             .world()
             .get::<LinearDamping>(rover)
-            .expect(&format!("{label}: missing LinearDamping"));
+            .unwrap_or_else(|| panic!("{label}: missing LinearDamping"));
         assert!((ld.0 - 0.5).abs() < 0.1, "{label}: LinearDamping ~0.5");
 
         let ad = app
             .world()
             .get::<AngularDamping>(rover)
-            .expect(&format!("{label}: missing AngularDamping"));
+            .unwrap_or_else(|| panic!("{label}: missing AngularDamping"));
         assert!((ad.0 - 2.0).abs() < 0.1, "{label}: AngularDamping ~2.0");
 
         // Collider (compound-of-one cuboid built from the Chassis child)
         let col = app
             .world()
             .get::<Collider>(rover)
-            .expect(&format!("{label}: missing Collider"));
+            .unwrap_or_else(|| panic!("{label}: missing Collider"));
         let he = cuboid_half_extents(col);
         assert!((he[0] - 1.0).abs() < 0.1, "{label}: hx ~1.0, got {}", he[0]);
         assert!(
@@ -273,7 +273,7 @@ fn test_all_rover_files_match_procedural() {
         let mix = app
             .world()
             .get::<DriveMix>(rover)
-            .expect(&format!("{label}: missing DriveMix"));
+            .unwrap_or_else(|| panic!("{label}: missing DriveMix"));
         if file.contains("ackermann") {
             assert_eq!(
                 mix.kernel, "linear",
@@ -303,7 +303,7 @@ fn test_all_rover_files_match_procedural() {
         let actuators = app
             .world()
             .get::<ActuatorPorts>(rover)
-            .expect(&format!("{label}: missing ActuatorPorts"));
+            .unwrap_or_else(|| panic!("{label}: missing ActuatorPorts"));
         assert!(
             actuators.ports.contains_key("drive_left"),
             "{label}: actuators missing drive_left"
@@ -325,7 +325,7 @@ fn test_all_rover_files_match_procedural() {
         let children = app
             .world()
             .get::<Children>(rover)
-            .expect(&format!("{label}: missing Children"));
+            .unwrap_or_else(|| panic!("{label}: missing Children"));
         let mut wheels: Vec<(Entity, String)> = Vec::new();
         for child in children.iter() {
             if let Some(name) = app.world().get::<Name>(child) {
@@ -399,7 +399,7 @@ fn test_all_rover_files_match_procedural() {
             let wt = app
                 .world()
                 .get::<Transform>(w_ent)
-                .expect(&format!("{label}: {w_name} missing Transform"));
+                .unwrap_or_else(|| panic!("{label}: {w_name} missing Transform"));
             assert!(
                 (wt.translation.x - exp_pos.x).abs() < 0.01,
                 "{label}: {w_name} x ~{}",

@@ -62,16 +62,9 @@ fn test_escape_deselects() {
 #[test]
 fn test_possession_blocked_during_selection() {
     let drag_mode = DragModeActive { active: true };
-    let mut possession_attempted = false;
-
-    // Simulate what avatar_raycast_possession does:
-    if drag_mode.active {
-        // Possession blocked - early return
-        possession_attempted = false;
-    } else {
-        // Possession allowed
-        possession_attempted = true;
-    }
+    // Simulate what avatar_raycast_possession does: active drag mode returns
+    // before issuing a possession command.
+    let possession_attempted = !drag_mode.active;
 
     assert!(
         !possession_attempted,
@@ -92,12 +85,7 @@ fn test_deselection_allows_possession() {
     drag_mode.active = false;
 
     // Verify possession is now allowed
-    let mut possession_attempted = false;
-    if drag_mode.active {
-        possession_attempted = false; // blocked
-    } else {
-        possession_attempted = true; // allowed
-    }
+    let possession_attempted = !drag_mode.active;
     assert!(
         possession_attempted,
         "Possession MUST be allowed after deselection"

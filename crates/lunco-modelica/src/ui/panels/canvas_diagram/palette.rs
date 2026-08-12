@@ -49,21 +49,13 @@ impl MslPackageNode {
 /// component expects a functional block, not an icon shell").
 /// Persisted as a Bevy resource; the Settings dropdown flips the
 /// `show_icon_only_classes` flag to override.
-#[derive(Resource, Debug, Clone, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq, Default)]
 pub struct PaletteSettings {
     /// When `true`, pure-icon classes (matched by
     /// [`crate::ui::class_display::is_icon_only_class`]) appear in the
     /// MSL add-component submenus. Default `false` — matches
     /// Dymola's "hide `.Icons.*`" default.
     pub show_icon_only_classes: bool,
-}
-
-impl Default for PaletteSettings {
-    fn default() -> Self {
-        Self {
-            show_icon_only_classes: false,
-        }
-    }
 }
 
 /// Soft guards for the canvas projection. Prevent accidental

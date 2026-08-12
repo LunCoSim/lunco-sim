@@ -107,7 +107,7 @@ pub(crate) fn produce_rhai_editor_vm(
 
     if let Some(store) = diagnostics.as_deref() {
         if let Some(d) = store.get(did) {
-            vm.state = d.state.clone();
+            vm.state = d.state;
             vm.diagnostics = d.diagnostics.clone();
         } else {
             vm.state = CompileState::default();

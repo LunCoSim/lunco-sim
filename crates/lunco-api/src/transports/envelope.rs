@@ -72,6 +72,33 @@ impl TryFrom<ApiRequestUnified> for ApiRequest {
     }
 }
 
+impl From<ApiResponse> for ApiResponseEnvelope {
+    fn from(response: ApiResponse) -> Self {
+        match response {
+            ApiResponse::Ok { data } => ApiResponseEnvelope {
+                data,
+                error: None,
+                error_code: None,
+            },
+            ApiResponse::Error { code, message } => ApiResponseEnvelope {
+                data: None,
+                error: Some(message),
+                error_code: Some(code),
+            },
+            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
+                data: Some(serde_json::json!(event)),
+                error: None,
+                error_code: None,
+            },
+            ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
+                data: None,
+                error: Some("unexpected screenshot response".into()),
+                error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,32 +154,5 @@ mod tests {
     fn response_envelope_contains_ack_data_without_a_command_id() {
         let envelope = ApiResponseEnvelope::from(ApiResponse::accepted());
         assert_eq!(envelope.data.unwrap()["accepted"], true);
-    }
-}
-
-impl From<ApiResponse> for ApiResponseEnvelope {
-    fn from(response: ApiResponse) -> Self {
-        match response {
-            ApiResponse::Ok { data } => ApiResponseEnvelope {
-                data,
-                error: None,
-                error_code: None,
-            },
-            ApiResponse::Error { code, message } => ApiResponseEnvelope {
-                data: None,
-                error: Some(message),
-                error_code: Some(code),
-            },
-            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
-                data: Some(serde_json::json!(event)),
-                error: None,
-                error_code: None,
-            },
-            ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
-                data: None,
-                error: Some("unexpected screenshot response".into()),
-                error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),
-            },
-        }
     }
 }

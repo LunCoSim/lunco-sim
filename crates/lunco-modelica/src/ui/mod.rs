@@ -951,7 +951,7 @@ impl Plugin for ModelicaUiPlugin {
         // outer pattern with their own per-domain section.
         app.world_mut()
             .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
-            .register(browser_section::ModelicaSection::default());
+            .register(browser_section::ModelicaSection);
     }
 }
 
@@ -1244,8 +1244,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 if ctx
                     .resource::<crate::msl_remote::MslInstallCancel>()
                     .is_some()
-                {
-                    if ui
+                    && ui
                         .button("Cancel")
                         .on_hover_text(
                             "Stop the in-flight MSL download/index. The \
@@ -1253,9 +1252,8 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                          aborts at the next phase boundary.",
                         )
                         .clicked()
-                    {
-                        ctx.trigger(crate::msl_remote::MslInstallAction::Cancel);
-                    }
+                {
+                    ctx.trigger(crate::msl_remote::MslInstallAction::Cancel);
                 }
             }
         } else if matches!(
@@ -1283,17 +1281,16 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             {
                 ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
             }
-        } else if install_ready {
-            if ui
+        } else if install_ready
+            && ui
                 .button("Reinstall")
                 .on_hover_text(
                     "Force-redownload MSL and rebuild the bincode cache. \
                  Wipes the current cache directory first.",
                 )
                 .clicked()
-            {
-                ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
-            }
+        {
+            ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if ui

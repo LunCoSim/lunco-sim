@@ -24,19 +24,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Persisted view prefs for the Entity list.
-#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
 pub struct EntityListSettings {
     /// Show entities a system owns and churns ([`lunco_core::SystemManaged`]:
     /// streamed LOD tiles, globe tiles, scattered rocks). Off by default — with
     /// terrain streaming there are hundreds live and they bury the handful of
     /// authored objects the list exists to show.
     pub show_system: bool,
-}
-
-impl Default for EntityListSettings {
-    fn default() -> Self {
-        Self { show_system: false }
-    }
 }
 
 impl SettingsSection for EntityListSettings {
@@ -54,7 +48,7 @@ pub(crate) fn register_settings_menu(world: &mut World) {
         ui.label(egui::RichText::new("Entity list").weak().small());
         let current = ctx
             .resource::<EntityListSettings>()
-            .map_or(false, |s| s.show_system);
+            .is_some_and(|s| s.show_system);
         let mut next = current;
         ui.checkbox(&mut next, "Show system entities")
             .on_hover_text(

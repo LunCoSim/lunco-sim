@@ -787,7 +787,9 @@ version = "0.1.0"
         // find_owning picks the deepest match: `sub` for the inner file.
         assert_eq!(
             parent.find_owning(&inner_handle).unwrap().root,
-            root.join("sub").canonicalize().unwrap_or(root.join("sub"))
+            root.join("sub")
+                .canonicalize()
+                .unwrap_or_else(|_| root.join("sub"))
         );
         assert_eq!(parent.find_owning(&top_handle).unwrap().root, parent.root);
         assert!(parent.find_owning(&outside).is_none());

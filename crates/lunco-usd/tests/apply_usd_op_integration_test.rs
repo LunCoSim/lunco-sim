@@ -5,7 +5,6 @@
 //! updates through to the visual synchronization layer to update Bevy materials.
 
 use bevy::prelude::*;
-use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::{
@@ -82,35 +81,15 @@ def Xform "World"
             lunco_doc::PathlessOrigin::untitled("test_stage.usda"),
         )
     };
-    println!("[TEST-DEBUG] Allocated doc_id: {:?}", doc_id);
 
     // 5. Trigger SetActiveUsdViewport command to bootstrap the preview stage
     // and install our newly allocated document into the active viewport
     app.world_mut()
         .trigger(SetActiveUsdViewport { doc: doc_id });
-    println!("[TEST-DEBUG] Triggered SetActiveUsdViewport");
 
     // Run updates to process the viewport installation and initial visual synchronization
-    for i in 1..=5 {
+    for _ in 0..5 {
         app.update();
-        println!("[TEST-DEBUG] Tick {} complete.", i);
-
-        // Print all entities and their components to trace spawning
-        let mut q_debug = app.world_mut().query::<(
-            Entity,
-            Option<&Name>,
-            Option<&UsdPrimPath>,
-            Has<UsdVisualSynced>,
-        )>();
-        for (ent, name, prim_path, synced) in q_debug.iter(app.world()) {
-            println!(
-                "  -> Entity: {:?}, Name: {:?}, PrimPath: {:?}, Synced: {}",
-                ent,
-                name.map(|n| n.as_str()),
-                prim_path.map(|p| p.path.as_str()),
-                synced
-            );
-        }
     }
 
     // Verify the child MeshWithMaterial entity was spawned and got its material

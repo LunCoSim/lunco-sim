@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Supported scripting languages for Digital Twin integration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect, Default)]
 pub enum ScriptLanguage {
+    #[default]
     Python,
     /// Pure-Rust embedded engine (rhai). The default browser-capable backend.
     Rhai,
@@ -319,12 +320,6 @@ pub struct ScriptedModel {
     pub inputs: HashMap<String, f64>,
     /// Current output values synced from Script to Bevy ECS.
     pub outputs: HashMap<String, f64>,
-}
-
-impl Default for ScriptLanguage {
-    fn default() -> Self {
-        Self::Python
-    }
 }
 
 #[cfg(test)]

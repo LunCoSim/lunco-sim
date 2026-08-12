@@ -550,7 +550,7 @@ mod tests {
                 source: &Flat(0.0),
             }),
         );
-        assert!(mesh.indices().is_none_or(|indices| indices.len() == 0));
+        assert!(mesh.indices().is_none_or(|indices| indices.is_empty()));
     }
 
     #[test]

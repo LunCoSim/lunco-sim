@@ -242,7 +242,7 @@ impl Panel for InspectorPanel {
             let mut param_desc: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             let type_path = if index.classes.contains_key(&type_name) {
-                Some(type_name.clone())
+                Some(type_name)
             } else {
                 index
                     .classes

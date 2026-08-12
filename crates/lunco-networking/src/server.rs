@@ -968,18 +968,13 @@ fn host_send_outbox(
 /// For each peer we send every in-interest body whose `(pos, rot, ack)` differs from
 /// what that peer was last sent (a per-peer digest). This one rule covers three cases
 /// at once:
-///   - **steady updates** — a moving body differs each generation, so it streams;
-///   - **soft-enter baseline** — a body entering interest isn't in the peer's digest,
-///     so its current pose is sent even if it didn't move this tick (no stale frozen
-///     reappearance);
-///   - **render-throttle robustness** — the digest holds the LAST POSE THE PEER GOT,
-///     not this generation's delta, so when `Update` runs slower than the 20 Hz
-///     `FixedPostUpdate` and skips generations, the latest pose is still sent (the
-///     old broadcast path queued every gather's delta in the outbox; per-peer routing
-///     can't, so it diffs against the peer's known state instead).
-/// A body that LEAVES interest is dropped from the stream AND the digest (soft exit):
-/// the client freezes its proxy at the last pose — no despawn/re-spawn churn — and a
-/// later re-entry re-sends a fresh baseline.
+/// It covers steady updates because a moving body differs each generation,
+/// soft-enter baselines because a newly interested body is absent from the
+/// peer's digest, and render throttling because the digest holds the last pose
+/// the peer received rather than the current generation's delta.
+/// A body that leaves interest is dropped from the stream and digest (soft exit):
+/// the client freezes its proxy at the last pose, and a later re-entry resends a
+/// fresh baseline.
 ///
 /// The `(pos_q, rot_packed, last_input_seq)` key matches `gather_snapshot`'s own
 /// change test (velocity is intentionally excluded, so a body isn't re-sent for
@@ -1652,29 +1647,26 @@ fn drain_and_send_asset_chunks(
             requeue.push((session, chunk));
             continue;
         }
-        match peer_of.get(&session) {
-            Some(&peer) => {
-                let est = unacked_estimate.entry(session).or_insert(0.0);
-                if *est >= crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE {
-                    // Over budget for this peer — hold the chunk until the
-                    // estimate drains. FIFO order is preserved by the requeue.
-                    requeue.push((session, chunk));
-                    continue;
-                }
-                server_send(
-                    &mut sender,
-                    server,
-                    &NetworkTarget::Single(peer),
-                    SyncChannel::BulkData,
-                    &SyncEnvelope::AssetChunk(chunk),
-                );
-                *est += 1.0;
-                sent += 1;
+        if let Some(&peer) = peer_of.get(&session) {
+            let est = unacked_estimate.entry(session).or_insert(0.0);
+            if *est >= crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE {
+                // Over budget for this peer — hold the chunk until the
+                // estimate drains. FIFO order is preserved by the requeue.
+                requeue.push((session, chunk));
+                continue;
             }
-            // Peer disconnected mid-transfer → drop its chunks (it re-requests on
-            // reconnect from a fresh manifest).
-            None => {}
+            server_send(
+                &mut sender,
+                server,
+                &NetworkTarget::Single(peer),
+                SyncChannel::BulkData,
+                &SyncEnvelope::AssetChunk(chunk),
+            );
+            *est += 1.0;
+            sent += 1;
         }
+        // Peer disconnected mid-transfer → drop its chunks (it re-requests on
+        // reconnect from a fresh manifest).
     }
     // A disconnected peer's estimate must not linger into a reused session id.
     unacked_estimate.retain(|session, _| peer_of.contains_key(session));

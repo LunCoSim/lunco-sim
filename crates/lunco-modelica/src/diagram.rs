@@ -198,7 +198,7 @@ impl ModelicaComponentBuilder {
                             if port.is_empty() && !n.ports.is_empty() {
                                 Some(0)
                             } else {
-                                n.port_index(port).map(|p| p as usize)
+                                n.port_index(port)
                             }
                         };
                         if let (Some(sp), Some(tp)) = (
@@ -325,7 +325,7 @@ impl ModelicaComponentBuilder {
                 let conn_ports = get_connector_port_names(comp);
                 let ports: Vec<ComponentPort> = conn_ports
                     .iter()
-                    .map(|name| ComponentPort::output(name).with_type(&comp.type_name.to_string()))
+                    .map(|name| ComponentPort::output(name).with_type(comp.type_name.to_string()))
                     .collect();
 
                 if !ports.is_empty() {
@@ -562,9 +562,9 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
 ///    with the AST's `within` clause, strip it before walking.
 ///    Lets drill-in callers pass `"Modelica.Blocks.Continuous.CriticalDamping"`
 ///    without knowing the file's internal rooting.
-/// Strip the AST's `within` clause prefix from `qualified`, when it
-/// appears at a **segment boundary** (followed by `.`). Returns the
-/// path that's safe to split on `.` and walk against `ast.classes`.
+///    Strip the AST's `within` clause prefix from `qualified`, when it
+///    appears at a **segment boundary** (followed by `.`). Returns the
+///    path that's safe to split on `.` and walk against `ast.classes`.
 ///
 /// Centralised here so the read path (`find_class_by_qualified_name`)
 /// and the write path (`ast_mut::lookup_class_mut`) can't silently
@@ -1005,14 +1005,12 @@ fn extract_component_ports(comp: &Component) -> Vec<ComponentPort> {
 
     // Parameter value as labeled output port
     if matches!(comp.variability, Variability::Parameter(_)) {
-        if let Some(ref binding) = comp.binding {
-            if let Expression::Terminal { token, .. } = binding {
-                ports.push(
-                    ComponentPort::output("value")
-                        .with_type(comp.type_name.to_string())
-                        .with_description(format!("= {}", token.text)),
-                );
-            }
+        if let Some(Expression::Terminal { token, .. }) = comp.binding.as_ref() {
+            ports.push(
+                ComponentPort::output("value")
+                    .with_type(comp.type_name.to_string())
+                    .with_description(format!("= {}", token.text)),
+            );
         }
     }
 

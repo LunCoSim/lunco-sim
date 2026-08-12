@@ -176,17 +176,18 @@ fn test_full_teleport_workflow() {
         let fwd_v = up_v.cross(right_v);
         let surface_rot = Quat::from_mat3(&Mat3::from_cols(right_v, up_v, -fwd_v));
 
-        let mut entity = world.entity_mut(avatar);
-        entity.insert(new_cell);
-        entity.insert(Transform::from_translation(new_tf_pos).with_rotation(surface_rot));
-        entity.insert(SurfaceCamera {
-            heading: 0.0,
-            pitch: -0.2,
-        });
-        entity.insert(SurfaceRelativeMode);
-        entity.remove::<FreeFlightCamera>();
-        entity.remove::<OrbitCamera>();
-        drop(entity);
+        {
+            let mut entity = world.entity_mut(avatar);
+            entity.insert(new_cell);
+            entity.insert(Transform::from_translation(new_tf_pos).with_rotation(surface_rot));
+            entity.insert(SurfaceCamera {
+                heading: 0.0,
+                pitch: -0.2,
+            });
+            entity.insert(SurfaceRelativeMode);
+            entity.remove::<FreeFlightCamera>();
+            entity.remove::<OrbitCamera>();
+        }
 
         // Re-parent to Moon Grid (same as teleport does)
         world.entity_mut(moon_grid).add_child(avatar);
@@ -259,5 +260,4 @@ struct TestState {
     moon_grid: Option<Entity>,
     moon_body: Option<Entity>,
     avatar: Option<Entity>,
-    expected_altitude: f64,
 }

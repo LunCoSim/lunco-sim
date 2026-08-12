@@ -93,16 +93,6 @@ fn on_close(
 
 register_commands!(on_minimize, on_maximize, on_close,);
 
-#[cfg(test)]
-mod tests {
-    use super::needs_manual_maximize_fallback;
-
-    #[test]
-    fn only_linux_uses_the_manual_maximize_fallback() {
-        assert_eq!(needs_manual_maximize_fallback(), cfg!(target_os = "linux"));
-    }
-}
-
 /// Plugin registering the window-control commands ([`MinimizeWindow`],
 /// [`MaximizeWindow`], [`CloseWindow`]) and the [`WindowMaximized`] resource.
 pub struct WindowCommandPlugin;
@@ -136,5 +126,15 @@ pub fn merged_titlebar_window(title: impl Into<String>) -> Window {
         #[cfg(target_os = "macos")]
         fullsize_content_view: true,
         ..default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_manual_maximize_fallback;
+
+    #[test]
+    fn only_linux_uses_the_manual_maximize_fallback() {
+        assert_eq!(needs_manual_maximize_fallback(), cfg!(target_os = "linux"));
     }
 }

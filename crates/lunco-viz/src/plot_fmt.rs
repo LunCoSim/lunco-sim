@@ -65,7 +65,7 @@ pub fn decimate_min_max(points: &[[f64; 2]], px_width: f32) -> Option<Vec<[f64; 
     }
     let x0 = points[0][0];
     let span = points[points.len() - 1][0] - x0;
-    if !(span > 0.0) || !span.is_finite() {
+    if span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !span.is_finite() {
         return None;
     }
     let mut out = Vec::with_capacity(cols * 2);
@@ -113,7 +113,7 @@ fn compact_number(v: f64) -> String {
         return format!("{v}");
     }
     let exp = v.abs().log10().floor() as i32;
-    if exp >= 4 || exp < -3 {
+    if !(-3..4).contains(&exp) {
         // Scientific: one mantissa decimal, then drop a trailing ".0".
         format!("{v:.1e}").replace(".0e", "e")
     } else {

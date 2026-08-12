@@ -151,7 +151,7 @@ fn set_placement_replaces_existing_placement_through_apply() {
         )
     });
     let comp = sd.classes.get("M").unwrap().components.get("x").unwrap();
-    let placements: Vec<_> = comp
+    let placement_count = comp
         .annotation
         .iter()
         .filter(|expr| {
@@ -161,9 +161,9 @@ fn set_placement_replaces_existing_placement_through_apply() {
                     if target.parts.len() == 1 && &*target.parts[0].ident.text == "Placement"
             )
         })
-        .collect();
+        .count();
     assert_eq!(
-        placements.len(),
+        placement_count,
         1,
         "expected exactly one Placement (no duplicate from the AST-canonical path); source:\n{}",
         h.document().source()

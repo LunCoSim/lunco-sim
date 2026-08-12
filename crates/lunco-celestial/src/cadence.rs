@@ -293,7 +293,7 @@ pub fn commit_celestial_epoch(
         // log reports the bootstrap and tells you nothing about steady state —
         // which is the only interesting case.
         *solves += 1;
-        if delta >= step && *solves % 300 == 0 {
+        if delta >= step && (*solves).is_multiple_of(300) {
             bevy::log::info!(
                 "[celestial] epoch branch opens the gate: |{:.6} - {:.6}| = {:.3e} d \
                  >= step {:.3e} d ({:.1} s of epoch per solve)",

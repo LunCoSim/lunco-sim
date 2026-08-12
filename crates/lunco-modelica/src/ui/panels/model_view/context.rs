@@ -162,7 +162,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
 
     let _ = (display_name, read_only, library);
     {
-        let source_arc: std::sync::Arc<str> = source.clone().into();
+        let source_arc: std::sync::Arc<str> = source.into();
         let mut state = world.resource_mut::<WorkbenchState>();
         state.editor_buffer = source_arc.to_string();
     }

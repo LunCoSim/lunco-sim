@@ -144,7 +144,7 @@ pub(crate) fn scan_connect_annotations(
 
 fn collect_connect_waypoints_recursive(
     class: &rumoca_compile::parsing::ast::ClassDef,
-    out: &mut std::collections::HashMap<((String, String), (String, String)), ConnectRoute>,
+    _out: &mut std::collections::HashMap<((String, String), (String, String)), ConnectRoute>,
 ) {
     use rumoca_compile::parsing::ast::Equation;
     for eq in &class.equations {
@@ -155,7 +155,7 @@ fn collect_connect_waypoints_recursive(
         // Waypoint extraction from annotation is unavailable until upstream restores it.
     }
     for nested in class.classes.values() {
-        collect_connect_waypoints_recursive(nested, out);
+        collect_connect_waypoints_recursive(nested, _out);
     }
 }
 
@@ -694,7 +694,7 @@ pub fn import_model_to_diagram_from_ast(
         let short_name = node
             .qualified_name
             .split('.')
-            .last()
+            .next_back()
             .unwrap_or(&node.qualified_name);
 
         // Scope-aware type lookup:
@@ -708,7 +708,7 @@ pub fn import_model_to_diagram_from_ast(
         let resolved_path: Option<String> = if type_name.contains('.') {
             Some(type_name.to_string())
         } else {
-            imports_by_short.get(type_name).map(|full| full.clone())
+            imports_by_short.get(type_name).cloned()
         };
         let mut component_def: Option<crate::index::ClassEntry> = resolved_path
             .as_deref()
@@ -970,8 +970,8 @@ pub fn import_model_to_diagram_from_ast(
         let src_node = &graph.nodes[edge.source.0 as usize];
         let tgt_node = &graph.nodes[edge.target.0 as usize];
 
-        let src_short = src_node.qualified_name.split('.').last().unwrap_or("");
-        let tgt_short = tgt_node.qualified_name.split('.').last().unwrap_or("");
+        let src_short = src_node.qualified_name.split('.').next_back().unwrap_or("");
+        let tgt_short = tgt_node.qualified_name.split('.').next_back().unwrap_or("");
 
         // Find matching diagram nodes
         let src_diagram_id = diagram
@@ -1434,10 +1434,10 @@ fn classify_connector(
     }
 }
 
-/// Lookup the first colored graphic's line / fill color on a
-/// connector class. Split out from the old `resolve_connector_icon_color`
-/// so it can be called alongside `classify_connector` from the
-/// single resolve-class site.
+// Lookup the first colored graphic's line / fill color on a
+// connector class. Split out from the old `resolve_connector_icon_color`
+// so it can be called alongside `classify_connector` from the
+// single resolve-class site.
 
 fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Option<[u8; 3]> {
     use crate::annotations::{extract_icon, GraphicItem};
@@ -1507,10 +1507,12 @@ fn eval_condition(
                 .map(|d| eval_condition(d, params_map))
                 .unwrap_or(true)
         }
-        Expression::Unary { op, rhs, .. } => match op {
-            OpUnary::Not => !eval_condition(rhs, params_map),
-            _ => true,
-        },
+        Expression::Unary {
+            op: OpUnary::Not,
+            rhs,
+            ..
+        } => !eval_condition(rhs, params_map),
+        Expression::Unary { .. } => true,
         Expression::Parenthesized { inner, .. } => eval_condition(inner, params_map),
         Expression::Binary { op, lhs, rhs, .. } => match op {
             OpBinary::And => eval_condition(lhs, params_map) && eval_condition(rhs, params_map),

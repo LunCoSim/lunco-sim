@@ -176,7 +176,7 @@ pub fn produce_usd_canvas(
     for p in q.iter() {
         let entry = counts
             .entry(p.stage_handle.id())
-            .or_insert((0, p.stage_handle.clone()));
+            .or_insert_with(|| (0, p.stage_handle.clone()));
         entry.0 += 1;
     }
     let Some((stage_id, handle)) = counts

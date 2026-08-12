@@ -247,7 +247,7 @@ impl AppSettingsExt for App {
             let mut settings = self.world_mut().resource_mut::<Settings>();
             match settings.raw.get(S::KEY).cloned() {
                 None => S::default(),
-                Some(v) => match serde_json::from_value::<S>(v.clone()) {
+                Some(v) => match serde_json::from_value::<S>(v) {
                     Ok(s) => s,
                     Err(_) => {
                         settings.raw.remove(S::KEY);
@@ -492,16 +492,10 @@ impl SettingsSection for DownloadSettings {
 mod disk_guard_tests {
     use super::*;
 
-    #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+    #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
     #[serde(deny_unknown_fields)]
     struct TestSection {
         enabled: bool,
-    }
-
-    impl Default for TestSection {
-        fn default() -> Self {
-            Self { enabled: false }
-        }
     }
 
     impl SettingsSection for TestSection {

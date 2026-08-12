@@ -328,16 +328,16 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
         "AddShortClass" => ("CLAS".into(), format!("{class}/{name} (short)"), green),
         "AddVariable" => ("VAR ".into(), format!("{class} ← {name}"), green),
         "RemoveVariable" => ("VAR ".into(), format!("{class} ✗ {name}"), red),
-        "AddEquation" => ("EQN ".into(), format!("{class}"), blue),
+        "AddEquation" => ("EQN ".into(), class.to_string(), blue),
         "AddPlotNode" | "RemovePlotNode" | "SetPlotNodeExtent" | "SetPlotNodeTitle" => {
-            ("PLOT".into(), format!("{class}"), neutral)
+            ("PLOT".into(), class.to_string(), neutral)
         }
-        "AddIconGraphic" | "AddDiagramGraphic" => ("GFX ".into(), format!("{class}"), neutral),
+        "AddIconGraphic" | "AddDiagramGraphic" => ("GFX ".into(), class.to_string(), neutral),
         "SetDiagramTextExtent" | "SetDiagramTextString" | "RemoveDiagramText" => {
-            ("TXT ".into(), format!("{class}"), neutral)
+            ("TXT ".into(), class.to_string(), neutral)
         }
-        "SetExperimentAnnotation" => ("EXP ".into(), format!("{class}"), neutral),
+        "SetExperimentAnnotation" => ("EXP ".into(), class.to_string(), neutral),
         // Fallback for unknown / new variants.
-        _ => ("EDIT".into(), format!("{kind}"), neutral),
+        _ => ("EDIT".into(), kind.to_string(), neutral),
     }
 }

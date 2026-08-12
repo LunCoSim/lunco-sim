@@ -323,16 +323,12 @@ pub fn sample_nurbs_patch_at(
 /// the first control point and ends at the last, which is what every DCC writes.
 pub fn default_clamped_knots(cv: usize, order: usize) -> Vec<f64> {
     let mut k = Vec::with_capacity(cv + order);
-    for _ in 0..order {
-        k.push(0.0);
-    }
+    k.extend(std::iter::repeat_n(0.0, order));
     let interior = cv.saturating_sub(order);
     for i in 1..=interior {
         k.push(i as f64 / (interior + 1) as f64);
     }
-    for _ in 0..order {
-        k.push(1.0);
-    }
+    k.extend(std::iter::repeat_n(1.0, order));
     k
 }
 

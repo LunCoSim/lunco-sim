@@ -306,7 +306,7 @@ pub fn find_binding_for_wheel(
                 wheel: wheel.clone(),
                 motor: motor.clone(),
                 source,
-                expected: expected.clone(),
+                expected,
             });
         }
 

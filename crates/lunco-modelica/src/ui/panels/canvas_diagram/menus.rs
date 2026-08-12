@@ -165,7 +165,7 @@ fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String
         .resource::<lunco_viz::SignalRegistry>()
         .map(|r| {
             r.iter_scalar()
-                .filter(|(s, _)| bound_entity.map_or(true, |be| s.entity == be))
+                .filter(|(s, _)| bound_entity.is_none_or(|be| s.entity == be))
                 .map(|(s, _)| (s.entity, s.path.clone()))
                 .collect()
         })

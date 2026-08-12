@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod python_tests {
     #[cfg(feature = "python")]
     use crate::python;
     #[cfg(feature = "python")]

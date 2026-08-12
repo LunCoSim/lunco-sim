@@ -454,31 +454,6 @@ pub(super) fn parse_rock_instance(a: &dyn LayerAttrSource) -> Option<Arc<dyn Ter
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// R9: a placed rock draws its size BUCKET's shared mesh, so the bucket must
-    /// track the requested radius closely (else a boulder visibly resizes) while
-    /// still collapsing near-equal rocks onto one mesh (else there is no sharing).
-    #[test]
-    fn rock_size_buckets_are_tight_and_shared() {
-        for r in [0.05f32, 0.2, 0.6, 1.0, 2.5, 5.0, 12.0] {
-            let q = bucket_radius_of(size_bucket(r));
-            let err = (q - r).abs() / r;
-            assert!(
-                err < 0.07,
-                "radius {r} → bucket radius {q} ({:.1}% off)",
-                err * 100.0
-            );
-        }
-        // Near-equal rocks land in the SAME bucket → they share one mesh.
-        assert_eq!(size_bucket(0.60), size_bucket(0.62));
-        // Genuinely different sizes do not.
-        assert_ne!(size_bucket(0.6), size_bucket(2.0));
-    }
-}
-
 /// Parse a `lunco:layer = "rocks"` prim: `enabled` (explicit visibility,
 /// defaulting to true), `density` (per ha, required > 0), `sizeMode` (modal
 /// radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`, `regionM`
@@ -511,4 +486,29 @@ pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn Terrai
         pattern: Pattern::Uniform,
         seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0xB0A1),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R9: a placed rock draws its size BUCKET's shared mesh, so the bucket must
+    /// track the requested radius closely (else a boulder visibly resizes) while
+    /// still collapsing near-equal rocks onto one mesh (else there is no sharing).
+    #[test]
+    fn rock_size_buckets_are_tight_and_shared() {
+        for r in [0.05f32, 0.2, 0.6, 1.0, 2.5, 5.0, 12.0] {
+            let q = bucket_radius_of(size_bucket(r));
+            let err = (q - r).abs() / r;
+            assert!(
+                err < 0.07,
+                "radius {r} → bucket radius {q} ({:.1}% off)",
+                err * 100.0
+            );
+        }
+        // Near-equal rocks land in the SAME bucket → they share one mesh.
+        assert_eq!(size_bucket(0.60), size_bucket(0.62));
+        // Genuinely different sizes do not.
+        assert_ne!(size_bucket(0.6), size_bucket(2.0));
+    }
 }

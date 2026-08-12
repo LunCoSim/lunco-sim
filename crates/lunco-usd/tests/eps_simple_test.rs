@@ -23,7 +23,7 @@ fn electrical_scope_contains_program_api_components() {
     assert_eq!(view.type_name(&root).as_deref(), Some("Scope"));
 
     assert!(view.has_api_schema(&root, "CollectionAPI:components"));
-    let query = Collection::new(root.clone(), "components")
+    let query = Collection::new(root, "components")
         .compute_membership_query(view.stage())
         .unwrap();
     let members = compute_included_paths(view.stage(), &query, PrimPredicate::DEFAULT).unwrap();

@@ -62,6 +62,7 @@ def Xform "Rover" {
             "PhysxVehicleTireAPI", "PhysicsMaterialAPI",
         ]
     ) {
+        uniform token axis = "Z"
         double height = 0.3
         float physxVehicleWheel:radius = 0.4
         int physxVehicleWheelAttachment:index = 0
@@ -135,7 +136,7 @@ def Xform "Rover" {
         .spawn((
             Name::new("Wheel"),
             UsdPrimPath {
-                stage_handle: stage_handle.clone(),
+                stage_handle,
                 path: "/Rover/Wheel".to_string(),
             },
             // Mesh3d is required for wheel processing (matches real pipeline behavior)

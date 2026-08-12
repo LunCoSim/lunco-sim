@@ -325,7 +325,7 @@ pub fn jump_probe_system(
             last.insert(e, (p, bevy::math::DVec3::ZERO));
         }
     }
-    if *frame % 120 == 0 {
+    if (*frame).is_multiple_of(120) {
         bevy::log::info!(
             "[jump-probe] f{} heartbeat: max jerk since last = {:.3e} m ({})",
             *frame,
@@ -370,7 +370,7 @@ pub fn trajectory_probe_system(
     mut tick: Local<u32>,
 ) {
     *tick += 1;
-    if *tick % 20 != 0 {
+    if !(*tick).is_multiple_of(20) {
         return;
     }
     for (name, _view, cell, tf, gt, child_of) in q_views.iter() {
@@ -446,9 +446,9 @@ pub fn spawn_trajectory_update_task(
             let registry_arc = Arc::new((*registry).clone());
             let view_copy = *view;
 
-            let aligned_epoch = if is_fixed {
-                // If fixed range, update_epoch is not moving
-                view_copy.start_epoch.unwrap()
+            let aligned_epoch = if let (true, Some(start)) = (is_fixed, view_copy.start_epoch) {
+                // If fixed range, update_epoch is not moving.
+                start
             } else {
                 (current_epoch / view_copy.sampling_step).round() * view_copy.sampling_step
             };
@@ -475,9 +475,7 @@ pub fn spawn_trajectory_update_task(
                     bevy::math::DVec3::ZERO
                 };
 
-                if view_copy.start_epoch.is_some() && view_copy.end_epoch.is_some() {
-                    let start = view_copy.start_epoch.unwrap();
-                    let end = view_copy.end_epoch.unwrap();
+                if let (Some(start), Some(end)) = (view_copy.start_epoch, view_copy.end_epoch) {
                     let count = ((end - start) / view_copy.sampling_step).ceil() as usize + 1;
                     points.reserve(count);
 
@@ -725,8 +723,8 @@ pub fn trajectory_alpha_update_system(
                         path.update_epoch - (view.sampling_days / 2.0)
                     };
                     let total_sampling_days =
-                        if view.start_epoch.is_some() && view.end_epoch.is_some() {
-                            view.end_epoch.unwrap() - view.start_epoch.unwrap()
+                        if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
+                            end - start
                         } else {
                             view.sampling_days
                         };

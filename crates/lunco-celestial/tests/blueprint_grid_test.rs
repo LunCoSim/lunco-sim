@@ -79,7 +79,7 @@ fn test_grid_visible_at_face_centers() {
 
 #[test]
 fn test_grid_visible_at_surface_points() {
-    let test_points = [
+    let test_points: [(f64, f64, &str); 6] = [
         (0.0f64, 0.0, "equator/prime"),
         (0.0, 90.0, "equator/90E"),
         (45.0, 0.0, "45N/prime"),
@@ -89,8 +89,8 @@ fn test_grid_visible_at_surface_points() {
     ];
 
     for (lat, lon, desc) in &test_points {
-        let lat_r = (*lat as f64).to_radians();
-        let lon_r = (*lon as f64).to_radians();
+        let lat_r = (*lat).to_radians();
+        let lon_r = (*lon).to_radians();
         let pos = [
             (lat_r.cos() * lon_r.sin() * MOON_R as f64) as f32,
             (lat_r.sin() * MOON_R as f64) as f32,

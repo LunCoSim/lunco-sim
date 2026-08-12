@@ -159,13 +159,13 @@ pub fn resolve_asset(
         if !abs_path.is_file() {
             return None;
         }
-        return Some(AssetFile {
+        Some(AssetFile {
             asset_path: asset_path.to_string(),
             stem: stem_of(rel),
             rel: rel.to_string(),
             abs_path,
             twin: Some(name.to_string()),
-        });
+        })
     }
 
     #[cfg(target_arch = "wasm32")]

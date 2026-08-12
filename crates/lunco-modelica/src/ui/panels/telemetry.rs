@@ -598,12 +598,12 @@ impl Panel for TelemetryPanel {
     }
 }
 
-/// Empty-state for the runtime-telemetry section: a muted explanation
-/// + an inline 🚀 Compile button that triggers the same
-/// `CompileModel` the toolbar fires. Used both pre-compile (no
-/// stepper exists yet) and after a stepper loses its component
-/// (post-Reset / mid-rebuild). Keeping the action in-panel means users
-/// don't have to hunt the toolbar to escape the empty state.
+/// Empty-state for the runtime-telemetry section: a muted explanation with
+/// an inline 🚀 Compile button that triggers the same `CompileModel` as the
+/// toolbar. Used both pre-compile (no stepper exists yet) and after a stepper
+/// loses its component (post-Reset / mid-rebuild). Keeping the action
+/// in-panel means users do not have to hunt the toolbar to escape the empty
+/// state.
 fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelCtx, msg: &str) {
     let active_doc = ctx
         .resource::<lunco_workspace::WorkspaceResource>()

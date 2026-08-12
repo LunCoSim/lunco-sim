@@ -155,8 +155,8 @@ mod tests {
     #[test]
     fn kepler_solver_converges() {
         for e in [0.0, 0.3, 0.6, 0.9, 0.97] {
-            for m_deg in [0.0, 45.0, 123.0, 180.0, 271.0, 359.0] {
-                let m = (m_deg as f64).to_radians();
+            for m_deg in [0.0_f64, 45.0, 123.0, 180.0, 271.0, 359.0] {
+                let m = m_deg.to_radians();
                 let ecc = solve_kepler(m, e);
                 let back = ecc - e * ecc.sin();
                 assert!(

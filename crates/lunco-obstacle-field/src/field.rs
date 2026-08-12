@@ -516,9 +516,9 @@ mod tests {
         g.stamp_crater(Vec2::new(4.0, -4.0), 6.0, 3.0, 0.0);
         let av = g.to_avian_heights();
         // av[x][z] must equal the row-major sample.
-        for z in 0..g.res {
-            for x in 0..g.res {
-                assert_eq!(av[x][z], g.heights[z * g.res + x]);
+        for (z, row) in av.iter().enumerate() {
+            for (x, &height) in row.iter().enumerate() {
+                assert_eq!(height, g.heights[z * g.res + x]);
             }
         }
     }

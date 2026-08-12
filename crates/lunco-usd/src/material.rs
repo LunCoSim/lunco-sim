@@ -97,7 +97,7 @@ pub fn ensure_preview_surface_ops(
     let mut ops = vec![
         UsdOp::AddPrim {
             edit_target: root_layer.clone(),
-            parent_path: root.clone(),
+            parent_path: root,
             name: LOOKS.into(),
             type_name: Some("Scope".into()),
             reference: None,

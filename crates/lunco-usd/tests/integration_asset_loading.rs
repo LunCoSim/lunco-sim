@@ -737,7 +737,7 @@ fn test_full_scene_loads_with_rovers() {
     app.world_mut().spawn((
         Name::new("TestScene"),
         UsdPrimPath {
-            stage_handle: scene_handle.clone(),
+            stage_handle: scene_handle,
             path: "/SandboxScene".to_string(),
         },
         Transform::default(),
@@ -859,11 +859,13 @@ fn test_full_scene_loads_with_rovers() {
         .filter(|(_, name)| name.as_str().contains("Conn_Steer"))
         .map(|(_, name)| name.as_str().to_string())
         .collect();
-    // 6 rovers × 2 front wheels = 12 steering connections
+    // Only the two Ackermann instances steer their front knuckles directly
+    // (2 instances × 2 front wheels). The four skid-steer instances turn by
+    // differential drive and therefore have no wheel-steer connections.
     assert_eq!(
         steering_wires.len(),
-        12,
-        "6 rovers × 2 front wheels = 12 steering connections, got {}: {:?}",
+        4,
+        "2 Ackermann rovers × 2 front wheels = 4 steering connections, got {}: {:?}",
         steering_wires.len(),
         steering_wires
     );

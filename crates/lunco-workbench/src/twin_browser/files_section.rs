@@ -284,7 +284,6 @@ impl BrowserSection for FilesSection {
             (
                 ws.active_twin,
                 ws.twins()
-                    .map(|(id, t)| (id, t))
                     .collect::<Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)>>(),
             )
         });

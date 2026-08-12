@@ -367,7 +367,7 @@ mod tests {
         ];
         let rev_sorted = scenario_revision(&assets);
         // Same assets, different declaration order ⇒ same revision (sorts internally).
-        let mut shuffled = assets.clone();
+        let mut shuffled = assets;
         shuffled.reverse();
         let rev_shuffled = scenario_revision(&shuffled);
         assert_eq!(rev_sorted, rev_shuffled);

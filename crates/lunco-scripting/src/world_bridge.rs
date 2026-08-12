@@ -1234,10 +1234,11 @@ const COMPILED_CACHE_CAP: usize = 512;
 /// event (behaviour-identical to no filter). A scenario that subscribes trades a
 /// tiny footgun (forget a name ⇒ that event skips its `on_event`) for skipping
 /// the VM entry on every event it doesn't care about — the P2 optimisation, opt-in.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 enum EventFilter {
     /// No filter — deliver every event (the default; forgetting to subscribe is
     /// safe, it just means "all", never a silent drop).
+    #[default]
     All,
     /// Only events whose name is in `exact` or starts with a `prefixes` entry
     /// (e.g. `subscribe_prefix("enter:")` for every zone-enter).
@@ -1245,12 +1246,6 @@ enum EventFilter {
         exact: std::collections::HashSet<String>,
         prefixes: Vec<String>,
     },
-}
-
-impl Default for EventFilter {
-    fn default() -> Self {
-        EventFilter::All
-    }
 }
 
 impl EventFilter {
@@ -1822,16 +1817,16 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
     fn resolve(&mut self, path: &str) -> i64 {
         bridge_core::find(path)
     }
-    fn call_action(&mut self, f: &FnPtr) -> Result<(), ()> {
+    fn call_action(&mut self, f: &FnPtr) -> Result<(), crate::task_tree::TaskCallbackError> {
         match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.note(e);
-                Err(())
+                Err(crate::task_tree::TaskCallbackError)
             }
         }
     }
-    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, ()> {
+    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, crate::task_tree::TaskCallbackError> {
         match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
             Ok(d) => d.as_bool().map_err(|t| {
                 error!("[rhai] task predicate returned `{t}`, expected bool");
@@ -1841,10 +1836,11 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
                         rhai::Position::NONE,
                     ));
                 }
+                crate::task_tree::TaskCallbackError
             }),
             Err(e) => {
                 self.note(e);
-                Err(())
+                Err(crate::task_tree::TaskCallbackError)
             }
         }
     }
@@ -1882,9 +1878,7 @@ fn tick_native_task(
 
     // Inspect the spec (and stamp a new marker) inside one `this` borrow.
     let plan = {
-        let Some(mut this_map) = st.this.write_lock::<Map>() else {
-            return None;
-        };
+        let mut this_map = st.this.write_lock::<Map>()?;
         match this_map.get_mut("task") {
             None => TaskPlan::None,
             Some(v) if v.is_unit() => TaskPlan::None,
@@ -1925,9 +1919,7 @@ fn tick_native_task(
     }
 
     let program = st.program.clone();
-    let Some(ct) = st.task.as_mut() else {
-        return None;
-    };
+    let ct = st.task.as_mut()?;
     if ct.done {
         return None;
     }

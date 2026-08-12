@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(base, grid_cache_key(b"meta", b"tif", &job), "deterministic");
         assert_ne!(base, grid_cache_key(b"meta2", b"tif", &job));
         assert_ne!(base, grid_cache_key(b"meta", b"tif2", &job));
-        let mut job2 = job.clone();
+        let mut job2 = job;
         job2.half_window = 2001.0;
         assert_ne!(base, grid_cache_key(b"meta", b"tif", &job2));
     }

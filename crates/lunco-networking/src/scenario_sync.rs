@@ -630,17 +630,14 @@ pub fn drain_persist_results(
         }
         // Complete only when the last of this CID's writes reports in (a CID may
         // occupy several manifest paths).
-        match downloads.pending_writes.get_mut(&outcome.cid) {
-            Some(remaining) => {
-                *remaining -= 1;
-                if *remaining == 0 {
-                    downloads.pending_writes.remove(&outcome.cid);
-                    downloads.completed.insert(outcome.cid);
-                }
+        if let Some(remaining) = downloads.pending_writes.get_mut(&outcome.cid) {
+            *remaining -= 1;
+            if *remaining == 0 {
+                downloads.pending_writes.remove(&outcome.cid);
+                downloads.completed.insert(outcome.cid);
             }
-            // No tally (e.g. a failure already cleared it) → ignore the straggler.
-            None => {}
         }
+        // No tally (e.g. a failure already cleared it) → ignore the straggler.
     }
 }
 
@@ -1276,7 +1273,7 @@ mod tests {
         let data = vec![0xABu8; ASSET_CHUNK_SIZE + 123];
         lunco_storage::write_file_sync(&tmp, &data).unwrap();
         let cid = cid_for_content(&data).to_bytes();
-        let chunks = read_and_chunk(vec![(cid.clone(), tmp.clone())]);
+        let chunks = read_and_chunk(vec![(cid.clone(), tmp)]);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].offset, 0);
         assert_eq!(chunks[0].data.len(), ASSET_CHUNK_SIZE);

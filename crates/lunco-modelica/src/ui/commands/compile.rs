@@ -72,18 +72,18 @@ pub struct CompileModel {
     pub resume_after_compile: bool,
 }
 
-/// Run the Auto-Arrange layout: assign each component of the active
-/// class a deterministic grid position and persist it via a batch of
-/// `SetPlacement` ops (undo-able as one group). Matches Dymola's
-/// **Edit → Auto Arrange** command. The passive open-time fallback
-/// stacks components at origin so nothing jumps around; users invoke
-/// this to lay out an imported model cleanly in one click.
-///
-/// Exposed to the LunCo API: `POST /api/commands` with
-/// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
-/// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
-/// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
-/// the bevy-reflect dependency required to cross the API boundary.
+// Run the Auto-Arrange layout: assign each component of the active
+// class a deterministic grid position and persist it via a batch of
+// `SetPlacement` ops (undo-able as one group). Matches Dymola's
+// **Edit → Auto Arrange** command. The passive open-time fallback
+// stacks components at origin so nothing jumps around; users invoke
+// this to lay out an imported model cleanly in one click.
+//
+// Exposed to the LunCo API: `POST /api/commands` with
+// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
+// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
+// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
+// the bevy-reflect dependency required to cross the API boundary.
 
 // ─── Compile-class picker + Fast-Run setup modal types & renderers ───────
 
@@ -496,7 +496,7 @@ pub(crate) fn render_fast_run_setup(
         // disambiguation modal — the dropdown above already resolved it.
         commands.trigger(FastRunActiveModel {
             doc: entry.doc,
-            class: Some(entry.model_ref.0.clone()),
+            class: Some(entry.model_ref.0),
             t_end: None,
             dt: None,
             n_intervals: None,
@@ -625,12 +625,12 @@ pub(crate) fn render_compile_class_picker(
     }
 }
 
-/// Plugin that installs all Modelica command observers.
-///
-/// `ModelicaUiPlugin` adds this automatically. Keeping the registration
-/// in its own plugin makes it easy for headless tests (or another shell
-/// that doesn't want the rest of the UI plugin) to opt in to the
-/// command path alone.
+// Plugin that installs all Modelica command observers.
+//
+// `ModelicaUiPlugin` adds this automatically. Keeping the registration
+// in its own plugin makes it easy for headless tests (or another shell
+// that doesn't want the rest of the UI plugin) to opt in to the
+// command path alone.
 
 /// The source text to overlay into the compiler session when compiling a
 /// document — and the crux of running MSL/library examples correctly.
@@ -943,7 +943,7 @@ pub fn on_compile_model(
             // `compiled_generation` by the post-compile success handler.
             model.pending_generation = doc_generation;
             model.model_name = model_name.clone();
-            model.source_uri = source_uri.clone();
+            model.source_uri = source_uri;
             model.parameters = params;
             model.inputs.clear();
             for (name, val) in &inputs_with_defaults {
@@ -994,7 +994,7 @@ pub fn on_compile_model(
                 Name::new(model_name.clone()),
                 ModelicaModel {
                     model_name: model_name.clone(),
-                    source_uri: source_uri.clone(),
+                    source_uri,
                     current_time: 0.0,
                     // The world clock this model is coupled to starts with it
                     // (A3 — the macro-step target, advanced one fixed-tick delta
@@ -2015,7 +2015,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
         // Resolve the chosen class: an explicit (valid) `qualified`, else the
         // dialog's pre-selected candidate.
         let chosen = match want {
-            Some(q) if entry.candidates.iter().any(|c| *c == q) => q,
+            Some(q) if entry.candidates.contains(&q) => q,
             Some(q) => {
                 warn!(
                     "[ConfirmClassPicker] `{q}` is not a candidate ({:?}); using pre-selected",
@@ -2251,7 +2251,6 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
         // Drop the borrow before touching other resources.
         let live: std::collections::HashSet<lunco_experiments::ExperimentId> =
             reg.iter_all().map(|e| e.id).collect();
-        drop(reg);
         let purged: Vec<lunco_experiments::ExperimentId> =
             before.difference(&live).copied().collect();
         // Journal each removal (Delete) so the deletion syncs + persists. Done

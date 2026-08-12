@@ -212,8 +212,10 @@ end PriorAllocator;
     let dae = compiler
         .compile_str("GeneratedRcs", source, "generated://GeneratedRcs.mo")
         .expect("generated RCS network compiles");
-    let mut opts = rumoca_sim::SimOptions::default();
-    opts.t_end = 2.0;
+    let opts = rumoca_sim::SimOptions {
+        t_end: 2.0,
+        ..Default::default()
+    };
     let mut stepper =
         rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("generated RCS stepper builds");
     stepper

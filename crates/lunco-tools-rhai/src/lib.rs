@@ -153,7 +153,7 @@ pub fn refresh(engine: &mut Engine) -> Vec<(String, String)> {
     for tool in lunco_tools::all() {
         match build_module(&tool, engine) {
             Ok(Some(module)) => {
-                engine.register_static_module(tool.name().to_string(), module.into());
+                engine.register_static_module(tool.name(), module.into());
             }
             // No rhai surface by design (e.g. a behaviour-tree closure tool) — skip.
             Ok(None) => {}

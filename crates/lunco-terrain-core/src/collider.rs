@@ -216,8 +216,8 @@ mod tests {
     fn idempotent() {
         let res = 24;
         let mut h = vec![0.0; res * res];
-        for i in 0..res * res {
-            h[i] = ((i * 37) % 13) as f64 * 3.0; // jagged
+        for (i, value) in h.iter_mut().enumerate() {
+            *value = ((i * 37) % 13) as f64 * 3.0; // jagged
         }
         slope_limit_grid(&mut h, res, 1.0, 0.4);
         let once = h.clone();

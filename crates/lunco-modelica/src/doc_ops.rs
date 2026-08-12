@@ -137,9 +137,10 @@ pub struct PendingStructuralOps {
 }
 
 fn deferred_ack() -> lunco_doc::Ack {
-    let mut ack = lunco_doc::Ack::default();
-    ack.assigned = serde_json::json!({ "deferred": true });
-    ack
+    lunco_doc::Ack {
+        assigned: serde_json::json!({ "deferred": true }),
+        ..Default::default()
+    }
 }
 
 /// Exclusive system that retries queued structural ops once their

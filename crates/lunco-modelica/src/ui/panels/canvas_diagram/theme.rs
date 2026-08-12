@@ -66,6 +66,6 @@ pub(super) fn canvas_theme_from_ctx(ctx: &egui::Context) -> CanvasThemeSnapshot 
 /// published theme.
 pub(super) fn modelica_icon_palette_from_ctx(
     ctx: &egui::Context,
-) -> Option<lunco_theme::ModelicaIconPalette> {
-    Some(lunco_theme::active(ctx).modelica_icons.clone())
+) -> lunco_theme::ModelicaIconPalette {
+    lunco_theme::active(ctx).modelica_icons.clone()
 }

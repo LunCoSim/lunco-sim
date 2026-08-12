@@ -84,7 +84,7 @@ fn rewire_derives_at_load_and_clears() {
         .world_mut()
         .spawn((
             UsdPrimPath {
-                stage_handle: handle.clone(),
+                stage_handle: handle,
                 path: "/World/Sink".into(),
             },
             lunco_core::PortSurfaceReady,
@@ -393,10 +393,10 @@ fn lander_asset_wiring_migrated() {
     assert_eq!(view.value::<f32>(&gnc, "inputs:initial_vel_z"), Some(-5.0));
     assert_eq!(
         view.value::<f32>(&lander, "inputs:touchdown_ground_speed_mps"),
-        // The reusable descent airframe authors the settled-contact threshold
-        // at 0.1 m/s. This is intentionally stricter than the Modelica source
-        // default: the composed USD asset is the authoritative vehicle tuning.
-        Some(0.1)
+        // The reusable descent airframe deliberately leaves this input
+        // unauthored; Lander.mo owns its documented 0.5 m/s semantic default.
+        // A composed USD read must therefore report no authored override.
+        None
     );
     // The IMU is a measurement conversion, not a second estimator state
     // owner.  Its acceleration inputs are live solved Avian observations; the mission
@@ -533,7 +533,7 @@ fn rewire_applies_factor_and_offset() {
     ));
     app.world_mut().spawn((
         UsdPrimPath {
-            stage_handle: handle.clone(),
+            stage_handle: handle,
             path: "/World/Sink".into(),
         },
         lunco_core::PortSurfaceReady,
@@ -589,7 +589,7 @@ fn rewire_reads_float_authored_transform() {
     ));
     app.world_mut().spawn((
         UsdPrimPath {
-            stage_handle: handle.clone(),
+            stage_handle: handle,
             path: "/World/Sink".into(),
         },
         lunco_core::PortSurfaceReady,

@@ -144,7 +144,7 @@ pub(crate) fn crater_placements(
     // field must not become a carpet once the SFD scales it) and an absolute
     // count (a pathological window would otherwise mint millions).
     let per_ha = (craters.density as f64 * sfd_scale).min(MAX_CRATERS_PER_HA);
-    let count = (per_ha * hectares).round().max(0.0).min(250_000.0) as usize;
+    let count = (per_ha * hectares).round().clamp(0.0, 250_000.0) as usize;
     if count == 0 {
         return Vec::new();
     }
@@ -491,7 +491,7 @@ fn on_spawn_dem_terrain(
     }
     let half_window = match ev.window_m {
         w if !w.is_finite() => (DEFAULT_WINDOW_M * 0.5) as f64, // NaN/inf → default
-        w if w == 0.0 => f64::INFINITY,                         // whole map
+        0.0 => f64::INFINITY,                                   // whole map
         w if w < 0.0 => (DEFAULT_WINDOW_M * 0.5) as f64,
         w => (w.min(MAX_WINDOW_M) * 0.5) as f64,
     };

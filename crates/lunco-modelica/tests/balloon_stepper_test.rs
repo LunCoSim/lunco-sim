@@ -27,9 +27,11 @@ fn balloon_stepper_variable_names_contain_states_only() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = SimOptions::default();
-    opts.atol = 1e-3;
-    opts.rtol = 1e-3;
+    let opts = SimOptions {
+        atol: 1e-3,
+        rtol: 1e-3,
+        ..Default::default()
+    };
     let stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
 
     // rumoca 0.9.1: variable_names() exposes states + algebraics + outputs
@@ -54,9 +56,11 @@ fn balloon_stepper_get_recovers_algebraics() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = SimOptions::default();
-    opts.atol = 1e-3;
-    opts.rtol = 1e-3;
+    let opts = SimOptions {
+        atol: 1e-3,
+        rtol: 1e-3,
+        ..Default::default()
+    };
     let stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
 
     // Names we expect to be recoverable by stepper.get() (either by being in
@@ -98,10 +102,22 @@ fn balloon_stepper_initial_netforce_is_positive() {
         .compile_str("Balloon", &stripped, "balloon.mo")
         .expect("balloon.mo should compile cleanly");
 
-    let mut opts = SimOptions::default();
-    opts.atol = 1e-3;
-    opts.rtol = 1e-3;
+    let opts = SimOptions {
+        atol: 1e-3,
+        rtol: 1e-3,
+        ..Default::default()
+    };
     let mut stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
+
+    // Balloon.mo intentionally defaults to vacuum and lunar gravity.  This
+    // test checks the positive-lift Earth case, so author the medium and local
+    // gravity explicitly through the same runtime input boundary a scene uses.
+    stepper
+        .set_input("rho0", 1.225)
+        .expect("rho0 is a valid balloon input");
+    stepper
+        .set_input("gravity", 9.81)
+        .expect("gravity is a valid balloon input");
 
     // Step once so algebraics get evaluated if they're only computed on step().
     let _ = stepper.step(0.016);

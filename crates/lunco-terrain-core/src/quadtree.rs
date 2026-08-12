@@ -770,10 +770,8 @@ mod tests {
     #[test]
     fn hysteresis_is_a_real_dead_band() {
         let q = qt();
-        assert!(
-            REFINE_HYSTERESIS > 1.0,
-            "a band at or below 1.0 is no band at all"
-        );
+        let hysteresis = std::hint::black_box(REFINE_HYSTERESIS);
+        assert!(hysteresis > 1.0, "a band at or below 1.0 is no band at all");
         let r = q.error_refine_range(q.geometric_error(1));
         assert!(
             r * REFINE_HYSTERESIS > r,
