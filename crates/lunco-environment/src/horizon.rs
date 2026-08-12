@@ -397,6 +397,20 @@ pub struct HorizonShadowCache {
     last_sun_local: Vec3,
 }
 
+impl HorizonShadowCache {
+    /// Whether this cache can be sampled for the current terrain-local sun.
+    ///
+    /// The bake is an angular snapshot, not a generic terrain mask.  Consumers
+    /// must make the same freshness decision as [`start_shadow_cache_bake`]
+    /// before enabling the texture; keeping an old image bound while a fast
+    /// clock is rebaking makes a correctly lit terrain look fully shadowed.
+    pub fn is_valid_for_sun(&self, sun_local: Vec3, threshold_deg: f32) -> bool {
+        let sun_local = sun_local.normalize_or_zero();
+        let threshold = threshold_deg.max(0.0).to_radians();
+        self.last_sun_local.dot(sun_local) >= threshold.cos()
+    }
+}
+
 /// In-flight async visibility-cache bake for a terrain entity (native only).
 #[derive(Component)]
 pub struct ShadowCacheBakeTask(Task<ShadowCacheResult>);
@@ -1037,6 +1051,21 @@ mod tests {
         let sun = Vec3::new(1.0, 0.3, 0.2).normalize();
         let bytes = field.bake_visibility_cache(sun, 0.0046, 8);
         assert!(bytes.iter().all(|&b| b == 255), "flat terrain → all lit");
+    }
+
+    #[test]
+    fn shadow_cache_is_disabled_until_its_sun_direction_is_current() {
+        let cache = HorizonShadowCache {
+            image: Handle::default(),
+            last_sun_local: Vec3::Y,
+        };
+
+        assert!(cache.is_valid_for_sun(Vec3::Y, 0.05));
+        assert!(cache.is_valid_for_sun(
+            Quat::from_rotation_z(0.0005_f32.to_radians()) * Vec3::Y,
+            0.05
+        ));
+        assert!(!cache.is_valid_for_sun(Vec3::NEG_Y, 0.05));
     }
 
     /// A ridge casts a shadow on the side away from the sun: texels beyond the

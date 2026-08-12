@@ -125,9 +125,15 @@ pub fn insert_celestial_comms_components(
     }
 
     // --- Geodetic anchor (ground stations + scene site anchor) ---
+    // Terrain owns the same authored lat/lon as a DEM georeference, but that
+    // data is not a second ECS placement. `TerrainGeoref` is projected by the
+    // terrain bridge and the terrain remains in its site scene branch; giving
+    // it `GeodeticAnchor` here would make the celestial placement pass detach
+    // it from the scene and double-place the surface relative to the rover.
+    let is_terrain = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
     let lat = reader.real(sdf_path, "lunco:anchor:lat");
     let lon = reader.real(sdf_path, "lunco:anchor:lon");
-    if lat.is_some() || lon.is_some() {
+    if !is_terrain && (lat.is_some() || lon.is_some()) {
         let body = reader
             .scalar::<i32>(sdf_path, "lunco:anchor:body")
             .unwrap_or(DEFAULT_ANCHOR_BODY);

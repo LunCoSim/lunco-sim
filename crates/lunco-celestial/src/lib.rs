@@ -276,6 +276,7 @@ impl Plugin for CelestialPlugin {
                 },
             ),
         );
+        app.add_systems(Update, big_space_setup::sync_site_gravity);
 
         // The mirror of spawn: when a scene reload leaves the world with a celestial
         // hierarchy but no declarations (reloaded into a scene without a sky), tear the
@@ -371,6 +372,9 @@ impl Plugin for CelestialPlugin {
                 // following frame, which makes this run as soon as the grid
                 // actually exists.
                 placement::anchor_solar_frame_to_site
+                    .run_if(cadence::tracked_needs_solve())
+                    .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
+                placement::attach_site_scene_to_surface_grid
                     .run_if(cadence::tracked_needs_solve())
                     .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
                 placement::place_celestial_bound_entities,

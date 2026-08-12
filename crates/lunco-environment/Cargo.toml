@@ -31,6 +31,10 @@ wgpu-types = "29"
 avian3d = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }
+# BigSpace is a render-free spatial transform dependency. Gravity needs its
+# authoritative cell/grid types to compose body-relative positions; it does
+# not enable any renderer or own scene placement.
+big_space = { workspace = true }
 # `physics_is_live` — the run condition gating force application on the solver
 # actually stepping. Gravity is applied as an EXPLICIT force here (avian's own
 # `Gravity` resource is zero), so an ungated tick accumulates into the force

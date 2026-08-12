@@ -159,7 +159,9 @@ pub fn wire_terrain_materials(
             cache_engaged.insert(entity, now);
             now
         };
-        let shadow_cache_on: f32 = if cfg.enabled && engaged && cache_image.is_some() {
+        let cache_current = shadow_cache
+            .is_some_and(|cache| cache.is_valid_for_sun(sun_local, cfg.sun_threshold_deg));
+        let shadow_cache_on: f32 = if cfg.enabled && engaged && cache_current {
             1.0
         } else {
             0.0

@@ -249,7 +249,7 @@ impl Plugin for UsdAvianPlugin {
             |mut commands: Commands,
              mut lint: ResMut<lunco_lint::LintReport>,
              mut groups: ResMut<CollisionGroupTables>| {
-                commands.remove_resource::<PhysicsSceneGravity>();
+                commands.remove_resource::<lunco_environment::PhysicsSceneGravity>();
                 lint.clear_domain(lint::USD_LINT_DOMAIN);
                 // The groups belong to the scene being replaced. Carried over,
                 // they would put the next scene's colliders on layers nothing in
@@ -266,10 +266,10 @@ impl Plugin for UsdAvianPlugin {
             // The joint builder is preparation, not integration. It runs in the
             // enclosing fixed schedule after the bridge's hold-safe read pass,
             // so scene readiness can resolve authored joints even while
-            // `Time<Physics>` is paused. Commands are flushed before Avian's
-            // nested schedule: on the first released physics tick the parked
-            // `PendingJoint` is admitted after solver bodies exist and before
-            // joint preparation/integration.
+            // `Time<Physics>` is paused. The outer Update admission pass runs
+            // after the deferred commands are flushed; the next fixed physics
+            // step then consumes the admitted constraint after solver bodies
+            // exist.
             .add_systems(
                 FixedPostUpdate,
                 (
@@ -1136,21 +1136,6 @@ fn process_usd_avian_prims(
     extract_avian_prim(&view, entity, &sdf_path, &groups, &mut commands);
 }
 
-/// Which `UsdPhysicsScene` prim set the world's gravity, and to what.
-///
-/// Kept so a SECOND scene prim asking for something different is reported
-/// instead of silently winning by visit order. Cleared with the rest of the
-/// world on scene teardown, so a reload re-reads whatever the new scene says.
-#[derive(Resource, Clone, Debug)]
-pub struct PhysicsSceneGravity {
-    /// Composed path of the prim that set it.
-    pub prim: String,
-    /// Magnitude in m/s², already converted from scene units.
-    pub magnitude: f64,
-    /// Unit direction in the canonical frame.
-    pub direction: DVec3,
-}
-
 /// Set the world's gravity from a composed `UsdPhysicsScene` prim.
 ///
 /// `physics:gravityMagnitude` is in scene units per second squared and
@@ -1189,7 +1174,7 @@ fn apply_physics_scene_gravity(
         // unconditional or a scene RELOAD — whose prims are a different set from
         // the outgoing scene's — would be refused its own gravity and inherit
         // the previous scene's.
-        if let Some(existing) = world.get_resource::<PhysicsSceneGravity>() {
+        if let Some(existing) = world.get_resource::<lunco_environment::PhysicsSceneGravity>() {
             let disagrees = (existing.magnitude - magnitude).abs() > 1e-9
                 || !existing.direction.abs_diff_eq(direction, 1e-9);
             if existing.prim != prim && disagrees {
@@ -1209,7 +1194,7 @@ fn apply_physics_scene_gravity(
         }
         info!("[usd-avian] {prim} sets gravity to {magnitude:.4} m/s² along {direction:?}");
         world.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
-        world.insert_resource(PhysicsSceneGravity {
+        world.insert_resource(lunco_environment::PhysicsSceneGravity {
             prim,
             magnitude,
             direction,
@@ -2783,13 +2768,13 @@ pub struct JointAttachPlugin;
 
 /// The systems that install parked joints.
 ///
-/// Public so a joint BUILDER can order itself before them. That ordering is not
-/// cosmetic: a builder seats its joint (moves body1 onto the authored anchors,
-/// matches its velocity) and the seating is only true for the tick it ran on. If
-/// the constraint lands a tick later, gravity has already pulled the pair apart
-/// and the solver resolves the violation impulsively — an authored lander's legs
-/// leave the world at ~13 km/s. Ordering the build set before this one lets
-/// Bevy's sync point fall between them, so seat and install are the same tick.
+/// Public so a joint BUILDER can order itself before them. Admission runs in
+/// the outer `Update` schedule because that schedule continues while the
+/// nested Avian physics schedule is held for scene readiness. The builder seats
+/// the joint in `FixedPostUpdate`; the deferred command boundary then exposes
+/// the parked constraint to this set, and the next fixed physics step consumes
+/// the admitted component. The readiness hold keeps the seated assembly from
+/// integrating during that boundary.
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JointAdmission;
 
@@ -2799,16 +2784,14 @@ impl Plugin for JointAttachPlugin {
         // constraint it carries, so a new joint kind is one line HERE and
         // nothing else anywhere.
         //
-        // Admission belongs to Avian's nested solver schedule. The USD builder
-        // runs in the enclosing FixedPostUpdate schedule and seats a joint
-        // before the nested physics step; this system must therefore run after Avian has
-        // created the corresponding solver bodies but before Avian prepares
-        // joint constraints. Ordering against the outer `PhysicsSystems` set
-        // is insufficient: that set is not part of the nested
-        // `PhysicsSchedule`, so a parked joint could survive one whole physics
-        // tick and the body would move away from its authored seat.
+        // Admission is structural topology work, not solver work. It must be
+        // able to run while the nested PhysicsSchedule is paused by the world
+        // readiness hold; otherwise the hold waits for PendingJointAdmission
+        // while the only system that can clear it is itself paused. Body island
+        // nodes are already authoritative by this point, and Avian consumes
+        // the installed constraint on the next fixed physics step.
         app.add_systems(
-            avian3d::schedule::PhysicsSchedule,
+            Update,
             (
                 admit_pending_joints::<RevoluteJoint>
                     .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
@@ -2821,9 +2804,7 @@ impl Plugin for JointAttachPlugin {
                 admit_pending_joints::<DistanceJoint>
                     .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
             )
-                .in_set(JointAdmission)
-                .after(avian3d::dynamics::solver::schedule::SolverSystems::PrepareSolverBodies)
-                .before(avian3d::dynamics::solver::schedule::SolverSystems::PrepareJoints),
+                .in_set(JointAdmission),
         );
     }
 }

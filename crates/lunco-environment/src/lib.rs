@@ -9,8 +9,9 @@
 //! pattern — see the README for templates.
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
 // `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
 // `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
@@ -47,8 +48,8 @@ pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LunCoEnvironment";
 /// *systems* in `lunco_celestial` import these.
 pub mod gravity_types;
 pub use gravity_types::{
-    Gravity, GravityBody, GravityModel, GravityProvider, EARTH_SURFACE_GRAVITY,
-    MOON_SURFACE_GRAVITY,
+    Gravity, GravityBody, GravityModel, GravityProvider, PhysicsSceneGravity,
+    EARTH_SURFACE_GRAVITY, MOON_SURFACE_GRAVITY,
 };
 
 /// Physical lighting parameters of the lunar sky (`LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`)
@@ -187,6 +188,9 @@ pub fn compute_local_gravity(
     q_entities: Query<(
         Entity,
         Ref<Transform>,
+        Option<&CellCoord>,
+        Option<&ChildOf>,
+        Option<&Grid>,
         Option<&GravityBody>,
         Option<&LocalGravity>,
     )>,
@@ -198,7 +202,7 @@ pub fn compute_local_gravity(
     // This stops both the per-frame provider lookups and the change-detection
     // storm caused by blindly re-inserting an identical value every frame.
     let gravity_changed = gravity.is_changed();
-    for (entity, tf, gravity_body, existing) in &q_entities {
+    for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
         if existing.is_some() && !gravity_changed && !tf.is_changed() {
             continue;
         }
@@ -211,7 +215,17 @@ pub fn compute_local_gravity(
                 let Ok(provider) = q_bodies.get(body_link.body_entity) else {
                     continue;
                 };
-                provider.model.acceleration(tf.translation.as_dvec3())
+                let Some((entity_world, _)) = gravity_world_pose(entity, &q_entities) else {
+                    continue;
+                };
+                let Some((body_world, body_rotation)) =
+                    gravity_world_pose(body_link.body_entity, &q_entities)
+                else {
+                    continue;
+                };
+                let relative_body = body_rotation.inverse() * (entity_world - body_world);
+                let acceleration = provider.model.acceleration(relative_body);
+                body_rotation * acceleration
             }
         };
         // Don't re-insert (and re-trigger change detection) when the value is
@@ -223,6 +237,62 @@ pub fn compute_local_gravity(
         }
         commands.entity(entity).try_insert(LocalGravity(g));
     }
+}
+
+/// Compose a point and rotation through the same `(CellCoord, Transform, Grid)`
+/// chain used by the physics bridge.  Surface gravity is evaluated in the
+/// provider body's body-fixed frame; using only the entity's local Transform
+/// silently treated a scene-root offset as a body-relative position.
+fn gravity_world_pose(
+    entity: Entity,
+    q: &Query<(
+        Entity,
+        Ref<Transform>,
+        Option<&CellCoord>,
+        Option<&ChildOf>,
+        Option<&Grid>,
+        Option<&GravityBody>,
+        Option<&LocalGravity>,
+    )>,
+) -> Option<(DVec3, DQuat)> {
+    let (_, _, initial_cell, _, _, _, _) = q.get(entity).ok()?;
+    let mut current = entity;
+    let mut cell = initial_cell.copied().unwrap_or_default();
+    let mut chain = Vec::with_capacity(8);
+
+    for _ in 0..32 {
+        let (_, tf, _, child_of, _, _, _) = q.get(current).ok()?;
+        let edge = child_of.and_then(|parent| {
+            q.get(parent.parent())
+                .ok()
+                .and_then(|(_, _, _, _, grid, _, _)| grid.map(Grid::cell_edge_length))
+        });
+        let cell_offset = edge.map_or(DVec3::ZERO, |edge| {
+            DVec3::new(
+                cell.x as f64 * edge as f64,
+                cell.y as f64 * edge as f64,
+                cell.z as f64 * edge as f64,
+            )
+        });
+        chain.push((cell_offset + tf.translation.as_dvec3(), tf.rotation));
+
+        let Some(parent) = child_of.map(ChildOf::parent) else {
+            break;
+        };
+        let Ok((_, _, parent_cell, _, _, _, _)) = q.get(parent) else {
+            break;
+        };
+        current = parent;
+        cell = parent_cell.copied().unwrap_or_default();
+    }
+
+    let mut position = DVec3::ZERO;
+    let mut rotation = DQuat::IDENTITY;
+    for (offset, local_rotation) in chain.iter().rev() {
+        position += rotation.mul_vec3(*offset);
+        rotation *= local_rotation.as_dquat();
+    }
+    Some((position, rotation))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

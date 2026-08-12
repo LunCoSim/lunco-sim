@@ -79,7 +79,7 @@ impl GravityModel for PointMassGravity {
 ///
 /// Camera and UI systems read this resource to determine "up" direction
 /// and surface gravity magnitude. Updated each frame in `PreUpdate`.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct LocalGravityField {
     /// The body we're gravitationally bound to.
     pub body_entity: Option<Entity>,
@@ -89,6 +89,17 @@ pub struct LocalGravityField {
     pub local_up: DVec3,
     /// Surface gravity magnitude (m/s²).
     pub surface_g: f64,
+}
+
+impl Default for LocalGravityField {
+    fn default() -> Self {
+        Self {
+            body_entity: None,
+            up: DVec3::Y,
+            local_up: DVec3::Y,
+            surface_g: 0.0,
+        }
+    }
 }
 
 // Note: Gravity force application moved to `lunco-environment`.
@@ -138,64 +149,69 @@ pub fn update_local_gravity_field(
         avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
     );
 
-    let (body_local, surface_g) = if let Some(gb) = gravity_body {
-        // Compute body absolute position.
-        let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(gb.body_entity) {
-            let cell = b_cell.copied().unwrap_or_default();
-            crate::coords::world_position_seeded(
-                gb.body_entity,
-                &cell,
-                b_tf,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            )
-        } else {
-            lunco_core::coords::GridPos(DVec3::ZERO)
-        };
-
-        let rel = cam_abs - body_abs;
-        let g = if let Ok(gp) = q_bodies.get(gb.body_entity) {
-            gp.model.acceleration(rel).length()
-        } else {
-            0.0
-        };
-        (rel, g)
+    let (_body_local, body_up_local, body_up_world, surface_g) = if let Some(gb) = gravity_body {
+        gravity_at_body(
+            gb.body_entity,
+            cam_abs,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+            &q_bodies,
+        )
     } else if let Some(body_ent) = field.body_entity {
-        // Fall back to the last-known body from LocalGravityField.
-        let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(body_ent) {
-            let cell = b_cell.copied().unwrap_or_default();
-            crate::coords::world_position_seeded(
-                body_ent, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
-            )
-        } else {
-            lunco_core::coords::GridPos(DVec3::ZERO)
-        };
-
-        let rel = cam_abs - body_abs;
-        let g = if let Ok(gp) = q_bodies.get(body_ent) {
-            gp.model.acceleration(rel).length()
-        } else {
-            0.0
-        };
-        (rel, g)
+        // Hold the last body association while the avatar is between explicit
+        // surface commands.  The frame is still derived from that body's live
+        // Grid pose and gravity model, never from an arbitrary world axis.
+        gravity_at_body(
+            body_ent, cam_abs, &q_parents, &q_grids, &q_spatial, &q_bodies,
+        )
     } else {
-        (cam_abs.0, 0.0)
+        (cam_abs.0, DVec3::Y, DVec3::Y, 0.0)
     };
 
     field.surface_g = surface_g;
 
-    let dist = body_local.length();
-    field.local_up = if dist > 1e-6 {
-        body_local / dist
-    } else {
-        DVec3::Y
-    };
-    field.up = field.local_up;
+    field.local_up = body_up_local;
+    field.up = body_up_world;
 
     // For flat gravity, use the configured g.
     if let Gravity::Flat { g, direction } = gravity.as_ref() {
         field.surface_g = *g;
         field.local_up = -*direction / direction.length();
+        field.up = field.local_up;
     }
+}
+
+/// Evaluate the active body's gravity in its own rotating frame and publish
+/// both sides of the frame boundary.  `GravityModel::acceleration` receives a
+/// body-fixed relative position; camera systems consume `up` in root/world
+/// axes and convert it into their parent Grid before building a Transform.
+fn gravity_at_body(
+    body_entity: Entity,
+    camera_world: lunco_core::coords::GridPos,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_bodies: &Query<&GravityProvider>,
+) -> (DVec3, DVec3, DVec3, f64) {
+    let Some((body_world, body_rotation)) =
+        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)
+    else {
+        return (camera_world.0, DVec3::Y, DVec3::Y, 0.0);
+    };
+    let relative_world = camera_world - body_world;
+    let relative_body = body_rotation.0.inverse() * relative_world;
+    let Some(provider) = q_bodies.get(body_entity).ok() else {
+        return (relative_body, DVec3::Y, body_rotation.0 * DVec3::Y, 0.0);
+    };
+    let acceleration = provider.model.acceleration(relative_body);
+    let magnitude = acceleration.length();
+    let up_body = if magnitude > 1e-12 {
+        -acceleration / magnitude
+    } else {
+        // At the exact centre a radial gravity direction is physically
+        // undefined.  +Y is the canonical frame basis, not an approximation.
+        DVec3::Y
+    };
+    (relative_body, up_body, body_rotation.0 * up_body, magnitude)
 }

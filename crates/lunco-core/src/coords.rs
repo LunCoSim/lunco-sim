@@ -151,6 +151,31 @@ pub fn ancestor_grid_anchor(
     None
 }
 
+/// Walks `entity` and its ancestors to find the nearest live [`Grid`].
+///
+/// A streamed surface tile must be a direct child of the same grid frame as
+/// the terrain it represents. Looking only for `WorldGrid` is wrong for a
+/// site-anchored body: the terrain branch belongs to the body's surface grid.
+/// This is the shared frame lookup so visual and collider streaming cannot
+/// silently choose different parents.
+pub fn ancestor_grid<'a>(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &'a Query<&Grid>,
+) -> Option<(Entity, &'a Grid)> {
+    let mut current = entity;
+    for _ in 0..32 {
+        if let Ok(grid) = q_grids.get(current) {
+            return Some((current, grid));
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            return None;
+        };
+        current = child_of.parent();
+    }
+    None
+}
+
 /// Absolute world position of `entity` expressed in the BigSpace root
 /// frame, as a `DVec3`.
 ///

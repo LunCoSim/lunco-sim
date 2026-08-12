@@ -259,17 +259,21 @@ fn publish_raycast_support_footprints(
             Without<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
-    wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
+    wheels: Query<(&WheelRaycast, &Suspension, &Transform, &ChildOf)>,
 ) {
     for (root, children) in &roots {
         let contacts = children
             .iter()
             .filter_map(|child| wheels.get(child).ok())
-            .filter(|(_, _, parent)| parent.parent() == root)
+            .filter(|(_, _, _, parent)| parent.parent() == root)
             .map(
-                |(wheel, transform, _)| lunco_physics::PhysicsSupportContact {
+                |(wheel, suspension, transform, _)| lunco_physics::PhysicsSupportContact {
                     local_offset: transform.translation.as_dvec3(),
                     radius: wheel.wheel_radius.max(0.0),
+                    probe_origin: transform.translation.as_dvec3()
+                        + DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius),
+                    probe_direction: DVec3::NEG_Y,
+                    probe_length: suspension.rest_length,
                 },
             )
             .collect::<Vec<_>>();

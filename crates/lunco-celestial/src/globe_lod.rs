@@ -412,7 +412,15 @@ pub(crate) fn update_globe_lod(
         let Ok(sg_grid) = grids.get(lod.surface_grid) else {
             continue;
         };
-        let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
+        // The surface grid is a rotating body-fixed frame.  Subtracting only
+        // translations projects a world-space camera into the wrong cube-sphere
+        // face as soon as the body's rotation is non-identity, leaving the
+        // actually viewed branch uncovered (black gaps at the DEM/globe
+        // horizon).  Undo the live grid rotation at this one frame boundary;
+        // tile coordinates and placement remain in the same body-local frame.
+        let (_, surface_rotation, surface_translation) = sg_gt.to_scale_rotation_translation();
+        let camera_body_local =
+            surface_rotation.as_dquat().inverse() * (cam_pos - surface_translation.as_dvec3());
 
         // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a

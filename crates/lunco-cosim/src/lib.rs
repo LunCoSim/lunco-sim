@@ -298,10 +298,11 @@ impl Plugin for CoSimPlugin {
                     // unconditionally, so without avian the run condition itself
                     // hard-errors instead of gating. Headless cosim with no avian
                     // then skips force application, which is the intent.
-                    .run_if(
-                        resource_exists::<Time<avian3d::prelude::Physics>>
-                            .and_then(lunco_physics::physics_is_live),
-                    )
+                    // Run while a physics clock exists, including during a
+                    // hold: `apply_pending_forces` drains commands without
+                    // applying them while the clock is stopped, so a command
+                    // sampled during loading cannot become a later impulse.
+                    .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
                     .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                         // Absent role (single-player, headless tests) → run.
                         // Only a present `Client` role gates it off.

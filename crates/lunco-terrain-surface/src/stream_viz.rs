@@ -33,11 +33,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command, WorldGrid};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{
     ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
@@ -1599,8 +1599,19 @@ fn spawn_tile(
     // keeps the tile in the SAME big_space cell as the content standing on it, and its
     // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
     origin_y: f64,
+    // Absolute pose of the grid receiving the tile.
+    grid_world: DVec3,
+    grid_rotation: DQuat,
+    // Absolute pose of the DEM owner's local frame. The baked mesh is expressed
+    // in this frame, not necessarily in the receiving body's frame.
+    terrain_world: DVec3,
+    terrain_rotation: DQuat,
 ) -> Entity {
-    let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
+    let terrain_local = DVec3::new(center[0], origin_y, center[1]);
+    let world_center = terrain_world + terrain_rotation * terrain_local;
+    let grid_local = grid_rotation.inverse() * (world_center - grid_world);
+    let (cell, local) = grid.translation_to_grid(grid_local);
+    let local_rotation = (grid_rotation.inverse() * terrain_rotation).as_quat();
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
@@ -1611,7 +1622,7 @@ fn spawn_tile(
             mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
         ),
         cell,
-        Transform::from_translation(local),
+        Transform::from_translation(local).with_rotation(local_rotation),
         // The render binder reacts to `ShaderLook` after this deferred spawn.
         // Keep the tile hidden for one complete ECS turn; the streamer promotes
         // it on the next update, after its material exists.
@@ -1864,8 +1875,6 @@ pub struct LodFrozen;
 pub fn update_lod_tiles(
     mut commands: Commands,
     demands: Res<TerrainDetailDemands>,
-    // The big_space world grid each tile anchors into (its own `CellCoord`).
-    grids: Query<(Entity, &Grid), With<WorldGrid>>,
     mut terrains: Query<(
         Entity,
         &DemHeightField,
@@ -1887,6 +1896,9 @@ pub fn update_lod_tiles(
     lockstep: Res<TerrainStreamLockstep>,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
     overlay_params: Res<crate::overlay::TerrainOverlayParams>,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut scratch: Local<StreamScratch>,
 ) {
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
@@ -1912,11 +1924,6 @@ pub fn update_lod_tiles(
     if demands.visual.is_empty() {
         return;
     }
-    // No world grid yet → can't anchor tiles; skip this frame.
-    let Ok((grid_entity, grid)) = grids.single() else {
-        return;
-    };
-
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     //
     // Under lockstep the budgets are LIFTED, not merely raised: a budget makes the
@@ -1953,6 +1960,26 @@ pub fn update_lod_tiles(
         frozen,
     ) in &mut terrains
     {
+        // A terrain may be mounted under the canonical WorldGrid or under a
+        // body's surface sub-grid. Resolve the actual frame from its ancestry;
+        // streamed tiles must share that frame, while their mesh coordinates
+        // remain in the terrain owner's local DEM axes.
+        let Some((grid_entity, grid)) =
+            lunco_core::coords::ancestor_grid(terrain, &parents, &grids)
+        else {
+            continue;
+        };
+        let Some((terrain_world, terrain_rotation)) =
+            lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+        else {
+            continue;
+        };
+        let Some((grid_world, grid_rotation)) =
+            lunco_core::coords::world_pose(grid_entity, &parents, &grids, &spatial)
+        else {
+            continue;
+        };
+
         // A tile spawned on the previous update has now had one complete ECS turn
         // for `ShaderLook` → render-material binding. Only now may the draw
         // partition expose it; until then its ready ancestor remains visible.
@@ -2022,18 +2049,18 @@ pub fn update_lod_tiles(
         let h = oracle.half_extent() as f64;
         visual_foci.clear();
         for demand in demands.visual.iter() {
-            let local = demand.position;
-            let local_forward = demand.forward;
+            let terrain_local = terrain_rotation.0.inverse() * (demand.position - terrain_world.0);
+            let local_forward = terrain_rotation.0.inverse() * demand.forward;
             let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
             let heading = (heading.length() > 1e-3).then(|| heading.normalize());
-            let here = [local.x, local.z];
+            let here = [terrain_local.x, terrain_local.z];
             if here[0].abs() > h || here[1].abs() > h {
                 continue;
             }
             let ground = oracle.height_at(here[0], here[1]);
             visual_foci.push(TerrainVisualDemand {
                 focus: here,
-                eye_height: (local.y - ground).max(0.0),
+                eye_height: (terrain_local.y - ground).max(0.0),
                 heading,
                 required: true,
                 near_detail_radius_m: demand.near_detail_radius_m,
@@ -2481,6 +2508,10 @@ pub fn update_lod_tiles(
                 shadow,
                 overlay,
                 oy,
+                grid_world.0,
+                grid_rotation.0,
+                terrain_world.0,
+                terrain_rotation.0,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -2573,6 +2604,10 @@ pub fn update_lod_tiles(
                     shadow,
                     overlay,
                     oy,
+                    grid_world.0,
+                    grid_rotation.0,
+                    terrain_world.0,
+                    terrain_rotation.0,
                 );
                 if let Some(old) = tiles.tiles.insert(
                     s.coord,

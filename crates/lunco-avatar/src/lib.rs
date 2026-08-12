@@ -762,6 +762,13 @@ impl Plugin for LunCoAvatarPlugin {
             lunco_time::InteractionSchedule,
             (
                 orbital_exit_restore_system,
+                // A celestial site handoff may move the avatar between
+                // rotating Grid frames while preserving its authoritative
+                // Transform.  FreeFlightCamera's yaw/pitch are local to the
+                // direct parent frame; reseed them from that pose before the
+                // normal free-flight writer runs, otherwise it would replay
+                // the old ENU angles and erase the body-fixed rebranch.
+                rebase_freeflight_state,
                 // Entry half of the scroll transit — must see the free-flight scroll BEFORE
                 // orbit_system's zoom consumption; its mode swap lands next frame (commands).
                 freeflight_scroll_transit_system,
@@ -769,10 +776,16 @@ impl Plugin for LunCoAvatarPlugin {
                 surface_camera_system,
                 apply_fly,
                 orbit_system,
-                reset_easing_on_cell_rebase,
             )
                 .chain()
                 .in_set(AvatarCameraSet),
+        );
+        // This must run before lunco_time restores the previous eased pose.
+        // The camera's Transform is cell-local; after a Grid/CellCoord handoff
+        // the old interpolation history is a pose in a different frame.
+        app.add_systems(
+            lunco_time::InteractionSchedule,
+            reset_easing_before_spatial_rebase.before(lunco_time::InteractionRestoreSet),
         );
 
         app.configure_sets(
@@ -810,6 +823,26 @@ impl Plugin for LunCoAvatarPlugin {
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarCameraSet;
+
+/// Preserve a free-flight camera's authoritative orientation across a parent
+/// Grid handoff.
+///
+/// `FreeFlightCamera` stores absolute yaw/pitch values, but the camera system
+/// writes them as Euler angles in the camera's direct parent frame.  A
+/// rebranch therefore changes the meaning of the stored angles even though
+/// the incoming `Transform` already contains the correct converted pose.
+/// `Changed<ChildOf>` is the structural handoff signal; deriving the angles
+/// from the live local rotation makes the next writer frame-idempotent and
+/// does not guess a world/body offset.
+fn rebase_freeflight_state(
+    mut q_avatar: Query<(&mut FreeFlightCamera, &Transform), (With<Avatar>, Changed<ChildOf>)>,
+) {
+    for (mut freeflight, transform) in q_avatar.iter_mut() {
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        freeflight.yaw = yaw;
+        freeflight.pitch = pitch;
+    }
+}
 
 /// Own the camera interpolation mode from the authoritative camera component.
 ///
@@ -859,7 +892,8 @@ fn sync_avatar_easing(
     }
 }
 
-/// Drop the easing history when the avatar changes big_space CELL.
+/// Drop easing history before the interaction schedule restores its previous
+/// pose when the avatar changes BigSpace frame.
 ///
 /// `InteractionEased` interpolates two `Transform`s, which are cell-LOCAL: across a
 /// rebase the previous pose is expressed in a different cell, so lerping it toward
@@ -869,15 +903,16 @@ fn sync_avatar_easing(
 /// as the body-side rebase jitter `lunco_physics` probes; the fix is to not
 /// interpolate across the discontinuity at all.)
 ///
-/// Runs last in [`AvatarCameraSet`], i.e. after every writer that can move a cell.
-fn reset_easing_on_cell_rebase(
-    mut commands: Commands,
-    q: Query<Entity, (With<lunco_time::InteractionEased>, Changed<CellCoord>)>,
+/// Runs before [`lunco_time::InteractionRestoreSet`], so no old-frame pose can
+/// be restored after the handoff.
+fn reset_easing_before_spatial_rebase(
+    mut q: Query<
+        &mut lunco_time::InteractionEased,
+        (With<Avatar>, Or<(Changed<CellCoord>, Changed<ChildOf>)>),
+    >,
 ) {
-    for e in q.iter() {
-        commands
-            .entity(e)
-            .try_insert(lunco_time::InteractionEased::default());
+    for mut eased in &mut q {
+        eased.reset();
     }
 }
 
@@ -1098,21 +1133,26 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
 
 // ─── Shared Math Helpers (CQ-113 DRY) ────────────────────────────────────────
 
-/// Radial "up" (outward surface normal) at a grid-local position.
+/// Return gravity-up in an entity's immediate Grid frame.
 ///
-/// A body sits at its Grid origin, so the normalized grid-local position vector
-/// *is* the local up direction. Falls back to world-Y at/near the origin.
-///
-/// Consolidates the CQ-113 duplicate `if pos.length() > 1e-6 {
-/// (pos / pos.length()).as_vec3() } else { Vec3::Y }` math (was inlined in
-/// `spring_arm_system`, `freeflight_system`, `surface_camera_system`,
-/// `apply_fly`, and `avatar_behavior_input_system`).
-fn radial_up(pos: DVec3) -> Vec3 {
-    if pos.length() > 1e-6 {
-        (pos / pos.length()).as_vec3()
-    } else {
-        Vec3::Y
-    }
+/// `LocalGravityField::up` is expressed in the root/world frame, while a
+/// camera transform is authored in its direct Grid parent. Converting at this
+/// boundary keeps every surface camera path aligned with the actual gravity
+/// field, including rotating body grids and non-radial models.
+fn gravity_up_in_grid(
+    grid_entity: Entity,
+    gravity: &LocalGravityField,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+) -> Vec3 {
+    lunco_core::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
+        .map(|(_, grid_rotation)| {
+            (grid_rotation.0.inverse() * gravity.up)
+                .normalize_or(DVec3::Y)
+                .as_vec3()
+        })
+        .unwrap_or_else(|| gravity.local_up.normalize_or(DVec3::Y).as_vec3())
 }
 
 /// The site anchor's body: `(body entity, radius, body centre in the SITE
@@ -1132,19 +1172,6 @@ fn site_body_center(
         body.radius_m,
         DVec3::new(0.0, -(body.radius_m + anchor.geodetic.height_m), 0.0),
     ))
-}
-
-/// Radial "up" for a camera at `pos` in ITS parent grid's frame. In the old
-/// rover luncosim the grid origin IS the body centre, so `pos` normalized is
-/// the surface normal. A site-anchored scene parents free cameras to the
-/// WorldGrid, whose origin is the SITE point on the sphere — there the body
-/// centre sits `radius + height` straight down (`site_center`), and ignoring
-/// that offset made "up" wrong everywhere except directly over the site.
-fn surface_up(pos: DVec3, parent_is_world_grid: bool, site_center: Option<DVec3>) -> Vec3 {
-    match site_center {
-        Some(c) if parent_is_world_grid => radial_up(pos - c),
-        _ => radial_up(pos),
-    }
 }
 
 /// Build a surface-relative camera orientation from a local `up` (surface
@@ -1541,6 +1568,7 @@ fn spring_arm_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
+    gravity: Res<LocalGravityField>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
@@ -1641,12 +1669,9 @@ fn spring_arm_system(
                 };
                 let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
                 if surface_mode.is_some() {
-                    // "Up" = surface normal at the rover's position = rover's grid-local direction from body center.
-                    // Both rover and camera are on the Body's Grid; body is at Grid origin.
-                    // Compute rotation from scratch using local_up as "up" —
-                    // avoids accumulated roll drift from incremental rotations
-                    // (see surface_camera_investigation.md for root cause analysis).
-                    tangent_frame(radial_up(target_pos), final_yaw, arm.pitch)
+                    let up =
+                        gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
+                    tangent_frame(up, final_yaw, arm.pitch)
                 } else {
                     Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0)
                 }
@@ -1662,12 +1687,9 @@ fn spring_arm_system(
         // Desired camera position: behind target along smoothed rotation.
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
         let vertical_offset: DVec3 = if surface_mode.is_some() {
-            // "Up" = surface normal at rover's position (same computation as rotation)
-            if target_pos.length() > 1e-6 {
-                (target_pos / target_pos.length()) * arm.vertical_offset as f64
-            } else {
-                DVec3::Y * arm.vertical_offset as f64
-            }
+            let up = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+                .as_dvec3();
+            up * arm.vertical_offset as f64
         } else {
             DVec3::Y * arm.vertical_offset as f64
         };
@@ -2464,24 +2486,13 @@ fn freeflight_system(
         ),
     >,
     q_grids: Query<&Grid>,
-    q_world: Query<(), With<lunco_core::WorldGrid>>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
-    _gravity_field: Res<LocalGravityField>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    gravity: Res<LocalGravityField>,
 ) {
-    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
-    for (mut tf, mut ff, cell, child_of, surface_mode) in q_avatar.iter_mut() {
+    for (mut tf, mut ff, _cell, child_of, surface_mode) in q_avatar.iter_mut() {
         let rot = if surface_mode.is_some() {
-            // "Up" under the camera — body-centre aware (see `surface_up`).
-            let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
-                surface_up(
-                    grid.grid_position_double(cell, &tf),
-                    q_world.contains(child_of.0),
-                    site_center,
-                )
-            } else {
-                Vec3::Y
-            };
+            let up_v = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
 
             // In surface mode, apply yaw/pitch as incremental rotations.
             let yaw_q = Quat::from_axis_angle(up_v, ff.yaw);
@@ -2645,22 +2656,20 @@ fn surface_camera_system(
         ),
     >,
     q_grids: Query<&Grid>,
-    q_world: Query<(), With<lunco_core::WorldGrid>>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
+    q_parents: Query<&ChildOf>,
+    // The avatar transform is mutably borrowed above.  Grid ancestors are
+    // ordinary scene entities, so make that ownership boundary explicit to
+    // Bevy's query validator instead of relying on a runtime-only hierarchy
+    // assumption.
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    gravity: Res<LocalGravityField>,
 ) {
-    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
-    for (mut tf, cam, cell, child_of) in q_avatar.iter_mut() {
-        let Ok(grid) = q_grids.get(child_of.0) else {
+    for (mut tf, cam, _cell, child_of) in q_avatar.iter_mut() {
+        if q_grids.get(child_of.0).is_err() {
             continue;
-        };
+        }
 
-        // Surface normal under the camera — body-centre aware (see `surface_up`).
-        let up = surface_up(
-            grid.grid_position_double(cell, &tf),
-            q_world.contains(child_of.0),
-            site_center,
-        );
+        let up = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
 
         // Rebuild the rotation from scratch each frame from heading + pitch
         // around the surface normal (local north = world-Y onto the tangent
@@ -2867,8 +2876,11 @@ fn avatar_behavior_input_system(
         ),
     >,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     sensitivity: Res<MouseSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
+    gravity: Res<LocalGravityField>,
 ) {
     let Some((analog, surface_mode)) = q_avatar.iter().next() else {
         return;
@@ -2884,14 +2896,10 @@ fn avatar_behavior_input_system(
 
     if ctrl_pressed {
         // Momentary free-flight: apply look deltas directly to Transform.
-        if let Some((mut tf, cell, child_of)) = q_tf.iter_mut().next() {
+        if let Some((mut tf, _cell, child_of)) = q_tf.iter_mut().next() {
             if surface_mode.is_some() {
-                // "Up" = camera's grid-local position (body center → camera direction).
-                let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
-                    radial_up(grid.grid_position_double(cell, &tf))
-                } else {
-                    Vec3::Y
-                };
+                let up_v =
+                    gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
                 let yaw_q = Quat::from_axis_angle(up_v, delta_yaw);
                 let right: Vec3 = *tf.right();
                 let right_yawed = yaw_q.mul_vec3(right);
@@ -4627,6 +4635,40 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn freeflight_reseeds_after_grid_parent_handoff() {
+        let mut app = App::new();
+        app.add_systems(Update, rebase_freeflight_state);
+
+        let first_grid = app.world_mut().spawn(Grid::new(2_000.0, 0.0)).id();
+        let second_grid = app.world_mut().spawn(Grid::new(2_000.0, 0.0)).id();
+        let authored_rotation = Quat::from_euler(EulerRot::YXZ, 1.2, -0.4, 0.0);
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                },
+                Transform::from_rotation(authored_rotation),
+                ChildOf(first_grid),
+            ))
+            .id();
+
+        app.update();
+        app.world_mut().entity_mut(avatar).insert((
+            ChildOf(second_grid),
+            Transform::from_rotation(authored_rotation),
+        ));
+        app.update();
+
+        let freeflight = app.world().get::<FreeFlightCamera>(avatar).unwrap();
+        assert!((freeflight.yaw - 1.2).abs() < 1e-5);
+        assert!((freeflight.pitch + 0.4).abs() < 1e-5);
     }
 
     #[test]

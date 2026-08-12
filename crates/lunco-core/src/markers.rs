@@ -95,6 +95,18 @@ pub struct CinematicCameraLock;
 #[reflect(Component)]
 pub struct NeedsGroundSettle;
 
+/// The physics pose was authoritatively changed outside Avian's solver and
+/// must be written back to the cell-local representation before the bridge
+/// reads ancestor-frame changes again.
+///
+/// This is a short-lived transaction marker, not a second pose store. A
+/// placement system writes Avian `Position`/`Rotation`, the big-space physics
+/// bridge preserves that pose through its next READ, and its normal WRITEBACK
+/// updates `(CellCoord, Transform)` before consuming this marker.
+#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct PhysicsPoseAuthoritative;
+
 /// Marker: this revolute joint's **motor is owned by an external actuator**
 /// (a velocity drive or a frame-steer), not by the cosim joint backend.
 ///

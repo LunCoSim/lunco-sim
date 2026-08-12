@@ -89,13 +89,12 @@ impl ApiQueryProvider for QueryEntityProvider {
             .map(|gt| gt.to_scale_rotation_translation())
             .unwrap_or((Vec3::ONE, Quat::IDENTITY, Vec3::ZERO));
         // Position is frame-sensitive, so it comes off the cell chain instead.
-        let pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+        let pos = lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
             .map(|p| p.0)
             .unwrap_or(bevy::math::DVec3::ZERO);
         // Euler YXZ (yaw, pitch, roll) — matches the sun / steering authoring
         // convention, handier than a quat.
         let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
-
         ApiResponse::ok(serde_json::json!({
             "api_id": raw,
             "name": name.map(|n| n.as_str()).unwrap_or(""),

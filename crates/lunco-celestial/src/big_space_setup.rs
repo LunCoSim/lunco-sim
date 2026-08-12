@@ -90,7 +90,7 @@ use avian3d::prelude::{Collider, CollisionLayers};
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_environment::GravityProvider;
+use lunco_environment::{Gravity, GravityProvider, PhysicsSceneGravity};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 
@@ -892,6 +892,23 @@ pub fn setup_big_space_hierarchy(
             ))
             .set_parent_in_place(solar_grid);
     }
+}
+
+/// Select the celestial gravity model for a site scene after the hierarchy is
+/// present. An explicit composed `UsdPhysicsScene` is authoritative and is
+/// recorded by the USD physics projection, so it is never overwritten by this
+/// site default. The host's flat sandbox gravity remains the baseline for
+/// scenes without a celestial site.
+pub fn sync_site_gravity(
+    q_site: Query<(), With<crate::geo::SiteAnchor>>,
+    authored: Option<Res<PhysicsSceneGravity>>,
+    mut gravity: ResMut<Gravity>,
+) {
+    if q_site.is_empty() || authored.is_some() || *gravity == Gravity::Surface {
+        return;
+    }
+    *gravity = Gravity::Surface;
+    info!("celestial takeover: site scene selected body-fixed surface gravity");
 }
 
 #[cfg(test)]

@@ -63,6 +63,43 @@ pub use bevy::app::AppExit;
 pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
 /// Short source revision stamped into this build for diagnostics.
 pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
+
+/// The app-level raw-frame cap that protects the fixed loop from a render hitch.
+///
+/// `Time<Virtual>::max_delta` is applied before the transport rate, so a fixed
+/// 33 ms cap becomes a 264 ms fixed-time burst at 8x. A loaded rover scene can
+/// then spend the whole next frame draining that burst and never get back to
+/// rendering. Keep the normal 33 ms cap at low rates, but tighten the raw cap
+/// as the rate rises so one frame asks for at most this many fixed ticks.
+const BASE_VIRTUAL_MAX_DELTA: std::time::Duration = std::time::Duration::from_millis(33);
+const MAX_FIXED_STEPS_PER_FRAME: u32 = 16;
+
+fn fixed_step_raw_delta_limit(
+    rate: f64,
+    fixed_timestep: std::time::Duration,
+) -> std::time::Duration {
+    if !(rate > 0.0 && rate <= lunco_time::MAX_REALTIME_RATE) {
+        return BASE_VIRTUAL_MAX_DELTA;
+    }
+    let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
+    budget.min(BASE_VIRTUAL_MAX_DELTA)
+}
+
+/// Keep Bevy's fixed-loop catch-up bounded when the user selects a realtime
+/// transport rate. The transport still owns the requested rate and runs at the
+/// full rate while frames fit inside the budget; a genuinely overloaded frame
+/// drops excess virtual time through Bevy's normal `max_delta` semantics instead
+/// of recursively scheduling larger fixed bursts until the window freezes.
+fn limit_fixed_step_burst(
+    transport: Res<lunco_time::TimeTransport>,
+    fixed: Res<Time<Fixed>>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+) {
+    let limit = fixed_step_raw_delta_limit(transport.rate, fixed.timestep());
+    if virtual_time.max_delta() != limit {
+        virtual_time.set_max_delta(limit);
+    }
+}
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
@@ -235,6 +272,43 @@ mod startup_scene_tests {
     fn missing_scene_value_does_not_create_a_default() {
         let args = ["luncosim".to_string(), "--scene".to_string()];
         assert_eq!(startup_scene_arg(&args), None);
+    }
+}
+
+#[cfg(test)]
+mod fixed_step_budget_tests {
+    use super::{fixed_step_raw_delta_limit, BASE_VIRTUAL_MAX_DELTA, MAX_FIXED_STEPS_PER_FRAME};
+    use std::time::Duration;
+
+    #[test]
+    fn low_rates_keep_the_normal_virtual_delta_cap() {
+        assert_eq!(
+            fixed_step_raw_delta_limit(1.0, Duration::from_secs_f64(1.0 / 60.0)),
+            BASE_VIRTUAL_MAX_DELTA
+        );
+        assert_eq!(
+            fixed_step_raw_delta_limit(4.0, Duration::from_secs_f64(1.0 / 60.0)),
+            BASE_VIRTUAL_MAX_DELTA
+        );
+    }
+
+    #[test]
+    fn eight_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
+        let fixed = Duration::from_secs_f64(1.0 / 60.0);
+        let limit = fixed_step_raw_delta_limit(8.0, fixed);
+        let requested_fixed = limit.as_secs_f64() * 8.0 / fixed.as_secs_f64();
+        assert!(
+            requested_fixed <= MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            "raw cap requests {requested_fixed} fixed ticks"
+        );
+    }
+
+    #[test]
+    fn kinematic_warp_restores_the_normal_raw_cap() {
+        assert_eq!(
+            fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
+            BASE_VIRTUAL_MAX_DELTA
+        );
     }
 }
 
@@ -2491,6 +2565,14 @@ impl Plugin for SandboxCorePlugin {
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
+            // Bound rate-scaled FixedUpdate bursts before the next loop. At 8x
+            // the ordinary 33 ms raw cap requests ~16 fixed ticks; retain that
+            // complete 8x budget while preventing a slower hitch from queuing
+            // an unbounded catch-up burst.
+            .add_systems(
+                PreUpdate,
+                limit_fixed_step_burst.after(lunco_time::TimeSpineSet),
+            )
             .add_systems(
                 Update,
                 (
@@ -2609,12 +2691,6 @@ impl Plugin for SandboxCorePlugin {
         // The terrain support projection must observe that promotion before it
         // decides whether physics may resume; plugin insertion order is not a
         // valid synchronization contract for a streamed physics world.
-        app.configure_sets(
-            Update,
-            lunco_usd_sim::UsdSimSet::ActivateDynamicBodies
-                .before(lunco_terrain_surface::TerrainSurfaceSet::PhysicsSupportCache),
-        );
-
         // Experiment result-artifact persistence — CORE (not networking): a run's
         // trajectory is written to `<twin>/results/<id>.json` through the
         // cross-platform storage layer and restored on demand, so single-player run
@@ -2768,9 +2844,7 @@ impl Plugin for SandboxCorePlugin {
         // terrain request and `lunco-usd`'s `GroundColliderPending`.
         app.add_systems(
             Update,
-            track_ground_collider_pending
-                .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
-                .before(lunco_usd_sim::UsdSimSet::ActivateDynamicBodies),
+            track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
         );
         // A just-promoted Dynamic body is not visible to the terrain ring until
         // deferred commands flush. Keep physics held across that fixed-loop
@@ -2778,8 +2852,8 @@ impl Plugin for SandboxCorePlugin {
         app.add_systems(
             Update,
             release_ground_activation_hold
-                .after(lunco_usd_sim::UsdSimSet::ActivateDynamicBodies)
-                .after(lunco_terrain_surface::collider_ring::hold_physics_until_dem_ready),
+                .after(lunco_terrain_surface::collider_ring::hold_physics_until_dem_ready)
+                .after(lunco_terrain_surface::collider_ring::settle_grounded_assemblies),
         );
         // Bind authored terrain layer maps (albedo/mineral/surface/normal) onto
         // the terrain's `ShaderMaterial`. GUI-only (materials are an `ui`-feature
@@ -2984,19 +3058,21 @@ mod ground_collider_gate_tests {
     }
 }
 
-/// Close the activation bridge only after two update boundaries: the first
-/// flushes the Dynamic insert; the second lets terrain see the promoted body and
-/// raise its own collider-liveness hold if needed.
+/// Close the activation bridge only after the one-time terrain placement has
+/// consumed every `NeedsGroundSettle` marker. The marker is the authoritative
+/// boundary: terrain readiness may take any number of frames, and physics must
+/// not resume in the gap between collider readiness and placement.
 fn release_ground_activation_hold(
     mut activation: ResMut<lunco_usd_sim::GroundActivationInFlight>,
     mut holds: ResMut<lunco_physics::PhysicsHolds>,
+    needs_ground_settle: Query<(), With<lunco_core::NeedsGroundSettle>>,
 ) {
     match activation.0 {
         2 => {
             activation.0 = 1;
             holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
         }
-        1 => {
+        1 if needs_ground_settle.is_empty() => {
             activation.0 = 0;
             holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, false);
         }
