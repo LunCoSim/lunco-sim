@@ -27,6 +27,12 @@
   border-bottom-color: rgba(166, 173, 200, 0.24);
 }
 
+#lunica-schema-heading-copy {
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+}
+
 #lunica-schema-title {
   color: var(--accent-color);
   font-size: 13px;

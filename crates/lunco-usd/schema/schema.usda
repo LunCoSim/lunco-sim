@@ -743,6 +743,9 @@ class LunCoEvent "LunCoEvent" (
     uniform bool lunco:event:latched = false (
         doc = "When true, emit once on the first rising edge and do not re-arm until the scene reloads."
     )
+    uniform double lunco:event:qualificationTime = 0 (
+        doc = "Continuous time in seconds that the trigger must remain active before the event is emitted. A false sample resets qualification."
+    )
 }
 
 class "LunCoAvatarAPI" (
@@ -839,12 +842,14 @@ class "LunCoPrismaticSuspensionAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """A passive, compression-only suspension on a PhysicsPrismaticJoint.
+    doc = """A passive, crushable suspension on a PhysicsPrismaticJoint.
     This API is intentionally distinct from UsdPhysicsDriveAPI: a drive is a
-    bilateral actuator that seeks a target, while a landing strut supports load
-    only while compressed and goes slack at its rest position. The prismatic
-    joint still owns travel limits and the rotational lock; this API owns only
-    the passive axial load law."""
+    commanded bilateral actuator, while a landing strut has a deployed elastic
+    lock whose unloaded reference yields permanently at the authored yield
+    force. The prismatic joint still owns travel limits and rotational locking;
+    this API owns only the substep-solved axial material law. Yield and solver
+    capacity are separate properties: conflating them can make a load-bearing
+    strut too weak merely because it is designed to crush."""
 )
 {
     float lunco:prismaticSuspension:restPosition = 0.0 (
@@ -857,7 +862,7 @@ class "LunCoPrismaticSuspensionAPI" (
             double max = 100000
             string unit = "N/m"
         }
-        doc = "Compression spring stiffness. Required; no implicit physical spring is invented when it is absent."
+        doc = "Elastic stiffness before plastic yielding. Required; no implicit physical spring is invented when it is absent."
     )
     float lunco:prismaticSuspension:damping (
         customData = {
@@ -865,14 +870,49 @@ class "LunCoPrismaticSuspensionAPI" (
             double max = 20000
             string unit = "N*s/m"
         }
-        doc = "Compression/rebound damping coefficient. Required; its reaction is bounded by the spring load."
+        doc = "Axial damping coefficient evaluated by the native prismatic solver. Required; the total reaction is bounded by maxForce."
     )
-    float lunco:prismaticSuspension:maxForce = inf (
+    float lunco:prismaticSuspension:yieldForce (
         customData = {
             double min = 0
             string unit = "N"
         }
-        doc = "Maximum compressive reaction. The force never becomes tensile."
+        doc = "Elastic yield force. Compression beyond this load permanently advances the unloaded reference; required for an explicitly crushable suspension."
+    )
+    float lunco:prismaticSuspension:maxForce (
+        customData = {
+            double min = 0
+            string unit = "N"
+        }
+        doc = "Symmetric axial reaction capacity of the native joint constraint. Must be at least yieldForce and is independent of the material's yield point."
+    )
+}
+
+class "LunCoJointDampingAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Relative-velocity damping on an authored UsdPhysics joint.
+    OpenUSD defines joint topology, limits, and drives, but no passive bearing
+    damping shared across joint types. Avian provides that solver primitive as
+    JointDamping. This API exposes it without turning a passive ball fitting into
+    a motor or applying drag to either rigid body in the world frame."""
+)
+{
+    float lunco:jointDamping:linear = 0.0 (
+        customData = {
+            double min = 0
+            string unit = "1/s"
+        }
+        doc = "Rate at which relative linear velocity is dissipated by the joint. Zero leaves allowed translational motion undamped."
+    )
+    float lunco:jointDamping:angular = 0.0 (
+        customData = {
+            double min = 0
+            string unit = "1/s"
+        }
+        doc = "Rate at which relative angular velocity is dissipated by the joint. Zero leaves allowed rotation undamped."
     )
 }
 
@@ -2008,6 +2048,9 @@ class "LunCoUiSchemaAPI" (
     )
     int lunco:ui:schemaRow = 0 (
         doc = "Row in the projected schema layout."
+    )
+    string lunco:ui:schemaRole = "" (
+        doc = "Short authored explanation of what enters and leaves this projected block."
     )
     bool lunco:ui:controlHud = false (
         doc = "Whether this prim contributes a control-HUD projection."

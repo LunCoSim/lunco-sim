@@ -1028,9 +1028,9 @@ fn publish_celestial_capability(
 ///
 /// This is the recorder-safe counterpart of the workbench connection canvas.
 /// It reads the composed stage, honours only typed schemaNode/schemaColumn/
-/// schemaRow properties, and derives the signal list from real USD attribute
-/// connections. The surface is deliberately presentation-only: it cannot
-/// affect simulation state and it does not classify prims from path names.
+/// schemaRow/schemaRole properties, and derives the signal list from real USD
+/// attribute connections. The surface is deliberately presentation-only: it
+/// cannot affect simulation state and it does not classify prims from paths.
 fn publish_lunica_schema_exposure(
     exposures: &mut EngineExposures,
     selected: &SelectedEntities,
@@ -1103,19 +1103,13 @@ fn publish_lunica_schema_exposure(
                     .unwrap_or("USD block")
                     .to_owned()
             });
-        let attrs = view.attr_names(&path);
-        let inputs = attrs
-            .iter()
-            .filter(|name| name.starts_with("inputs:"))
-            .count();
-        let outputs = attrs
-            .iter()
-            .filter(|name| name.starts_with("outputs:"))
-            .count();
         cards.push(SchemaCard {
             path: path_text,
             title,
-            role: format!("{inputs} inputs · {outputs} outputs"),
+            role: view
+                .text(&path, "lunco:ui:schemaRole")
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| "Connected USD block".to_owned()),
             column: view
                 .scalar::<i32>(&path, "lunco:ui:schemaColumn")
                 .unwrap_or(0),
@@ -1356,19 +1350,58 @@ fn publish_selected_control_exposure(
     ui.property("torque_y", "—");
     ui.property("torque_z", "—");
     ui.property("main_engine", "—");
+    ui.property("main_engine_width", "0%");
+    ui.property("main_engine_color", "var(--muted-color)");
 
     let Some(root) = root else {
         return;
     };
 
+    // The surface footprint is part of the recording composition. Mount it as
+    // soon as the authored HUD root exists, before Modelica has published its
+    // first values, so solver readiness cannot cause a large mid-shot layout pop.
+    ui.visible(true);
+
+    let vehicle = q_callsign
+        .get(root)
+        .ok()
+        .map(|callsign| callsign.0.trim().to_owned())
+        .filter(|label| !label.is_empty())
+        .or_else(|| {
+            q_name.get(root).ok().map(|name| {
+                name.as_str()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("selected")
+                    .to_owned()
+            })
+        })
+        .unwrap_or_else(|| "selected".to_owned());
+    ui.property("vehicle", vehicle.clone());
+    ui.property("status", "INITIALIZING");
+
     let mut outputs = std::collections::HashMap::<String, f64>::new();
     let mut max_valve = 0.0_f64;
     let mut touchdown = 0.0_f64;
-    for (entity, sim, _) in q_sim.iter() {
+    for (entity, sim, metadata) in q_sim.iter() {
         if !is_owned_by_vessel(entity, root, q_parents) {
             continue;
         }
+        let authored_outputs = authored_output_names(entity, q_paths, canonical);
         for (name, &value) in &sim.outputs {
+            // A generated network also publishes member implementation values
+            // on its solver entity.  The control card consumes only the
+            // composed prim's authored `outputs:*` boundary (or, for a
+            // non-USD provider, its declared output metadata).  This prevents
+            // an internal signal with the same short name from winning by ECS
+            // iteration order.
+            let is_public = authored_outputs.as_ref().map_or_else(
+                || metadata.is_none_or(|declared| declared.outputs.contains_key(name)),
+                |authored| authored.contains(name),
+            );
+            if !is_public {
+                continue;
+            }
             // Prefer the selected prim's own public output when a generated
             // wrapper also republishes the same name below it.
             if entity == root || !outputs.contains_key(name) {
@@ -1387,37 +1420,20 @@ fn publish_selected_control_exposure(
         || outputs.contains_key("torque_y")
         || outputs.contains_key("torque_z")
         || outputs.contains_key("engine_activity")
+        || outputs.contains_key("thrust_n")
         || outputs.contains_key("propellant_mass")
         || max_valve > 0.0;
     if !has_control_outputs {
         return;
     }
-
-    let vehicle = q_callsign
-        .get(root)
-        .ok()
-        .map(|callsign| callsign.0.trim().to_owned())
-        .filter(|label| !label.is_empty())
-        .or_else(|| {
-            q_name.get(root).ok().map(|name| {
-                name.as_str()
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("selected")
-                    .to_owned()
-            })
-        })
-        .unwrap_or_else(|| "selected".to_owned());
-    let main_activity = outputs
-        .get("engine_activity")
-        .copied()
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0);
+    let main_activity = engine_firing_fraction(&outputs);
     let landing_handoff = outputs.get("landing_handoff").copied();
     let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
-    let landing_complete = landing_handoff.is_some_and(|value| value >= 0.5);
-    let status = if landing_complete || (landing_handoff.is_none() && touchdown >= 0.5) {
+    let flight_handoff = landing_handoff.is_some_and(|value| value >= 0.5);
+    let status = if touchdown >= 0.5 {
         ("TOUCHDOWN", "var(--ok-color)")
+    } else if flight_handoff {
+        ("GEAR SETTLING", "var(--ok-color)")
     } else if max_valve > 0.01 {
         ("RCS FIRING", "var(--accent-color)")
     } else if main_activity > 0.01 {
@@ -1479,7 +1495,6 @@ fn publish_selected_control_exposure(
     // mounted while it appears so a shot boundary never causes a large HUD
     // pop-in or removes the horizontal-speed readout.
     let _ = hide_when_schema_visible;
-    ui.visible(true);
     ui.property("vehicle", vehicle);
     ui.property("status", status.0);
     ui.property("status_color", status.1);
@@ -1584,6 +1599,62 @@ fn publish_selected_control_exposure(
             "OFF".to_owned()
         },
     );
+    ui.property(
+        "main_engine_width",
+        format!("{:.1}%", main_activity * 100.0),
+    );
+    ui.property(
+        "main_engine_color",
+        if main_activity > 0.01 {
+            "var(--warm-color)"
+        } else {
+            "var(--muted-color)"
+        },
+    );
+}
+
+/// Names on the prim's composed public co-simulation boundary.
+///
+/// This is derived from authored USD properties, not from solver variable
+/// spelling. Generated networks can expose hundreds of member values in their
+/// runtime `SimComponent`; only the root `outputs:*` properties are the public
+/// contract a scene author chose.
+fn authored_output_names(
+    entity: Entity,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    canonical: &CanonicalStages,
+) -> Option<std::collections::HashSet<String>> {
+    let (_, prim_path) = q_paths.get(entity).ok()?;
+    let stage = canonical.get(prim_path.stage_handle.id())?;
+    let path = SdfPath::new(&prim_path.path).ok()?;
+    let names = stage
+        .view()
+        .attr_names(&path)
+        .into_iter()
+        .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
+        .collect::<std::collections::HashSet<_>>();
+    (!names.is_empty()).then_some(names)
+}
+
+/// Delivered main-engine thrust fraction for operator display.
+///
+/// A chamber can still move a trace amount of propellant while producing no
+/// useful force. `ENGINE FIRING` therefore reports the physically delivered
+/// thrust fraction whenever the authored engine boundary provides it. Older or
+/// non-thrust actuators retain their explicit activity output as the fallback.
+fn engine_firing_fraction(outputs: &std::collections::HashMap<String, f64>) -> f64 {
+    let fraction = outputs
+        .get("thrust_n")
+        .zip(outputs.get("maximum_thrust_n"))
+        .filter(|(_, maximum)| maximum.is_finite() && **maximum > f64::EPSILON)
+        .map(|(thrust, maximum)| thrust / maximum)
+        .or_else(|| outputs.get("engine_activity").copied())
+        .unwrap_or(0.0);
+    if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 /// RCS valve names are the authored actuator contract of AttitudeActuation:
@@ -1630,6 +1701,27 @@ fn rcs_axis_label(outputs: &std::collections::HashMap<String, f64>) -> (String, 
         ("OFF".to_owned(), peak)
     } else {
         (active.join(" · "), peak)
+    }
+}
+
+#[cfg(test)]
+mod control_exposure_tests {
+    use super::*;
+
+    #[test]
+    fn engine_display_uses_delivered_thrust_over_stale_activity() {
+        let outputs = std::collections::HashMap::from([
+            ("thrust_n".to_owned(), 0.0),
+            ("maximum_thrust_n".to_owned(), 93_000.0),
+            ("engine_activity".to_owned(), 0.07),
+        ]);
+        assert_eq!(engine_firing_fraction(&outputs), 0.0);
+    }
+
+    #[test]
+    fn engine_display_falls_back_to_explicit_activity_without_thrust_contract() {
+        let outputs = std::collections::HashMap::from([("engine_activity".to_owned(), 0.4)]);
+        assert_eq!(engine_firing_fraction(&outputs), 0.4);
     }
 }
 

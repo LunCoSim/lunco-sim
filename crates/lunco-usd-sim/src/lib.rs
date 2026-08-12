@@ -1054,28 +1054,33 @@ fn passive_prismatic_suspension_from_usd(
         .unwrap_or(0.0) as f64;
     let spring_k = reader.real_f32(prim, "lunco:prismaticSuspension:stiffness")? as f64;
     let damping_c = reader.real_f32(prim, "lunco:prismaticSuspension:damping")? as f64;
-    let max_force = reader
-        .real_f32(prim, "lunco:prismaticSuspension:maxForce")
-        .unwrap_or(f32::INFINITY) as f64;
+    let yield_force = reader.real_f32(prim, "lunco:prismaticSuspension:yieldForce")? as f64;
+    let max_force = reader.real_f32(prim, "lunco:prismaticSuspension:maxForce")? as f64;
     if !spring_k.is_finite()
         || spring_k <= 0.0
         || !damping_c.is_finite()
         || damping_c < 0.0
         || !rest_position.is_finite()
-        || (!max_force.is_finite() && max_force != f64::INFINITY)
+        || !yield_force.is_finite()
+        || yield_force <= 0.0
+        || !max_force.is_finite()
         || max_force <= 0.0
+        || max_force < yield_force
     {
         warn!(
-            "USD passive suspension {} has invalid parameters: rest={} m, k={} N/m, c={} N*s/m, max={} N",
-            prim.as_str(), rest_position, spring_k, damping_c, max_force
+            "USD passive suspension {} has invalid parameters: rest={} m, k={} N/m, c={} N*s/m, yield={} N, max={} N",
+            prim.as_str(), rest_position, spring_k, damping_c, yield_force, max_force
         );
         return None;
     }
     Some(PassivePrismaticSuspension {
         rest_position,
+        plastic_position: rest_position,
         spring_k,
         damping_c,
+        yield_force,
         max_force,
+        reaction_force: 0.0,
     })
 }
 

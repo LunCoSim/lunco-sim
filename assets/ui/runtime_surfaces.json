@@ -90,8 +90,8 @@
         "mode": "window",
         "anchor": "bottom_left",
         "offset": [16.0, -16.0],
-        "width": 260.0,
-        "height": 184.0
+        "width": 236.0,
+        "height": 118.0
       }
     },
     {
@@ -125,8 +125,8 @@
         "mode": "window",
         "anchor": "bottom_right",
         "offset": [-16.0, -16.0],
-        "width": 260.0,
-        "height": 184.0
+        "width": 236.0,
+        "height": 118.0
       }
     },
     {

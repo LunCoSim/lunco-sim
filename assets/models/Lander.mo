@@ -62,6 +62,29 @@ model Lander
   input Real leg_contact_nx = 0.0 "Native contact state on the -X leg";
   input Real leg_contact_pz = 0.0 "Native contact state on the +Z leg";
   input Real leg_contact_nz = 0.0 "Native contact state on the -Z leg";
+  // The prismatic joint state is the landing gear's measured load path. Pad
+  // contact can become true at the instant of first touch. The joint states
+  // remain measured telemetry, and their rates participate in the quiet-gear
+  // qualification; permanent honeycomb crush is not required because a soft
+  // touchdown can load all four pads without exceeding material yield.
+  input Real leg_displacement_px = 0.0
+    "Measured +X suspension displacement along its authored axis (m)";
+  input Real leg_displacement_nx = 0.0
+    "Measured -X suspension displacement along its authored axis (m)";
+  input Real leg_displacement_pz = 0.0
+    "Measured +Z suspension displacement along its authored axis (m)";
+  input Real leg_displacement_nz = 0.0
+    "Measured -Z suspension displacement along its authored axis (m)";
+  input Real leg_velocity_px = 0.0
+    "Measured +X suspension rate (m/s)";
+  input Real leg_velocity_nx = 0.0
+    "Measured -X suspension rate (m/s)";
+  input Real leg_velocity_pz = 0.0
+    "Measured +Z suspension rate (m/s)";
+  input Real leg_velocity_nz = 0.0
+    "Measured -Z suspension rate (m/s)";
+  input Real touchdown_max_suspension_speed_mps = 0.25
+    "Maximum measured strut rate before touchdown (m/s)";
   input Real upright_axis_y = 1.0
     "Measured body-frame component of navigation up (1 when upright)";
 
@@ -74,17 +97,25 @@ model Lander
     "Measured navigation-frame vertical velocity (m/s)";
   input Real navigation_velocity_z = 0.0
     "Measured navigation-frame Z velocity (m/s)";
-  input Real touchdown_ground_speed_mps = 0.5
+  input Real touchdown_ground_speed_mps = 0.05
     "Ground speed below which contact may become settled touchdown (m/s)";
-  input Real touchdown_descent_speed_mps = 0.15
+  input Real touchdown_descent_speed_mps = 0.05
     "Vertical speed below which contact may become settled touchdown (m/s)";
-  input Real touchdown_settle_tau_s = 0.35
-    "Time constant for the contact-to-settled touchdown transition (s)";
+  input Real touchdown_angular_speed_rad_s = 0.005
+    "Body angular speed below which flight authority may pass to the gear (rad/s)";
+  input Real engine_cutoff_ground_speed_mps = 0.08
+    "Maximum horizontal speed for qualified pad-contact engine cutoff (m/s)";
+  input Real engine_cutoff_descent_speed_mps = 0.20
+    "Maximum descent speed for qualified pad-contact engine cutoff (m/s)";
+  input Real touchdown_min_upright_axis_y = 0.9
+    "Minimum measured body-up projection for an upright touchdown";
 
   input Real attitude_hold = 0.0
     "Enable local attitude stabilization";
   input Real landing_handoff = 0.0
     "Target-qualified handoff from flight control to the landing gear";
+  input Real landing_engine_cutoff = 0.0
+    "Accepted target-qualified pad-contact cutoff; closes the main engine";
   input Real hold_kp = 2.0
     "Attitude-error gain in angular acceleration units";
   input Real hold_kd = 2.5
@@ -104,8 +135,13 @@ model Lander
   output Real torque_y "Requested body torque about Y (N.m)";
   output Real torque_z "Requested body torque about Z (N.m)";
   output Real landing_contact
-    "Settled four-leg contact while the airframe remains upright";
-  output Real touchdown "Touchdown signal from local landing loads";
+    "Loaded, quiet native four-leg contact ready for flight-control handoff";
+  output Real engine_cutoff_contact
+    "Low-speed native pad contact used to stop adding propulsion energy";
+  output Real touchdown
+    "Loaded, low-rate suspension touchdown while the airframe remains upright";
+  output Real minimum_leg_compression
+    "Smallest compression measured across the four native suspension joints (m)";
   output Real desired_tilt_x
     "Requested thrust tilt toward navigation +Z (rad)";
   output Real desired_tilt_z
@@ -133,14 +169,22 @@ model Lander
   Real hold_rate_y;
   Real hold_rate_z;
   Real all_legs_contact;
+  Real any_leg_contact;
+  Real pad_contact_phase;
   Real upright_contact_gate;
   Real attitude_authority;
+  Real attitude_position_authority;
   Real ground_speed;
   Real descent_speed;
+  Real angular_speed;
   Real ground_speed_gate;
   Real descent_speed_gate;
+  Real angular_speed_gate;
+  Real engine_cutoff_ground_speed_gate;
+  Real engine_cutoff_descent_speed_gate;
+  Real maximum_leg_speed;
+  Real suspension_rate_gate;
   Real settled_touchdown_target;
-  Real settled_touchdown_state(start = 0.0);
 
 initial equation
   // `authority_initial` is part of the live USD input surface, so it has
@@ -184,7 +228,8 @@ equation
   desired_tilt_x = cmd_pitch * command_tilt_limit_rad;
   desired_tilt_z = cmd_roll * command_tilt_limit_rad;
   command_torque_x = 0.0;
-  command_torque_y = cmd_yaw * controller_inertia_yy * live_authority;
+  command_torque_y = cmd_yaw * controller_inertia_yy * live_authority
+    * max(0.0, min(1.0, 1.0 - landing_engine_cutoff));
   command_torque_z = 0.0;
 
   // Stabilization is expressed entirely in the body frame. AttitudeReference
@@ -210,27 +255,32 @@ equation
   hold_rate_z = gyro_z * noEvent(max(0.0,
     1.0 - rate_deadband_rad_s / noEvent(max(1.0e-9, abs(gyro_z)))));
 
-  // Native contact is not by itself a landing: a flat surface can catch all
-  // four feet while the vehicle is still far from its commanded pad. The
-  // flight computer owns the target-qualified handoff, so the RCS remains
-  // available until the vehicle is both settled and over the authored zone.
-  // This prevents a missed vehicle from losing attitude authority merely
-  // because its feet touched some other part of the terrain.
+  // Main-engine cutoff and flight-control handoff are separate phases. A
+  // qualified pad-contact cutoff closes every propulsion valve. Before that
+  // event, the first low-speed contact removes the attitude target term but
+  // retains measured-rate damping: RCS may arrest residual rotation, but it
+  // cannot lean a grounded vehicle. Cutoff is accepted only after that rate is
+  // quiet, so no residual yaw is frozen into the passive landing phase.
   attitude_authority = attitude_hold * max(0.0, min(1.0,
-    1.0 - landing_handoff));
+    1.0 - max(landing_handoff, landing_engine_cutoff)));
+  attitude_position_authority = max(0.0, min(1.0,
+    1.0 - max(landing_engine_cutoff, pad_contact_phase)));
   // Bound the requested torque at the controller/actuator boundary. Without
   // this, a large measured attitude error becomes an impossible torque request
   // that the downstream valve clamp silently clips, invalidating the loop's
   // tuning assumptions and making a recovery sensitive to tiny solver noise.
   hold_torque_x = max(-max(0.0, hold_torque_limit_nm), min(
     max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_xx
-      * (hold_kp * hold_error_x - hold_kd * hold_rate_x)));
+      * (attitude_position_authority * hold_kp * hold_error_x
+        - hold_kd * hold_rate_x)));
   hold_torque_y = max(-max(0.0, hold_torque_limit_nm), min(
     max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_yy
-      * (hold_kp * hold_error_y - hold_kd * hold_rate_y)));
+      * (attitude_position_authority * hold_kp * hold_error_y
+        - hold_kd * hold_rate_y)));
   hold_torque_z = max(-max(0.0, hold_torque_limit_nm), min(
     max(0.0, hold_torque_limit_nm), attitude_authority * controller_inertia_zz
-      * (hold_kp * hold_error_z - hold_kd * hold_rate_z)));
+      * (attitude_position_authority * hold_kp * hold_error_z
+        - hold_kd * hold_rate_z)));
 
   torque_x = command_torque_x + hold_torque_x;
   torque_y = command_torque_y + hold_torque_y;
@@ -246,33 +296,68 @@ equation
     navigation_velocity_x * navigation_velocity_x
       + navigation_velocity_z * navigation_velocity_z);
   descent_speed = abs(navigation_velocity_y);
-  ground_speed_gate = max(0.0, min(1.0,
-    1.0 - ground_speed
-      / max(1.0e-9, touchdown_ground_speed_mps)));
-  descent_speed_gate = max(0.0, min(1.0,
-    1.0 - descent_speed
-      / max(1.0e-9, touchdown_descent_speed_mps)));
-  all_legs_contact = max(0.0, min(1.0, leg_contact_px))
-    * max(0.0, min(1.0, leg_contact_nx))
-    * max(0.0, min(1.0, leg_contact_pz))
-    * max(0.0, min(1.0, leg_contact_nz));
+  angular_speed = sqrt(gyro_x * gyro_x + gyro_y * gyro_y + gyro_z * gyro_z);
+  // These are mode predicates, not confidence weights. Multiplying normalized
+  // margins made a physically valid quiet landing asymptotically approach a
+  // value below the flight computer's touchdown threshold. Each predicate is
+  // instead derived directly from an authored tolerance and a measured
+  // property; the state filter below supplies the temporal qualification.
+  ground_speed_gate = noEvent(if ground_speed
+      <= max(0.0, touchdown_ground_speed_mps) then 1.0 else 0.0);
+  descent_speed_gate = noEvent(if descent_speed
+      <= max(0.0, touchdown_descent_speed_mps) then 1.0 else 0.0);
+  angular_speed_gate = noEvent(if angular_speed
+      <= max(0.0, touchdown_angular_speed_rad_s) then 1.0 else 0.0);
+  engine_cutoff_ground_speed_gate = noEvent(if ground_speed
+      <= max(0.0, engine_cutoff_ground_speed_mps) then 1.0 else 0.0);
+  engine_cutoff_descent_speed_gate = noEvent(if descent_speed
+      <= max(0.0, engine_cutoff_descent_speed_mps) then 1.0 else 0.0);
+  all_legs_contact = noEvent(if leg_contact_px >= 0.5
+      and leg_contact_nx >= 0.5
+      and leg_contact_pz >= 0.5
+      and leg_contact_nz >= 0.5 then 1.0 else 0.0);
+  any_leg_contact = noEvent(if leg_contact_px >= 0.5
+      or leg_contact_nx >= 0.5
+      or leg_contact_pz >= 0.5
+      or leg_contact_nz >= 0.5 then 1.0 else 0.0);
+  // A negative prismatic displacement is compression by the joint's authored
+  // axis convention. Keep the minimum as measured evidence and require all
+  // four suspension rates to be quiet. Do not require a minimum displacement:
+  // an elastoplastic absorber only crushes above yield, so that predicate would
+  // reject the physically desirable soft landing.
+  minimum_leg_compression = min(
+    min(max(0.0, -leg_displacement_px), max(0.0, -leg_displacement_nx)),
+    min(max(0.0, -leg_displacement_pz), max(0.0, -leg_displacement_nz)));
+  maximum_leg_speed = max(
+    max(abs(leg_velocity_px), abs(leg_velocity_nx)),
+    max(abs(leg_velocity_pz), abs(leg_velocity_nz)));
+  suspension_rate_gate = noEvent(if maximum_leg_speed
+      <= max(0.0, touchdown_max_suspension_speed_mps) then 1.0 else 0.0);
   // The up-axis reading comes from the IMU quaternion through the shared
-  // AttitudeReference transform. Allow a small contact lean, but reject a
-  // side-lying body (body-frame up component <= 0.2).
-  upright_contact_gate = max(0.0, min(1.0,
-    (upright_axis_y - 0.2) / 0.6));
-  settled_touchdown_target = all_legs_contact
+  // AttitudeReference transform. The authored minimum is a direct body-up
+  // projection criterion, so a side-lying or inverted hull cannot qualify.
+  upright_contact_gate = noEvent(if upright_axis_y
+      >= max(-1.0, min(1.0, touchdown_min_upright_axis_y))
+      then 1.0 else 0.0);
+  // Main-engine cutoff and final flight handoff are different physical events.
+  // A qualified low-speed pad switch starts a rate-only contact phase. Once the
+  // measured body rate is quiet, cutoff closes propulsion and the passive gear
+  // takes the remaining touchdown energy. The event supervisor supplies the
+  // contiguous-time qualification; this model publishes only the measured
+  // predicate. Final handoff still requires all four pads, low body rates, and
+  // quiet struts, so first contact is never mistaken for "settled".
+  pad_contact_phase = any_leg_contact
     * upright_contact_gate
-    * ground_speed_gate * descent_speed_gate;
+    * engine_cutoff_ground_speed_gate * engine_cutoff_descent_speed_gate;
+  engine_cutoff_contact = pad_contact_phase * angular_speed_gate;
+  landing_contact = all_legs_contact
+    * upright_contact_gate * ground_speed_gate * descent_speed_gate
+    * angular_speed_gate * suspension_rate_gate;
+  settled_touchdown_target = landing_contact;
   // Contact alone is not yet a landing: a vehicle can touch four pads while
   // still translating or descending fast enough to slide across the surface.
-  // Keep the flight computer authoritative until the native contact loads and
-  // measured body velocity satisfy the same low-speed condition used by the
-  // touchdown filter. This lets the engine/RCS dissipate the real residual
-  // kinetic energy instead of handing it to an unpowered, sliding airframe.
-  landing_contact = settled_touchdown_target;
-  der(settled_touchdown_state) = (settled_touchdown_target
-    - settled_touchdown_state)
-    / max(minimum_time_constant_s, touchdown_settle_tau_s);
-  touchdown = max(0.0, min(1.0, settled_touchdown_state));
+  // Once every physical predicate is true, touchdown is an event-ready fact.
+  // No low-pass state delays or weakens it: the event layer latches this exact
+  // measured transition if later contact bits flicker during solver sleep.
+  touchdown = settled_touchdown_target;
 end Lander;

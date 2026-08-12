@@ -150,6 +150,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
             .register_type::<avian_queries::RaycastObservation>();
+        joint::install_passive_prismatic_solver(app);
 
         // The shared port substrate (in `lunco-core`, below every participant).
         // The cosim engine owns the avian/joint/Modelica/hardware backends and
@@ -305,19 +306,6 @@ impl Plugin for CoSimPlugin {
                     .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                         // Absent role (single-player, headless tests) → run.
                         // Only a present `Client` role gates it off.
-                        !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
-                    }),
-                // A passive prismatic suspension is a physical load, not a
-                // bilateral joint motor. Apply it through the same force
-                // accumulator after authored body-force inputs have arrived.
-                joint::apply_passive_prismatic_suspension
-                    .in_set(systems::apply_forces::CosimSet::ApplyForces)
-                    .after(avian::apply_pending_forces)
-                    .run_if(
-                        resource_exists::<Time<avian3d::prelude::Physics>>
-                            .and_then(lunco_physics::physics_is_live),
-                    )
-                    .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                         !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
                     }),
             ),

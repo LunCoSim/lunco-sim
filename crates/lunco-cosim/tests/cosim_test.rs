@@ -118,6 +118,47 @@ fn test_avian_body_ports_read_live_state() {
     assert_eq!(ports().read_output_port(w, e, "velocity_y"), Some(3.2));
 }
 
+#[test]
+fn authored_kinematic_body_accepts_position_inputs() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    let marker = app
+        .world_mut()
+        .spawn((
+            RigidBody::Kinematic,
+            lunco_core::Mobility::Kinematic,
+            Position(DVec3::new(1.0, 2.0, 3.0)),
+        ))
+        .id();
+
+    let registry = ports();
+    assert!(registry.write_port(app.world_mut(), marker, "position_x", 8.0));
+    assert!(registry.write_port(app.world_mut(), marker, "position_z", -5.0));
+    assert_eq!(
+        app.world().get::<Position>(marker).unwrap().0,
+        DVec3::new(8.0, 2.0, -5.0)
+    );
+}
+
+#[test]
+fn dynamic_mobility_never_accepts_position_inputs_during_admission() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    // USD dynamic bodies transiently use Avian's Kinematic variant while their
+    // joint graph is admitted. The stable authored Mobility remains Dynamic.
+    let vehicle = app
+        .world_mut()
+        .spawn((
+            RigidBody::Kinematic,
+            lunco_core::Mobility::Dynamic,
+            Position(DVec3::new(1.0, 2.0, 3.0)),
+        ))
+        .id();
+
+    assert!(!ports().write_port(app.world_mut(), vehicle, "position_x", 99.0));
+    assert_eq!(app.world().get::<Position>(vehicle).unwrap().0.x, 1.0);
+}
+
 // ---------------------------------------------------------------------------
 // SimConnection Tests
 // ---------------------------------------------------------------------------

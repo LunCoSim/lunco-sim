@@ -36,6 +36,7 @@
 //! Filtering is symmetric (the USD docs say so, and a one-sided contact filter is
 //! meaningless), so authoring it on either prim filters the pair.
 
+use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
@@ -73,6 +74,14 @@ pub struct FilteredPairs(pub EntityHashSet);
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
 pub struct SharedTireContact;
+
+/// Numerical stiction band for Avian's discrete Coulomb solve.
+///
+/// Coulomb friction is discontinuous at zero slip, while a discrete solver
+/// never measures an exact mathematical zero. One centimetre per second is a
+/// solver tolerance, not a material classifier: both coefficients and their
+/// combine rule still come entirely from the authored [`Friction`] properties.
+const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.01;
 
 /// Declare that `a` and `b` must never collide, from this command flush onward.
 ///
@@ -320,6 +329,10 @@ pub struct UsdCollisionFilter<'w, 's> {
     filtered: Query<'w, 's, &'static FilteredPairs>,
     collider_of: Query<'w, 's, &'static ColliderOf>,
     shared_tire: Query<'w, 's, (), With<SharedTireContact>>,
+    friction: Query<'w, 's, &'static Friction>,
+    linear_velocity: Query<'w, 's, &'static LinearVelocity>,
+    angular_velocity: Query<'w, 's, &'static AngularVelocity>,
+    default_friction: Res<'w, DefaultFriction>,
 }
 
 /// Add contact-modification capability without overwriting an authored pair
@@ -334,6 +347,31 @@ pub fn enable_shared_tire_contact_hooks(
             .entity(entity)
             .insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
     }
+}
+
+/// Enable contact modification for materials with distinct static and dynamic
+/// coefficients.
+///
+/// Avian 0.7 stores both on [`Friction`], but its narrow phase currently copies
+/// only `dynamic_coefficient` onto contact manifolds. The shared hook restores
+/// the authored static branch without classifying bodies by path or vehicle.
+pub fn enable_static_friction_contact_hooks(
+    mut commands: Commands,
+    q_changed: Query<(Entity, &Friction, Option<&ActiveCollisionHooks>), Changed<Friction>>,
+) {
+    for (entity, friction, hooks) in &q_changed {
+        if (friction.static_coefficient - friction.dynamic_coefficient).abs() <= Scalar::EPSILON {
+            continue;
+        }
+        let current = hooks.copied().unwrap_or_default();
+        commands
+            .entity(entity)
+            .insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
+    }
+}
+
+fn use_static_friction(max_tangent_speed: Scalar) -> bool {
+    max_tangent_speed <= STATIC_FRICTION_MAX_SLIP_SPEED_MPS
 }
 
 impl CollisionHooks for UsdCollisionFilter<'_, '_> {
@@ -364,6 +402,48 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
     }
 
     fn modify_contacts(&self, contacts: &mut ContactPair, _commands: &mut Commands) -> bool {
+        let surface_friction = |collider: Entity, body: Option<Entity>| {
+            self.friction
+                .get(collider)
+                .ok()
+                .copied()
+                .or_else(|| body.and_then(|body| self.friction.get(body).ok().copied()))
+                .unwrap_or(self.default_friction.0)
+        };
+        let combined = surface_friction(contacts.collider1, contacts.body1)
+            .combine(surface_friction(contacts.collider2, contacts.body2));
+        let point_velocity = |body: Option<Entity>, anchor: Vector| {
+            let Some(body) = body else {
+                return Vector::ZERO;
+            };
+            let linear = self
+                .linear_velocity
+                .get(body)
+                .map_or(Vector::ZERO, |velocity| velocity.0);
+            let angular = self
+                .angular_velocity
+                .get(body)
+                .map_or(Vector::ZERO, |velocity| velocity.0);
+            linear + angular.cross(anchor)
+        };
+
+        for manifold in &mut contacts.manifolds {
+            let max_tangent_speed = manifold
+                .points
+                .iter()
+                .fold(0.0 as Scalar, |maximum, point| {
+                    let relative = point_velocity(contacts.body2, point.anchor2)
+                        - point_velocity(contacts.body1, point.anchor1);
+                    let tangent = relative - manifold.normal * relative.dot(manifold.normal);
+                    maximum.max(tangent.length())
+                });
+            manifold.friction = if use_static_friction(max_tangent_speed) {
+                combined.static_coefficient
+            } else {
+                combined.dynamic_coefficient
+            };
+        }
+
         // A wheel body may be represented by a collider child in a future
         // composition, so use the resolved body endpoints rather than assuming
         // the collider entity itself carries the marker.
@@ -437,5 +517,14 @@ def Xform "Rig"
         let reader = cs.view();
         let shell = SdfPath::new("/Rig/B/Shell").unwrap();
         assert!(read_filtered_pairs(&reader, &shell).is_none());
+    }
+
+    #[test]
+    fn stiction_band_selects_static_only_near_zero_slip() {
+        assert!(use_static_friction(0.0));
+        assert!(use_static_friction(STATIC_FRICTION_MAX_SLIP_SPEED_MPS));
+        assert!(!use_static_friction(
+            STATIC_FRICTION_MAX_SLIP_SPEED_MPS + 0.001
+        ));
     }
 }

@@ -1461,11 +1461,7 @@ mod dem_bridge_tests {
 
     fn bridge_with_spec(
         scene: &str,
-    ) -> (
-        World,
-        Entity,
-        lunco_obstacle_field::spec::ObstacleFieldSpec,
-    ) {
+    ) -> (World, Entity, lunco_obstacle_field::spec::ObstacleFieldSpec) {
         let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
             .expect("stage builds");
         let view = cs.view();
@@ -1621,7 +1617,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().any(|entry| entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .any(|entry| entry.id.as_str().ends_with("Detail")),
             "enabled overzoom must remain in the composed stack"
         );
     }
@@ -1646,7 +1645,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::TerrainLayerStack>(entity)
             .expect("terrain layer stack attached");
         assert!(
-            stack.0.iter().all(|entry| !entry.id.as_str().ends_with("Detail")),
+            stack
+                .0
+                .iter()
+                .all(|entry| !entry.id.as_str().ends_with("Detail")),
             "disabled overzoom must not contribute a height layer"
         );
     }

@@ -5,9 +5,9 @@
     metersPerUnit = 1
 )
 
-# Reusable landing location marker — a translucent glowing DOME representing the
-# target touchdown site. It NEVER collides with physics: the dome has no collider,
-# and the trigger volume is an overlap-only avian Sensor (non-solid).
+# Reusable landing location marker — a thin illuminated pad disc representing
+# the target touchdown site. It NEVER collides with physics: the disc has no
+# collider, and the trigger volume is an overlap-only Avian Sensor (non-solid).
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
 def Xform "LandingLocationMarker" (
@@ -39,17 +39,20 @@ def Xform "LandingLocationMarker" (
         }
     }
 
-    # Translucent emissive dome. A sphere centred at the marker origin (ground
-    # level): the upper half reads as a half-sphere dome; the lower half sits
-    # below the surface and is hidden. Purely visual — no collider.
-    def Sphere "Dome"
+    # Thin emissive pad mark centred on the authored ground datum.  Keeping the
+    # existing child name preserves ordinary USD overrides while changing the
+    # reusable visual from a misleading flame-like hemisphere to a flat target.
+    # Purely visual — no collider.
+    def Cylinder "Dome"
     {
         custom string lunco:interaction:left = "pass_through"
         custom string lunco:interaction:right = "context"
+        uniform token axis = "Y"
         double radius = 2.5
+        double height = 0.04
         rel material:binding = </LandingLocationMarker/Looks/Dome_Mat>
         color3f[] primvars:displayColor = [(0.95, 0.2, 0.2)]
-        float[] primvars:displayOpacity = [0.28]
+        float[] primvars:displayOpacity = [0.5]
         bool physics:collisionEnabled = false
     }
 

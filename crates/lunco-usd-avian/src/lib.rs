@@ -297,6 +297,7 @@ impl Plugin for UsdAvianPlugin {
                         .run_if(any_with_component::<PendingTerrainCollider>),
                     enforce_kinematic_on_animated,
                     filtered_pairs::enable_shared_tire_contact_hooks,
+                    filtered_pairs::enable_static_friction_contact_hooks,
                     project_mobility_to_rigid_body,
                 ),
             );
@@ -443,6 +444,11 @@ pub struct PendingUsdJoint {
     /// then stays passive until a cosim wire commands its `displacement`/`angle`
     /// port.
     pub drive: Option<JointDrive>,
+    /// Passive relative-velocity damping explicitly classified by
+    /// `LunCoJointDampingAPI`, or `None` when the joint is lossless. This maps
+    /// directly to Avian's native `JointDamping`; it is not a drive or a
+    /// rigid-body world-damping approximation.
+    pub damping: Option<JointDamping>,
 }
 
 /// The `UsdPhysicsJoint` base reads every joint type shares: the two bodies and
@@ -1573,6 +1579,19 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
     let conv = lunco_usd_bevy::stage_convention(&view);
+    let damping = view
+        .has_api_schema(path, "LunCoJointDampingAPI")
+        .then(|| JointDamping {
+            linear: view
+                .real_f32(path, "lunco:jointDamping:linear")
+                .unwrap_or(0.0) as f64,
+            angular: view
+                .real_f32(path, "lunco:jointDamping:angular")
+                .unwrap_or(0.0) as f64,
+        })
+        .filter(|d| {
+            d.linear.is_finite() && d.linear >= 0.0 && d.angular.is_finite() && d.angular >= 0.0
+        });
     // A UsdPhysics joint is defined by a FRAME on each body: `physics:localPos0`
     // + `physics:localRot0` on body0, `localPos1` + `localRot1` on body1. The
     // joint constrains those two frames to each other, and `physics:axis` names a
@@ -1814,6 +1833,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         joint_type: joint_type.into(),
         swing_limit,
         drive,
+        damping,
     };
 
     let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone())
@@ -2137,12 +2157,12 @@ const JOINT_RESOLVE_MAX_TICKS: u32 = 3_600;
 /// Return body1's velocity after seating a joint without asking the solver to
 /// remove an authored constraint violation on its first step.
 ///
-/// A fixed joint has no free relative velocity. A prismatic joint has exactly
-/// one: translation along its slider axis. Its angular velocity and the two
-/// transverse components of the anchor velocity are still constrained. This
-/// is the velocity equivalent of seating the joint's position and orientation
-/// above; treating a prismatic body as a zero-velocity child is not a neutral
-/// initial condition, it is an impulse request at the joint anchor.
+/// The admitted velocity must obey the same degrees of freedom as the joint:
+/// fixed has none, prismatic preserves axial translation, revolute preserves
+/// angular rate about its hinge, and spherical preserves all relative angular
+/// rate. Every one of those joints still locks the two anchor points together.
+/// A child without authored velocity inherits the parent's rigid motion;
+/// treating it as stationary is an impulse request at the joint anchor.
 fn seated_body1_velocity(
     body0_position: DVec3,
     body1_position: DVec3,
@@ -2151,22 +2171,32 @@ fn seated_body1_velocity(
     body0_angular: DVec3,
     body1_linear: DVec3,
     body1_angular: DVec3,
-    free_axis_world: Option<DVec3>,
-    preserve_free_rate: bool,
+    free_linear_axis_world: Option<DVec3>,
+    free_angular_axis_world: Option<DVec3>,
+    all_angular_free: bool,
+    preserve_authored_free_rates: bool,
 ) -> (DVec3, DVec3) {
     let body0_anchor_offset = anchor_world - body0_position;
     let body1_anchor_offset = anchor_world - body1_position;
     let body0_anchor_velocity = body0_linear + body0_angular.cross(body0_anchor_offset);
-    let free_rate = free_axis_world
-        .filter(|_| preserve_free_rate)
+    let free_linear_rate = free_linear_axis_world
+        .filter(|_| preserve_authored_free_rates)
         .map(|axis| {
             let body1_anchor_velocity = body1_linear + body1_angular.cross(body1_anchor_offset);
             (body1_anchor_velocity - body0_anchor_velocity).dot(axis)
         })
         .unwrap_or(0.0);
-    let target_angular = body0_angular;
-    let target_anchor_velocity = free_axis_world
-        .map(|axis| body0_anchor_velocity + axis * free_rate)
+    let target_angular = if !preserve_authored_free_rates {
+        body0_angular
+    } else if all_angular_free {
+        body1_angular
+    } else if let Some(axis) = free_angular_axis_world {
+        body0_angular + axis * (body1_angular - body0_angular).dot(axis)
+    } else {
+        body0_angular
+    };
+    let target_anchor_velocity = free_linear_axis_world
+        .map(|axis| body0_anchor_velocity + axis * free_linear_rate)
         .unwrap_or(body0_anchor_velocity);
     let target_linear = target_anchor_velocity - target_angular.cross(body1_anchor_offset);
     (target_linear, target_angular)
@@ -2190,6 +2220,8 @@ mod joint_velocity_tests {
             DVec3::ZERO,
             DVec3::ZERO,
             Some(slider_axis),
+            None,
+            false,
             false,
         );
 
@@ -2211,11 +2243,65 @@ mod joint_velocity_tests {
             child_velocity,
             DVec3::ZERO,
             Some(slider_axis),
+            None,
+            false,
             true,
         );
 
         assert!((linear - child_velocity).length() < 1.0e-6);
         assert_eq!(angular, DVec3::ZERO);
+    }
+
+    #[test]
+    fn spherical_child_inherits_rigid_motion_when_rates_are_unauthored() {
+        let parent_linear = DVec3::new(0.8, -2.6, 1.5);
+        let parent_angular = DVec3::new(0.1, -0.2, 0.3);
+        let child_position = DVec3::new(2.5, -5.0, 0.0);
+        let anchor = DVec3::new(2.5, -4.9, 0.0);
+        let (linear, angular) = seated_body1_velocity(
+            DVec3::ZERO,
+            child_position,
+            anchor,
+            parent_linear,
+            parent_angular,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            None,
+            None,
+            true,
+            false,
+        );
+
+        let expected_anchor_velocity = parent_linear + parent_angular.cross(anchor);
+        let actual_anchor_velocity = linear + angular.cross(anchor - child_position);
+        assert!((actual_anchor_velocity - expected_anchor_velocity).length() < 1.0e-6);
+        assert_eq!(angular, parent_angular);
+    }
+
+    #[test]
+    fn revolute_child_preserves_only_authored_hinge_rate() {
+        let hinge = DVec3::Y;
+        let parent_angular = DVec3::new(0.1, -0.2, 0.3);
+        let child_angular = parent_angular + hinge * 1.75 + DVec3::X * 4.0;
+        let (linear, angular) = seated_body1_velocity(
+            DVec3::ZERO,
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.5, 0.0, 0.0),
+            DVec3::ZERO,
+            parent_angular,
+            DVec3::ZERO,
+            child_angular,
+            None,
+            Some(hinge),
+            false,
+            true,
+        );
+
+        assert!(((angular - parent_angular).dot(hinge) - 1.75).abs() < 1.0e-6);
+        assert!((angular.x - parent_angular.x).abs() < 1.0e-6);
+        let body0_anchor_velocity = parent_angular.cross(DVec3::new(0.5, 0.0, 0.0));
+        let body1_anchor_velocity = linear + angular.cross(DVec3::new(-0.5, 0.0, 0.0));
+        assert!((body1_anchor_velocity - body0_anchor_velocity).length() < 1.0e-6);
     }
 }
 
@@ -2433,8 +2519,6 @@ fn build_usd_physics_joints(
             pending.joint_type.as_str(),
             "PhysicsFixedJoint" | "PhysicsPrismaticJoint"
         );
-        let rigid = pending.joint_type == "PhysicsFixedJoint";
-
         // avian `Position` is a grid-absolute point — wrap at the read so the
         // anchor math below type-checks as grid + body-local offset.
         let pose0 = q_pose.get(b0).ok().map(|(p, r)| (GridPos(p.0), r.0));
@@ -2512,13 +2596,20 @@ fn build_usd_physics_joints(
                 }
             }
 
-            // Seat velocity for every joint that locks orientation. Fixed
-            // joints have no free relative velocity; prismatic joints retain
-            // only the authored/realized rate along their slider axis. A child
-            // without an authored initial velocity is part of the parent's
-            // initial rigid motion, so its free slider rate starts at zero
-            // rather than inheriting Avian's required-component default.
-            if locks_rotation {
+            // Seat every point-constrained joint in velocity space too. A
+            // spherical footpad may rotate at its ball joint, and a revolute
+            // link may rotate about its hinge, but neither may begin with its
+            // anchor stationary while the parent vehicle is already moving.
+            // Preserve only explicitly authored rates in each joint's free DOF;
+            // otherwise the child inherits coherent parent motion.
+            let seats_anchor_velocity = matches!(
+                pending.joint_type.as_str(),
+                "PhysicsFixedJoint"
+                    | "PhysicsPrismaticJoint"
+                    | "PhysicsRevoluteJoint"
+                    | "PhysicsSphericalJoint"
+            );
+            if seats_anchor_velocity {
                 let authored0 = q_authored_velocity.get(b0).ok().copied();
                 let authored1 = q_authored_velocity.get(b1).ok().copied();
                 let motion0 = q_vel.get(b0).ok().map(|(l, a)| {
@@ -2534,8 +2625,13 @@ fn build_usd_physics_joints(
                     )
                 });
                 if let (Some((lin0, ang0)), Some((lin1, ang1))) = (motion0, motion1) {
-                    let free_axis_world =
-                        (!rigid).then(|| (r0 * pending.local_rot0 * pending.axis).normalize());
+                    let joint_axis_world =
+                        (r0 * pending.local_rot0 * pending.axis).normalize_or_zero();
+                    let free_linear_axis_world =
+                        (pending.joint_type == "PhysicsPrismaticJoint").then_some(joint_axis_world);
+                    let free_angular_axis_world =
+                        (pending.joint_type == "PhysicsRevoluteJoint").then_some(joint_axis_world);
+                    let all_angular_free = pending.joint_type == "PhysicsSphericalJoint";
                     let (target_lin, target_ang) = seated_body1_velocity(
                         p0.0,
                         p1_seated.0,
@@ -2544,7 +2640,9 @@ fn build_usd_physics_joints(
                         ang0,
                         lin1,
                         ang1,
-                        free_axis_world,
+                        free_linear_axis_world,
+                        free_angular_axis_world,
+                        all_angular_free,
                         authored1.is_some_and(|v| v.linear.is_some() || v.angular.is_some()),
                     );
                     if (lin1 - target_lin).length() > JOINT_SEAT_EPS
@@ -2571,7 +2669,7 @@ fn build_usd_physics_joints(
         // `RevoluteJoint` — addressable by USD path, API id, or `Entity` alike,
         // so the wiring fabric can target `</…/Joint>.angle` with no
         // USD-specific lookup.
-        match pending.joint_type.as_str() {
+        let attached = match pending.joint_type.as_str() {
             "PhysicsPrismaticJoint" => {
                 let mut joint = PrismaticJoint::new(b0, b1)
                     .with_local_anchor1(pending.local_pos0)
@@ -2590,6 +2688,7 @@ fn build_usd_physics_joints(
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                true
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -2609,6 +2708,7 @@ fn build_usd_physics_joints(
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                true
             }
             "PhysicsFixedJoint" => {
                 attach_joint(
@@ -2624,6 +2724,7 @@ fn build_usd_physics_joints(
                             .with_local_basis2(pending.local_rot1),
                     ),
                 );
+                true
             }
             "PhysicsSphericalJoint" => {
                 // Ball joint: 3 rotational DOF about the anchor. `physics:axis`
@@ -2646,6 +2747,7 @@ fn build_usd_physics_joints(
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                true
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
@@ -2674,6 +2776,7 @@ fn build_usd_physics_joints(
                             .with_limits(min, max),
                     ),
                 );
+                true
             }
             // UsdPhysics generic D6 joint has no avian primitive (avian offers
             // fixed/revolute/prismatic/spherical/distance, not a configurable
@@ -2686,9 +2789,21 @@ fn build_usd_physics_joints(
                      DistanceJoint/FixedJoint for the DOF you need",
                     pending.body1_path
                 );
+                false
             }
             other => {
                 warn!("Unsupported USD joint type: {}", other);
+                false
+            }
+        };
+
+        // JointDamping must live on the same entity as the Avian joint. The
+        // joint itself is still parked until both bodies enter the island graph;
+        // inserting this carrier now means the damping is present from the
+        // first constrained velocity solve, with no startup frame gap.
+        if attached {
+            if let Some(damping) = pending.damping {
+                commands.entity(joint_entity).try_insert(damping);
             }
         }
 
@@ -3490,7 +3605,7 @@ mod joint_typed_tests {
 def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
 def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
 def PhysicsRevoluteJoint "Hinge" (
-    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    prepend apiSchemas = ["PhysicsDriveAPI:angular", "LunCoJointDampingAPI"]
 )
 {
     rel physics:body0 = </Chassis>
@@ -3502,6 +3617,7 @@ def PhysicsRevoluteJoint "Hinge" (
     point3f physics:localPos1 = (0, 0, 0)
     float drive:angular:physics:targetVelocity = 2.5
     float drive:angular:physics:maxForce = 100
+    float lunco:jointDamping:angular = 2.5
 }
 "#;
 
@@ -3538,6 +3654,9 @@ def PhysicsRevoluteJoint "Hinge" (
         assert_eq!(drive.target_velocity, Some(2.5f64.to_radians()));
         assert_eq!(drive.max_force, Some(100.0));
         assert_eq!(drive.target_position, None);
+        let damping = j.damping.expect("typed passive joint damping");
+        assert_eq!(damping.linear, 0.0);
+        assert_eq!(damping.angular, 2.5);
     }
 
     /// Where a raked joint's axis actually POINTS, from the authoring a landing
