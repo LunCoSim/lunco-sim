@@ -783,6 +783,7 @@ impl Plugin for LunCoAvatarPlugin {
             // the step's final pose be snapshotted for the render-rate ease.
             AvatarCameraSet
                 .after(lunco_time::InteractionRestoreSet)
+                .after(lunco_controller::InteractionControlSet)
                 .before(lunco_time::InteractionRecordSet),
         );
         // Chase follows the body after physics/render interpolation has written the
