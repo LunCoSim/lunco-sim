@@ -125,6 +125,10 @@ impl Plugin for SandboxUiPlugin {
                 lunco_workbench::PerspectiveId("rover_build"),
             )),
         );
+        app.insert_resource(lunco_workbench::BuildIdentity::new(
+            crate::PRODUCT_VERSION,
+            crate::GIT_SHA,
+        ));
         app.add_observer(on_luncosim_tutorial_start);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, crate::apply_luncosim_window_icon);

@@ -25,6 +25,10 @@
 // exemption `clippy.toml`'s own header claims for build scripts is spelled here.
 #![allow(clippy::disallowed_methods)]
 
+mod build_identity {
+    include!("../../scripts/build_identity.rs");
+}
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::path::Path;
@@ -75,4 +79,5 @@ fn main() {
         "cargo:rustc-env=LUNCO_WIRE_BUILD_ID={:016x}",
         hasher.finish()
     );
+    build_identity::stamp();
 }

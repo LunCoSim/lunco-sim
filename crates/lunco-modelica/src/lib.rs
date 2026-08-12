@@ -39,6 +39,11 @@ use rumoca_compile::{Session, SessionConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
+/// SemVer2 product version stamped into this build.
+pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
+/// Short source revision stamped into this build for diagnostics.
+pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
+
 /// Typed identity for a Modelica class across the workbench.
 ///
 /// Replaces the former string ID schemes (`msl_path:`, `bundled://…#`,
@@ -1555,6 +1560,10 @@ impl Plugin for ModelicaPlugin {
 /// `config` field:
 ///
 /// ```ignore
+/// app.insert_resource(lunco_workbench::BuildIdentity::new(
+///     lunco_modelica::PRODUCT_VERSION,
+///     lunco_modelica::GIT_SHA,
+/// ));
 /// app.add_plugins(lunco_modelica::ModelicaWorkbenchPlugin {
 ///     config: lunco_modelica::ModelicaUiConfig {
 ///         include_help_overlay: false,
@@ -1567,6 +1576,9 @@ impl Plugin for ModelicaPlugin {
 /// `ClearColor`) is deliberately **not** owned here — Bevy always inserts
 /// defaults for those resources so an "insert-if-absent" guard can't tell
 /// a host's choice from the default. Those stay an app-shell concern.
+/// The host composition root must also insert its [`lunco_workbench::BuildIdentity`]
+/// before adding this plugin; this bundle never invents or overwrites the host
+/// application's product identity.
 #[cfg(feature = "ui")]
 #[derive(Default)]
 pub struct ModelicaWorkbenchPlugin {

@@ -140,6 +140,34 @@ pub use panel::{
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WorkbenchRenderSet;
 
+/// Authoritative version and build identity supplied by the host application.
+///
+/// Workbench is shared by multiple binaries, so its own package metadata is
+/// not the product identity users are running. Each host inserts its stamped
+/// identity, and Workbench only presents it in shared UI such as Help.
+#[derive(Resource, Clone, Debug, PartialEq, Eq)]
+pub struct BuildIdentity {
+    /// Release or product version shown to users.
+    pub version: String,
+    /// Build identifier, normally the short source revision.
+    pub build: String,
+}
+
+impl BuildIdentity {
+    /// Create an identity from the host application's stamped values.
+    pub fn new(version: impl Into<String>, build: impl Into<String>) -> Self {
+        Self {
+            version: version.into(),
+            build: build.into(),
+        }
+    }
+
+    /// Format the canonical version line shared by Help and Settings.
+    pub fn version_label(&self) -> String {
+        format!("Version {} ({})", self.version, self.build)
+    }
+}
+
 /// Desired pixel widths for the side / right dock panes. Read each
 /// frame by [`WorkbenchLayout::enforce_fixed_widths`] which rewrites
 /// the relevant split fractions so the panes stay at a constant
@@ -3816,12 +3844,13 @@ fn render_layout(
             });
             anchor_rects.push(("menu.settings", r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
-                ui.label(format!(
-                    "{} v{} ({})",
-                    running_app_name(),
-                    env!("CARGO_PKG_VERSION"),
-                    env!("LUNCO_GIT_HASH"),
-                ));
+                if let Some(identity) = world.get_resource::<BuildIdentity>() {
+                    ui.label(format!(
+                        "{} · {}",
+                        running_app_name(),
+                        identity.version_label()
+                    ));
+                }
                 let callbacks = std::mem::take(&mut layout.help_menu);
                 if !callbacks.is_empty() {
                     ui.separator();
@@ -4895,6 +4924,16 @@ fn register_graphics_settings_menu(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_identity_formats_the_shared_version_label() {
+        let identity = BuildIdentity::new("0.6.0-nightly.37.1", "abc12345-dirty");
+
+        assert_eq!(
+            identity.version_label(),
+            "Version 0.6.0-nightly.37.1 (abc12345-dirty)"
+        );
+    }
 
     /// `FocusPanel` can arrive from another UI/domain plugin before (or without)
     /// `WorkbenchPlugin`; an absent dock is a valid no-op state, not a fatal

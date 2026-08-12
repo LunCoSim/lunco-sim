@@ -200,11 +200,9 @@ fn register_update_settings_menu(world: &mut World) {
         // narrow window. The persistent dialog below uses the same width budget.
         ui.set_min_width(560.0);
         ui.label(egui::RichText::new("Velopack updates").weak().small());
-        ui.label(format!(
-            "Version {} ({})",
-            crate::PRODUCT_VERSION,
-            crate::GIT_SHA
-        ));
+        if let Some(identity) = ctx.resource::<lunco_workbench::BuildIdentity>() {
+            ui.label(identity.version_label());
+        }
         ui.label(format!(
             "LunCoSim nightly updates · {} channel",
             UPDATE_CHANNEL
