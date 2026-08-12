@@ -5,18 +5,21 @@
 //! as one unit: assets added by a release arrive, and files absent from the
 //! release are not retained as an accidental second asset tree.
 
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
 use bevy_egui::egui;
 use lunco_settings::AppSettingsExt;
+use lunco_workbench::status_bus::{StatusBus, StatusLevel};
 use lunco_workbench::WorkbenchLayout;
 use serde::{Deserialize, Serialize};
 use velopack::sources::GithubSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
 
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const UPDATE_STATUS_SOURCE: &str = "updates";
 /// Public machine-only repository containing immutable update releases.
 pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-sim-updates";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -90,6 +93,8 @@ pub(crate) struct UpdateState {
     pub(crate) available: Option<UpdateInfo>,
     pub(crate) ready: Option<UpdateInfo>,
     pub(crate) error: Option<String>,
+    /// Latest percentage reported by Velopack while downloading.
+    pub(crate) download_progress: Option<u8>,
     /// Unix time when the current process last attempted a check, including a
     /// manual check. This is separate from the persisted automatic-check
     /// throttle so the UI remains truthful after a successful no-update result.
@@ -103,6 +108,7 @@ impl Default for UpdateState {
             available: None,
             ready: None,
             error: None,
+            download_progress: None,
             last_check_unix: None,
         }
     }
@@ -121,6 +127,7 @@ pub(crate) struct UpdateActions {
 struct UpdateTasks {
     check: Option<Task<UpdateCheckResult>>,
     download: Option<Task<UpdateDownloadResult>>,
+    download_progress: Option<Arc<Mutex<mpsc::Receiver<i16>>>>,
 }
 
 impl Default for UpdateTasks {
@@ -128,6 +135,7 @@ impl Default for UpdateTasks {
         Self {
             check: None,
             download: None,
+            download_progress: None,
         }
     }
 }
@@ -142,6 +150,12 @@ enum UpdateCheckResult {
 struct UpdateDownloadResult {
     info: UpdateInfo,
     result: Result<(), String>,
+}
+
+#[derive(Default)]
+struct UpdateStatusMemo {
+    status: Option<UpdateStatus>,
+    detail: String,
 }
 
 pub(crate) struct UpdatePlugin;
@@ -159,6 +173,7 @@ impl Plugin for UpdatePlugin {
                     schedule_automatic_check,
                     process_update_actions,
                     poll_update_tasks,
+                    mirror_update_status_to_status_bus,
                 )
                     .chain(),
             );
@@ -221,7 +236,10 @@ fn register_update_settings_menu(world: &mut World) {
                 ui.label("No update is available.");
             }
             UpdateStatus::Checking => {
-                ui.label("Checking GitHub for a newer release…");
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Checking GitHub for a newer release…");
+                });
             }
             UpdateStatus::Available => {
                 if let Some(info) = state.available.as_ref() {
@@ -233,7 +251,9 @@ fn register_update_settings_menu(world: &mut World) {
                 }
             }
             UpdateStatus::Downloading => {
-                ui.label("Downloading update…");
+                let progress = state.download_progress.unwrap_or_default();
+                ui.label(format!("Downloading update… {progress}%"));
+                ui.add(egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage());
             }
             UpdateStatus::ReadyToRestart => {
                 ui.label("Update downloaded. Choose Install and restart.");
@@ -331,6 +351,7 @@ fn process_update_actions(
             state.available = None;
             state.ready = None;
             state.error = None;
+            state.download_progress = None;
             tasks.check = Some(IoTaskPool::get().spawn(async { check_for_updates() }));
         }
     }
@@ -339,10 +360,14 @@ fn process_update_actions(
         actions.download_requested = false;
         if tasks.check.is_none() && tasks.download.is_none() {
             if let Some(info) = state.available.clone() {
+                let (progress_sender, progress_receiver) = mpsc::channel();
                 state.status = UpdateStatus::Downloading;
                 state.error = None;
-                tasks.download =
-                    Some(IoTaskPool::get().spawn(async move { download_update(info) }));
+                state.download_progress = Some(0);
+                tasks.download_progress = Some(Arc::new(Mutex::new(progress_receiver)));
+                tasks.download = Some(
+                    IoTaskPool::get().spawn(async move { download_update(info, progress_sender) }),
+                );
             }
         }
     }
@@ -368,6 +393,14 @@ fn process_update_actions(
 }
 
 fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTasks>) {
+    if let Some(progress_receiver) = tasks.download_progress.as_ref() {
+        if let Ok(progress_receiver) = progress_receiver.lock() {
+            for progress in progress_receiver.try_iter() {
+                state.download_progress = Some(clamp_download_progress(progress));
+            }
+        }
+    }
+
     let check_result = tasks
         .check
         .as_mut()
@@ -378,18 +411,22 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
             UpdateCheckResult::Available(info) => {
                 state.status = UpdateStatus::Available;
                 state.available = Some(info);
+                state.download_progress = None;
             }
             UpdateCheckResult::NoUpdate => {
                 state.status = UpdateStatus::Idle;
                 state.error = None;
+                state.download_progress = None;
             }
             UpdateCheckResult::NotInstalled => {
                 state.status = UpdateStatus::NotInstalled;
                 state.error = None;
+                state.download_progress = None;
             }
             UpdateCheckResult::Error(error) => {
                 state.status = UpdateStatus::Error;
                 state.error = Some(error);
+                state.download_progress = None;
             }
         }
     }
@@ -400,18 +437,157 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
         .and_then(|task| future::block_on(future::poll_once(task)));
     if let Some(result) = download_result {
         tasks.download = None;
+        tasks.download_progress = None;
         match result.result {
             Ok(()) => {
                 state.status = UpdateStatus::ReadyToRestart;
                 state.ready = Some(result.info);
                 state.error = None;
+                state.download_progress = Some(100);
             }
             Err(error) => {
                 state.status = UpdateStatus::Available;
                 state.available = Some(result.info);
                 state.error = Some(error);
+                state.download_progress = None;
             }
         }
+    }
+}
+
+/// Mirror updater state into the shared status bar without owning or polling
+/// the network task itself. The updater task publishes progress through
+/// [`UpdateState`]; this state mirror only performs cheap, non-blocking UI
+/// projection on the main thread.
+fn mirror_update_status_to_status_bus(
+    state: Res<UpdateState>,
+    bus: Option<ResMut<StatusBus>>,
+    mut last: Local<UpdateStatusMemo>,
+) {
+    let Some(mut bus) = bus else {
+        return;
+    };
+
+    let detail = update_status_detail(&state);
+    let changed = last.status != Some(state.status) || last.detail != detail;
+    match state.status {
+        UpdateStatus::Checking => {
+            bus.set_progress(
+                UPDATE_STATUS_SOURCE,
+                "checking GitHub for a newer release…",
+                0,
+                0,
+            );
+        }
+        UpdateStatus::Downloading => {
+            let progress = u64::from(state.download_progress.unwrap_or_default());
+            let version = state
+                .available
+                .as_ref()
+                .map(|info| info.TargetFullRelease.Version.as_str())
+                .unwrap_or("update");
+            bus.set_progress(
+                UPDATE_STATUS_SOURCE,
+                format!("downloading {version}… {progress}%"),
+                progress,
+                100,
+            );
+        }
+        UpdateStatus::Available => {
+            bus.remove_progress(UPDATE_STATUS_SOURCE);
+            if changed {
+                let version = state
+                    .available
+                    .as_ref()
+                    .map(|info| info.TargetFullRelease.Version.as_str())
+                    .unwrap_or("a newer release");
+                if let Some(error) = state.error.as_deref() {
+                    bus.push(
+                        UPDATE_STATUS_SOURCE,
+                        StatusLevel::Error,
+                        format!("update download failed: {error}"),
+                    );
+                } else {
+                    bus.push(
+                        UPDATE_STATUS_SOURCE,
+                        StatusLevel::Info,
+                        format!("update available: {version}"),
+                    );
+                }
+            }
+        }
+        UpdateStatus::ReadyToRestart => {
+            bus.remove_progress(UPDATE_STATUS_SOURCE);
+            if changed {
+                let version = state
+                    .ready
+                    .as_ref()
+                    .map(|info| info.TargetFullRelease.Version.as_str())
+                    .unwrap_or("update");
+                bus.push(
+                    UPDATE_STATUS_SOURCE,
+                    StatusLevel::Info,
+                    format!("update {version} downloaded — restart to install"),
+                );
+            }
+        }
+        UpdateStatus::Idle => {
+            bus.remove_progress(UPDATE_STATUS_SOURCE);
+            if changed && state.last_check_unix.is_some() {
+                bus.push(
+                    UPDATE_STATUS_SOURCE,
+                    StatusLevel::Info,
+                    "no update available",
+                );
+            }
+        }
+        UpdateStatus::NotInstalled => {
+            bus.remove_progress(UPDATE_STATUS_SOURCE);
+            if changed {
+                bus.push(
+                    UPDATE_STATUS_SOURCE,
+                    StatusLevel::Warn,
+                    "updates unavailable: this build is not Velopack-managed",
+                );
+            }
+        }
+        UpdateStatus::Error => {
+            bus.remove_progress(UPDATE_STATUS_SOURCE);
+            if changed {
+                bus.push(
+                    UPDATE_STATUS_SOURCE,
+                    StatusLevel::Error,
+                    format!(
+                        "update check failed: {}",
+                        state.error.as_deref().unwrap_or("unknown error")
+                    ),
+                );
+            }
+        }
+    }
+
+    last.status = Some(state.status);
+    last.detail = detail;
+}
+
+fn update_status_detail(state: &UpdateState) -> String {
+    match state.status {
+        UpdateStatus::Available => format!(
+            "{}:{}",
+            state
+                .available
+                .as_ref()
+                .map(|info| info.TargetFullRelease.Version.as_str())
+                .unwrap_or(""),
+            state.error.as_deref().unwrap_or("")
+        ),
+        UpdateStatus::ReadyToRestart => state
+            .ready
+            .as_ref()
+            .map(|info| info.TargetFullRelease.Version.clone())
+            .unwrap_or_default(),
+        UpdateStatus::Error => state.error.clone().unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -430,11 +606,15 @@ fn check_for_updates() -> UpdateCheckResult {
     }
 }
 
-fn download_update(info: UpdateInfo) -> UpdateDownloadResult {
+fn download_update(info: UpdateInfo, progress: mpsc::Sender<i16>) -> UpdateDownloadResult {
     let result = create_update_manager()
-        .and_then(|manager| manager.download_updates(&info, None))
+        .and_then(|manager| manager.download_updates(&info, Some(progress)))
         .map_err(|error| error.to_string());
     UpdateDownloadResult { info, result }
+}
+
+fn clamp_download_progress(progress: i16) -> u8 {
+    progress.clamp(0, 100) as u8
 }
 
 fn create_update_manager() -> Result<UpdateManager, velopack::Error> {
@@ -515,5 +695,12 @@ mod tests {
             &actions,
             UPDATE_CHECK_INTERVAL_SECS + 1
         ));
+    }
+
+    #[test]
+    fn download_progress_is_clamped_to_percentage_range() {
+        assert_eq!(clamp_download_progress(-1), 0);
+        assert_eq!(clamp_download_progress(42), 42);
+        assert_eq!(clamp_download_progress(101), 100);
     }
 }

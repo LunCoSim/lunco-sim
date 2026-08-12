@@ -3296,7 +3296,13 @@ fn render_layout(
         // menu bar bumped to 30px the buttons would stick to the top
         // edge. Explicit `Align::Center` keeps them vertically centred
         // in the bar.
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        egui::MenuBar::new()
+            .config(
+                egui::menu::MenuConfig::new()
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+            )
+            .ui(ui, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // Collected screen-rects of the menu buttons + transport
             // controls. Published to `HelpAnchors` after this layout
             // closure finishes so we don't double-borrow `world`
@@ -4160,7 +4166,8 @@ fn render_layout(
                     a.set(k, r);
                 }
             }
-        });
+                });
+            });
     });
 
     // ── Status bar ──────────────────────────────────────────────────
@@ -4530,12 +4537,16 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                     ui.label(egui::RichText::new(l.source).small().strong());
                     let text = egui::RichText::new(&l.message).small();
                     ui.add(egui::Label::new(text).truncate());
-                    if let Some(pct) = l.progress_pct {
-                        ui.add(
-                            egui::ProgressBar::new((pct as f32) / 100.0)
-                                .desired_width(120.0)
-                                .desired_height(6.0),
-                        );
+                    if l.level == StatusLevel::Progress {
+                        if let Some(pct) = l.progress_pct {
+                            ui.add(
+                                egui::ProgressBar::new((pct as f32) / 100.0)
+                                    .desired_width(120.0)
+                                    .desired_height(6.0),
+                            );
+                        } else {
+                            ui.spinner();
+                        }
                     }
                 } else {
                     ui.label(egui::RichText::new("ready").small().weak());
