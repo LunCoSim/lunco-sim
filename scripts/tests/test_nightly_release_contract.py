@@ -13,6 +13,9 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("--draft=false", workflow)
+        self.assertNotIn('git push origin "${{ needs.meta.outputs.tag }}"', workflow)
+        self.assertNotIn("--verify-tag", workflow)
+        self.assertIn('--target "${{ github.sha }}"', workflow)
         main_release_edit = workflow.index(
             'GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG"'
         )

@@ -287,9 +287,9 @@ jobs:
             echo "Repository secret LUNCOSIM_UPDATES_TOKEN is required to publish updater releases." >&2
             exit 1
           fi
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin "+refs/tags/*:refs/tags/*" 2>/dev/null || true
+          # Tag validation is fail-closed: do not let a transient fetch error
+          # turn an existing-tag check into an unverified release creation.
+          git fetch origin "+refs/tags/*:refs/tags/*"
 
           python3 skills/nightly-changelog/scripts/generate_changelog.py \
             --from-ref latest \
@@ -318,18 +318,15 @@ jobs:
           [report issues](${{ github.server_url }}/${{ github.repository }}/issues) for problems.
           EOF
 
-          # Create an immutable traceability tag pointing at the exact commit
-          # built. A rerun must use a new release tag rather than replacing a
-          # published build that testers may already be using.
+          # Check for an existing immutable traceability tag before asking the
+          # Release API to create it. A rerun must use a new release tag rather
+          # than replacing a published build that testers may already be using.
           if git show-ref --tags --verify --quiet "refs/tags/${{ needs.meta.outputs.tag }}"; then
             existing_sha=$(git rev-list -n 1 "${{ needs.meta.outputs.tag }}")
             if [ "$existing_sha" != "${{ github.sha }}" ]; then
               echo "Tag ${{ needs.meta.outputs.tag }} already points at $existing_sha, not ${{ github.sha }}." >&2
               exit 1
             fi
-          else
-            git tag "${{ needs.meta.outputs.tag }}" "${{ github.sha }}"
-            git push origin "${{ needs.meta.outputs.tag }}"
           fi
 
           mapfile -d '' release_assets < <(find release/public -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
@@ -370,7 +367,7 @@ jobs:
           GH_TOKEN="$MAIN_GH_TOKEN" gh release create "$RELEASE_TAG" \
             --title "Nightly ${{ needs.meta.outputs.date }}" \
             --notes-file release_notes.md \
-            --verify-tag \
+            --target "${{ github.sha }}" \
             --draft
 
           # Upload versioned packages before their feeds, then upload the four
