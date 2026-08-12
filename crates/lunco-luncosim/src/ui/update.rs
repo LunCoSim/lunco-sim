@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use velopack::sources::GithubSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
 
-const UPDATE_CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const UPDATE_STATUS_SOURCE: &str = "updates";
 /// Public machine-only repository containing immutable update releases.
 pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-sim-updates";
@@ -52,17 +51,17 @@ const UPDATE_PACKAGE_GUIDANCE: &str =
 #[derive(Resource, Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct UpdateSettings {
-    /// Check once per day when the GUI starts.
+    /// Check once when the GUI starts.
     pub auto_check: bool,
-    /// Unix time of the most recent automatic check.
-    pub last_check_unix: u64,
+    /// Download a discovered package in the background without another click.
+    pub auto_download: bool,
 }
 
 impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             auto_check: true,
-            last_check_unix: 0,
+            auto_download: true,
         }
     }
 }
@@ -96,8 +95,8 @@ pub(crate) struct UpdateState {
     /// Latest percentage reported by Velopack while downloading.
     pub(crate) download_progress: Option<u8>,
     /// Unix time when the current process last attempted a check, including a
-    /// manual check. This is separate from the persisted automatic-check
-    /// throttle so the UI remains truthful after a successful no-update result.
+    /// manual check. It also prevents the startup check from being scheduled
+    /// again in every subsequent frame.
     pub(crate) last_check_unix: Option<u64>,
 }
 
@@ -158,6 +157,15 @@ struct UpdateStatusMemo {
     detail: String,
 }
 
+/// Whether the short update window is currently visible. The status bar remains
+/// the durable progress surface; this window is the actionable hand-off for a
+/// discovered or downloaded update and can be dismissed without cancelling work.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+struct UpdateDialogState {
+    open: bool,
+    last_status: Option<UpdateStatus>,
+}
+
 pub(crate) struct UpdatePlugin;
 
 impl Plugin for UpdatePlugin {
@@ -166,6 +174,7 @@ impl Plugin for UpdatePlugin {
             .init_resource::<UpdateState>()
             .init_resource::<UpdateActions>()
             .init_resource::<UpdateTasks>()
+            .init_resource::<UpdateDialogState>()
             .add_systems(Startup, register_update_settings_menu)
             .add_systems(
                 Update,
@@ -173,10 +182,12 @@ impl Plugin for UpdatePlugin {
                     schedule_automatic_check,
                     process_update_actions,
                     poll_update_tasks,
+                    open_update_dialog_on_transition,
                     mirror_update_status_to_status_bus,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(bevy_egui::EguiPrimaryContextPass, render_update_dialog);
     }
 }
 
@@ -185,6 +196,9 @@ fn register_update_settings_menu(world: &mut World) {
         return;
     };
     layout.register_settings_submenu("Updates", |ui, ctx| {
+        // Keep the whole updater flow readable when the menu is opened on a
+        // narrow window. The persistent dialog below uses the same width budget.
+        ui.set_min_width(560.0);
         ui.label(egui::RichText::new("Velopack updates").weak().small());
         ui.label(format!(
             "Version {} ({})",
@@ -198,15 +212,18 @@ fn register_update_settings_menu(world: &mut World) {
         egui::CollapsingHeader::new("How automatic updates work")
             .default_open(false)
             .show(ui, |ui| {
-                ui.label("LunCoSim checks at most once per 24 hours when this GUI starts.");
-                ui.label(
-                    "A check never installs anything by itself: choose Download update, then Install and restart.",
+                ui.add(
+                    egui::Label::new(
+                        "LunCoSim checks once at startup. When it finds a release, the package downloads in the background; nothing restarts until you approve it.",
+                    )
+                    .wrap(),
                 );
-                ui.label(
-                    UPDATE_PACKAGE_GUIDANCE,
-                );
-                ui.label(
-                    "Source builds, target/debug binaries, and ordinary archives are not update-managed.",
+                ui.add(egui::Label::new(UPDATE_PACKAGE_GUIDANCE).wrap());
+                ui.add(
+                    egui::Label::new(
+                        "Source builds, target/debug binaries, and ordinary archives are not update-managed.",
+                    )
+                    .wrap(),
                 );
             });
         ui.add_space(6.0);
@@ -217,10 +234,14 @@ fn register_update_settings_menu(world: &mut World) {
         let original_settings = settings.clone();
         ui.checkbox(
             &mut settings.auto_check,
-            "Check for updates at startup (at most once per day)",
+            "Check for updates at startup",
+        );
+        ui.checkbox(
+            &mut settings.auto_download,
+            "Download found updates automatically",
         );
         if settings != original_settings {
-            ctx.set_resource(settings);
+            ctx.set_resource(settings.clone());
         }
 
         let Some(state) = ctx.resource::<UpdateState>().cloned() else {
@@ -247,16 +268,26 @@ fn register_update_settings_menu(world: &mut World) {
                         "Update available: {}",
                         info.TargetFullRelease.Version
                     ));
-                    ui.label("Choose Download update, then install and restart.");
+                    if state.error.is_some() {
+                        ui.label("The download failed. Retry it below.");
+                    } else if settings.auto_download {
+                        ui.label("Starting the background download…");
+                    } else {
+                        ui.label("Choose Download update to start the background download.");
+                    }
                 }
             }
             UpdateStatus::Downloading => {
                 let progress = state.download_progress.unwrap_or_default();
                 ui.label(format!("Downloading update… {progress}%"));
-                ui.add(egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage());
+                ui.add_sized(
+                    [ui.available_width(), 24.0],
+                    egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage(),
+                );
+                ui.label("You can keep working; the download continues in the background.");
             }
             UpdateStatus::ReadyToRestart => {
-                ui.label("Update downloaded. Choose Install and restart.");
+                ui.label("Update downloaded and ready to install.");
             }
             UpdateStatus::NotInstalled => {
                 ui.label("This build is not running from an update-managed Velopack package.");
@@ -282,10 +313,18 @@ fn register_update_settings_menu(world: &mut World) {
             if can_check && ui.button("Check now").clicked() {
                 actions.check_requested = true;
             }
-            if state.status == UpdateStatus::Available && ui.button("Download update").clicked() {
+            if state.status == UpdateStatus::Available
+                && (!settings.auto_download || state.error.is_some())
+                && ui.button(if state.error.is_some() {
+                    "Retry download"
+                } else {
+                    "Download update"
+                })
+                .clicked()
+            {
                 actions.download_requested = true;
             }
-            if state.ready.is_some() && ui.button("Install and restart").clicked() {
+            if state.ready.is_some() && ui.button("Restart to install").clicked() {
                 actions.apply_requested = true;
             }
         });
@@ -296,18 +335,16 @@ fn register_update_settings_menu(world: &mut World) {
 }
 
 fn schedule_automatic_check(
-    settings: Option<ResMut<UpdateSettings>>,
+    settings: Option<Res<UpdateSettings>>,
     state: Res<UpdateState>,
     mut actions: ResMut<UpdateActions>,
 ) {
-    let Some(mut settings) = settings else {
+    let Some(settings) = settings else {
         return;
     };
-    let now = unix_now();
-    if !automatic_check_due(&settings, &state, &actions, now) {
+    if !automatic_check_due(&settings, &state, &actions) {
         return;
     }
-    settings.last_check_unix = now;
     actions.check_requested = true;
 }
 
@@ -315,19 +352,19 @@ fn automatic_check_due(
     settings: &UpdateSettings,
     state: &UpdateState,
     actions: &UpdateActions,
-    now: u64,
 ) -> bool {
     settings.auto_check
         && state.status == UpdateStatus::Idle
         && !actions.check_requested
-        && now.saturating_sub(settings.last_check_unix) >= UPDATE_CHECK_INTERVAL_SECS
+        // A process performs one startup check. Manual checks remain available
+        // through the menu after that check completes.
+        && state.last_check_unix.is_none()
 }
 
 fn process_update_actions(
     mut actions: ResMut<UpdateActions>,
     mut state: ResMut<UpdateState>,
     mut tasks: ResMut<UpdateTasks>,
-    settings: Option<ResMut<UpdateSettings>>,
 ) {
     if actions.check_requested {
         actions.check_requested = false;
@@ -340,12 +377,6 @@ fn process_update_actions(
         ) && state.ready.is_none();
         if can_start_check && tasks.check.is_none() && tasks.download.is_none() {
             let now = unix_now();
-            if let Some(mut settings) = settings {
-                // A manual check also satisfies the automatic-check throttle;
-                // otherwise a manual check made after the 24-hour boundary
-                // would immediately run a duplicate automatic check next frame.
-                settings.last_check_unix = now;
-            }
             state.last_check_unix = Some(now);
             state.status = UpdateStatus::Checking;
             state.available = None;
@@ -392,7 +423,12 @@ fn process_update_actions(
     }
 }
 
-fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTasks>) {
+fn poll_update_tasks(
+    mut state: ResMut<UpdateState>,
+    mut tasks: ResMut<UpdateTasks>,
+    settings: Option<Res<UpdateSettings>>,
+    mut actions: ResMut<UpdateActions>,
+) {
     if let Some(progress_receiver) = tasks.download_progress.as_ref() {
         if let Ok(progress_receiver) = progress_receiver.lock() {
             for progress in progress_receiver.try_iter() {
@@ -412,6 +448,12 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
                 state.status = UpdateStatus::Available;
                 state.available = Some(info);
                 state.download_progress = None;
+                if settings
+                    .as_deref()
+                    .is_none_or(|settings| settings.auto_download)
+                {
+                    actions.download_requested = true;
+                }
             }
             UpdateCheckResult::NoUpdate => {
                 state.status = UpdateStatus::Idle;
@@ -453,6 +495,124 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
             }
         }
     }
+}
+
+fn open_update_dialog_on_transition(
+    state: Res<UpdateState>,
+    mut dialog: ResMut<UpdateDialogState>,
+) {
+    if dialog.last_status != Some(state.status) {
+        if matches!(
+            state.status,
+            UpdateStatus::Available | UpdateStatus::Downloading | UpdateStatus::ReadyToRestart
+        ) {
+            dialog.open = true;
+        }
+        dialog.last_status = Some(state.status);
+    }
+}
+
+fn render_update_dialog(
+    mut egui_ctx: bevy_egui::EguiContexts,
+    state: Res<UpdateState>,
+    settings: Option<Res<UpdateSettings>>,
+    mut actions: ResMut<UpdateActions>,
+    mut dialog: ResMut<UpdateDialogState>,
+) {
+    if !dialog.open {
+        return;
+    }
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+
+    let mut open = true;
+    let mut close_requested = false;
+    egui::Window::new("LunCoSim update")
+        .id(egui::Id::new("lunco_update_dialog"))
+        .open(&mut open)
+        .order(egui::Order::Foreground)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(560.0)
+        .min_width(520.0)
+        .max_width(760.0)
+        .show(ctx, |ui| {
+            ui.heading("LunCoSim update");
+            ui.add_space(4.0);
+
+            match state.status {
+                UpdateStatus::Available => {
+                    let version = state
+                        .available
+                        .as_ref()
+                        .map(|info| info.TargetFullRelease.Version.as_str())
+                        .unwrap_or("new release");
+                    ui.label(format!("Version {version} is available."));
+                    if let Some(error) = state.error.as_deref() {
+                        ui.colored_label(egui::Color32::RED, error);
+                        if ui.button("Retry download").clicked() {
+                            actions.download_requested = true;
+                        }
+                    } else if settings
+                        .as_deref()
+                        .is_none_or(|settings| !settings.auto_download)
+                    {
+                        ui.label("The update is ready to download.");
+                        if ui.button("Download update").clicked() {
+                            actions.download_requested = true;
+                        }
+                    } else {
+                        ui.label("The background download is about to begin.");
+                    }
+                }
+                UpdateStatus::Downloading => {
+                    let progress = state.download_progress.unwrap_or_default();
+                    ui.label("Downloading in the background. You can keep working.");
+                    ui.add_sized(
+                        [ui.available_width(), 24.0],
+                        egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage(),
+                    );
+                }
+                UpdateStatus::ReadyToRestart => {
+                    ui.label("The update is downloaded and ready to install.");
+                    ui.label(
+                        "Save your work before restarting; LunCoSim will close and reopen once.",
+                    );
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 32.0],
+                            egui::Button::new("Restart to install update"),
+                        )
+                        .clicked()
+                    {
+                        actions.apply_requested = true;
+                    }
+                }
+                UpdateStatus::Error if state.ready.is_some() => {
+                    if let Some(error) = state.error.as_deref() {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+                    ui.label("The downloaded update is still ready to install.");
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 32.0],
+                            egui::Button::new("Retry install and restart"),
+                        )
+                        .clicked()
+                    {
+                        actions.apply_requested = true;
+                    }
+                }
+                _ => {}
+            }
+
+            ui.add_space(8.0);
+            if ui.button("Later").clicked() {
+                close_requested = true;
+            }
+        });
+    dialog.open = open && !close_requested;
 }
 
 /// Mirror updater state into the shared status bar without owning or polling
@@ -653,24 +813,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn automatic_check_is_throttled() {
-        let mut settings = UpdateSettings::default();
-        settings.last_check_unix = 100;
+    fn automatic_check_runs_once_per_process() {
+        let settings = UpdateSettings::default();
         let state = UpdateState::default();
         let actions = UpdateActions::default();
 
-        assert!(!automatic_check_due(
-            &settings,
-            &state,
-            &actions,
-            100 + UPDATE_CHECK_INTERVAL_SECS - 1
-        ));
-        assert!(automatic_check_due(
-            &settings,
-            &state,
-            &actions,
-            100 + UPDATE_CHECK_INTERVAL_SECS
-        ));
+        assert!(automatic_check_due(&settings, &state, &actions));
+
+        let mut state = state;
+        state.last_check_unix = Some(100);
+        assert!(!automatic_check_due(&settings, &state, &actions));
     }
 
     #[test]
@@ -680,21 +832,21 @@ mod tests {
         let mut actions = UpdateActions::default();
 
         actions.check_requested = true;
-        assert!(!automatic_check_due(
-            &settings,
-            &state,
-            &actions,
-            UPDATE_CHECK_INTERVAL_SECS + 1
-        ));
+        assert!(!automatic_check_due(&settings, &state, &actions));
 
         actions.check_requested = false;
         settings.auto_check = false;
-        assert!(!automatic_check_due(
-            &settings,
-            &state,
-            &actions,
-            UPDATE_CHECK_INTERVAL_SECS + 1
-        ));
+        assert!(!automatic_check_due(&settings, &state, &actions));
+    }
+
+    #[test]
+    fn discovered_updates_are_downloaded_by_default_but_can_be_manual() {
+        let settings = UpdateSettings::default();
+        assert!(settings.auto_download);
+
+        let mut settings = settings;
+        settings.auto_download = false;
+        assert!(!settings.auto_download);
     }
 
     #[test]

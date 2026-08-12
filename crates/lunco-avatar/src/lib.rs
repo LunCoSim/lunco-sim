@@ -1272,6 +1272,29 @@ fn tangent_frame(up: Vec3, heading: f32, pitch: f32) -> Quat {
     (pitch_q * base_rot).normalize()
 }
 
+/// Compose the free-flight movement vector from the camera's forward/right
+/// directions and a stable vertical axis.
+///
+/// Elevation must not use `Transform::up()`: when the view is pitched, Q+W can
+/// then cancel the forward vector's horizontal component and make the diagonal
+/// appear not to move. World +Y is the vertical axis in free flight; callers in
+/// surface mode pass the current gravity-up direction instead.
+fn fly_move_direction(
+    tf: &Transform,
+    forward: f32,
+    side: f32,
+    elevation: f32,
+    up_dir: Vec3,
+) -> Vec3 {
+    let up_dir = up_dir.normalize_or_zero();
+    let up_dir = if up_dir == Vec3::ZERO {
+        Vec3::Y
+    } else {
+        up_dir
+    };
+    *tf.forward() * forward + *tf.right() * side + up_dir * elevation
+}
+
 /// Apply an accumulated mouse-scroll delta as a multiplicative (exponential)
 /// zoom to a camera arm `distance`, clamped to `[min_dist, max_dist]`, then
 /// consume the delta. Scroll up (delta > 0) zooms in; down zooms out.
@@ -2760,8 +2783,8 @@ fn surface_camera_system(
 ///
 /// Only active with a `FreeFlightCamera`/`SurfaceCamera`, or when CTRL is held while
 /// possessing a vessel (a momentary free-flight overlay). `Shift` boosts speed ×10.
-/// Q/E elevation follows the avatar's current orientation. Runs in PostUpdate at
-/// render rate on wall-clock time, so the ghost camera
+/// Q/E elevation follows world up in free flight and gravity up in surface mode.
+/// Runs in PostUpdate at render rate on wall-clock time, so the ghost camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
 fn apply_fly(
     mut q_avatar: Query<
@@ -2773,10 +2796,14 @@ fn apply_fly(
             &lunco_core::InputPorts,
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
+            Option<&SurfaceRelativeMode>,
         ),
         (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
     >,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    gravity: Res<LocalGravityField>,
     keys: Res<ButtonInput<KeyCode>>,
     // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
     // paused, because pausing the simulation is not supposed to paralyse the user. Runs
@@ -2791,8 +2818,16 @@ fn apply_fly(
         1.0
     };
 
-    for (entity, mut tf, mut cell, child_of, inputs, has_freeflight, has_surface_camera) in
-        q_avatar.iter_mut()
+    for (
+        entity,
+        mut tf,
+        mut cell,
+        child_of,
+        inputs,
+        has_freeflight,
+        has_surface_camera,
+        surface_mode,
+    ) in q_avatar.iter_mut()
     {
         let Ok(grid) = q_grids.get(child_of.0) else {
             continue;
@@ -2818,13 +2853,16 @@ fn apply_fly(
         // Actively moving → cancel any idle auto-action.
         commands.entity(entity).remove::<lunco_core::ActiveAction>();
 
-        let mut move_vec = Vec3::ZERO;
-        move_vec += *tf.forward() * forward;
-        move_vec += *tf.right() * side;
-        // Q/E are local vertical movement, not world-Y movement. This keeps
-        // elevation relative to the current view after looking up/down and
-        // while flying forward.
-        move_vec += *tf.up() * elevation;
+        // Q/E are vertical movement relative to the current world/surface, not
+        // the camera's pitched up vector. A camera-relative elevation basis can
+        // cancel W/S's horizontal component at a particular pitch (most visibly
+        // Q+W), making a valid diagonal look stationary.
+        let up_dir = if surface_mode.is_some() {
+            gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+        } else {
+            Vec3::Y
+        };
+        let move_vec = fly_move_direction(&tf, forward, side, elevation, up_dir);
 
         // 23.1 m/s base fly speed × the real frame delta.
         let next_pos = current_pos + move_vec.as_dvec3() * 23.1 * time.delta_secs_f64();
@@ -4717,6 +4755,19 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn pitched_qw_keeps_a_forward_component() {
+        // Looking down by 45° makes camera-relative `forward - up` lose its
+        // horizontal component. Q+W must still travel forward while descending.
+        let tf = Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4));
+        let direction = fly_move_direction(&tf, 1.0, 0.0, -1.0, Vec3::Y);
+
+        assert!(
+            direction.z < -0.5,
+            "Q+W must retain forward travel at a pitched view, got {direction:?}"
+        );
     }
 
     #[test]
