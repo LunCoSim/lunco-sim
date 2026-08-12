@@ -1655,11 +1655,12 @@ fn modelica_models_terminal<'a>(
 /// Native endpoint admission is deliberately *not* a world-level readiness
 /// hold. `PendingUsdJoint`, `PendingWheelWiring`, and `PendingDifferential` are
 /// local activation gates: the affected bodies remain kinematic until their
-/// endpoint is ready. Their preparation and admission systems run inside
-/// Avian's nested `PhysicsSchedule`, so globally pausing that schedule while
-/// waiting for those markers would deadlock the markers forever. A deferred
-/// USD stage is different: its projection can still add arbitrary bodies and
-/// connections, so it retains the world hold until the stage is available.
+/// endpoint is ready. Their preparation runs in the fixed schedule and their
+/// structural admission runs in the outer `Update` schedule, so globally
+/// pausing Avian's nested `PhysicsSchedule` does not deadlock those markers.
+/// A deferred USD stage is different: its projection can still add arbitrary
+/// bodies and connections, so it retains the world hold until the stage is
+/// available.
 fn settle_binding_epoch(
     awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,

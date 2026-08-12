@@ -23,11 +23,11 @@
 use std::sync::Arc;
 
 use bevy::camera::visibility::RenderLayers;
-use bevy::light::{CascadeShadowConfig, DirectionalLight};
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_core::HorizonShadowTerrain;
+use lunco_environment::horizon::{pick_sun, HorizonShadowCacheConfig, SunQuery};
 use lunco_environment::{
     install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
 };
@@ -219,47 +219,42 @@ pub(crate) fn mark_streamed_horizon_stale(
 #[allow(clippy::type_complexity)]
 pub(crate) fn wire_tile_shadow_cache(
     mut commands: Commands,
+    cfg: Res<HorizonShadowCacheConfig>,
     terrains: Query<
         (
             Entity,
+            &GlobalTransform,
             Option<&HorizonShadowCache>,
             Option<&TileShadowCache>,
         ),
         (With<TerrainLodViz>, With<HorizonShadowTerrain>),
     >,
-    sun: Query<
-        (
-            &DirectionalLight,
-            Option<&CascadeShadowConfig>,
-            Option<&RenderLayers>,
-        ),
-        (
-            With<DirectionalLight>,
-            Without<lunco_environment::Earthshine>,
-        ),
-    >,
+    sun: SunQuery,
 ) {
     // The same "one sun" rule as the environment's wiring, and the same
     // STRUCTURAL basis: a body's reflected fill is authored under that body's
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
     // is left is the scene's sun, so there is nothing to rank.
-    let csm_far: f32 = sun
-        .iter()
-        .find(|(_, _, layers)| layers.is_none())
-        .and_then(|(light, cascades, _)| {
-            if !light.shadow_maps_enabled {
-                return Some(0.0);
-            }
-            cascades.and_then(|c| c.bounds.last().copied())
-        })
-        .unwrap_or(0.0);
+    let sun = pick_sun(&sun).map(|(sun_gt, _, csm_far)| (sun_gt, csm_far));
 
-    for (entity, cache, wired) in &terrains {
+    for (entity, terrain_gt, cache, wired) in &terrains {
         let (image, on) = match cache {
-            Some(c) => (Some(c.image.clone()), 1.0),
+            Some(c) => {
+                let on = sun.is_some_and(|(sun_gt, _)| {
+                    let to_sun_world: Vec3 = sun_gt.back().into();
+                    let sun_local = terrain_gt
+                        .affine()
+                        .inverse()
+                        .transform_vector3(to_sun_world)
+                        .normalize_or_zero();
+                    cfg.enabled && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
+                });
+                (Some(c.image.clone()), if on { 1.0 } else { 0.0 })
+            }
             None => (wired.map(|w| w.image.clone()), 0.0),
         };
         let Some(image) = image else { continue }; // never had a cache → nothing to wire
+        let csm_far = sun.map_or(0.0, |(_, csm_far)| csm_far);
         let dirty = match wired {
             None => true,
             Some(w) => {

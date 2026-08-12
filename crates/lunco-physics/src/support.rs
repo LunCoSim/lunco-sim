@@ -19,11 +19,23 @@ use bevy::prelude::*;
 #[reflect(Component)]
 pub struct PhysicsSupportFootprint(pub Vec<PhysicsSupportContact>);
 
-/// One conservative support contact in a body's local physics frame.
+/// One support contact in a body's local physics frame.
+///
+/// The probe description is part of the contract because initial placement
+/// must target the same collider surface that the live support query uses. A
+/// terrain oracle and a sampled heightfield can legitimately differ between
+/// lattice points; placement therefore consumes the authoritative spatial
+/// query rather than inventing a second surface approximation.
 #[derive(Debug, Clone, Copy, Reflect, PartialEq)]
 pub struct PhysicsSupportContact {
     /// Contact centre relative to the owning body's origin.
     pub local_offset: DVec3,
     /// Conservative horizontal support radius in metres.
     pub radius: f64,
+    /// Probe origin relative to the owning body's origin.
+    pub probe_origin: DVec3,
+    /// Probe direction in the owning body's local physics frame.
+    pub probe_direction: DVec3,
+    /// Probe distance at the authored/rest support pose.
+    pub probe_length: f64,
 }

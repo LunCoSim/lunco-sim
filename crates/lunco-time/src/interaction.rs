@@ -189,6 +189,17 @@ pub struct InteractionEased {
     curr: Option<Transform>,
 }
 
+impl InteractionEased {
+    /// Discard render interpolation history when the entity's local frame
+    /// changes. `Transform` is frame-local, so interpolating a pose from the
+    /// old `(CellCoord, ChildOf)` pair into the new one would write a value in
+    /// the wrong coordinate system before the next interaction step.
+    pub fn reset(&mut self) {
+        self.prev = None;
+        self.curr = None;
+    }
+}
+
 /// START of the interaction step: restore each eased entity's authoritative pose
 /// (`curr`) into `Transform`, undoing the previous frame's render interpolation.
 ///

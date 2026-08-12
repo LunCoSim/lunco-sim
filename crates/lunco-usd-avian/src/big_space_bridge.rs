@@ -269,6 +269,12 @@ fn pose_to_position(
             Without<Collider>,
         ),
     >,
+    // big_space's recenter system owns the only paired CellCoord + Transform
+    // rewrite in this hierarchy. It is a representation re-split of the same
+    // world pose, not an external teleport. Keep it separate from ordinary
+    // transform changes so the READ pass cannot overwrite Avian's Position
+    // with the pre-recenter render representation.
+    q_rebranched: Query<Entity, (Changed<CellCoord>, Changed<Transform>)>,
     mut q_bodies: Query<
         (
             Entity,
@@ -277,18 +283,28 @@ fn pose_to_position(
             &mut Position,
             &mut Rotation,
             &mut BridgeShadow,
+            Option<&lunco_core::PhysicsPoseAuthoritative>,
         ),
         BridgeSynced,
     >,
 ) {
     // Pass 1 (read-only): which entities did an external writer touch?
     let mut moved = EntityHashSet::default();
-    for (e, cell, tf, _, _, shadow) in q_bodies.iter() {
-        if !shadow.matches(cell, tf) {
+    for (e, cell, tf, _, _, shadow, pose_override) in q_bodies.iter() {
+        if pose_override.is_some() {
+            continue;
+        }
+        let internal_rebranch = shadow.is_seeded() && q_rebranched.contains(e);
+        let mismatch = !shadow.matches(cell, tf);
+        if !internal_rebranch && mismatch {
             moved.insert(e);
         }
     }
-    moved.extend(q_moved_plain.iter());
+    moved.extend(
+        q_moved_plain
+            .iter()
+            .filter(|entity| !q_rebranched.contains(*entity)),
+    );
     if moved.is_empty() {
         return;
     }
@@ -296,8 +312,20 @@ fn pose_to_position(
     // Pass 2: re-read a body if it moved OR any ancestor moved (the ancestor's
     // new Transform is already in place, so the chain walk composes the
     // carried pose).
-    for (e, cell, tf, mut pos, mut rot, mut shadow) in &mut q_bodies {
-        let fired = moved.contains(&e) || {
+    for (e, cell, tf, mut pos, mut rot, mut shadow, pose_override) in &mut q_bodies {
+        if pose_override.is_some() {
+            continue;
+        }
+        // big_space has just moved the cell-local representation of this body
+        // while preserving its world pose. Refresh the shadow so the bridge
+        // accepts the new representation; Position/Rotation remain the
+        // authoritative physics pose written by the solver.
+        if shadow.is_seeded() && q_rebranched.contains(e) {
+            shadow.capture(cell, tf);
+            continue;
+        }
+        let direct_move = moved.contains(&e);
+        let ancestor_move = {
             let mut cur = e;
             let mut hit = false;
             for _ in 0..32 {
@@ -310,6 +338,7 @@ fn pose_to_position(
             }
             hit
         };
+        let fired = direct_move || ancestor_move;
         if !fired {
             continue;
         }
@@ -343,6 +372,7 @@ fn pose_to_position(
 /// second writer fights avian's interpolation and big_space's propagation).
 #[allow(clippy::type_complexity)]
 fn position_to_pose(
+    mut commands: Commands,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     // Chain nodes that are not bodies or colliders (grids, plain group
@@ -358,6 +388,7 @@ fn position_to_pose(
         &mut Transform,
         &mut BridgeShadow,
         &RigidBody,
+        Option<&lunco_core::PhysicsPoseAuthoritative>,
     )>,
     // PERSISTENT across ticks, not just scratch: entries for bodies the solver
     // did not touch this tick (sleeping, settled statics, idle kinematics) are
@@ -393,7 +424,7 @@ fn position_to_pose(
         }
     }
 
-    'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb) in &mut q_dyn {
+    'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
         // Sync Position → Transform for every body avian moves via `Position`:
         // `Dynamic` (solver-integrated) AND `Kinematic` (externally seated — the
         // networked client pins replicated proxies `Kinematic` and drives their
@@ -504,6 +535,11 @@ fn position_to_pose(
             tf.rotation = local_rot;
         }
         shadow.capture(cell, &tf);
+        if pose_override.is_some() {
+            commands
+                .entity(e)
+                .remove::<lunco_core::PhysicsPoseAuthoritative>();
+        }
     }
 }
 

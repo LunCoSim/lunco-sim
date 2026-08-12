@@ -1,11 +1,16 @@
 //! Site-anchored solar hierarchy + celestial-bound entity placement (doc 43
 //! §2.6).
 //!
-//! **Site anchoring**: rather than moving a loaded scene to the Moon, the
+//! **Site anchoring**: the solar hierarchy is pinned and the site scene is
+//! re-branched under its body's surface grid once that frame exists. The
 //! solar hierarchy is pinned so the site's geodetic point coincides with the
 //! scene origin and ENU aligns with the scene axes (East=+X, North=−Z,
-//! Up=+Y). Scene content and physics never move; the globe appears under the
-//! terrain patch and Earth/Sun stand in the correct sky. Runs after
+//! Up=+Y). During the handoff the authored ENU pose is converted exactly into
+//! the body's fixed Cartesian frame; preserving the old world pose would keep
+//! ecliptic axes and rotate the ground away from gravity. Keeping the DEM,
+//! globe handoff, camera, and surface operations in one body-fixed precision
+//! branch avoids an AU-scale hierarchy joint between moving surface pieces.
+//! Runs after
 //! `ephemeris_update_system` (which re-zeroes the solar grid on epoch change)
 //! and overrides it whenever a [`SiteAnchor`] is authored.
 //!
@@ -18,7 +23,7 @@
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 
 use lunco_time::WorldTime;
 
@@ -31,6 +36,52 @@ use crate::geo::{
 };
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
+
+/// Map a site-authored pose into the body's rotating surface frame.
+///
+/// A `SiteAnchor` is an explicit USD frame contract: scene coordinates are
+/// ENU (`+X = east`, `+Y = up`, `-Z = north`).  The body's surface grid is not
+/// an arbitrary display grid; its axes are the body's fixed Cartesian axes and
+/// its origin is the body centre.  Therefore the handoff is the unique rigid
+/// transform defined by the authored geodetic anchor.  Keeping this conversion
+/// here makes scene root, camera, terrain and physics use the same frame map.
+fn site_enu_to_body_fixed_pose(
+    anchor: &GeodeticAnchor,
+    radius_m: f64,
+    scene_position: DVec3,
+    scene_rotation: DQuat,
+) -> (DVec3, DQuat) {
+    let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, radius_m);
+    let scene_to_body = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
+        tangent.east,
+        tangent.up,
+        -tangent.north,
+    ));
+    (
+        tangent.origin + scene_to_body * scene_position,
+        scene_to_body * scene_rotation,
+    )
+}
+
+/// Read an entity's pose in its direct Grid frame.
+///
+/// A site scene is mounted under the canonical `WorldGrid` before celestial
+/// handoff. Its authored coordinates are therefore already local ENU values;
+/// composing them through the whole solar hierarchy would mix that local frame
+/// with the grid's storage cells. This helper deliberately stops at the direct
+/// parent Grid, then the site-anchor conversion below changes semantic frames.
+fn direct_grid_pose(
+    entity: Entity,
+    parent: Entity,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<(DVec3, DQuat)> {
+    let grid = q_grids.get(parent).ok()?;
+    let (cell, transform) = q_spatial.get(entity).ok()?;
+    let cell = cell.copied().unwrap_or_default();
+    let position = grid.grid_position_double(&cell, transform);
+    Some((position, transform.rotation.as_dquat()))
+}
 
 /// Celestial projection is multi-stage. Give the solar grid and ephemeris a
 /// short settle window before reporting a structural anchoring failure.
@@ -108,7 +159,7 @@ pub fn anchor_solar_frame_to_site(
         ),
         (With<Grid>, Without<SolarSystemRoot>),
     >,
-    q_parents: Query<&ChildOf>,
+    q_parents: Query<&ChildOf, Without<SiteAnchor>>,
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
     // One-shot latch for the "declared a site but cannot anchor it" diagnostics
@@ -368,6 +419,168 @@ pub fn anchor_solar_frame_to_site(
     );
 }
 
+/// Attach the site scene to the body's body-fixed surface frame.
+///
+/// The scene is initially mounted under `WorldGrid` because the USD loader has
+/// no celestial knowledge at mount time. Keeping it there permanently leaves
+/// the DEM on one branch while the globe tiles live under `MoonSurfaceGrid` or
+/// `EarthSurfaceGrid`; their stored f32 transforms then accumulate different
+/// long-chain rounding and the seam moves independently. The scene's authored
+/// ENU pose is converted into the target body's fixed frame before the atomic
+/// migration, so the handoff changes representation without changing the
+/// authored site pose.
+pub fn attach_site_scene_to_surface_grid(
+    q_site: Query<(Entity, &GeodeticAnchor, &ChildOf), With<SiteAnchor>>,
+    q_bodies: Query<(
+        Entity,
+        &crate::registry::CelestialBody,
+        &crate::globe_lod::GlobeLod,
+    )>,
+    q_avatars: Query<
+        (Entity, &Transform, Option<&CellCoord>, &ChildOf),
+        (With<lunco_core::Avatar>, With<FloatingOrigin>),
+    >,
+    q_physical: Query<Entity, With<avian3d::prelude::RigidBody>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut commands: Commands,
+) {
+    let Some((scene_root, anchor, child_of)) = q_site.iter().next() else {
+        return;
+    };
+    let Some((body_entity, body, lod)) = q_bodies
+        .iter()
+        .find(|(_, body, _)| body.ephemeris_id == anchor.body)
+    else {
+        return;
+    };
+    let target_grid = lod.surface_grid;
+    let Ok(target_grid_component) = q_grids.get(target_grid) else {
+        return;
+    };
+
+    let scene_pose = if child_of.parent() != target_grid {
+        let Some((scene_position, scene_rotation)) =
+            direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
+        else {
+            return;
+        };
+        Some((scene_position, scene_rotation))
+    } else {
+        None
+    };
+    if let Some((scene_position, scene_rotation)) = scene_pose {
+        let (body_position, body_rotation) =
+            site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
+        let (cell, translation) = target_grid_component.translation_to_grid(body_position);
+        let local_transform =
+            Transform::from_translation(translation).with_rotation(body_rotation.as_quat());
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            scene_root,
+            target_grid,
+            cell,
+            local_transform,
+        );
+        info!(
+            "[celestial] site scene re-branched onto body surface grid {:?} (body {})",
+            target_grid, anchor.body
+        );
+    }
+
+    // The USD avatar projection is grid-direct for `FloatingOrigin`, so its
+    // Transform is no longer necessarily local to the authored scene root.
+    // Recover the avatar's pose relative to that root before the handoff. Using
+    // the avatar's direct-grid absolute pose here would include the root pose a
+    // second time (or omit it when the branches differ), which separates the
+    // camera from the rover after the scene is moved onto the body grid.
+    let scene_root_world_pose = scene_pose
+        .and_then(|_| lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial));
+    for (avatar, _avatar_transform, _avatar_cell, avatar_child) in &q_avatars {
+        let (body_position, body_rotation) = if avatar_child.parent() == target_grid {
+            // Already in the body-fixed frame: do not apply the site transform
+            // twice when this system runs again after a reload or re-anchor.
+            let Some((position, rotation)) =
+                direct_grid_pose(avatar, target_grid, &q_grids, &q_spatial)
+            else {
+                continue;
+            };
+            (position, rotation)
+        } else {
+            let Some((scene_position, scene_rotation)) = scene_pose else {
+                continue;
+            };
+            let Some((scene_world_position, scene_world_rotation)) = scene_root_world_pose else {
+                continue;
+            };
+            let Some((avatar_world_position, avatar_world_rotation)) =
+                lunco_core::coords::world_pose(avatar, &q_parents, &q_grids, &q_spatial)
+            else {
+                continue;
+            };
+            let root_local_position = scene_world_rotation.0.inverse()
+                * (avatar_world_position.0 - scene_world_position.0);
+            let root_local_rotation = scene_world_rotation.0.inverse() * avatar_world_rotation.0;
+            let scene_avatar_position = scene_position + scene_rotation * root_local_position;
+            let scene_avatar_rotation = scene_rotation * root_local_rotation;
+            site_enu_to_body_fixed_pose(
+                anchor,
+                body.radius_m,
+                scene_avatar_position,
+                scene_avatar_rotation,
+            )
+        };
+        let (cell, translation) = target_grid_component.translation_to_grid(body_position);
+        let local_transform =
+            Transform::from_translation(translation).with_rotation(body_rotation.as_quat());
+        if avatar_child.parent() == target_grid {
+            commands
+                .entity(avatar)
+                .try_insert(lunco_environment::GravityBody { body_entity });
+            continue;
+        }
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            avatar,
+            target_grid,
+            cell,
+            local_transform,
+        );
+        // A site-anchored avatar is physically associated with the authored
+        // body even before it possesses a rover.  The avatar plugin consumes
+        // this authoritative binding to enter surface-relative camera mode;
+        // no altitude/name heuristic is needed.
+        commands
+            .entity(avatar)
+            .try_insert(lunco_environment::GravityBody { body_entity });
+        info!(
+            "[celestial] site avatar {:?} re-branched onto body surface grid {:?}",
+            avatar, target_grid
+        );
+    }
+
+    // Surface gravity is a property of every physical body mounted under the
+    // site scene, not only of the camera. The USD physics projection owns the
+    // rigid bodies; this celestial projection only supplies their explicit
+    // gravitational parent at the scene-frame boundary.
+    for physical in &q_physical {
+        let mut current = physical;
+        for _ in 0..32 {
+            if current == scene_root {
+                commands
+                    .entity(physical)
+                    .try_insert(lunco_environment::GravityBody { body_entity });
+                break;
+            }
+            let Ok(parent) = q_parents.get(current) else {
+                break;
+            };
+            current = parent.parent();
+        }
+    }
+}
+
 /// Hide UNANCHORED local scene roots while the orbital view is active; restore
 /// on exit. Geometry parked at the world origin has no celestial identity, so
 /// from an orbital viewpoint it would float in space in front of the body.
@@ -464,6 +677,11 @@ pub fn place_celestial_bound_entities(
         (
             Or<(With<GeodeticAnchor>, With<KeplerOrbit>)>,
             Without<SiteAnchor>,
+            // A terrain's anchor attributes describe the DEM's georeference;
+            // they do not place the terrain entity as a second body-fixed
+            // object. The site root already owns that placement, and the DEM
+            // must remain in the same local branch as the rover/camera.
+            Without<lunco_terrain_surface::TerrainGeoref>,
         ),
     >,
     q_added: Query<(), Or<(Added<GeodeticAnchor>, Added<KeplerOrbit>)>>,
@@ -778,5 +996,30 @@ mod tests {
         // And the full map sends the site origin to the scene origin.
         let world = align * (frame.origin - frame.origin);
         assert!(world.length() < 1e-9);
+    }
+
+    /// Site-scene poses are converted once into the body's fixed surface frame:
+    /// the authored +Y is exactly the local gravity/up direction, not ecliptic
+    /// +Y.  This is the invariant that keeps the terrain below the camera at a
+    /// non-equatorial site.
+    #[test]
+    fn site_pose_maps_authored_enu_to_body_fixed_axes() {
+        let registry = CelestialBodyRegistry::default_system();
+        let body = registry
+            .bodies
+            .iter()
+            .find(|b| b.ephemeris_id == 301)
+            .unwrap();
+        let anchor = GeodeticAnchor {
+            body: 301,
+            geodetic: Geodetic::new(25.28, 307.60, 0.0),
+        };
+        let (position, rotation) =
+            site_enu_to_body_fixed_pose(&anchor, body.radius_m, DVec3::ZERO, DQuat::IDENTITY);
+        let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, body.radius_m);
+        assert!((position - tangent.origin).length() < 1e-9);
+        assert!((rotation * DVec3::Y - tangent.up).length() < 1e-9);
+        assert!((rotation * DVec3::X - tangent.east).length() < 1e-9);
+        assert!((rotation * DVec3::NEG_Z - tangent.north).length() < 1e-9);
     }
 }

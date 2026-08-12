@@ -22,6 +22,7 @@ use avian3d::prelude::{
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
     RigidBody, Rotation, Sensor, WriteRigidBodyForces,
 };
+use avian3d::schedule::PhysicsTime;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -794,6 +795,8 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
 /// tick is correct. Runs in [`crate::systems::apply_forces::CosimSet::ApplyForces`]
 /// (after propagation).
 pub fn apply_pending_forces(
+    physics_time: Res<Time<Physics>>,
+    virtual_time: Res<Time<Virtual>>,
     mut q_pending: Query<(Entity, &mut PendingForces)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -809,6 +812,10 @@ pub fn apply_pending_forces(
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
 ) {
+    let physics_live = !physics_time.is_paused()
+        && !virtual_time.is_paused()
+        && virtual_time.relative_speed_f64() > 0.0
+        && !faults.as_deref().is_some_and(|state| state.active());
     for (e, mut pf) in &mut q_pending {
         if !pf.f.is_finite() || !pf.f_local.is_finite() || !pf.torque.is_finite() {
             let detail = format!(
@@ -830,7 +837,9 @@ pub fn apply_pending_forces(
             }
             continue;
         }
-        if pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO {
+        if physics_live
+            && (pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO)
+        {
             if let Ok(mut f) = forces.get_mut(e) {
                 if pf.f != DVec3::ZERO {
                     f.apply_force(pf.f);
@@ -847,6 +856,19 @@ pub fn apply_pending_forces(
         pf.f = DVec3::ZERO;
         pf.f_local = DVec3::ZERO;
         pf.torque = DVec3::ZERO;
+    }
+
+    // A held physics clock does not consume Avian's force accumulator. Drain
+    // actuator commands without applying them so a command sampled during a
+    // loading/readiness hold cannot become a launch impulse when the hold ends.
+    if !physics_live {
+        for (_, _, mut command) in actuator_commands.p0().iter_mut() {
+            command.value = 0.0;
+        }
+        for (_, _, mut command) in actuator_commands.p1().iter_mut() {
+            command.value = 0.0;
+        }
+        return;
     }
 
     // Generic force-actuator commands are drained only after ordinary body

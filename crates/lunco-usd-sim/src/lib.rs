@@ -451,7 +451,8 @@ mod runtime_safety_tests {
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);
-        app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies);
+        app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
+            .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
             reset_scene_runtime_safety,
@@ -523,11 +524,21 @@ impl Plugin for UsdSimPlugin {
                     remove_nested_link_nodes
                         .run_if(any_nested_link_nodes)
                         .after(project_celestial_comms_prims),
-                    activate_dynamic_bodies
-                        .in_set(UsdSimSet::ActivateDynamicBodies)
-                        .run_if(any_with_component::<ShouldBeDynamic>),
                 ),
             );
+        // Dynamic admission must happen before the fixed loop.  The main loop runs
+        // FixedUpdate before Update, so admitting a body from Update gives it one
+        // live solver tick at its authored loading pose before the terrain placement
+        // pass can observe it.  USD projection still publishes `ShouldBeDynamic` in
+        // Update; this pre-fixed pass consumes it on the following frame, after the
+        // terrain readiness state is authoritative.
+        app.add_systems(
+            PreUpdate,
+            activate_dynamic_bodies
+                .in_set(UsdSimSet::ActivateDynamicBodies)
+                .before(lunco_physics::apply_physics_holds)
+                .run_if(any_with_component::<ShouldBeDynamic>),
+        );
         // Self-healing watchdog: a USD prim that stays unprocessed forever means
         // an unmet dependency is silently deadlocking setup (historically the
         // wheel-shader bug: physics deferred until a render-only `ShaderMaterial`
@@ -757,7 +768,8 @@ fn process_usd_sim_prims(
         Without<UsdSimProcessed>,
     >,
     all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
-    q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
+    grid_components: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
     q_child_of: Query<&ChildOf>,
@@ -878,9 +890,10 @@ fn process_usd_sim_prims(
             topology,
             &all_prims,
             &q_child_of,
+            &grid_components,
+            &q_spatial,
             &q_existing_floating_origins,
             &q_provisional_cameras,
-            &q_grids,
             active_sun.as_deref(),
             &mut commands,
         );
@@ -1093,9 +1106,10 @@ fn process_usd_sim_prim_read(
     topology: &StageJointTopology,
     all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     q_child_of: &Query<&ChildOf>,
+    grid_components: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
-    q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
 ) {
@@ -1366,27 +1380,38 @@ fn process_usd_sim_prim_read(
             }
         }
 
-        // Avatar position from USD transform — placed CELL-GRID AWARE. The
-        // authored translate is a WORLD position (e.g. ~1990 m on an elevated
-        // site); split it into (CellCoord, local) via the grid instead of
-        // dropping it in cell (0,0,0) with a multi-km local and leaning on
-        // big_space's `recenter_large_transforms` to migrate it a frame later.
-        // Because this camera carries the `FloatingOrigin`, that one-frame
-        // cell-0 state put the origin — and the whole world composed off it —
-        // at the wrong place on the first rendered frame at elevation.
-        let target_grid = q_grids
-            .iter()
-            .find(|(_, _, is_site)| *is_site)
-            .or_else(|| q_grids.iter().next());
+        // Avatar position from the LIVE composed scene hierarchy. The USD
+        // transform is local to its authored parent (`/Traverse` here), while
+        // the FloatingOrigin must be a high-precision entity in the same
+        // BigSpace. Resolve the nearest actual Grid in that parent chain: this
+        // is the scene's frame owner (WorldGrid during bootstrap, or the body's
+        // surface grid after celestial placement), never a marker-selected
+        // parallel grid. Compose the authored pose in f64 first, then convert
+        // that one pose into the chosen grid atomically.
+        let (avatar_world, avatar_world_rotation) =
+            lunco_core::coords::world_pose(entity, q_child_of, grid_components, q_spatial)
+                .unwrap_or((
+                    lunco_core::coords::GridPos(existing_tf.translation.as_dvec3()),
+                    lunco_core::coords::GridRot(existing_tf.rotation.as_dquat()),
+                ));
+        let target_grid = lunco_core::coords::ancestor_grid(entity, q_child_of, grid_components);
         let (avatar_cell, avatar_local) = match target_grid {
-            Some((_, grid, _)) => grid.translation_to_grid(existing_tf.translation.as_dvec3()),
+            Some((grid_entity, grid)) => lunco_core::coords::world_pose_to_live_grid_local(
+                avatar_world,
+                avatar_world_rotation,
+                grid_entity,
+                grid,
+                q_child_of,
+                grid_components,
+                q_spatial,
+            )
+            .map(|(cell, transform)| (cell, transform.translation))
+            .unwrap_or_else(|| (CellCoord::default(), avatar_world.0.as_vec3())),
             None => (CellCoord::default(), existing_tf.translation),
         };
-        let avatar_tf = Transform {
-            translation: avatar_local,
-            rotation: existing_tf.rotation,
-            scale: existing_tf.scale,
-        };
+        let avatar_tf = Transform::from_translation(avatar_local)
+            .with_rotation(avatar_world_rotation.0.as_quat())
+            .with_scale(existing_tf.scale);
 
         // Shared render-look for the avatar camera: SMAA post-process AA,
         // MSAA off (can't touch shader-internal regolith speckle), and
@@ -1528,13 +1553,12 @@ fn process_usd_sim_prim_read(
         commands
             .entity(entity)
             .try_insert(lunco_usd_bevy::UsdCameraPose::Avatar);
-        // Parent to Grid (preferring SiteAlignGrid when present) so FloatingOrigin works
-        let target_grid = q_grids
-            .iter()
-            .find(|(_, _, is_site)| *is_site)
-            .or_else(|| q_grids.iter().next());
-        if let Some((g, _, _)) = target_grid {
-            commands.entity(entity).try_insert(ChildOf(g));
+        // Keep the camera in the scene's actual frame owner. The nearest Grid
+        // was selected above from the authored parent chain, so this is not a
+        // second celestial frame and does not detach the camera from the rover
+        // scene during bootstrap or body-surface rebranching.
+        if let Some((grid_entity, _)) = target_grid {
+            commands.entity(entity).try_insert(ChildOf(grid_entity));
         }
     }
 
@@ -3535,7 +3559,7 @@ fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
     mut activation: ResMut<GroundActivationInFlight>,
-    readiness_holds: Option<Res<lunco_physics::PhysicsHolds>>,
+    mut physics_holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     q_kinematic: Query<
         (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
         With<ShouldBeDynamic>,
@@ -3565,11 +3589,11 @@ fn activate_dynamic_bodies(
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
-    // pass runs in Update.  During scene readiness physics is deliberately held,
-    // so a parked joint is safe to admit on the first released fixed tick.  Do
-    // not deadlock the world by waiting for a nested-schedule admission that can
-    // only happen after this pass has published the bodies as Dynamic.
-    let readiness_hold_active = readiness_holds
+    // pass runs in Update. During scene readiness physics is deliberately held,
+    // so a parked joint is safe to admit before the first released fixed tick.
+    // Do not deadlock the world by waiting for a nested-schedule admission that
+    // cannot run while the hold is active.
+    let readiness_hold_active = physics_holds
         .as_deref()
         .is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::READINESS));
     let mut promoted = false;
@@ -3629,23 +3653,29 @@ fn activate_dynamic_bodies(
             // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
             // no-op at apply time if the entity is gone (a `get_entity` guard here
             // would not help — it only proves validity at queue time, not apply).
-            commands
-                .entity(entity)
-                .try_insert((RigidBody::Dynamic, lunco_core::PhysicsStateReady));
+            // A kinematic loading body can carry a bridge-generated velocity from
+            // the authored-pose/rebranch handoff. That is a render/pose transport
+            // value, not a physical initial condition. Seed the dynamic body from
+            // the only authoritative source: USD's explicitly authored velocity;
+            // absent that, admission starts at rest.
+            let linear = authored_velocity
+                .and_then(|velocity| velocity.linear)
+                .unwrap_or(DVec3::ZERO);
+            let angular = authored_velocity
+                .and_then(|velocity| velocity.angular)
+                .unwrap_or(DVec3::ZERO);
+            commands.entity(entity).try_insert((
+                RigidBody::Dynamic,
+                lunco_core::PhysicsStateReady,
+                LinearVelocity(linear),
+                AngularVelocity(angular),
+            ));
             commands
                 .entity(entity)
                 .try_remove::<lunco_core::PhysicsStatePending>();
-            if let Some(velocity) = authored_velocity {
-                if let Some(linear) = velocity.linear {
-                    commands.entity(entity).try_insert(LinearVelocity(linear));
-                }
-                if let Some(angular) = velocity.angular {
-                    commands.entity(entity).try_insert(AngularVelocity(angular));
-                }
-                commands
-                    .entity(entity)
-                    .try_remove::<AuthoredInitialVelocity>();
-            }
+            commands
+                .entity(entity)
+                .try_remove::<AuthoredInitialVelocity>();
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
             // A physical wheel is part of the chassis' joint-connected assembly,
             // so marking it moves the whole vehicle as one.
@@ -3662,6 +3692,14 @@ fn activate_dynamic_bodies(
         }
     }
     if promoted {
+        // Arm the physics hold at the same ownership boundary as the
+        // Kinematic→Dynamic transition.  The next FixedUpdate can run before
+        // the following Update pass (which normally publishes the release),
+        // so arming it in a later bridge system leaves one unplaced tick in
+        // which a raycast rover can launch from its authored embedded wheel.
+        if let Some(ref mut holds) = physics_holds {
+            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
+        }
         // Promotion publishes the authored physical initial condition through
         // deferred component insertion. Reopen the co-sim binding epoch so the
         // next sealed pass seeds every already-valid sensor/actuator wire from

@@ -25,14 +25,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use avian3d::prelude::{Collider, ColliderAabb, ColliderOf, RigidBody};
+use avian3d::prelude::{
+    Collider, ColliderAabb, ColliderOf, Position, RayHits, RigidBody, Rotation, SimpleCollider,
+    SpatialQuery, SpatialQueryFilter,
+};
 use bevy::ecs::system::SystemParam;
-use bevy::math::{DQuat, DVec3};
+use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use big_space::prelude::Grid;
-use lunco_core::coords::GridPos;
-use lunco_core::{on_command, register_commands, Command, WorldGrid};
+use big_space::prelude::{CellCoord, Grid};
+use lunco_core::coords::{GridPos, GridRot};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_terrain_core::{quantize, HeightSource};
 
 use crate::band::SurfaceBand;
@@ -271,19 +274,49 @@ pub struct ColliderDirtyRegion {
 #[derive(Debug, Clone, Copy)]
 struct CachedCollider {
     owner: Entity,
-    bounds: Option<[f64; 4]>,
+    bounds: Option<Bounds3>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CachedBody {
-    support_bounds: [f64; 4],
-    bounds: [f64; 4],
+    support_bounds: Bounds3,
+    bounds: Bounds3,
 }
 
 #[derive(Debug, Clone)]
 struct CachedAssembly {
     members: Vec<Entity>,
-    bounds: [f64; 4],
+    bounds: Bounds3,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bounds3 {
+    min: DVec3,
+    max: DVec3,
+}
+
+impl Bounds3 {
+    fn point(point: DVec3) -> Self {
+        Self {
+            min: point,
+            max: point,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
+    fn expanded(point: DVec3, radius: f64) -> Self {
+        let extent = DVec3::splat(radius.max(0.0));
+        Self {
+            min: point - extent,
+            max: point + extent,
+        }
+    }
 }
 
 /// Change-driven runtime support index shared by ring selection and readiness.
@@ -322,7 +355,7 @@ impl PhysicsSupportCache {
         &mut self,
         entity: Entity,
         owner: Entity,
-        bounds: Option<[f64; 4]>,
+        bounds: Option<Bounds3>,
         changed_bodies: &mut HashSet<Entity>,
     ) {
         if let Some(previous) = self
@@ -368,7 +401,7 @@ impl PhysicsSupportCache {
             for collider in colliders {
                 if let Some(Some(collider_bounds)) = self.colliders.get(collider).map(|c| c.bounds)
                 {
-                    bounds = Some(union_xz_bounds(bounds, collider_bounds));
+                    bounds = Some(bounds.unwrap_or(collider_bounds).union(collider_bounds));
                 }
             }
         }
@@ -394,7 +427,7 @@ impl PhysicsSupportCache {
             for &member in &members {
                 self.assembly_of.insert(member, index);
                 if let Some(body) = self.bodies.get(&member) {
-                    bounds = Some(union_xz_bounds(bounds, body.bounds));
+                    bounds = Some(bounds.unwrap_or(body.bounds).union(body.bounds));
                 }
             }
             if let Some(bounds) = bounds {
@@ -412,7 +445,7 @@ impl PhysicsSupportCache {
         let mut bounds = None;
         for member in members {
             if let Some(body) = self.bodies.get(&member) {
-                bounds = Some(union_xz_bounds(bounds, body.bounds));
+                bounds = Some(bounds.unwrap_or(body.bounds).union(body.bounds));
             }
         }
         if let Some(bounds) = bounds {
@@ -423,12 +456,21 @@ impl PhysicsSupportCache {
     }
 }
 
-fn collider_bounds(aabb: &ColliderAabb) -> Option<[f64; 4]> {
+fn collider_bounds(
+    collider: &Collider,
+    position: &Position,
+    rotation: &Rotation,
+) -> Option<Bounds3> {
+    let aabb = collider.aabb(position.0, *rotation);
     (aabb.min.is_finite()
         && aabb.max.is_finite()
         && aabb.min.x <= aabb.max.x
+        && aabb.min.y <= aabb.max.y
         && aabb.min.z <= aabb.max.z)
-        .then_some([aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z])
+        .then_some(Bounds3 {
+            min: aabb.min,
+            max: aabb.max,
+        })
 }
 
 /// ECS inputs for the support projection, bundled so the change-driven system
@@ -452,6 +494,18 @@ pub(crate) struct PhysicsSupportQueries<'w, 's> {
             Changed<RigidBody>,
             Changed<avian3d::prelude::Position>,
             Changed<avian3d::prelude::Rotation>,
+            // Big-space rebranching changes the stored cell/local transform
+            // before the bridge publishes the new physics pose. Treat that
+            // transform change as a body-position revision too; otherwise the
+            // support cache retains its pre-rebranch bounds and the collider
+            // ring both over-streams and eventually leaves a hole under the
+            // rover.
+            Changed<Transform>,
+            Changed<CellCoord>,
+            // Rebranching also reparents the body under the active surface
+            // grid.  That parent change is the authoritative ECS revision
+            // when the local transform itself is unchanged.
+            Changed<ChildOf>,
             Added<lunco_physics::PhysicsSupportFootprint>,
             Changed<lunco_physics::PhysicsSupportFootprint>,
         )>,
@@ -469,16 +523,37 @@ pub(crate) struct PhysicsSupportQueries<'w, 's> {
     colliders: Query<
         'w,
         's,
-        (Entity, &'static ColliderAabb, Option<&'static ColliderOf>),
+        (
+            Entity,
+            &'static Collider,
+            &'static Position,
+            &'static Rotation,
+            Option<&'static ColliderOf>,
+        ),
         Or<(
-            Added<ColliderAabb>,
+            Added<Collider>,
+            Changed<Collider>,
             Changed<ColliderAabb>,
+            Changed<Position>,
+            Changed<Rotation>,
             Added<ColliderOf>,
+            Changed<ColliderOf>,
+            Changed<ChildOf>,
         )>,
     >,
-    all_colliders: Query<'w, 's, (Entity, &'static ColliderAabb, Option<&'static ColliderOf>)>,
+    all_colliders: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Collider,
+            &'static Position,
+            &'static Rotation,
+            Option<&'static ColliderOf>,
+        ),
+    >,
     removed_bodies: RemovedComponents<'w, 's, RigidBody>,
-    removed_colliders: RemovedComponents<'w, 's, ColliderAabb>,
+    removed_colliders: RemovedComponents<'w, 's, Collider>,
     removed_footprints: RemovedComponents<'w, 's, lunco_physics::PhysicsSupportFootprint>,
     removed_collider_owners: RemovedComponents<'w, 's, ColliderOf>,
     revolute_joints: Query<
@@ -636,8 +711,7 @@ pub(crate) fn update_physics_support_cache(
             continue;
         }
         if let Some(body) = cache.bodies.get_mut(&entity) {
-            body.support_bounds =
-                runtime_support_xz_bounds(GridPos(position.0), rotation, None, None);
+            body.support_bounds = runtime_support_bounds(GridPos(position.0), rotation, None, None);
             changed_bodies.insert(entity);
         }
     }
@@ -647,9 +721,14 @@ pub(crate) fn update_physics_support_cache(
     // surviving AABB onto its new implicit owner (itself), or remove it when the
     // collider was removed in the same update.
     for entity in removed_collider_owners.read() {
-        if let Ok((_, aabb, collider_of)) = all_colliders.get(entity) {
+        if let Ok((_, collider, position, rotation, collider_of)) = all_colliders.get(entity) {
             let owner = collider_of.map_or(entity, |collider_of| collider_of.body);
-            cache.update_collider(entity, owner, collider_bounds(aabb), &mut changed_bodies);
+            cache.update_collider(
+                entity,
+                owner,
+                collider_bounds(collider, position, rotation),
+                &mut changed_bodies,
+            );
         } else {
             cache.remove_collider(entity, &mut changed_bodies);
         }
@@ -662,8 +741,7 @@ pub(crate) fn update_physics_support_cache(
             }
             continue;
         }
-        let support_bounds =
-            runtime_support_xz_bounds(GridPos(position.0), rotation, None, footprint);
+        let support_bounds = runtime_support_bounds(GridPos(position.0), rotation, None, footprint);
         cache
             .bodies
             .entry(entity)
@@ -679,9 +757,9 @@ pub(crate) fn update_physics_support_cache(
         }
     }
 
-    for (collider_entity, aabb, collider_of) in &colliders {
+    for (collider_entity, collider, position, rotation, collider_of) in &colliders {
         let owner = collider_of.map_or(collider_entity, |collider_of| collider_of.body);
-        let bounds = collider_bounds(aabb);
+        let bounds = collider_bounds(collider, position, rotation);
         cache.update_collider(collider_entity, owner, bounds, &mut changed_bodies);
     }
 
@@ -726,20 +804,24 @@ fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
 /// A body can briefly lack a valid AABB while its collider is being registered;
 /// during that bounded initialization window its authoritative position is the
 /// safe conservative fallback.
-fn collider_xz_bounds(
+fn runtime_collider_bounds(
     position: GridPos,
     collider_aabb: Option<&avian3d::prelude::ColliderAabb>,
-) -> [f64; 4] {
+) -> Bounds3 {
     match collider_aabb {
         Some(aabb)
             if aabb.min.is_finite()
                 && aabb.max.is_finite()
                 && aabb.min.x <= aabb.max.x
+                && aabb.min.y <= aabb.max.y
                 && aabb.min.z <= aabb.max.z =>
         {
-            [aabb.min.x, aabb.min.z, aabb.max.x, aabb.max.z]
+            Bounds3 {
+                min: aabb.min,
+                max: aabb.max,
+            }
         }
-        _ => [position.0.x, position.0.z, position.0.x, position.0.z],
+        _ => Bounds3::point(position.0),
     }
 }
 
@@ -750,24 +832,21 @@ fn collider_xz_bounds(
 /// shared [`lunco_physics::PhysicsSupportFootprint`] is published by the
 /// physics model and stores offsets in the body's local frame, so this remains
 /// independent of USD identity and works at any world/grid position.
-fn contact_footprint_xz_bounds(
+fn contact_footprint_bounds(
     position: GridPos,
     rotation: DQuat,
     footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
-) -> Option<[f64; 4]> {
+) -> Option<Bounds3> {
     let mut bounds = None;
     for contact in footprint?.0.iter() {
         let center = position.0 + rotation * contact.local_offset;
-        let radius = contact.radius.max(0.0);
-        bounds = Some(union_xz_bounds(
-            bounds,
-            [
-                center.x - radius,
-                center.z - radius,
-                center.x + radius,
-                center.z + radius,
-            ],
-        ));
+        if !center.is_finite() || !contact.radius.is_finite() {
+            continue;
+        }
+        let contact_bounds = Bounds3::expanded(center, contact.radius);
+        bounds = Some(bounds.map_or(contact_bounds, |bounds: Bounds3| {
+            bounds.union(contact_bounds)
+        }));
     }
     bounds
 }
@@ -778,29 +857,70 @@ fn contact_footprint_xz_bounds(
 /// physics-readiness hold. Keeping those consumers on the same footprint makes
 /// it impossible to release physics while a wheel's terrain tile is still
 /// absent, which is the boundary failure mode for a raycast rover.
+fn runtime_support_bounds(
+    position: GridPos,
+    rotation: Option<&avian3d::prelude::Rotation>,
+    collider_aabb: Option<&ColliderAabb>,
+    footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
+) -> Bounds3 {
+    let bounds = runtime_collider_bounds(position, collider_aabb);
+    let rotation = rotation.map_or(DQuat::IDENTITY, |rotation| rotation.0);
+    contact_footprint_bounds(position, rotation, footprint)
+        .map_or(bounds, |contact_bounds| bounds.union(contact_bounds))
+}
+
+#[cfg(test)]
+fn bounds3_to_xz(bounds: Bounds3) -> [f64; 4] {
+    [bounds.min.x, bounds.min.z, bounds.max.x, bounds.max.z]
+}
+
+/// Test-only compatibility with the quadtree helper's two-dimensional contract.
+/// Production ring selection uses [`Bounds3`] and transforms all eight corners
+/// through the terrain pose before it reaches this boundary.
+#[cfg(test)]
 fn runtime_support_xz_bounds(
     position: GridPos,
     rotation: Option<&avian3d::prelude::Rotation>,
     collider_aabb: Option<&ColliderAabb>,
     footprint: Option<&lunco_physics::PhysicsSupportFootprint>,
 ) -> [f64; 4] {
-    let bounds = collider_xz_bounds(position, collider_aabb);
-    let rotation = rotation.map_or(DQuat::IDENTITY, |rotation| rotation.0);
-    contact_footprint_xz_bounds(position, rotation, footprint).map_or(bounds, |contact_bounds| {
-        union_xz_bounds(Some(bounds), contact_bounds)
-    })
+    bounds3_to_xz(runtime_support_bounds(
+        position,
+        rotation,
+        collider_aabb,
+        footprint,
+    ))
 }
 
-/// Union two X/Z footprints.
-fn union_xz_bounds(current: Option<[f64; 4]>, next: [f64; 4]) -> [f64; 4] {
-    current.map_or(next, |a| {
-        [
-            a[0].min(next[0]),
-            a[1].min(next[1]),
-            a[2].max(next[2]),
-            a[3].max(next[3]),
-        ]
-    })
+/// Convert a complete physics-space support AABB into the terrain's local DEM
+/// frame. The terrain may be translated and rotated beneath the world grid, so
+/// selecting a ring from root-frame X/Z is not valid. All eight corners are
+/// transformed: Y matters because a tilted terrain changes which local X/Z
+/// extrema are occupied by the body's 3D footprint.
+fn terrain_local_xz_bounds(
+    bounds: Bounds3,
+    terrain_world: GridPos,
+    terrain_rotation: GridRot,
+) -> [f64; 4] {
+    let inverse = terrain_rotation.0.inverse();
+    let mut local_bounds = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for &x in &[bounds.min.x, bounds.max.x] {
+        for &y in &[bounds.min.y, bounds.max.y] {
+            for &z in &[bounds.min.z, bounds.max.z] {
+                let local = inverse * (DVec3::new(x, y, z) - terrain_world.0);
+                local_bounds[0] = local_bounds[0].min(local.x);
+                local_bounds[1] = local_bounds[1].min(local.z);
+                local_bounds[2] = local_bounds[2].max(local.x);
+                local_bounds[3] = local_bounds[3].max(local.z);
+            }
+        }
+    }
+    local_bounds
 }
 
 /// Add the canonical-depth footprint and one tile of build-ahead to `out`.
@@ -852,7 +972,6 @@ fn push_assembly_ring_nodes(
 
 pub fn update_collider_ring(
     mut commands: Commands,
-    grids: Query<(Entity, &Grid), With<WorldGrid>>,
     cache: Res<PhysicsSupportCache>,
     mut terrains: Query<(
         Entity,
@@ -865,10 +984,10 @@ pub fn update_collider_ring(
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
-    let Ok((grid_entity, grid)) = grids.single() else {
-        return;
-    };
     let pool = AsyncComputeTaskPool::get();
 
     // Per-frame heightfield-bake budget, shared across all terrains. On WEB the
@@ -885,6 +1004,21 @@ pub fn update_collider_ring(
     let mut bake_budget: usize = usize::MAX;
 
     for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
+        let Some((grid_entity, grid)) =
+            lunco_core::coords::ancestor_grid(terrain, &parents, &grids)
+        else {
+            continue;
+        };
+        let Some((terrain_world, terrain_rotation)) =
+            lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+        else {
+            continue;
+        };
+        let Some((grid_world, grid_rotation)) =
+            lunco_core::coords::world_pose(grid_entity, &parents, &grids, &spatial)
+        else {
+            continue;
+        };
         let oracle = &hf.0;
         let h = oracle.half_extent() as f64;
         let nodes = 1u32 << ring.depth;
@@ -925,11 +1059,12 @@ pub fn update_collider_ring(
         }
 
         // Each assembly's canonical-depth footprint plus one tile of build-ahead.
-        // The DEM frame IS the grid frame: a grid-absolute body position is
-        // already DEM-local, and no render transform belongs in between.
+        // The support cache is in the physics root frame; the oracle and
+        // quadtree are in the terrain-local frame. Cross that pose boundary once
+        // here, using the same composed terrain pose as visual tile placement.
         ring_nodes.clear();
         for assembly in &cache.assemblies {
-            let bounds = assembly.bounds;
+            let bounds = terrain_local_xz_bounds(assembly.bounds, terrain_world, terrain_rotation);
             push_assembly_ring_nodes(&qt, ring.depth, h, nodes, bounds, &mut ring_nodes);
         }
         // Sorted so the comparison is order-independent (entity iteration order
@@ -992,8 +1127,11 @@ pub fn update_collider_ring(
             // was rebased by — the SAME (cell, local) convention the visual tiles
             // use — so the collider surface lands in the render tile's big_space
             // cell rather than ~1945 m below it.
-            let (cell, local) =
-                grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
+            let terrain_local = DVec3::new(center[0], origin_y, center[1]);
+            let world_center = terrain_world.0 + terrain_rotation.0 * terrain_local;
+            let grid_local = grid_rotation.0.inverse() * (world_center - grid_world.0);
+            let (cell, local) = grid.translation_to_grid(grid_local);
+            let local_rotation = (grid_rotation.0.inverse() * terrain_rotation.0).as_quat();
             if let Some(&ent) = tiles.map.get(&coord) {
                 // Replacement for a stale tile: swap the collider onto the
                 // existing entity — the ground never vanishes under the rover.
@@ -1003,7 +1141,9 @@ pub fn update_collider_ring(
                     commands.entity(ent).try_insert((
                         collider,
                         cell,
-                        Transform::from_translation(local),
+                        Transform::from_translation(local).with_rotation(local_rotation),
+                        Position(world_center),
+                        Rotation(terrain_rotation.0),
                     ));
                 }
                 continue;
@@ -1013,7 +1153,14 @@ pub fn update_collider_ring(
                     RigidBody::Static,
                     collider,
                     cell,
-                    Transform::from_translation(local),
+                    Transform::from_translation(local).with_rotation(local_rotation),
+                    // Seed the canonical pose in the spawn batch. Static
+                    // proxies enter Avian's broad phase at insertion; waiting
+                    // for the bridge's first read leaves them registered at
+                    // Position::ZERO and makes their later ECS AABB diverge
+                    // from the proxy that physics actually queries.
+                    Position(world_center),
+                    Rotation(terrain_rotation.0),
                     ColliderTileOf(terrain),
                     Name::new(format!("ColliderTile {},{}", coord.x, coord.z)),
                     // A collider tile is streamed runtime implementation detail,
@@ -1131,17 +1278,16 @@ fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
 pub fn hold_physics_until_dem_ready(
     building: Query<(), With<crate::terrain::DemTerrainRequest>>,
     rings: Query<(
+        Entity,
         &crate::stream_viz::DemHeightField,
         &TerrainColliderRing,
         &ColliderTiles,
     )>,
     cache: Res<PhysicsSupportCache>,
-    // Same frame rule as `update_collider_ring`: avian `Position` is the
-    // grid-absolute pose the DEM is sampled in. This guard exists to keep a
-    // rover pinned until there is ground under it, so asking the question in the
-    // WRONG frame is worse than not asking: it answered about a point ~a
-    // FloatingOrigin cell away, found a resident tile there, released physics —
-    // and the rover fell through the hole it was supposed to be protected from.
+    // The support cache is in avian's grid-absolute frame while the DEM quadtree
+    // is terrain-local. The same composed pose transform used by
+    // `update_collider_ring` must be applied here, or this guard can release a
+    // rover after finding a resident tile in the wrong terrain location.
     // Broad-phase liveness probe. `ColliderAabb` is a REQUIRED component of
     // `Collider`, so it exists from spawn — but initialised to `INVALID`
     // (min=+∞, max=−∞); avian fills a real AABB only AFTER its prepare/broad-phase
@@ -1149,21 +1295,32 @@ pub fn hold_physics_until_dem_ready(
     q_live: Query<&avian3d::prelude::ColliderAabb>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut required_nodes: Local<Vec<QuadCoord>>,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
-        'terrains: for (hf, ring, tiles) in &rings {
+        'terrains: for (terrain, hf, ring, tiles) in &rings {
+            let Some((terrain_world, terrain_rotation)) =
+                lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+            else {
+                wait = true;
+                break 'terrains;
+            };
             let half = hf.0.half_extent() as f64;
             let qt = Quadtree::new(half, ring.depth, 1.0, half);
             for assembly in &cache.assemblies {
                 required_nodes.clear();
+                let bounds =
+                    terrain_local_xz_bounds(assembly.bounds, terrain_world, terrain_rotation);
                 push_assembly_ring_nodes(
                     &qt,
                     ring.depth,
                     half,
                     1u32 << ring.depth,
-                    assembly.bounds,
+                    bounds,
                     &mut required_nodes,
                 );
                 required_nodes.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
@@ -1262,13 +1419,11 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
 /// long landing assemblies by different, arbitrary amounts.
 const SETTLE_CLEARANCE: f64 = 0.05;
 
-// A raycast contact is the *wheel axle*, not a rigid tyre volume. Its cast
-// starts at the suspension strut top and only supports the chassis once it is
-// slightly compressed, so placing the tyre a large distance above the terrain
-// leaves the ground outside the spring's rest-length window. Keep the contact
-// just below the datum to establish a real normal force on the first step.
-const RAYCAST_SETTLE_CLEARANCE: f64 = -0.02;
-
+// A raycast contact is the *wheel axle*, not a rigid tyre volume. At the
+// authored suspension rest length the strut top is exactly one cast length
+// above the DEM, so placement must put the tyre tangent to the surface: zero
+// spring compression and zero startup impulse. The ray's endpoint is inclusive;
+// forcing an artificial compression here makes every freshly placed rover hop.
 /// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
 /// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
 ///
@@ -1282,19 +1437,31 @@ const RAYCAST_SETTLE_CLEARANCE: f64 = -0.02;
 /// rescue — it fires exactly once per assembly, at activation, and is pure initial
 /// PLACEMENT (the same job the command-spawn rest-depth lift does for GUI spawns).
 pub fn settle_grounded_assemblies(
-    terrains: Query<&crate::stream_viz::DemHeightField, With<TerrainColliderRing>>,
+    terrains: Query<(
+        Entity,
+        &crate::stream_viz::DemHeightField,
+        &TerrainColliderRing,
+    )>,
     q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
     footprints: Query<Option<&lunco_physics::PhysicsSupportFootprint>>,
-    mut bodies: Query<(
-        Entity,
-        &mut avian3d::prelude::Position,
-        Option<&mut avian3d::prelude::LinearVelocity>,
-        Option<&mut avian3d::prelude::AngularVelocity>,
+    mut avian: ParamSet<(
+        Query<(
+            Entity,
+            &mut avian3d::prelude::Position,
+            Option<&RigidBody>,
+            Option<&mut avian3d::prelude::LinearVelocity>,
+            Option<&mut avian3d::prelude::AngularVelocity>,
+            Option<&mut RayHits>,
+        )>,
+        Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
+        Query<&avian3d::prelude::Rotation>,
+        SpatialQuery,
     )>,
-    colliders: Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
-    rotations: Query<&avian3d::prelude::Rotation>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
     mut commands: Commands,
 ) {
@@ -1313,30 +1480,56 @@ pub fn settle_grounded_assemblies(
     // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
     // owner is anchored at the grid origin cell). Wait for it if not built yet —
     // the marker persists.
-    let Some(hf) = terrains.iter().next() else {
+    let Some((terrain, hf, ring)) = terrains.iter().next() else {
         return;
     };
     let half = hf.0.half_extent() as f64;
+    let Some((terrain_world, terrain_rotation)) =
+        lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial_transforms)
+    else {
+        return;
+    };
+    let terrain_from_physics = terrain_rotation.0.inverse();
+    let terrain_up = terrain_rotation.0 * DVec3::Y;
+
+    // Avian Position is in the BigSpace-root physics frame. The retained DEM
+    // is in the terrain prim's local frame. These are identical only for an
+    // untransformed terrain at the root; a site-mounted/rotating terrain must
+    // cross this pose boundary before sampling the oracle or applying a lift.
+    // Initial placement must query the same surface product that the streamed
+    // heightfield collider contains. The collider is intentionally sampled
+    // through the terrain's contact band (the visual/contact invariant); using
+    // the raw DEM here places wheel axles against a different surface and
+    // creates startup spring compression before the first physics step.
+    let contact_oracle = ring.contact_band.limited(&hf.0);
+    let sample_height = |point: DVec3| {
+        let local = terrain_from_physics * (point - terrain_world.0);
+        (local.x.abs() <= half && local.z.abs() <= half)
+            .then(|| (local, contact_oracle.height_at(local.x, local.z)))
+    };
 
     // Pass 1 (read-only): snapshot every body's grid-absolute Position.
     let mut pos_of: HashMap<Entity, GridPos> = HashMap::default();
-    for (e, pos, _, _) in bodies.iter() {
+    for (e, pos, _, _, _, _) in avian.p0().iter() {
         pos_of.insert(e, GridPos(pos.0));
     }
     // Use the same broad-phase geometry Avian will solve. A compound collider
     // owns its AABB directly; child colliders point to their body through
     // `ColliderOf`. This avoids turning initial placement into a metre-scale
     // drop merely because a body has a small wheel or a long leg.
-    let mut lowest_collider_y: HashMap<Entity, f64> = HashMap::default();
-    for (collider, aabb, owner) in &colliders {
+    let mut collider_bounds: HashMap<Entity, (DVec3, DVec3)> = HashMap::default();
+    for (collider, aabb, owner) in avian.p1().iter() {
         if !aabb.min.is_finite() {
             continue;
         }
         let body = owner.map_or(collider, |owner| owner.body);
-        lowest_collider_y
+        collider_bounds
             .entry(body)
-            .and_modify(|lowest| *lowest = lowest.min(aabb.min.y))
-            .or_insert(aabb.min.y);
+            .and_modify(|(min, max)| {
+                *min = min.min(aabb.min);
+                *max = max.max(aabb.max);
+            })
+            .or_insert((aabb.min, aabb.max));
     }
     let adj = joints.adjacency(|e| {
         dynamics
@@ -1382,17 +1575,45 @@ pub fn settle_grounded_assemblies(
             let Some(root_pos) = pos_of.get(&footprint_owner) else {
                 continue;
             };
-            let root_rot = rotations
+            let root_rot = avian
+                .p2()
                 .get(footprint_owner)
                 .map(|rotation| rotation.0)
                 .unwrap_or(DQuat::IDENTITY);
+            let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
+                !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
+            ));
+            filter.excluded_entities.extend(members.iter().copied());
             for contact in &footprint.0 {
-                let point = root_pos.0 + root_rot * contact.local_offset;
-                if point.x.abs() > half || point.z.abs() > half {
+                if !contact.probe_origin.is_finite()
+                    || !contact.probe_direction.is_finite()
+                    || !contact.probe_length.is_finite()
+                    || contact.probe_length <= 0.0
+                {
                     continue;
                 }
-                let surface = hf.0.height_at(point.x, point.z);
-                lift = lift.max(surface + RAYCAST_SETTLE_CLEARANCE - (point.y - contact.radius));
+                let origin = root_pos.0 + root_rot * contact.probe_origin;
+                let Ok(direction) = Dir3::new((root_rot * contact.probe_direction).as_vec3())
+                else {
+                    continue;
+                };
+                // Use the live spatial surface, not the analytic oracle. The
+                // streamed collider is a sampled heightfield, so its exact
+                // bilinear surface can differ from the oracle between lattice
+                // points. A search ray is used only for this one-time placement;
+                // its target remains the authored probe rest distance.
+                let hit = avian.p3().cast_ray(
+                    origin,
+                    direction,
+                    (2.0 * half).max(contact.probe_length),
+                    true,
+                    &filter,
+                );
+                let Some(hit) = hit else {
+                    continue;
+                };
+                let required = contact.probe_length - hit.distance;
+                lift = lift.max(required);
                 over_terrain = true;
             }
         } else {
@@ -1401,39 +1622,97 @@ pub fn settle_grounded_assemblies(
             // fallback is only for a body whose AABB has not published yet.
             for &m in &members {
                 let Some(p) = pos_of.get(&m) else { continue };
-                if p.0.x.abs() > half || p.0.z.abs() > half {
-                    continue; // this member is off the terrain footprint
+                let Some((aabb_min, aabb_max)) = collider_bounds.get(&m).copied() else {
+                    let Some((local, surface)) = sample_height(p.0) else {
+                        continue;
+                    };
+                    over_terrain = true;
+                    lift = lift.max(surface + SETTLE_CLEARANCE - local.y);
+                    continue;
+                };
+                // A ColliderAabb is expressed in the same physics frame as
+                // Position. Test all corners in the terrain frame; using only
+                // its global-Y lower corner is wrong for a rotated terrain.
+                for &x in &[aabb_min.x, aabb_max.x] {
+                    for &y in &[aabb_min.y, aabb_max.y] {
+                        for &z in &[aabb_min.z, aabb_max.z] {
+                            let Some((local, surface)) = sample_height(DVec3::new(x, y, z)) else {
+                                continue;
+                            };
+                            over_terrain = true;
+                            lift = lift.max(surface + SETTLE_CLEARANCE - local.y);
+                        }
+                    }
                 }
-                over_terrain = true;
-                let surface = hf.0.height_at(p.0.x, p.0.z);
-                let lowest = lowest_collider_y
-                    .get(&m)
-                    .copied()
-                    .unwrap_or(p.0.y - SETTLE_CLEARANCE);
-                lift = lift.max(surface + SETTLE_CLEARANCE - lowest);
             }
         }
-        if !over_terrain || lift <= 0.0 {
+        // A ground-settle request is a placement transaction, not a request to
+        // force a positive teleport. Once the live surface has been sampled,
+        // zero (or negative) required lift is the valid result for an authored
+        // pose that already clears the terrain. Leaving the marker armed in
+        // that case holds physics forever even though the contact product is
+        // ready and no correction is needed.
+        if !over_terrain {
             continue;
         }
-        // Consume only after an actual placement.  During terrain/celestial
-        // startup the same assembly can be observed before its final
-        // grid-absolute pose exists; treating that zero-lift observation as a
-        // completed settle loses the sole chance to lift its wheel probes.
+        // Consume only after the live surface has been observed. During
+        // terrain/celestial startup the same assembly can be observed before
+        // its final grid-absolute pose exists; the terrain-ready hold prevents
+        // this branch until the collider ring is live beneath the assembly.
         for &m in &members {
-            commands
-                .entity(m)
-                .try_remove::<lunco_core::NeedsGroundSettle>();
+            let mut entity = commands.entity(m);
+            entity.try_remove::<lunco_core::NeedsGroundSettle>();
+            if lift > 0.0 {
+                entity.try_insert(lunco_core::PhysicsPoseAuthoritative);
+            }
         }
+        if lift <= 0.0 {
+            continue;
+        }
+        let lift_vector = terrain_up * lift;
         for &m in &members {
-            if let Ok((_, mut pos, lin, ang)) = bodies.get_mut(m) {
-                pos.0.y += lift;
+            if let Ok((_, mut pos, _, lin, ang, hits)) = avian.p0().get_mut(m) {
+                pos.0 += lift_vector;
                 if let Some(mut v) = lin {
                     v.0 = DVec3::ZERO;
                 }
                 if let Some(mut w) = ang {
                     w.0 = DVec3::ZERO;
                 }
+                // RayHits is a cached result from the previous spatial-query
+                // pass. The placement transaction changed the ray origin, so
+                // retaining it would feed a pre-placement compression into
+                // the first live suspension tick. The next FixedPostUpdate
+                // recasts from the moved pose.
+                if let Some(mut hits) = hits {
+                    hits.clear();
+                }
+            }
+        }
+        // Raycast wheels are physics probes rather than rigid bodies. Their
+        // absolute Position is refreshed from the chassis in FixedPostUpdate,
+        // but that schedule is intentionally skipped while this activation hold
+        // is up. Move descendant probes in the same placement transaction so the
+        // first released raycast cannot use the pre-lift, embedded pose.
+        let members_set: HashSet<Entity> = members.iter().copied().collect();
+        for (entity, mut pos, rigid_body, _, _, hits) in avian.p0().iter_mut() {
+            if let Some(mut hits) = hits {
+                hits.clear();
+            }
+            if rigid_body.is_some() || members_set.contains(&entity) {
+                continue;
+            }
+            let mut cursor = entity;
+            let mut descendant = false;
+            while let Ok(child_of) = parents.get(cursor) {
+                cursor = child_of.parent();
+                if members_set.contains(&cursor) {
+                    descendant = true;
+                    break;
+                }
+            }
+            if descendant {
+                pos.0 += lift_vector;
             }
         }
         warn!(
@@ -1476,10 +1755,7 @@ pub struct RecoverVessel {
 fn on_recover_vessel(
     trigger: On<RecoverVessel>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    terrains: Query<
-        (&GlobalTransform, &crate::stream_viz::DemHeightField),
-        With<TerrainColliderRing>,
-    >,
+    terrains: Query<(Entity, &crate::stream_viz::DemHeightField), With<TerrainColliderRing>>,
     mut bodies: Query<(
         &RigidBody,
         &mut avian3d::prelude::Position,
@@ -1489,6 +1765,9 @@ fn on_recover_vessel(
     )>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     use bevy::math::DQuat;
     let global_id = lunco_core::GlobalEntityId::from_raw(trigger.event().entity_id);
@@ -1514,12 +1793,19 @@ fn on_recover_vessel(
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
         let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
+        let terrain_surfaces: Vec<(GridPos, GridRot, Arc<SurfaceOracle>)> = terrains
+            .iter()
+            .filter_map(|(terrain, hf)| {
+                lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+                    .map(|(world, rotation)| (world, rotation, hf.0.clone()))
+            })
+            .collect();
         recover_assembly(
             root,
             pivot,
             q_fix,
             up.y,
-            &terrains,
+            &terrain_surfaces,
             &mut bodies,
             &dynamics,
             &joints,
@@ -1535,10 +1821,7 @@ fn recover_assembly(
     pivot: GridPos,
     q_fix: bevy::math::DQuat,
     was_up_y: f64,
-    terrains: &Query<
-        (&GlobalTransform, &crate::stream_viz::DemHeightField),
-        With<TerrainColliderRing>,
-    >,
+    terrain_surfaces: &[(GridPos, GridRot, Arc<SurfaceOracle>)],
     bodies: &mut Query<(
         &RigidBody,
         &mut avian3d::prelude::Position,
@@ -1572,19 +1855,23 @@ fn recover_assembly(
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
         // its local surface (only ever lifting — gravity handles settling down).
         let mut lift = 0.0_f64;
-        for (_t_gt, hf) in terrains {
-            let half = hf.0.half_extent() as f64;
-            // Grid-absolute frame: `post` positions ARE avian `Position`
-            // (grid-absolute) and the oracle is sampled in that frame. The terrain
-            // render `GlobalTransform` (origin-relative) must NOT be interposed
-            // here — it desynced the surface by the FloatingOrigin cell offset
-            // (~2 km) at the elevated moonbase.
+        for (terrain_world, terrain_rotation, oracle) in terrain_surfaces {
+            let half = oracle.half_extent() as f64;
+            let terrain_from_physics = terrain_rotation.0.inverse();
+            // Cross from avian's grid-absolute frame into the composed terrain
+            // frame before sampling. A terrain can be site-mounted and rotated;
+            // raw root X/Z is not a valid DEM coordinate in that case.
             for world in &post {
-                let (x, z) = (world.0.x, world.0.z);
-                if x.abs() > half || z.abs() > half {
+                let local = terrain_from_physics * (world.0 - terrain_world.0);
+                if local.x.abs() > half || local.z.abs() > half {
                     continue;
                 }
-                lift = lift.max(hf.0.height_at(x, z) - world.0.y + RESCUE_CLEARANCE);
+                let surface_world = terrain_world.0
+                    + terrain_rotation.0
+                        * DVec3::new(local.x, oracle.height_at(local.x, local.z), local.z);
+                lift = lift.max(
+                    (surface_world - world.0).dot(terrain_rotation.0 * DVec3::Y) + RESCUE_CLEARANCE,
+                );
             }
         }
         for &m in &members {
@@ -1660,10 +1947,16 @@ mod tests {
             lunco_physics::PhysicsSupportContact {
                 local_offset: DVec3::new(-7.0, -0.5, 0.0),
                 radius: 0.5,
+                probe_origin: DVec3::new(-7.0, -0.1, 0.0),
+                probe_direction: DVec3::NEG_Y,
+                probe_length: 0.6,
             },
             lunco_physics::PhysicsSupportContact {
                 local_offset: DVec3::new(7.0, -0.5, 0.0),
                 radius: 0.5,
+                probe_origin: DVec3::new(7.0, -0.1, 0.0),
+                probe_direction: DVec3::NEG_Y,
+                probe_length: 0.6,
             },
         ]);
         let bounds = runtime_support_xz_bounds(GridPos(DVec3::ZERO), None, None, Some(&footprint));
@@ -1677,6 +1970,57 @@ mod tests {
         nodes.sort_unstable_by_key(|node| (node.x, node.z));
         nodes.dedup();
         assert_eq!(nodes.len(), 16);
+    }
+
+    #[test]
+    fn collider_ring_transforms_the_complete_support_bounds_into_terrain_frame() {
+        let terrain_world = GridPos(DVec3::new(100.0, -40.0, 250.0));
+        let terrain_rotation =
+            GridRot(DQuat::from_rotation_y(0.37) * DQuat::from_rotation_x(-0.21));
+        let local_bounds = Bounds3 {
+            min: DVec3::new(-3.0, -2.0, -4.0),
+            max: DVec3::new(5.0, 6.0, 7.0),
+        };
+        let mut world_bounds = Bounds3 {
+            min: DVec3::splat(f64::INFINITY),
+            max: DVec3::splat(f64::NEG_INFINITY),
+        };
+        for &x in &[local_bounds.min.x, local_bounds.max.x] {
+            for &y in &[local_bounds.min.y, local_bounds.max.y] {
+                for &z in &[local_bounds.min.z, local_bounds.max.z] {
+                    let world = terrain_world.0 + terrain_rotation.0 * DVec3::new(x, y, z);
+                    world_bounds.min = world_bounds.min.min(world);
+                    world_bounds.max = world_bounds.max.max(world);
+                }
+            }
+        }
+
+        let actual = terrain_local_xz_bounds(world_bounds, terrain_world, terrain_rotation);
+        let inverse = terrain_rotation.0.inverse();
+        let mut expected = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for &x in &[world_bounds.min.x, world_bounds.max.x] {
+            for &y in &[world_bounds.min.y, world_bounds.max.y] {
+                for &z in &[world_bounds.min.z, world_bounds.max.z] {
+                    let local = inverse * (DVec3::new(x, y, z) - terrain_world.0);
+                    expected[0] = expected[0].min(local.x);
+                    expected[1] = expected[1].min(local.z);
+                    expected[2] = expected[2].max(local.x);
+                    expected[3] = expected[3].max(local.z);
+                }
+            }
+        }
+        for (&actual, expected) in actual.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!(actual[0] <= local_bounds.min.x);
+        assert!(actual[1] <= local_bounds.min.z);
+        assert!(actual[2] >= local_bounds.max.x);
+        assert!(actual[3] >= local_bounds.max.z);
     }
 
     #[test]

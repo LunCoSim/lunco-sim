@@ -98,6 +98,20 @@ pub enum Gravity {
     Surface,
 }
 
+/// The composed USD `UsdPhysicsScene` gravity fact currently active in the
+/// world.  A site-anchored celestial scene uses `Gravity::Surface` when this
+/// resource is absent; an authored physics scene remains the stronger scene
+/// opinion and keeps its explicit flat gravity.
+#[derive(Resource, Clone, Debug)]
+pub struct PhysicsSceneGravity {
+    /// Composed path of the prim that authored the setting.
+    pub prim: String,
+    /// Magnitude in metres per second squared, after stage-unit conversion.
+    pub magnitude: f64,
+    /// Unit direction in the canonical physics frame.
+    pub direction: DVec3,
+}
+
 impl Gravity {
     /// Convenience constructor for flat gravity.
     pub const fn flat(g: f64, direction: DVec3) -> Self {
