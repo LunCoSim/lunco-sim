@@ -385,7 +385,10 @@ jobs:
             "${release_assets[@]}"
 
           # Publish the complete updater release first. The public release is
-          # the final success marker testers see.
+          # the final success marker testers see. GitHub cannot mark a
+          # prerelease as Latest, so the human-facing nightly is published as
+          # the explicitly selected Latest release; its Nightly title/tag
+          # still identifies the build channel.
           GH_TOKEN="$UPDATES_GH_TOKEN" gh release edit "$RELEASE_TAG" \
             --repo "$UPDATES_REPOSITORY" \
             --draft=false \
@@ -393,5 +396,4 @@ jobs:
             --latest=false
           GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG" \
             --draft=false \
-            --prerelease \
-            --latest=false
+            --latest=true

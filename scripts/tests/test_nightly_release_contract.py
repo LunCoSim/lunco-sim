@@ -13,6 +13,19 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("--draft=false", workflow)
+        main_release_edit = workflow.index(
+            'GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG"'
+        )
+        main_release_block = workflow[main_release_edit : main_release_edit + 220]
+        self.assertIn("--latest=true", main_release_block)
+        self.assertNotIn("--prerelease", main_release_block)
+        updates_release_edit = workflow.index(
+            'GH_TOKEN="$UPDATES_GH_TOKEN" gh release edit "$RELEASE_TAG"'
+        )
+        updates_release_block = workflow[
+            updates_release_edit : updates_release_edit + 260
+        ]
+        self.assertIn("--latest=false", updates_release_block)
         self.assertIn("LunCoSim-Linux-x86_64.AppImage", workflow)
         self.assertIn("Windows x86_64", workflow)
         self.assertIn("macOS", workflow)
