@@ -2691,7 +2691,6 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `pixel_error` | `Option < f64 >` |   |
 | `max_depth` | `Option < u8 >` |   |
-| `coarse_depth` | `Option < u8 >` | Deepest level of the complete DEM-derived fallback cover. |
 | `bakes_per_frame` | `Option < usize >` |   |
 | `tile_budget` | `Option < usize >` |   |
 

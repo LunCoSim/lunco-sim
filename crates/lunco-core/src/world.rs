@@ -156,7 +156,7 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
     let root = world
         .spawn((
             BigSpace::default(),
-            Grid::new(cfg.cell_edge_length, 100.0),
+            Grid::new(cfg.cell_edge_length, cfg.switching_threshold),
             WorldRoot,
             GlobalTransform::default(),
             Visibility::default(),
@@ -237,29 +237,11 @@ impl Plugin for WorldShellPlugin {
             );
         }
 
-        // Kill the dual-propagation race deterministically. big_space registers
-        // BOTH its high-precision propagation AND a plain bevy-compat
-        // `propagate_parent_transforms` in `TransformSystems::Propagate` with
-        // no mutual ordering. Our `WorldRoot` is a parentless entity WITH a
-        // `Transform` (Avian's physics transform handling requires the standard
-        // convention — see `ensure_world_root`), so the compat pass re-walks
-        // the WHOLE big_space tree with plain f32 math, dropping `CellCoord`s.
-        // Unordered, the per-frame winner is nondeterministic: invisible while
-        // all cells ≈ 0, a whole-frame white/black strobe in site-anchored
-        // scenes (Solar Grid at ~5e7 cells → losing frames put the Moon 1e11 m
-        // away). Constraining the high-precision set AFTER the compat system
-        // makes big_space overwrite the plain values every frame, in both
-        // schedules big_space registers them in.
-        app.configure_sets(
-            PostStartup,
-            BigSpaceSystems::PropagateHighPrecision
-                .after(big_space::bevy_compat::propagate_parent_transforms),
-        );
-        app.configure_sets(
-            PostUpdate,
-            BigSpaceSystems::PropagateHighPrecision
-                .after(big_space::bevy_compat::propagate_parent_transforms),
-        );
+        // The canonical shell deliberately has no `Transform` on `WorldRoot`.
+        // Consequently Bevy's f32 compatibility propagation cannot enter the
+        // BigSpace tree, while big_space owns every origin-relative
+        // `GlobalTransform`. Do not order the two propagation mechanisms as a
+        // corrective pass: the component contract itself prevents a dual writer.
     }
 }
 

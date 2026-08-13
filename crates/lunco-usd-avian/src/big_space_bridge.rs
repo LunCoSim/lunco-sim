@@ -5,8 +5,8 @@
 //! third plain-f32 whole-tree `GlobalTransform` writer — it re-propagates the
 //! entire hierarchy in absolute convention inside `PhysicsSchedule` on every
 //! physics tick, unordered (and unorderable) against big_space's PostUpdate
-//! high-precision pass. That is the measured 1-in-5–9 render strobe the
-//! `touch_celestial_transforms` list papers over.
+//! high-precision pass. The bridge removes that competing writer instead of
+//! relying on per-frame dirtying to reconcile two transform conventions.
 //!
 //! This bridge turns ALL of avian's f32 transform sync off
 //! (`propagate_before_physics`, `transform_to_position`,

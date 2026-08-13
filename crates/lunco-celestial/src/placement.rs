@@ -442,8 +442,18 @@ pub fn attach_site_scene_to_surface_grid(
     >,
     q_physical: Query<Entity, With<avian3d::prelude::RigidBody>>,
     q_parents: Query<&ChildOf>,
+    q_children: Query<&Children>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_desc_spatial: Query<
+        (),
+        (
+            With<Transform>,
+            With<GlobalTransform>,
+            Without<CellCoord>,
+            Without<Grid>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     let Some((scene_root, anchor, child_of)) = q_site.iter().next() else {
@@ -483,6 +493,13 @@ pub fn attach_site_scene_to_surface_grid(
             cell,
             local_transform,
         );
+        // The migration makes the scene root a high-precision cell entity.
+        // Its USD-spawned visual descendants remain plain Transform entities;
+        // tag their low-precision roots in the same command batch so big_space
+        // owns their GlobalTransforms from the first frame of the new branch.
+        // The built-in tagger cannot see this transition because the children
+        // themselves are not reparented.
+        stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
         info!(
             "[celestial] site scene re-branched onto body surface grid {:?} (body {})",
             target_grid, anchor.body
@@ -690,7 +707,15 @@ pub fn place_celestial_bound_entities(
     q_children: Query<&Children>,
     // Only spatial descendants (Transform + GlobalTransform) need the marker;
     // a non-spatial child is already a valid `AnyNonSpatial` archetype.
-    q_spatial: Query<(), (With<Transform>, With<GlobalTransform>)>,
+    q_spatial: Query<
+        (),
+        (
+            With<Transform>,
+            With<GlobalTransform>,
+            Without<CellCoord>,
+            Without<Grid>,
+        ),
+    >,
     mut commands: Commands,
     mut last_jd: Local<f64>,
 ) {
@@ -794,7 +819,15 @@ pub fn place_celestial_bound_entities(
 fn stamp_low_precision_roots(
     root: Entity,
     q_children: &Query<&Children>,
-    q_spatial: &Query<(), (With<Transform>, With<GlobalTransform>)>,
+    q_spatial: &Query<
+        (),
+        (
+            With<Transform>,
+            With<GlobalTransform>,
+            Without<CellCoord>,
+            Without<Grid>,
+        ),
+    >,
     commands: &mut Commands,
 ) {
     let mut stack: Vec<Entity> = Vec::new();

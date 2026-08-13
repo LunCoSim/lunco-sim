@@ -788,11 +788,10 @@ pub fn populate_inspector_view(world: &mut World) {
 ///
 /// This gate used to ask `Changed<Transform>` on the sun. It fired on 296 of 300
 /// frames, i.e. it gated nothing while the Inspector paid for a full world scan
-/// every frame. The reason is upstream and deliberate:
-/// `lunco_celestial::touch_celestial_transforms` calls `set_changed()` on the
-/// celestial subtree EVERY frame (measured load-bearing — without it the tree
-/// strobes to the origin), so a transform's change tick carries no information in
-/// this app. Anything gated on it is gated on nothing.
+/// every frame. Celestial transforms are projection state and can legitimately
+/// change as the shared epoch advances, so a component change tick is not the
+/// same thing as a changed inspector value. The gate compares the displayed
+/// values directly instead.
 ///
 /// So the gate compares the handful of scalars the view actually holds against
 /// the world's current values: a few single-entity component reads, versus the
@@ -1987,10 +1986,6 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         );
     ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
         .on_hover_text("Deepest refinement = closest-up detail.");
-    ui.add(egui::Slider::new(&mut cfg.coarse_depth, 0u8..=cfg.max_depth).text("Coarse cover depth"))
-        .on_hover_text(
-            "Always-resident DEM cover used while finer tiles bake. Higher = sharper startup and more resident memory.",
-        );
     ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
         .on_hover_text(
             "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
@@ -2005,7 +2000,6 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ctx.trigger(SetTerrainLod {
             pixel_error: (cfg.pixel_error != before.pixel_error).then_some(cfg.pixel_error),
             max_depth: (cfg.max_depth != before.max_depth).then_some(cfg.max_depth),
-            coarse_depth: (cfg.coarse_depth != before.coarse_depth).then_some(cfg.coarse_depth),
             bakes_per_frame: (cfg.bakes_per_frame != before.bakes_per_frame)
                 .then_some(cfg.bakes_per_frame),
             tile_budget: (cfg.tile_budget != before.tile_budget).then_some(cfg.tile_budget),

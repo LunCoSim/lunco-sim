@@ -17,6 +17,7 @@ use big_space::prelude::{CellCoord, Grid};
 // `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
 // second observer in `lunco-render-bevy` (`env_light.rs`), so this crate names no
 // post-processing type. See docs/architecture/render-decoupling.md.
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::Exposure;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
 use lunco_core::{on_command, register_commands, Command};
@@ -488,13 +489,22 @@ fn on_set_environment_light(
             &mut DirectionalLight,
             Option<&mut CascadeShadowConfig>,
         ),
-        (With<DirectionalLight>, Without<Earthshine>),
+        (
+            With<DirectionalLight>,
+            Without<Earthshine>,
+            Without<RenderLayers>,
+        ),
     >,
     mut q_earthshine: Query<&mut DirectionalLight, With<Earthshine>>,
     mut q_exposure: Query<&mut Exposure>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
-    for (mut tf, mut light, cascades) in &mut q_sun {
+    // The command has one authoritative scene-sun target. Refuse ambiguity
+    // rather than applying a user command to an arbitrary set of lights.
+    if q_sun.iter().count() == 1 {
+        let Ok((mut tf, mut light, cascades)) = q_sun.single_mut() else {
+            unreachable!("a counted scene sun must remain queryable");
+        };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
             // Preserve the unspecified axis by reading it back off the current
             // rotation (same YXZ order the Inspector writes with).

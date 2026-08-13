@@ -436,40 +436,6 @@ pub fn world_to_grid_local(
     target_grid.translation_to_grid(world_pos - target_grid_world)
 }
 
-/// Express a root-frame pose in a possibly nested, rotated live grid.
-///
-/// [`world_to_grid_local`] is intentionally the lightweight spelling for a
-/// grid whose parent-frame pose is already known to be translation-only. For a
-/// live hierarchy, this is the one conversion boundary: it undoes both the
-/// grid's accumulated translation and rotation before decomposing the local
-/// point into `CellCoord + Transform`.
-pub fn world_pose_to_live_grid_local<F: QueryFilter>(
-    world_pos: GridPos,
-    world_rotation: GridRot,
-    target_grid_entity: Entity,
-    target_grid: &Grid,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<(CellCoord, Transform)> {
-    let (grid_cell, grid_transform) = q_spatial.get(target_grid_entity).ok()?;
-    let (grid_world, grid_rotation) = world_pose_seeded(
-        target_grid_entity,
-        &grid_cell.copied().unwrap_or_default(),
-        grid_transform,
-        q_parents,
-        q_grids,
-        q_spatial,
-    );
-    let grid_local = grid_rotation.0.inverse() * (world_pos - grid_world);
-    let (cell, translation) = target_grid.translation_to_grid(grid_local);
-    Some((
-        cell,
-        Transform::from_translation(translation)
-            .with_rotation((grid_rotation.0.inverse() * world_rotation.0).as_quat()),
-    ))
-}
-
 /// Convert a `GlobalTransform`-space point (the floating-origin-relative
 /// render frame) into `grid`'s absolute coordinate frame.
 ///
@@ -906,49 +872,5 @@ mod tests {
 
         assert!((first.0 - second.0).length() < 1e-9);
         assert!(first.1.abs_diff_eq(second.1, 1e-9));
-    }
-
-    #[test]
-    fn world_pose_to_live_grid_local_undoes_grid_rotation() {
-        let mut world = World::new();
-        let target_grid = world
-            .spawn((
-                grid(),
-                CellCoord::ZERO,
-                Transform::from_rotation(Quat::from_rotation_y(core::f32::consts::FRAC_PI_2)),
-                GlobalTransform::default(),
-            ))
-            .id();
-
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-        )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state
-            .get(&world)
-            .expect("read-only queries always validate");
-        let grid_ref = q_grids.get(target_grid).unwrap();
-
-        // The point is local +X under a grid rotated +90° around Y, so its
-        // root-frame position is -Z. Possession must recover +X before storing
-        // the avatar under that grid.
-        let (cell, local) = world_pose_to_live_grid_local(
-            GridPos(DVec3::new(0.0, 0.0, -100.0)),
-            GridRot(DQuat::IDENTITY),
-            target_grid,
-            grid_ref,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .expect("target grid has a world pose");
-
-        assert_eq!(cell, CellCoord::ZERO);
-        assert!((local.translation - Vec3::new(100.0, 0.0, 0.0)).length() < 1e-4);
-        assert_eq!(
-            local.rotation,
-            Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2)
-        );
     }
 }

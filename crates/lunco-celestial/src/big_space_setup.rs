@@ -64,11 +64,11 @@
 //!
 //! ## Surface sub-Grids
 //!
-//! Surface ops (rovers, avatars, terrain) live in a finer sub-Grid (edge=1e3 m,
-//! ULP ≈ 60 µm at half-cell) under each body's rotating Grid. This keeps avian's
-//! `Position` near zero in the rover's frame so f64 → f32 narrowing preserves
-//! sub-mm precision on wheel raycasts even at body-radius distances from the
-//! parent Grid's origin.
+//! Surface ops (rovers, avatars, terrain) live in a sub-Grid under each body's
+//! rotating Grid. Its precision contract is the shared [`WorldGridConfig`], not
+//! a separate surface-specific edge. This keeps every BigSpace branch on the
+//! same deterministic cell/rebranch boundary while keeping Avian's `Position`
+//! near zero in the rover's frame.
 //!
 //! ## Why two layers?
 //!
@@ -275,7 +275,7 @@ pub struct InertialAnchor {
     pub ephemeris_id: i32,
 }
 
-/// Marker for Earth's surface sub-grid (edge=1e3 m).
+/// Marker for Earth's surface sub-grid.
 ///
 /// Surface entities — rovers, avatars, terrain tiles, future surface ops —
 /// live here so their `Transform.translation` stays small in `f32` and
@@ -283,7 +283,7 @@ pub struct InertialAnchor {
 #[derive(Component)]
 pub struct EarthSurfaceRoot;
 
-/// Marker for Moon's surface sub-grid (edge=1e3 m). See [`EarthSurfaceRoot`].
+/// Marker for Moon's surface sub-grid. See [`EarthSurfaceRoot`].
 #[derive(Component)]
 pub struct MoonSurfaceRoot;
 
@@ -299,6 +299,7 @@ pub fn setup_big_space_hierarchy(
     config: Res<crate::CelestialConfig>,
     quality: Option<Res<lunco_render::RenderingQualitySettings>>,
     shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
+    grid_config: Option<Res<lunco_core::WorldGridConfig>>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
@@ -308,6 +309,19 @@ pub fn setup_big_space_hierarchy(
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
+    // Every grid in the live hierarchy uses the same precision contract as the
+    // persistent world shell.  A child with a different cell edge has a
+    // different rebranch boundary and therefore can move relative to its
+    // parent when BigSpace propagates the floating origin.  Keep the contract
+    // in WorldGridConfig; this system must not grow a second set of grid
+    // constants.
+    let grid_config = grid_config.as_deref().copied().unwrap_or_default();
+    let make_grid = || {
+        Grid::new(
+            grid_config.cell_edge_length,
+            grid_config.switching_threshold,
+        )
+    };
     // A site-anchored DEM twin authors its own rocks and bakes rock features
     // into the far-field maps — the generated obstacle field on top is
     // redundant decoration that costs over a second per frame in views that
@@ -371,7 +385,7 @@ pub fn setup_big_space_hierarchy(
             commands
                 .spawn((
                     BigSpace::default(),
-                    Grid::new(2_000.0, 100.0),
+                    make_grid(),
                     GlobalTransform::default(),
                     Visibility::default(),
                     InheritedVisibility::default(),
@@ -423,7 +437,7 @@ pub fn setup_big_space_hierarchy(
             // Subtree root: the entire body hierarchy chain-parents under this, so a
             // recursive despawn here tears down every grid, body, anchor and globe tile.
             CelestialDerived,
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -438,7 +452,7 @@ pub fn setup_big_space_hierarchy(
         .spawn((
             SolarSystemRoot,
             CelestialReferenceFrame { ephemeris_id: 10 },
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -555,7 +569,7 @@ pub fn setup_big_space_hierarchy(
             EMBRoot,
             CelestialReferenceFrame { ephemeris_id: 3 },
             // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -572,7 +586,7 @@ pub fn setup_big_space_hierarchy(
             EarthRoot,
             CelestialReferenceFrame { ephemeris_id: 399 },
             // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -594,7 +608,7 @@ pub fn setup_big_space_hierarchy(
             InertialAnchor { ephemeris_id: 399 },
             // Same 2 km / 100 m as every other celestial grid — cell edge is a
             // PRECISION knob (see the Solar Grid note).
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -660,7 +674,7 @@ pub fn setup_big_space_hierarchy(
     let earth_surface_grid = commands
         .spawn((
             EarthSurfaceRoot,
-            Grid::new(1_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -697,7 +711,7 @@ pub fn setup_big_space_hierarchy(
             MoonRoot,
             CelestialReferenceFrame { ephemeris_id: 301 },
             // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-            Grid::new(2_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -757,7 +771,7 @@ pub fn setup_big_space_hierarchy(
     let moon_surface_grid = commands
         .spawn((
             MoonSurfaceRoot,
-            Grid::new(1_000.0, 100.0),
+            make_grid(),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),

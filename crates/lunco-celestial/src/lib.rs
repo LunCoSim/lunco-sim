@@ -315,10 +315,10 @@ impl Plugin for CelestialPlugin {
         // wrong at every other warp factor — see `cadence`). Solving every frame
         // measured ~10 ms/frame across the five systems gated below.
         //
-        // `touch_celestial_transforms` and the rest of the chain stay UNGATED on
-        // purpose: the touch is load-bearing against stale-GT strobing every
-        // frame (a deletion attempt on 2026-07-11 strobed the whole tree), so the
-        // gate goes on the individual expensive systems, never on the set.
+        // The cadence gate belongs on the systems that solve celestial state.
+        // BigSpace propagation is driven by actual CellCoord/Transform and
+        // hierarchy changes; no per-frame dirtying is allowed to manufacture a
+        // change signal or hide an invalid low-precision subtree.
         app.init_resource::<cadence::CelestialSolvedEpoch>();
         lunco_settings::AppSettingsExt::register_settings_section::<
             cadence::CelestialCadenceSettings,
@@ -378,10 +378,6 @@ impl Plugin for CelestialPlugin {
                     .run_if(cadence::tracked_needs_solve())
                     .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
                 placement::place_celestial_bound_entities,
-                // Defeat stale-GT / compat-strobe frames for the celestial
-                // subtree — measured load-bearing; see the system doc (a deletion
-                // attempt on 2026-07-11 strobed the whole tree ~1 frame in 5–9).
-                touch_celestial_transforms,
                 soi_transition_system,
             )
                 .chain()

@@ -48,7 +48,7 @@ const OLD: Chain = Chain {
     solar: (1.0e9, 1.0e8),
     emb: (1.0e8, 1.0e7),
     body: (10_000.0, 1_000.0),
-    surface: (1_000.0, 100.0),
+    surface: (2_000.0, 100.0),
 };
 
 const NEW: Chain = Chain {

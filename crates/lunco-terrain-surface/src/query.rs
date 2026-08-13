@@ -428,7 +428,6 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             "config": {
                 "pixel_error": config.pixel_error,
                 "max_depth": config.max_depth,
-                "coarse_depth": config.coarse_depth,
                 "bakes_per_frame": config.bakes_per_frame,
                 "tile_budget": config.tile_budget,
             },

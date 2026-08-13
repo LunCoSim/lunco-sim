@@ -277,7 +277,10 @@ pub fn update_sun_light_system(
     // `lunco_environment::horizon::SunQuery` for the same filter render-side.
     mut q_light: Query<
         (Entity, &mut Transform, &mut DirectionalLight, Option<&Name>),
-        Without<lunco_environment::Earthshine>,
+        (
+            Without<lunco_environment::Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+        ),
     >,
     // The site-ENU alignment lives on the Site Align Grid (the Solar Grid's
     // rotation is IDENTITY — see `anchor_solar_frame_to_site`).
@@ -426,7 +429,12 @@ pub fn update_sun_light_system(
     // scene had two suns, and with equal illuminance it picked by archetype
     // iteration order. That guess is exactly how an engine-spawned duplicate
     // came to take the ephemeris aim while the scene's own sun stayed frozen.
-    if let Some((light_entity, mut light_tf, mut light, light_name)) = q_light.iter_mut().next() {
+    // Exactly one unscoped scene sun owns this write. ECS/archetype order is
+    // not a lighting policy, so an ambiguous scene must not silently choose.
+    if q_light.iter().count() != 1 {
+        return;
+    }
+    if let Ok((light_entity, mut light_tf, mut light, light_name)) = q_light.single_mut() {
         debug!("[celestial] selected scene sun entity={light_entity:?} name={light_name:?}");
         // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
         // from a direction that steps in f32-quat ULPs (the site pin's
@@ -467,64 +475,6 @@ pub fn update_sun_light_system(
         }
     }
 }
-
-/// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
-///
-/// **Measured to be load-bearing (2026-07-11, `LUNCO_JUMP_PROBE=1`).** An
-/// attempt to delete this after the root-grid fix strobed the ENTIRE
-/// celestial tree to the world origin ~1 frame in 5–9 (whole-chain
-/// plain-f32 compat output surviving to the renderer; 3385 jump events in
-/// 15 s). Ordering `PropagateHighPrecision.after(propagate_parent_transforms)`
-/// is evidently not sufficient on those frames for entities the HP pass
-/// doesn't rewrite — force-dirtying their `Transform` guarantees it rewrites
-/// them all, every frame. The real fix is retiring the root `Transform`
-/// (Avian bubble, doc 47 Phase 5 / doc 45 two-space split); until then this
-/// stays.
-///
-/// The `Or<>` must cover EVERY cell-entity living on a celestial grid.
-/// `GeodeticAnchor`/`KeplerOrbit` prims (ground stations, satellites) were
-/// missing — they kept flickering between their anchor pose and the collapsed
-/// compat pose while the listed entities were protected (the "DSS ping-pong",
-/// task #18). `Without<SiteAnchor>` is REQUIRED with them: the site-anchored
-/// SCENE ROOT also carries `GeodeticAnchor`, and force-dirtying it dirties
-/// the whole local scene every frame ("everything is jumping around",
-/// 2026-07-10 regression).
-#[allow(clippy::type_complexity)]
-pub fn touch_celestial_transforms(
-    q_site: Query<(), With<crate::geo::SiteAnchor>>,
-    mut q: Query<
-        &mut Transform,
-        (
-            Or<(
-                With<CelestialBody>,
-                With<CelestialReferenceFrame>,
-                With<lunco_terrain_globe::TerrainTile>,
-                With<crate::geo::GeodeticAnchor>,
-                With<crate::kepler::KeplerOrbit>,
-                With<crate::trajectories::TrajectoryPath>,
-            )>,
-            Without<crate::geo::SiteAnchor>,
-        ),
-    >,
-) {
-    // Only needed while a site anchor re-pins the solar frame; a plain scene
-    // has no moving grid chain to go stale against.
-    if q_site.is_empty() {
-        return;
-    }
-    for mut tf in q.iter_mut() {
-        tf.set_changed();
-    }
-}
-
-// NOTE (2026-07-12): an orbital-only "touch_site_scene_transforms" pass was
-// tried here to force the site subtree onto the HP propagation path while the
-// orbital camera is on a celestial grid. Measured result: it did NOT remove
-// the camera↔terrain divergence (the site branch and the celestial branch
-// still disagree at f32-ULP scale across the Solar Grid's ~1 AU joint) and it
-// cost whole-subtree GT recomputation every frame (~1 FPS in orbital view).
-// The structural fix is re-branching the site scene under its anchor body's
-// grid (task #24) so no 1 AU joint separates camera from terrain.
 
 pub fn celestial_visuals_system(
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,

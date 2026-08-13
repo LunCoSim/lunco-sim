@@ -222,8 +222,11 @@ impl Plugin for TrajectoryPlugin {
 /// largest spike seen so a silent log provably means "no jumps".
 ///
 /// Landmarks: celestial bodies, reference-frame grids, trajectory views,
-/// grid-anchored scene roots, and the `WorldGrid` (the root-composition
-/// victim class of the 2026-07-10 regression).
+/// grid-anchored scene roots, the active avatar, streamed terrain, and the
+/// `WorldGrid` (the root-composition victim class of the 2026-07-10
+/// regression).  The avatar and terrain are deliberately included as a pair:
+/// a floating-origin rebranch may move both in world coordinates, but it must
+/// never change their relative rendered pose.
 #[allow(clippy::type_complexity)]
 pub fn jump_probe_system(
     q_cam: Query<&GlobalTransform, With<big_space::prelude::FloatingOrigin>>,
@@ -235,6 +238,8 @@ pub fn jump_probe_system(
             With<TrajectoryView>,
             With<lunco_core::GridAnchor>,
             With<lunco_core::WorldGrid>,
+            With<lunco_core::Avatar>,
+            With<lunco_terrain_surface::stream_viz::TerrainLodViz>,
         )>,
     >,
     q_parents: Query<&ChildOf>,

@@ -43,7 +43,7 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{
-    ParamValue, ShaderLook, ShaderLookBound, TextureLayer, ATTRIBUTE_MORPH_EDGE,
+    ParamValue, ShaderLook, ShaderLookReady, TextureLayer, ATTRIBUTE_MORPH_EDGE,
     ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 use lunco_obstacle_field::grid_mesh;
@@ -374,9 +374,10 @@ struct TileSlot {
     /// that should cover its area is not ready yet. Tracked so the `Visibility`
     /// command is issued on a flip, not every frame.
     drawn: bool,
-    /// A new entity stays hidden until the render binder has attached its concrete
-    /// material. This is a domain/render boundary contract, not an ECS-timing
-    /// guess: the binder inserts [`ShaderLookBound`] with the material itself.
+    /// A new entity stays hidden until the render binder has attached a concrete
+    /// material whose shader layout is ready. This is a domain/render boundary
+    /// contract, not an ECS-timing guess: [`ShaderLookReady`] is inserted only
+    /// after shader loading and parameter reflection have completed.
     ready: bool,
     /// The edge-stitch topology currently bound to this tile's material. The
     /// stitch mask is per-tile material identity, not a shared live uniform: two
@@ -428,25 +429,21 @@ pub(crate) fn retire_terrain_tiles(
 /// flicker rather than as anything a type error would catch.
 ///
 /// `scratch` is caller-owned to keep this allocation-free on the hot path.
-/// The retained coarse base. It is a complete, disjoint quadtree cover at every
-/// level from the root through the configured coarse fallback depth. The
-/// deepest level normally draws; its ancestors remain available for an atomic
-/// local unrefinement if a deeper tile is not ready.
-fn fallback_coords(max_depth: u8) -> impl Iterator<Item = QuadCoord> {
-    (0..=max_depth).flat_map(|depth| {
-        let side = 1_u32 << depth;
-        (0..side).flat_map(move |z| (0..side).map(move |x| QuadCoord { depth, x, z }))
-    })
+/// The one retained fallback. The quadtree root is a complete cover of the
+/// DEM, so it is the only permanent stand-in needed while selected detail is
+/// baked. Keeping a second hierarchy of coarse tiles creates extra render
+/// surfaces and lets an incomplete coarse level become visible as a tile-sized
+/// hole.
+fn fallback_coords() -> impl Iterator<Item = QuadCoord> {
+    std::iter::once(QuadCoord::ROOT)
 }
 
-fn is_coarse_fallback(coord: QuadCoord, fallback_depth: u8) -> bool {
-    coord.depth <= fallback_depth
+fn is_coarse_fallback(coord: QuadCoord) -> bool {
+    coord == QuadCoord::ROOT
 }
 
-fn coarse_fallback_tile_count(fallback_depth: u8) -> usize {
-    (0..=fallback_depth)
-        .map(|depth| 1usize << (2 * depth))
-        .sum()
+fn coarse_fallback_tile_count() -> usize {
+    1
 }
 
 /// Keep the direct parents of the live cover resident as local, hidden fallback
@@ -1039,10 +1036,6 @@ pub struct LodTiles {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
-    /// Coarse fallback depth used by the last base build. A live LOD-depth edit
-    /// must invalidate the latch so increasing the maximum depth cannot leave a
-    /// terrain with a shallower-than-requested base.
-    coarse_depth: u8,
     /// Budget-refused split count from the last live [`evolve_cover`] pass. Kept
     /// on the component because the idle fast path skips selection — a
     /// starved-but-idle terrain must keep reporting, not read as healthy.
@@ -1195,10 +1188,6 @@ pub struct TerrainLodConfig {
     pub pixel_error: f64,
     /// Deepest quadtree level the streamer refines to (caps closest-up detail).
     pub max_depth: u8,
-    /// Deepest level of the always-resident DEM-derived fallback cover. This is
-    /// separate from `max_depth` so the no-hole quality floor is explicit; it is
-    /// clamped to `max_depth` when applied.
-    pub coarse_depth: u8,
     /// Tiles BAKED per frame across all terrains. 1 = smoothest frame-time but
     /// slowest fill; raise for a faster initial load at the cost of bigger spikes.
     pub bakes_per_frame: usize,
@@ -1247,7 +1236,6 @@ impl Default for TerrainLodConfig {
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
-            coarse_depth: 4,
             bakes_per_frame,
             tile_budget,
         }
@@ -1262,7 +1250,6 @@ impl Default for TerrainLodConfig {
 pub struct SetTerrainLod {
     pub pixel_error: Option<f64>,
     pub max_depth: Option<u8>,
-    pub coarse_depth: Option<u8>,
     pub bakes_per_frame: Option<usize>,
     pub tile_budget: Option<usize>,
 }
@@ -1275,11 +1262,6 @@ fn on_set_terrain_lod(trigger: On<SetTerrainLod>, mut cfg: ResMut<TerrainLodConf
     }
     if let Some(v) = ev.max_depth {
         cfg.max_depth = v;
-    }
-    if let Some(v) = ev.coarse_depth {
-        cfg.coarse_depth = v.min(cfg.max_depth);
-    } else {
-        cfg.coarse_depth = cfg.coarse_depth.min(cfg.max_depth);
     }
     if let Some(v) = ev.bakes_per_frame {
         cfg.bakes_per_frame = v;
@@ -1478,8 +1460,8 @@ const MESH_CACHE_BYTE_CEILING: usize = 640 * 1024 * 1024;
 /// The old flat `CACHE_CAP = 1024` sat BELOW the resident bound at the
 /// default 768 budget, so the trim evicted exactly the entries the cache
 /// exists for, every frame the camera traversed.
-fn mesh_cache_entry_cap(tile_budget: usize, terrain_count: usize, fallback_depth: u8) -> usize {
-    let resident_bound = 2 * tile_budget + coarse_fallback_tile_count(fallback_depth) + 64;
+fn mesh_cache_entry_cap(tile_budget: usize, terrain_count: usize) -> usize {
+    let resident_bound = 2 * tile_budget + coarse_fallback_tile_count() + 64;
     2 * resident_bound * terrain_count
 }
 /// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
@@ -1618,7 +1600,10 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
                 ParamValue::F32(authored.weight_albedo),
             );
         }
-        None => set_param(look, "weight_albedo", ParamValue::F32(0.0)),
+        None => {
+            look.textures.remove(&TextureLayer::Albedo);
+            set_param(look, "weight_albedo", ParamValue::F32(0.0));
+        }
     }
     match &authored.mineral {
         Some(h) => {
@@ -1629,7 +1614,10 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
                 ParamValue::F32(authored.weight_mineral),
             );
         }
-        None => set_param(look, "weight_mineral", ParamValue::F32(0.0)),
+        None => {
+            look.textures.remove(&TextureLayer::Mineral);
+            set_param(look, "weight_mineral", ParamValue::F32(0.0));
+        }
     }
 }
 
@@ -2018,7 +2006,7 @@ pub fn update_lod_tiles(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
-    material_bound: Query<(), With<ShaderLookBound>>,
+    material_bound: Query<(), With<ShaderLookReady>>,
     mut looks: Query<&mut ShaderLook>,
     mut scratch: Local<StreamScratch>,
 ) {
@@ -2137,14 +2125,6 @@ pub fn update_lod_tiles(
         } else {
             viz.tile_res
         };
-        // The coarse base is a scene-independent coverage policy. Cap it by the
-        // configured depth so shallow diagnostic terrains still receive valid nodes.
-        let fallback_depth = cfg.coarse_depth.min(cfg.max_depth);
-        if tiles.coarse_depth != fallback_depth {
-            tiles.coarse_depth = fallback_depth;
-            tiles.coarse_ready = false;
-            tiles.last_sig = None;
-        }
         // A live max-depth reduction invalidates the persistent cover: it may
         // still contain leaves deeper than the new tree and those leaves would
         // otherwise remain drawable forever. The cover is authoritative state,
@@ -2314,7 +2294,6 @@ pub fn update_lod_tiles(
             sig.write_u64(cfg.pixel_error.to_bits());
             sig.write_u64(cfg.tile_budget as u64);
             sig.write_u64(cfg.max_depth as u64);
-            sig.write_u64(cfg.coarse_depth as u64);
             sig.finish()
         };
         {
@@ -2537,7 +2516,7 @@ pub fn update_lod_tiles(
             *gen == cur_gen
                 && (wanted.contains(coord)
                     || parent_fallbacks.contains(coord)
-                    || is_coarse_fallback(*coord, fallback_depth))
+                    || is_coarse_fallback(*coord))
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
         // Intelligent baking, two phases:
@@ -2665,7 +2644,7 @@ pub fn update_lod_tiles(
             // work that is no longer wanted stays in the content cache.
             if !wanted.contains(&coord)
                 && !parent_fallbacks.contains(&coord)
-                && !is_coarse_fallback(coord, fallback_depth)
+                && !is_coarse_fallback(coord)
             {
                 continue;
             }
@@ -2719,7 +2698,7 @@ pub fn update_lod_tiles(
         // complete DEM-derived floor; finer work never creates an uncovered area.
         coarse.clear();
         if !frozen && !tiles.coarse_ready {
-            for c in fallback_coords(fallback_depth) {
+            for c in fallback_coords() {
                 coarse.push(Selected {
                     coord: c,
                     region: qt.region(c),
@@ -2736,7 +2715,7 @@ pub fn update_lod_tiles(
         // pool on a cold cache and leave an area without a ready ancestor. Admit
         // only coarse work until the complete cover exists; then refine nearest-first.
         for s in coarse.iter().chain(sel.iter()) {
-            if !tiles.coarse_ready && !is_coarse_fallback(s.coord, fallback_depth) {
+            if !tiles.coarse_ready && !is_coarse_fallback(s.coord) {
                 continue;
             }
             // Skip coords already satisfied at the current generation (resident tile
@@ -2910,7 +2889,7 @@ pub fn update_lod_tiles(
         // else lives while wanted, is a direct hidden fallback for a wanted child,
         // or actively draws as a stand-in.
         tiles.tiles.retain(|coord, slot| {
-            let keep = is_coarse_fallback(*coord, fallback_depth)
+            let keep = is_coarse_fallback(*coord)
                 || wanted.contains(coord)
                 || parent_fallbacks.contains(coord)
                 || draw.contains(coord);
@@ -3007,13 +2986,13 @@ pub fn update_lod_tiles(
         // tile entities themselves, so LRU-evicting its cache entries can only
         // cost a re-bake on a much later re-selection, never a visible hole.)
         mesh_cache.trim(
-            mesh_cache_entry_cap(cfg.tile_budget.max(16), terrain_count, fallback_depth),
+            mesh_cache_entry_cap(cfg.tile_budget.max(16), terrain_count),
             MESH_CACHE_BYTE_CEILING,
             |(e, c, _)| {
                 *e == terrain
                     && (wanted.contains(c)
                         || parent_fallbacks.contains(c)
-                        || is_coarse_fallback(*c, fallback_depth))
+                        || is_coarse_fallback(*c))
             },
         );
     }
@@ -3155,20 +3134,11 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn fallback_is_a_complete_coarse_cover() {
-        let fallback_depth = 4;
-        let fallback = fallback_coords(fallback_depth).collect::<Vec<_>>();
-        assert_eq!(fallback.len(), coarse_fallback_tile_count(fallback_depth));
-        for depth in 0..=fallback_depth {
-            let side = 1_u32 << depth;
-            assert_eq!(
-                fallback.iter().filter(|coord| coord.depth == depth).count(),
-                (side * side) as usize
-            );
-        }
-        assert!(fallback
-            .iter()
-            .all(|&coord| is_coarse_fallback(coord, fallback_depth)));
+    fn fallback_is_exactly_one_root_tile() {
+        assert_eq!(fallback_coords().collect::<Vec<_>>(), vec![QuadCoord::ROOT]);
+        assert_eq!(coarse_fallback_tile_count(), 1);
+        assert!(is_coarse_fallback(QuadCoord::ROOT));
+        assert!(!is_coarse_fallback(c(1, 0, 0)));
     }
 
     #[test]
@@ -4030,18 +4000,14 @@ mod draw_partition_tests {
         // edge every frame — the exact failure the flat 1024 cap had at the
         // default 768 budget.
         let budget = 768;
-        let fallback_depth = 4;
+        assert!(mesh_cache_entry_cap(budget, 1) > 2 * budget + coarse_fallback_tile_count());
         assert!(
-            mesh_cache_entry_cap(budget, 1, fallback_depth)
-                > 2 * budget + coarse_fallback_tile_count(fallback_depth)
-        );
-        assert!(
-            mesh_cache_entry_cap(budget, 1, fallback_depth) > 1024,
+            mesh_cache_entry_cap(budget, 1) > 1024,
             "must exceed the old flat cap"
         );
         assert_eq!(
-            mesh_cache_entry_cap(budget, 3, fallback_depth),
-            3 * mesh_cache_entry_cap(budget, 1, fallback_depth),
+            mesh_cache_entry_cap(budget, 3),
+            3 * mesh_cache_entry_cap(budget, 1),
             "cap scales with the live terrain count"
         );
     }

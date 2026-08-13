@@ -1392,32 +1392,30 @@ fn process_usd_sim_prim_read(
         // BigSpace. Resolve the nearest actual Grid in that parent chain: this
         // is the scene's frame owner (WorldGrid during bootstrap, or the body's
         // surface grid after celestial placement), never a marker-selected
-        // parallel grid. Compose the authored pose in f64 first, then convert
-        // that one pose into the chosen grid atomically.
-        let (avatar_world, avatar_world_rotation) =
-            lunco_core::coords::world_pose(entity, q_child_of, grid_components, q_spatial)
-                .unwrap_or((
-                    lunco_core::coords::GridPos(existing_tf.translation.as_dvec3()),
-                    lunco_core::coords::GridRot(existing_tf.rotation.as_dquat()),
-                ));
+        // parallel grid. Resolve the pose directly in that Grid's frame; a
+        // root-world compose followed by an immediate inverse conversion is
+        // both unnecessary and unstable when the distant root is re-pinned.
         let target_grid = lunco_core::coords::ancestor_grid(entity, q_child_of, grid_components);
-        let (avatar_cell, avatar_local) = match target_grid {
-            Some((grid_entity, grid)) => lunco_core::coords::world_pose_to_live_grid_local(
-                avatar_world,
-                avatar_world_rotation,
+        let (avatar_cell, avatar_tf) = match target_grid {
+            Some((grid_entity, grid)) => lunco_core::coords::grid_relative_pose(
+                entity,
                 grid_entity,
-                grid,
                 q_child_of,
                 grid_components,
                 q_spatial,
             )
-            .map(|(cell, transform)| (cell, transform.translation))
-            .unwrap_or_else(|| (CellCoord::default(), avatar_world.0.as_vec3())),
-            None => (CellCoord::default(), existing_tf.translation),
+            .map(|(position, rotation)| {
+                let (cell, translation) = grid.translation_to_grid(position);
+                (
+                    cell,
+                    Transform::from_translation(translation)
+                        .with_rotation(rotation.as_quat())
+                        .with_scale(existing_tf.scale),
+                )
+            })
+            .unwrap_or_else(|| (CellCoord::default(), existing_tf)),
+            None => (CellCoord::default(), existing_tf),
         };
-        let avatar_tf = Transform::from_translation(avatar_local)
-            .with_rotation(avatar_world_rotation.0.as_quat())
-            .with_scale(existing_tf.scale);
 
         // Shared render-look for the avatar camera: SMAA post-process AA,
         // MSAA off (can't touch shader-internal regolith speckle), and

@@ -956,6 +956,7 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
              `RenderLayers` preview or removed.",
             sun.iter().count()
         );
+        return None;
     }
     Some(first).map(|(gt, light, ang, csm)| {
         let csm_far = if light.shadow_maps_enabled {

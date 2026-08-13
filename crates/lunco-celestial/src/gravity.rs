@@ -83,6 +83,11 @@ impl GravityModel for PointMassGravity {
 pub struct LocalGravityField {
     /// The body we're gravitationally bound to.
     pub body_entity: Option<Entity>,
+    /// Avatar position relative to the bound body's centre, expressed in the
+    /// body's rotating frame.  This is the canonical position for surface
+    /// decisions: it is composed through the shared BigSpace grid branch and
+    /// never obtained by subtracting two root-frame `GlobalTransform`s.
+    pub body_relative_position: DVec3,
     /// "Up" direction in world space.
     pub up: DVec3,
     /// "Up" direction in body-local space.
@@ -95,6 +100,7 @@ impl Default for LocalGravityField {
     fn default() -> Self {
         Self {
             body_entity: None,
+            body_relative_position: DVec3::ZERO,
             up: DVec3::Y,
             local_up: DVec3::Y,
             surface_g: 0.0,
@@ -112,9 +118,9 @@ impl Default for LocalGravityField {
 
 /// Updates `LocalGravityField` based on avatar position.
 ///
-/// Uses the avatar's full grid position (CellCoord + Transform) to compute
-/// the direction from the body center via absolute coordinate arithmetic.
-/// This correctly handles nested grids and reparenting.
+/// Uses the avatar's body-relative position composed through the shared local
+/// BigSpace branch. This correctly handles nested grids, reparenting, and a
+/// rotating celestial frame without subtracting astronomical root positions.
 ///
 /// Runs in `PreUpdate` so camera systems see fresh data.
 pub fn update_local_gravity_field(
@@ -140,35 +146,32 @@ pub fn update_local_gravity_field(
     if orbital_pin.active {
         return;
     }
-    let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else {
+    let Some((avatar_ent, _tf, _cell, _, gravity_body)) = q_avatar.iter().next() else {
         return;
     };
 
-    // Avatar absolute position in root frame.
-    let cam_abs = crate::coords::world_position_seeded(
-        avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
-    );
+    let (body_relative_position, body_up_local, body_up_world, surface_g) =
+        if let Some(gb) = gravity_body {
+            gravity_at_body(
+                gb.body_entity,
+                avatar_ent,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+                &q_bodies,
+            )
+        } else if let Some(body_ent) = field.body_entity {
+            // Hold the last body association while the avatar is between explicit
+            // surface commands.  The frame is still derived from that body's live
+            // Grid pose and gravity model, never from an arbitrary world axis.
+            gravity_at_body(
+                body_ent, avatar_ent, &q_parents, &q_grids, &q_spatial, &q_bodies,
+            )
+        } else {
+            (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0)
+        };
 
-    let (_body_local, body_up_local, body_up_world, surface_g) = if let Some(gb) = gravity_body {
-        gravity_at_body(
-            gb.body_entity,
-            cam_abs,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-            &q_bodies,
-        )
-    } else if let Some(body_ent) = field.body_entity {
-        // Hold the last body association while the avatar is between explicit
-        // surface commands.  The frame is still derived from that body's live
-        // Grid pose and gravity model, never from an arbitrary world axis.
-        gravity_at_body(
-            body_ent, cam_abs, &q_parents, &q_grids, &q_spatial, &q_bodies,
-        )
-    } else {
-        (cam_abs.0, DVec3::Y, DVec3::Y, 0.0)
-    };
-
+    field.body_relative_position = body_relative_position;
     field.surface_g = surface_g;
 
     field.local_up = body_up_local;
@@ -183,12 +186,13 @@ pub fn update_local_gravity_field(
 }
 
 /// Evaluate the active body's gravity in its own rotating frame and publish
-/// both sides of the frame boundary.  `GravityModel::acceleration` receives a
-/// body-fixed relative position; camera systems consume `up` in root/world
-/// axes and convert it into their parent Grid before building a Transform.
+/// both sides of the frame boundary. `GravityModel::acceleration` receives a
+/// body-fixed relative position. When camera and body share a local grid
+/// branch, that relative position is composed in the branch directly instead
+/// of subtracting two astronomical root-frame positions.
 fn gravity_at_body(
     body_entity: Entity,
-    camera_world: lunco_core::coords::GridPos,
+    camera_entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
@@ -197,10 +201,20 @@ fn gravity_at_body(
     let Some((body_world, body_rotation)) =
         lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)
     else {
-        return (camera_world.0, DVec3::Y, DVec3::Y, 0.0);
+        return (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0);
     };
-    let relative_world = camera_world - body_world;
-    let relative_body = body_rotation.0.inverse() * relative_world;
+    let relative_body =
+        local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)
+            .or_else(|| {
+                let camera_world = lunco_core::coords::world_position(
+                    camera_entity,
+                    q_parents,
+                    q_grids,
+                    q_spatial,
+                )?;
+                Some(body_rotation.0.inverse() * (camera_world - body_world))
+            })
+            .unwrap_or(DVec3::ZERO);
     let Some(provider) = q_bodies.get(body_entity).ok() else {
         return (relative_body, DVec3::Y, body_rotation.0 * DVec3::Y, 0.0);
     };
@@ -214,4 +228,33 @@ fn gravity_at_body(
         DVec3::Y
     };
     (relative_body, up_body, body_rotation.0 * up_body, magnitude)
+}
+
+/// Express a camera position in the active body's body-fixed frame without
+/// traversing their shared astronomical ancestors. The two entities are
+/// siblings beneath the body frame: the camera is under a surface grid and
+/// the body is at the body-frame origin.
+fn local_body_relative_position(
+    body_entity: Entity,
+    camera_entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<DVec3> {
+    let body_frame = q_parents.get(body_entity).ok()?.parent();
+    let (camera_position, _) = lunco_core::coords::grid_relative_pose(
+        camera_entity,
+        body_frame,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let (body_position, body_rotation) = lunco_core::coords::grid_relative_pose(
+        body_entity,
+        body_frame,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    Some(body_rotation.inverse() * (camera_position - body_position))
 }

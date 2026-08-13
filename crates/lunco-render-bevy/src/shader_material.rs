@@ -604,8 +604,18 @@ pub struct ShaderSchemas {
     map: std::collections::HashMap<AssetId<Shader>, Arc<ParamSchema>>,
 }
 
+impl ShaderSchemas {
+    /// Return the cached layout for a loaded shader. The shader-look binder
+    /// uses this identity to publish a tile only after the material has the
+    /// exact layout used by the shader; it must not re-parse WGSL once per
+    /// waiting tile.
+    pub(crate) fn get(&self, shader: AssetId<Shader>) -> Option<&Arc<ParamSchema>> {
+        self.map.get(&shader)
+    }
+}
+
 /// The WGSL source of a loaded shader, if it is WGSL.
-fn wgsl_source(shader: &Shader) -> Option<&str> {
+pub(crate) fn wgsl_source(shader: &Shader) -> Option<&str> {
     match &shader.source {
         ShaderSource::Wgsl(c) => Some(c.as_ref()),
         _ => None,
