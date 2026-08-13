@@ -4479,7 +4479,7 @@ fn render_layout(
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
 fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
-    use status_bus::{StatusBus, StatusLevel};
+    use status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
 
@@ -4546,6 +4546,10 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         let status_width = (ui.available_width() - right_reserve).max(160.0);
 
         // The status message scope on the left
+        let latest_attention = latest
+            .as_ref()
+            .is_some_and(|event| event.level == StatusLevel::Attention);
+        let mut attention_clicked = false;
         let response = ui
             .scope(|ui| {
                 ui.set_height(18.0);
@@ -4553,39 +4557,66 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 if let Some(l) = latest.as_ref() {
                     let dot_color = match l.level {
                         StatusLevel::Error => theme.tokens.error,
+                        StatusLevel::Attention => theme.tokens.error,
                         StatusLevel::Warn => theme.tokens.warning,
                         StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
                     };
-                    // Painted circle instead of `●` so we don't depend
-                    // on a font that ships U+25CF (the wasm build's
-                    // egui font fallback chain doesn't, hence "tofu"
-                    // boxes for that glyph).
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                    ui.label(egui::RichText::new(l.source).small().strong());
-                    let text = egui::RichText::new(&l.message).small();
-                    ui.add(egui::Label::new(text).truncate());
-                    if l.level == StatusLevel::Progress {
-                        if let Some(pct) = l.progress_pct {
-                            ui.add(
-                                egui::ProgressBar::new((pct as f32) / 100.0)
-                                    .desired_width(120.0)
-                                    .desired_height(6.0),
-                            );
-                        } else {
-                            ui.spinner();
+                    let attention = l.level == StatusLevel::Attention;
+                    if attention {
+                        attention_clicked = ui
+                            .add(egui::Button::new(
+                                egui::RichText::new(&l.message)
+                                    .small()
+                                    .strong()
+                                    .color(theme.tokens.error),
+                            ))
+                            .on_hover_text("Click to continue")
+                            .clicked();
+                    } else {
+                        // Painted circle instead of `●` so we don't depend
+                        // on a font that ships U+25CF (the wasm build's
+                        // egui font fallback chain doesn't, hence "tofu"
+                        // boxes for that glyph).
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                        ui.label(egui::RichText::new(l.source).small().strong());
+                        let text = egui::RichText::new(&l.message).small();
+                        ui.add(egui::Label::new(text).truncate());
+                        if l.level == StatusLevel::Progress {
+                            if let Some(pct) = l.progress_pct {
+                                ui.add(
+                                    egui::ProgressBar::new((pct as f32) / 100.0)
+                                        .desired_width(120.0)
+                                        .desired_height(6.0),
+                                );
+                            } else {
+                                ui.spinner();
+                            }
                         }
                     }
                 } else {
                     ui.label(egui::RichText::new("ready").small().weak());
                 }
             })
-            .response
-            .interact(egui::Sense::click())
-            .on_hover_text("Click to view recent status events");
+            .response;
 
-        if response.clicked() {
+        if attention_clicked {
+            if let Some(source) = latest
+                .as_ref()
+                .filter(|event| event.level == StatusLevel::Attention)
+                .map(|event| event.source)
+            {
+                world.trigger(StatusBarAction { source });
+            } else {
+                unreachable!("attention status button rendered without an attention event");
+            }
+        } else if !latest_attention
+            && response
+                .interact(egui::Sense::click())
+                .on_hover_text("Click to view recent status events")
+                .clicked()
+        {
             egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
 
@@ -4689,6 +4720,9 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                 .small()
                                 .color(theme.tokens.warning),
                             StatusLevel::Error => egui::RichText::new("ERR  ")
+                                .small()
+                                .color(theme.tokens.error),
+                            StatusLevel::Attention => egui::RichText::new("ACTN ")
                                 .small()
                                 .color(theme.tokens.error),
                             StatusLevel::Progress => egui::RichText::new("…    ")

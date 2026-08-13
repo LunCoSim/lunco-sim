@@ -20,7 +20,9 @@
 
 [earth]
 name = "Earth Blue Marble (NASA Next Generation)"
-url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg"
+# NASA's current Science CDN serves this immutable dataset through CloudFront;
+# the legacy eoimages host intermittently refuses GitHub Actions connections.
+url = "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-topography-bathymetry/december/world.topo.bathy.200412.3x5400x2700.jpg"
 dest = "textures/earth_source.jpg"
 sha256 = "a9f0088972dee0254610af851c4d6838ca3f2cf79176987e0a5713e2c15ec042"
 

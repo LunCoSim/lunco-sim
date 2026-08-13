@@ -57,9 +57,12 @@ The official installers are platform-specific:
 | macOS Intel | `LunCoSim-macOS-Intel.pkg` | The installed `LunCoSim.app` |
 | Linux x86_64 | `LunCoSim-Linux-x86_64.AppImage` | The same AppImage from a writable location |
 
-LunCoSim checks the matching runtime feed once per day when the GUI starts. A
-check never installs or restarts anything by itself. When an update is found,
-open **Settings → Updates**, choose **Download update**, then **Install and restart**.
+LunCoSim checks the matching runtime feed once when the GUI starts. When a new
+version is found, the status bar shows a red, clickable update notice. Click
+**Download update** to start or retry the download; the status bar reports the
+percentage while you keep working. When the package is ready, click
+**Install and restart**. The Settings → Updates menu remains available for
+manual checks and update preferences.
 
 Windows updates replace the installed application managed by Velopack. macOS
 updates replace the installed `.app` bundle. Linux updates replace the same

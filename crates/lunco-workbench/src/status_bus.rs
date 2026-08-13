@@ -177,10 +177,27 @@ pub enum StatusLevel {
     Warn,
     /// Failure — red dot, console `error`, surfaces in Diagnostics.
     Error,
+    /// Actionable notification — red dot and text, console `info`.
+    ///
+    /// The status bar emits [`StatusBarAction`] when the user clicks an
+    /// attention event. The owning feature decides what that action means.
+    Attention,
     /// In-flight progress tick. Replaces the last `Progress` from the
     /// same source instead of appending. Use [`StatusBus::set_progress`]
     /// for state mirrors or [`StatusBus::begin`] for task-owned work.
     Progress,
+}
+
+/// Typed intent emitted when the user clicks an actionable status-bar event.
+///
+/// The workbench does not know what a source-specific action should do. The
+/// owning feature observes this event and queues its own typed view-model
+/// action, keeping the status bar generic and preventing it from reaching into
+/// domain state.
+#[derive(Event, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatusBarAction {
+    /// Source key of the clicked status event.
+    pub source: &'static str,
 }
 
 /// One status event. Carries everything the renderers need without

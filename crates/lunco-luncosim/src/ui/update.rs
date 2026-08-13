@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
 use bevy_egui::egui;
 use lunco_settings::AppSettingsExt;
-use lunco_workbench::status_bus::{StatusBus, StatusLevel};
+use lunco_workbench::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 use lunco_workbench::WorkbenchLayout;
 use serde::{Deserialize, Serialize};
 use velopack::sources::GithubSource;
@@ -53,16 +53,11 @@ const UPDATE_PACKAGE_GUIDANCE: &str =
 pub(crate) struct UpdateSettings {
     /// Check once when the GUI starts.
     pub auto_check: bool,
-    /// Download a discovered package in the background without another click.
-    pub auto_download: bool,
 }
 
 impl Default for UpdateSettings {
     fn default() -> Self {
-        Self {
-            auto_check: true,
-            auto_download: true,
-        }
+        Self { auto_check: true }
     }
 }
 
@@ -187,7 +182,35 @@ impl Plugin for UpdatePlugin {
                 )
                     .chain(),
             )
+            .add_observer(on_status_bar_action)
             .add_systems(bevy_egui::EguiPrimaryContextPass, render_update_dialog);
+    }
+}
+
+/// Continue the update flow from the shared status bar. The status bar only
+/// emits the source key; this updater owns the phase-specific meaning.
+fn on_status_bar_action(
+    trigger: On<StatusBarAction>,
+    state: Res<UpdateState>,
+    mut actions: ResMut<UpdateActions>,
+) {
+    queue_status_bar_action(trigger.event().source, &state, &mut actions);
+}
+
+fn queue_status_bar_action(source: &str, state: &UpdateState, actions: &mut UpdateActions) {
+    if source != UPDATE_STATUS_SOURCE {
+        return;
+    }
+
+    match state.status {
+        UpdateStatus::Available => actions.download_requested = true,
+        UpdateStatus::ReadyToRestart => actions.apply_requested = true,
+        UpdateStatus::Error if state.ready.is_some() => actions.apply_requested = true,
+        UpdateStatus::Checking
+        | UpdateStatus::Downloading
+        | UpdateStatus::Idle
+        | UpdateStatus::NotInstalled
+        | UpdateStatus::Error => {}
     }
 }
 
@@ -207,12 +230,12 @@ fn register_update_settings_menu(world: &mut World) {
             "LunCoSim nightly updates · {} channel",
             UPDATE_CHANNEL
         ));
-        egui::CollapsingHeader::new("How automatic updates work")
+        egui::CollapsingHeader::new("How updates work")
             .default_open(false)
             .show(ui, |ui| {
                 ui.add(
                     egui::Label::new(
-                        "LunCoSim checks once at startup. When it finds a release, the package downloads in the background; nothing restarts until you approve it.",
+                        "LunCoSim checks once at startup. When it finds a release, click Download update in the status bar or here. Nothing restarts until you approve installation.",
                     )
                     .wrap(),
                 );
@@ -230,14 +253,7 @@ fn register_update_settings_menu(world: &mut World) {
             return;
         };
         let original_settings = settings.clone();
-        ui.checkbox(
-            &mut settings.auto_check,
-            "Check for updates at startup",
-        );
-        ui.checkbox(
-            &mut settings.auto_download,
-            "Download found updates automatically",
-        );
+        ui.checkbox(&mut settings.auto_check, "Check for updates at startup");
         if settings != original_settings {
             ctx.set_resource(settings.clone());
         }
@@ -268,10 +284,8 @@ fn register_update_settings_menu(world: &mut World) {
                     ));
                     if state.error.is_some() {
                         ui.label("The download failed. Retry it below.");
-                    } else if settings.auto_download {
-                        ui.label("Starting the background download…");
                     } else {
-                        ui.label("Choose Download update to start the background download.");
+                        ui.label("Click Download update to start.");
                     }
                 }
             }
@@ -282,7 +296,7 @@ fn register_update_settings_menu(world: &mut World) {
                     [ui.available_width(), 24.0],
                     egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage(),
                 );
-                ui.label("You can keep working; the download continues in the background.");
+                ui.label("You can keep working while the download completes.");
             }
             UpdateStatus::ReadyToRestart => {
                 ui.label("Update downloaded and ready to install.");
@@ -293,7 +307,11 @@ fn register_update_settings_menu(world: &mut World) {
             }
             UpdateStatus::Error => {
                 if let Some(error) = state.error.as_deref() {
-                    ui.label(egui::RichText::new(error).color(egui::Color32::RED));
+                    if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
+                        ui.label(egui::RichText::new(error).color(theme.tokens.error));
+                    } else {
+                        ui.label(error);
+                    }
                 }
                 if state.ready.is_some() {
                     ui.label("The downloaded update is still ready to install.");
@@ -311,15 +329,12 @@ fn register_update_settings_menu(world: &mut World) {
             if can_check && ui.button("Check now").clicked() {
                 actions.check_requested = true;
             }
-            if state.status == UpdateStatus::Available
-                && (!settings.auto_download || state.error.is_some())
-                && ui.button(if state.error.is_some() {
-                    "Retry download"
-                } else {
-                    "Download update"
-                })
-                .clicked()
-            {
+            let download_label = if state.error.is_some() {
+                "Retry download"
+            } else {
+                "Download update"
+            };
+            if state.status == UpdateStatus::Available && ui.button(download_label).clicked() {
                 actions.download_requested = true;
             }
             if state.ready.is_some() && ui.button("Restart to install").clicked() {
@@ -421,12 +436,7 @@ fn process_update_actions(
     }
 }
 
-fn poll_update_tasks(
-    mut state: ResMut<UpdateState>,
-    mut tasks: ResMut<UpdateTasks>,
-    settings: Option<Res<UpdateSettings>>,
-    mut actions: ResMut<UpdateActions>,
-) {
+fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTasks>) {
     if let Some(progress_receiver) = tasks.download_progress.as_ref() {
         if let Ok(progress_receiver) = progress_receiver.lock() {
             for progress in progress_receiver.try_iter() {
@@ -446,12 +456,6 @@ fn poll_update_tasks(
                 state.status = UpdateStatus::Available;
                 state.available = Some(info);
                 state.download_progress = None;
-                if settings
-                    .as_deref()
-                    .is_none_or(|settings| settings.auto_download)
-                {
-                    actions.download_requested = true;
-                }
             }
             UpdateCheckResult::NoUpdate => {
                 state.status = UpdateStatus::Idle;
@@ -513,7 +517,7 @@ fn open_update_dialog_on_transition(
 fn render_update_dialog(
     mut egui_ctx: bevy_egui::EguiContexts,
     state: Res<UpdateState>,
-    settings: Option<Res<UpdateSettings>>,
+    theme: Res<lunco_theme::Theme>,
     mut actions: ResMut<UpdateActions>,
     mut dialog: ResMut<UpdateDialogState>,
 ) {
@@ -548,25 +552,20 @@ fn render_update_dialog(
                         .unwrap_or("new release");
                     ui.label(format!("Version {version} is available."));
                     if let Some(error) = state.error.as_deref() {
-                        ui.colored_label(egui::Color32::RED, error);
+                        ui.colored_label(theme.tokens.error, error);
                         if ui.button("Retry download").clicked() {
                             actions.download_requested = true;
                         }
-                    } else if settings
-                        .as_deref()
-                        .is_none_or(|settings| !settings.auto_download)
-                    {
+                    } else {
                         ui.label("The update is ready to download.");
                         if ui.button("Download update").clicked() {
                             actions.download_requested = true;
                         }
-                    } else {
-                        ui.label("The background download is about to begin.");
                     }
                 }
                 UpdateStatus::Downloading => {
                     let progress = state.download_progress.unwrap_or_default();
-                    ui.label("Downloading in the background. You can keep working.");
+                    ui.label("Downloading. You can keep working.");
                     ui.add_sized(
                         [ui.available_width(), 24.0],
                         egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage(),
@@ -589,7 +588,7 @@ fn render_update_dialog(
                 }
                 UpdateStatus::Error if state.ready.is_some() => {
                     if let Some(error) = state.error.as_deref() {
-                        ui.colored_label(egui::Color32::RED, error);
+                        ui.colored_label(theme.tokens.error, error);
                     }
                     ui.label("The downloaded update is still ready to install.");
                     if ui
@@ -662,14 +661,14 @@ fn mirror_update_status_to_status_bus(
                 if let Some(error) = state.error.as_deref() {
                     bus.push(
                         UPDATE_STATUS_SOURCE,
-                        StatusLevel::Error,
-                        format!("update download failed: {error}"),
+                        StatusLevel::Attention,
+                        format!("Update download failed: {error} · Retry download"),
                     );
                 } else {
                     bus.push(
                         UPDATE_STATUS_SOURCE,
-                        StatusLevel::Info,
-                        format!("update available: {version}"),
+                        StatusLevel::Attention,
+                        format!("Update available: {version} · Download update"),
                     );
                 }
             }
@@ -684,8 +683,8 @@ fn mirror_update_status_to_status_bus(
                     .unwrap_or("update");
                 bus.push(
                     UPDATE_STATUS_SOURCE,
-                    StatusLevel::Info,
-                    format!("update {version} downloaded — restart to install"),
+                    StatusLevel::Attention,
+                    format!("Update {version} ready · Install and restart"),
                 );
             }
         }
@@ -712,14 +711,20 @@ fn mirror_update_status_to_status_bus(
         UpdateStatus::Error => {
             bus.remove_progress(UPDATE_STATUS_SOURCE);
             if changed {
-                bus.push(
-                    UPDATE_STATUS_SOURCE,
-                    StatusLevel::Error,
-                    format!(
-                        "update check failed: {}",
-                        state.error.as_deref().unwrap_or("unknown error")
-                    ),
-                );
+                let error = state.error.as_deref().unwrap_or("unknown error");
+                if state.ready.is_some() {
+                    bus.push(
+                        UPDATE_STATUS_SOURCE,
+                        StatusLevel::Attention,
+                        format!("Update install failed: {error} · Retry install"),
+                    );
+                } else {
+                    bus.push(
+                        UPDATE_STATUS_SOURCE,
+                        StatusLevel::Error,
+                        format!("update check failed: {error}"),
+                    );
+                }
             }
         }
     }
@@ -838,13 +843,9 @@ mod tests {
     }
 
     #[test]
-    fn discovered_updates_are_downloaded_by_default_but_can_be_manual() {
+    fn discovered_updates_require_an_explicit_download_action() {
         let settings = UpdateSettings::default();
-        assert!(settings.auto_download);
-
-        let mut settings = settings;
-        settings.auto_download = false;
-        assert!(!settings.auto_download);
+        assert!(settings.auto_check);
     }
 
     #[test]
@@ -852,5 +853,41 @@ mod tests {
         assert_eq!(clamp_download_progress(-1), 0);
         assert_eq!(clamp_download_progress(42), 42);
         assert_eq!(clamp_download_progress(101), 100);
+    }
+
+    #[test]
+    fn status_bar_click_starts_download_for_available_update() {
+        let mut state = UpdateState::default();
+        state.status = UpdateStatus::Available;
+        let mut actions = UpdateActions::default();
+
+        queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
+
+        assert!(actions.download_requested);
+        assert!(!actions.apply_requested);
+    }
+
+    #[test]
+    fn status_bar_click_installs_downloaded_update() {
+        let mut state = UpdateState::default();
+        state.status = UpdateStatus::ReadyToRestart;
+        let mut actions = UpdateActions::default();
+
+        queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
+
+        assert!(!actions.download_requested);
+        assert!(actions.apply_requested);
+    }
+
+    #[test]
+    fn status_bar_click_ignores_other_sources_and_in_flight_downloads() {
+        let mut state = UpdateState::default();
+        state.status = UpdateStatus::Downloading;
+        let mut actions = UpdateActions::default();
+
+        queue_status_bar_action("scene", &state, &mut actions);
+        queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
+
+        assert_eq!(actions, UpdateActions::default());
     }
 }

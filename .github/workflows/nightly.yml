@@ -200,6 +200,18 @@ jobs:
         with:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
+      # Keep the downloaded and processed runtime payload across successful
+      # nightly runs. The manifest hash invalidates this cache when a source,
+      # version, or integrity pin changes; the downloader still verifies every
+      # restored file before packaging it.
+      - name: Cache native runtime assets
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: ${{ matrix.platform }}-native-assets-${{ hashFiles('assets/manifests/*.toml') }}
+          restore-keys: |
+            ${{ matrix.platform }}-native-assets-
+
       # ── Build + package LunCoSim (native arch) ──────────────────────────
       # --velopack turns the complete staged directory into an installer,
       # update package, and channel feed. docs/ + AGENTS.md + all assets are
@@ -308,8 +320,10 @@ jobs:
           `LunCoSim-macOS-Apple-Silicon.pkg`,
           `LunCoSim-macOS-Intel.pkg`, or
           `LunCoSim-Linux-x86_64.AppImage`. LunCoSim checks the matching update
-          feed once per day at startup. In **Settings → Updates**, choose
-          **Download update**, then **Install and restart**. Launch Windows
+          feed once at startup. When a new version is available, the red
+          clickable status-bar notice offers **Download update** and reports
+          its percentage; click **Install and restart** when ready. The
+          same actions are available in **Settings → Updates**. Launch Windows
           from its installed shortcut, macOS from the installed `.app`, and
           Linux from the same writable AppImage. Source builds and ordinary
           source archives do not participate in this update flow.

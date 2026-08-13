@@ -425,9 +425,10 @@ Or run the binary directly (from this directory):
 
 ## Updates
 
-Official Velopack releases check for updates once per day when the GUI starts.
-An update is not installed silently: open Settings ▸ Updates, choose
-**Download update**, then **Install and restart**. Use the official installer
+Official Velopack releases check for updates once when the GUI starts. When a
+new version is available, the red status-bar notice offers **Download update**
+and reports its percentage. When ready, click **Install and restart**. The same
+actions are available in Settings ▸ Updates. Use the official installer
 for your platform: Windows uses \`LunCoSim-Windows-x86_64-Setup.exe\`, macOS uses
 the matching Apple Silicon or Intel \`.pkg\`, and Linux uses the
 \`LunCoSim-Linux-x86_64.AppImage\`. On Linux, make the AppImage executable,
