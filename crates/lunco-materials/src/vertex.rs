@@ -45,3 +45,18 @@ pub const ATTRIBUTE_MORPH_NORMAL: MeshVertexAttribute =
 /// Shader side: `@location(10)`.
 pub const ATTRIBUTE_MORPH_EDGE: MeshVertexAttribute =
     MeshVertexAttribute::new("Lunco_MorphEdge", 0x4d_4f_52_52, VertexFormat::Float32x4);
+
+/// Custom vertex attribute: a globe vertex's unit **body-fixed radial direction**.
+///
+/// Equirectangular UV is a nonlinear function of direction. Computing it only at
+/// mesh vertices and interpolating the resulting UV affinely makes the sampled
+/// location depend on tessellation: parent and child LOD tiles show different
+/// pixels, and the two triangles of one coarse quad meet along a visible diagonal.
+/// The globe vertex stage carries this direction to the fragment stage, which
+/// normalises the interpolant and evaluates longitude/latitude per fragment.
+/// Shader side: `@location(11)`.
+pub const ATTRIBUTE_GLOBE_DIRECTION: MeshVertexAttribute = MeshVertexAttribute::new(
+    "Lunco_GlobeDirection",
+    0x47_4c_4f_42,
+    VertexFormat::Float32x3,
+);

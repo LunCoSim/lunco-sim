@@ -64,8 +64,8 @@ use std::sync::{Arc, OnceLock};
 
 use lunco_materials::dyn_params::{self, ParamSchema, ParamType, ParamValue};
 use lunco_materials::{
-    to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL,
-    ATTRIBUTE_MORPH_TARGET,
+    to_snake_case, ShaderCatalog, ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE,
+    ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
@@ -139,8 +139,9 @@ pub struct ShaderMaterial {
     /// [`shader`](Self::shader) it drives pipeline specialization, not the bind
     /// group. When `Some`, [`specialize`](Self::specialize) swaps
     /// `descriptor.vertex.shader` and extends the vertex layout with
-    /// [`ATTRIBUTE_MORPH_TARGET`]. `None` (the common case) = Bevy's default mesh
-    /// vertex shader, so the fragment-only path is unchanged.
+    /// the custom geometry semantics required by that stage. `None` (the common
+    /// case) = Bevy's default mesh vertex shader, so the fragment-only path is
+    /// unchanged.
     pub vertex_shader: Option<Handle<Shader>>,
     /// Reflected parameter layout for [`shader`](Self::shader). Starts with the
     /// built-in layout and is replaced when the shader source is available.
@@ -393,6 +394,25 @@ impl Material for ShaderMaterial {
                         ATTRIBUTE_MORPH_EDGE.at_shader_location(10),
                     ])?;
                     descriptor.vertex.buffers = vec![vertex_layout];
+                } else if layout.0.contains(ATTRIBUTE_GLOBE_DIRECTION) {
+                    let vertex_layout = layout.0.get_layout(&[
+                        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                        ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11),
+                    ])?;
+                    descriptor.vertex.buffers = vec![vertex_layout];
+
+                    // The globe material owns a dedicated body-direction
+                    // inter-stage field. Define the same interface variant for
+                    // both linked stages; the mesh input is the explicit
+                    // location-11 semantic above.
+                    descriptor
+                        .vertex
+                        .shader_defs
+                        .push("LUNCO_GLOBE_DIRECTION".into());
+                    if let Some(fragment) = descriptor.fragment.as_mut() {
+                        fragment.shader_defs.push("LUNCO_GLOBE_DIRECTION".into());
+                    }
                 }
             }
         }

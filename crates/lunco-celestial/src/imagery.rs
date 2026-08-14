@@ -111,9 +111,9 @@ pub(crate) struct PendingBodyImagery {
 const MAX_IMAGERY_ATTEMPTS: u8 = 3;
 
 /// Load an equirectangular body map with longitude wrapping at the sampler.
-/// Globe tile UVs are intentionally unwrapped across the anti-meridian; keeping
-/// that continuity until texture sampling prevents a diagonal seam in the
-/// interpolated triangle.
+/// The globe shader derives longitude per fragment from body-fixed direction;
+/// repeat addressing makes the anti-meridian's two coordinate representations
+/// sample the same texels.
 fn load_body_image(
     asset_server: &AssetServer,
     path: impl Into<bevy::asset::AssetPath<'static>>,

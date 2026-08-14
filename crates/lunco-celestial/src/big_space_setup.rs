@@ -166,6 +166,7 @@ fn blueprint_tile_look_untextured(
     roughness: f32,
 ) -> ShaderLook {
     ShaderLook::new("shaders/blueprint.wgsl")
+        .with_vertex_shader("shaders/blueprint.wgsl")
         .with("surface_color", ParamValue::Vec3(surface))
         .with("roughness", ParamValue::F32(roughness))
         .with("high_line_color", ParamValue::Vec3(line))
