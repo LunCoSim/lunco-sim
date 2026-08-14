@@ -987,6 +987,7 @@ pub fn update_collider_ring(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
 ) {
     let pool = AsyncComputeTaskPool::get();
 
@@ -1009,14 +1010,26 @@ pub fn update_collider_ring(
         else {
             continue;
         };
+        // Avian Position is expressed in the one explicit active physics frame,
+        // not in the distant BigSpace root. The terrain owner and its streamed
+        // tile grid may be a sibling branch of that frame, so use the canonical
+        // cross-branch conversion for both poses. Mixing this with world_pose
+        // makes every support ray miss as soon as a body-fixed surface grid is
+        // selected.
         let Some((terrain_world, terrain_rotation)) =
-            lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+            lunco_core::coords::pose_in_grid(terrain, active_frame.0, &parents, &grids, &spatial)
+                .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
         else {
             continue;
         };
-        let Some((grid_world, grid_rotation)) =
-            lunco_core::coords::world_pose(grid_entity, &parents, &grids, &spatial)
-        else {
+        let Some((grid_world, grid_rotation)) = lunco_core::coords::pose_in_grid(
+            grid_entity,
+            active_frame.0,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
             continue;
         };
         let oracle = &hf.0;
@@ -1298,14 +1311,20 @@ pub fn hold_physics_until_dem_ready(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
         'terrains: for (terrain, hf, ring, tiles) in &rings {
-            let Some((terrain_world, terrain_rotation)) =
-                lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
-            else {
+            let Some((terrain_world, terrain_rotation)) = lunco_core::coords::pose_in_grid(
+                terrain,
+                active_frame.0,
+                &parents,
+                &grids,
+                &spatial,
+            )
+            .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
                 wait = true;
                 break 'terrains;
             };
@@ -1463,6 +1482,7 @@ pub fn settle_grounded_assemblies(
     grids: Query<&Grid>,
     spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
 ) {
     if q_needs.is_empty() {
@@ -1484,18 +1504,22 @@ pub fn settle_grounded_assemblies(
         return;
     };
     let half = hf.0.half_extent() as f64;
-    let Some((terrain_world, terrain_rotation)) =
-        lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial_transforms)
-    else {
+    let Some((terrain_world, terrain_rotation)) = lunco_core::coords::grid_relative_pose(
+        terrain,
+        active_frame.0,
+        &parents,
+        &grids,
+        &spatial_transforms,
+    )
+    .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
         return;
     };
     let terrain_from_physics = terrain_rotation.0.inverse();
     let terrain_up = terrain_rotation.0 * DVec3::Y;
 
-    // Avian Position is in the BigSpace-root physics frame. The retained DEM
-    // is in the terrain prim's local frame. These are identical only for an
-    // untransformed terrain at the root; a site-mounted/rotating terrain must
-    // cross this pose boundary before sampling the oracle or applying a lift.
+    // Avian Position and the terrain now share the active physics frame. The
+    // retained DEM is still in the terrain prim's local frame, so this one
+    // explicit pose conversion is the complete frame boundary.
     // Initial placement must query the same surface product that the streamed
     // heightfield collider contains. The collider is intentionally sampled
     // through the terrain's contact band (the visual/contact invariant); using
@@ -1768,6 +1792,7 @@ fn on_recover_vessel(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
 ) {
     use bevy::math::DQuat;
     let global_id = lunco_core::GlobalEntityId::from_raw(trigger.event().entity_id);
@@ -1787,24 +1812,41 @@ fn on_recover_vessel(
             warn!("[recover] {root:?} is not Dynamic — a static body has no pose to fix");
             return;
         }
-        let up = rot.0 * DVec3::Y;
         let pivot = GridPos(pos.0);
-        // Rigid righting transform about the target's own position: shortest arc
-        // from the current up to world up (an exact 180° flip picks an arbitrary
-        // axis — any righting is fine there).
-        let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
         let terrain_surfaces: Vec<(GridPos, GridRot, Arc<SurfaceOracle>)> = terrains
             .iter()
             .filter_map(|(terrain, hf)| {
-                lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
-                    .map(|(world, rotation)| (world, rotation, hf.0.clone()))
+                lunco_core::coords::pose_in_grid(
+                    terrain,
+                    active_frame.0,
+                    &parents,
+                    &grids,
+                    &spatial,
+                )
+                .map(|(position, rotation)| (GridPos(position), GridRot(rotation), hf.0.clone()))
             })
             .collect();
+        let target_up = terrain_surfaces
+            .iter()
+            .find_map(|(terrain_position, terrain_rotation, oracle)| {
+                let local = terrain_rotation.0.inverse() * (pivot - *terrain_position);
+                (local.x.abs() <= oracle.half_extent() as f64
+                    && local.z.abs() <= oracle.half_extent() as f64)
+                    .then(|| terrain_rotation.0 * DVec3::Y)
+            })
+            .unwrap_or(DVec3::Y)
+            .normalize_or(DVec3::Y);
+        let up = rot.0 * DVec3::Y;
+        // Rigid righting transform about the target's own position: shortest arc
+        // from the current up to the active terrain normal. An active surface
+        // grid is not required to use root +Y (it may be body-fixed and rotated).
+        let q_fix = DQuat::from_rotation_arc(up.normalize_or(DVec3::Y), target_up);
         recover_assembly(
             root,
             pivot,
             q_fix,
-            up.y,
+            up.dot(target_up),
+            target_up,
             &terrain_surfaces,
             &mut bodies,
             &dynamics,
@@ -1821,6 +1863,7 @@ fn recover_assembly(
     pivot: GridPos,
     q_fix: bevy::math::DQuat,
     was_up_y: f64,
+    terrain_up: DVec3,
     terrain_surfaces: &[(GridPos, GridRot, Arc<SurfaceOracle>)],
     bodies: &mut Query<(
         &RigidBody,
@@ -1879,7 +1922,7 @@ fn recover_assembly(
                 continue;
             };
             if lift > 0.0 {
-                pos.0.y += lift;
+                pos.0 += terrain_up * lift;
             }
             if let Some(mut v) = lin {
                 v.0 = DVec3::ZERO;

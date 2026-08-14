@@ -38,6 +38,7 @@ lunco-cosim = { path = "../lunco-cosim" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
 serde = { workspace = true }

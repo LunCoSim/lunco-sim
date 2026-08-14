@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
 use core::time::Duration;
+use lunco_core::ActivePhysicsFrame;
 use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
 const EDGE: f32 = 2000.0;
@@ -34,6 +35,7 @@ fn shell(app: &mut App) -> Entity {
             GlobalTransform::default(),
         ))
         .id();
+    app.world_mut().insert_resource(ActivePhysicsFrame(root));
     let grid = app
         .world_mut()
         .spawn((
@@ -418,4 +420,72 @@ fn external_teleport_carries_child_body() {
         (after - before).length() < 0.5,
         "wheel not carried with chassis: relative before {before:?}, after {after:?}"
     );
+}
+
+#[test]
+fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
+    let mut app = make_app();
+    let grid = shell(&mut app);
+
+    // This is the production shape: a rotating celestial Grid carries a
+    // body-fixed PhysicsFrame Grid, and the physical scene is below it.
+    let rotating_parent = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(grid),
+        ))
+        .id();
+    let physics_frame = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(rotating_parent),
+        ))
+        .id();
+    app.world_mut()
+        .insert_resource(ActivePhysicsFrame(physics_frame));
+    app.world_mut().spawn((
+        RigidBody::Static,
+        Collider::cuboid(20.0, 2.0, 20.0),
+        CellCoord::ZERO,
+        Transform::from_xyz(0.0, -1.0, 0.0),
+        GlobalTransform::default(),
+        ChildOf(physics_frame),
+    ));
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            CellCoord::ZERO,
+            Transform::from_xyz(3.0, 5.0, -4.0),
+            GlobalTransform::default(),
+            ChildOf(physics_frame),
+        ))
+        .id();
+
+    step(&mut app, 600);
+    let initial = app.world().get::<Position>(body).unwrap().0;
+    assert!((initial.x - 3.0).abs() < 0.1);
+    assert!((initial.z + 4.0).abs() < 0.1);
+    assert!((initial.y - 0.5).abs() < 0.1);
+
+    for n in 1..=30 {
+        app.world_mut()
+            .get_mut::<Transform>(rotating_parent)
+            .unwrap()
+            .rotation = Quat::from_rotation_y(n as f32 * 0.1);
+        step(&mut app, 1);
+    }
+
+    let final_pos = app.world().get::<Position>(body).unwrap().0;
+    assert!((final_pos - initial).length() < 0.05);
+    assert!((app.world().get::<Transform>(body).unwrap().translation.x - 3.0).abs() < 0.1);
 }

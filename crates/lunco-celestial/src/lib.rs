@@ -60,7 +60,7 @@ pub use big_space_setup::*;
 pub use embedded_assets::*;
 pub use ephemeris::*;
 pub use geo::*;
-pub use globe_lod::GlobeLodBudget;
+pub use globe_lod::{GlobeLod, GlobeLodBudget};
 pub use gravity::*;
 pub use iau::*;
 pub use kepler::*;

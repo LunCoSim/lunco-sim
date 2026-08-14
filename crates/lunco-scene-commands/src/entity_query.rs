@@ -80,18 +80,19 @@ impl ApiQueryProvider for QueryEntityProvider {
             "unknown"
         };
 
-        // Orientation/scale from `GlobalTransform`: a rotation is the same in the
-        // render frame and the grid's (big_space rebases the origin, it does not
-        // spin it), so this is the cheap correct source for them.
-        let (scale, rot, _) = q_gt
+        // Scale is frame-independent. Position and rotation are not: a
+        // body-fixed BigSpace branch may rotate relative to the floating-origin
+        // render frame, so both parts of the reported pose must come from the
+        // same cell-chain composition.
+        let scale = q_gt
             .get(entity)
             .ok()
-            .map(|gt| gt.to_scale_rotation_translation())
-            .unwrap_or((Vec3::ONE, Quat::IDENTITY, Vec3::ZERO));
-        // Position is frame-sensitive, so it comes off the cell chain instead.
-        let pos = lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-            .map(|p| p.0)
-            .unwrap_or(bevy::math::DVec3::ZERO);
+            .map(GlobalTransform::to_scale_rotation_translation)
+            .map(|(scale, _, _)| scale)
+            .unwrap_or(Vec3::ONE);
+        let (pos, rot) = lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+            .map(|(position, rotation)| (position.0, rotation.0.as_quat()))
+            .unwrap_or((bevy::math::DVec3::ZERO, Quat::IDENTITY));
         // Euler YXZ (yaw, pitch, roll) — matches the sun / steering authoring
         // convention, handier than a quat.
         let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
@@ -182,6 +183,55 @@ mod tests {
         );
         assert_eq!(data["position_frame"], "grid_absolute");
         assert_eq!(data["name"], "SolarPanel");
+    }
+
+    #[test]
+    fn reports_rotation_in_the_same_grid_absolute_frame_as_position() {
+        let mut app = App::new();
+        app.init_resource::<ApiEntityRegistry>();
+
+        let grid_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 0.0),
+                CellCoord::ZERO,
+                Transform::from_rotation(grid_rotation),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let local_rotation = Quat::from_rotation_x(0.3);
+        let prim = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_rotation(local_rotation),
+                GlobalTransform::default(),
+                ChildOf(grid),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ApiEntityRegistry>()
+            .assign(prim, GlobalEntityId::from_raw(43));
+
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 43 }))
+        else {
+            panic!("expected successful query");
+        };
+        let q = data["rotation"].as_array().expect("rotation array");
+        let reported = Quat::from_xyzw(
+            q[0].as_f64().unwrap() as f32,
+            q[1].as_f64().unwrap() as f32,
+            q[2].as_f64().unwrap() as f32,
+            q[3].as_f64().unwrap() as f32,
+        );
+        let expected = grid_rotation * local_rotation;
+        assert!(
+            reported.dot(expected).abs() > 1.0 - 1e-6,
+            "rotation must include the same parent-grid frame as position: reported={reported:?} expected={expected:?}"
+        );
     }
 
     /// A missing entity is an error, not a silent (0,0,0).

@@ -124,13 +124,16 @@ impl Default for LocalGravityField {
 ///
 /// Runs in `PreUpdate` so camera systems see fresh data.
 pub fn update_local_gravity_field(
-    q_avatar: Query<(
-        Entity,
-        &Transform,
-        &CellCoord,
-        &ChildOf,
-        Option<&GravityBody>,
-    )>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Option<&GravityBody>,
+        ),
+        With<lunco_core::Avatar>,
+    >,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -147,8 +150,15 @@ pub fn update_local_gravity_field(
         return;
     }
     let Some((avatar_ent, _tf, _cell, _, gravity_body)) = q_avatar.iter().next() else {
+        *field = LocalGravityField::default();
         return;
     };
+
+    // GravityBody is the authoritative surface-frame association for the
+    // avatar. Publish that exact association alongside the derived vectors so
+    // camera/UI consumers cannot observe a vector from one body paired with a
+    // stale or missing body id.
+    field.body_entity = gravity_body.map(|gb| gb.body_entity);
 
     let (body_relative_position, body_up_local, body_up_world, surface_g) =
         if let Some(gb) = gravity_body {
@@ -159,13 +169,6 @@ pub fn update_local_gravity_field(
                 &q_grids,
                 &q_spatial,
                 &q_bodies,
-            )
-        } else if let Some(body_ent) = field.body_entity {
-            // Hold the last body association while the avatar is between explicit
-            // surface commands.  The frame is still derived from that body's live
-            // Grid pose and gravity model, never from an arbitrary world axis.
-            gravity_at_body(
-                body_ent, avatar_ent, &q_parents, &q_grids, &q_spatial, &q_bodies,
             )
         } else {
             (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0)
@@ -257,4 +260,88 @@ fn local_body_relative_position(
         q_spatial,
     )?;
     Some(body_rotation.inverse() * (camera_position - body_position))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use big_space::plugin::BigSpaceMinimalPlugins;
+    use big_space::prelude::BigSpaceRootBundle;
+
+    #[test]
+    fn local_gravity_is_owned_by_the_avatar_gravity_body() {
+        let mut app = App::new();
+        app.add_plugins(BigSpaceMinimalPlugins);
+        app.insert_resource(Gravity::surface());
+        app.init_resource::<LocalGravityField>();
+        app.init_resource::<crate::placement::OrbitalViewPin>();
+        app.add_systems(Update, update_local_gravity_field);
+
+        let grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(10_000.0, 1_000.0),
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.world_mut()
+            .spawn(BigSpaceRootBundle::default())
+            .add_child(grid);
+
+        let body = app
+            .world_mut()
+            .spawn((
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                GravityProvider {
+                    model: Box::new(PointMassGravity { gm: 100.0 }),
+                },
+            ))
+            .id();
+
+        // This entity deliberately satisfies the former broad spatial query.
+        // It must never be allowed to become the camera/UI gravity source.
+        let distractor = app
+            .world_mut()
+            .spawn((
+                CellCoord::default(),
+                Transform::from_xyz(0.0, 500.0, 0.0),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                CellCoord::default(),
+                Transform::from_xyz(10.0, 0.0, 0.0),
+                GlobalTransform::default(),
+                GravityBody { body_entity: body },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(grid)
+            .add_children(&[body, distractor, avatar]);
+
+        app.update();
+
+        let field = app.world().resource::<LocalGravityField>();
+        assert_eq!(field.body_entity, Some(body));
+        assert!(field
+            .body_relative_position
+            .abs_diff_eq(DVec3::X * 10.0, 1e-9));
+        assert!(field.local_up.abs_diff_eq(DVec3::X, 1e-9));
+
+        // Removing the authoritative association must clear it immediately;
+        // consumers must not silently keep using a former body's frame.
+        app.world_mut().entity_mut(avatar).remove::<GravityBody>();
+        app.update();
+        let field = app.world().resource::<LocalGravityField>();
+        assert_eq!(field.body_entity, None);
+        assert_eq!(field.body_relative_position, DVec3::ZERO);
+    }
 }

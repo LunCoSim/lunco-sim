@@ -11,23 +11,16 @@ use bevy::prelude::*;
 
 // ─── Surface Camera Rotation Tests ─────────────────────────────────────────
 
-/// Build surface camera rotation the same way as `surface_camera_system`.
+/// Build surface camera rotation through the shared authored surface frame.
 fn build_surface_rot(heading: f32, pitch: f32, up_v: Vec3) -> Quat {
-    let ref_dir = if up_v.dot(Vec3::Y).abs() < 0.9 {
-        Vec3::Y
-    } else {
-        Vec3::Z
-    };
-    let east = up_v.cross(ref_dir).normalize();
-    let north = east.cross(up_v).normalize();
-
-    let heading_q = Quat::from_axis_angle(up_v, heading);
-    let forward = heading_q.mul_vec3(north);
-    let right = forward.cross(up_v).normalize();
-
-    let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up_v, -forward));
-    let pitch_q = Quat::from_axis_angle(right, pitch);
-    (pitch_q * base_rot).normalize()
+    let frame = Quat::from_rotation_arc(Vec3::Y, up_v);
+    lunco_avatar::surface_camera_rotation(
+        frame * Vec3::X,
+        frame * Vec3::NEG_Z,
+        up_v,
+        heading,
+        pitch,
+    )
 }
 
 /// "No roll" = right vector is perpendicular to up vector.

@@ -454,6 +454,7 @@ pub fn attach_site_scene_to_surface_grid(
             Without<Grid>,
         ),
     >,
+    active_physics_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     mut commands: Commands,
 ) {
     let Some((scene_root, anchor, child_of)) = q_site.iter().next() else {
@@ -469,6 +470,9 @@ pub fn attach_site_scene_to_surface_grid(
     let Ok(target_grid_component) = q_grids.get(target_grid) else {
         return;
     };
+    if active_physics_frame.is_none_or(|frame| frame.0 != target_grid) {
+        commands.insert_resource(lunco_core::ActivePhysicsFrame(target_grid));
+    }
 
     let scene_pose = if child_of.parent() != target_grid {
         let Some((scene_position, scene_rotation)) =

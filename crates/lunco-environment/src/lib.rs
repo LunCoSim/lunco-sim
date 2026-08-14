@@ -9,7 +9,7 @@
 //! pattern — see the README for templates.
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
-use bevy::math::{DQuat, DVec3};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
@@ -143,7 +143,8 @@ pub enum EnvironmentSet {
 // LocalGravity — the gravity vector at an entity's position
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Gravity vector at this entity's position, in world space (m/s²).
+/// Gravity vector at this entity's position, in the entity's Avian physics
+/// frame (m/s²).
 ///
 /// Computed each [`FixedUpdate`] from the [`Gravity`] resource and (for
 /// surface gravity) the [`GravityProvider`] on the entity's gravitational
@@ -185,6 +186,7 @@ impl LocalGravity {
 pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     q_bodies: Query<&GravityProvider>,
     q_entities: Query<(
         Entity,
@@ -195,6 +197,9 @@ pub fn compute_local_gravity(
         Option<&GravityBody>,
         Option<&LocalGravity>,
     )>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     // Recompute an entity's gravity only when something it depends on changed:
     // the global `Gravity` definition (Flat vector / Flat↔Surface switch) or
@@ -202,12 +207,17 @@ pub fn compute_local_gravity(
     // is not). Entities that don't yet have a `LocalGravity` always run once.
     // This stops both the per-frame provider lookups and the change-detection
     // storm caused by blindly re-inserting an identical value every frame.
-    let gravity_changed = gravity.is_changed();
+    let gravity_changed =
+        gravity.is_changed() || active_frame.as_ref().is_some_and(Res::is_changed);
+    let frame_rotation = active_frame.as_deref().and_then(|frame| {
+        lunco_core::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
+            .map(|(_, rotation)| rotation.0)
+    });
     for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
         if existing.is_some() && !gravity_changed && !tf.is_changed() {
             continue;
         }
-        let g = match gravity.as_ref() {
+        let g_world = match gravity.as_ref() {
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
                 let Some(body_link) = gravity_body else {
@@ -216,19 +226,25 @@ pub fn compute_local_gravity(
                 let Ok(provider) = q_bodies.get(body_link.body_entity) else {
                     continue;
                 };
-                let Some((entity_world, _)) = gravity_world_pose(entity, &q_entities) else {
-                    continue;
-                };
-                let Some((body_world, body_rotation)) =
-                    gravity_world_pose(body_link.body_entity, &q_entities)
+                let Some((entity_world, _)) =
+                    lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
                 else {
                     continue;
                 };
-                let relative_body = body_rotation.inverse() * (entity_world - body_world);
+                let Some((body_world, body_rotation)) = lunco_core::coords::world_pose(
+                    body_link.body_entity,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                ) else {
+                    continue;
+                };
+                let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
                 let acceleration = provider.model.acceleration(relative_body);
-                body_rotation * acceleration
+                body_rotation.0 * acceleration
             }
         };
+        let g = frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world);
         // Don't re-insert (and re-trigger change detection) when the value is
         // unchanged — e.g. a `gravity_changed` pass that recomputes the same g.
         if let Some(LocalGravity(prev)) = existing {
@@ -238,62 +254,6 @@ pub fn compute_local_gravity(
         }
         commands.entity(entity).try_insert(LocalGravity(g));
     }
-}
-
-/// Compose a point and rotation through the same `(CellCoord, Transform, Grid)`
-/// chain used by the physics bridge.  Surface gravity is evaluated in the
-/// provider body's body-fixed frame; using only the entity's local Transform
-/// silently treated a scene-root offset as a body-relative position.
-fn gravity_world_pose(
-    entity: Entity,
-    q: &Query<(
-        Entity,
-        Ref<Transform>,
-        Option<&CellCoord>,
-        Option<&ChildOf>,
-        Option<&Grid>,
-        Option<&GravityBody>,
-        Option<&LocalGravity>,
-    )>,
-) -> Option<(DVec3, DQuat)> {
-    let (_, _, initial_cell, _, _, _, _) = q.get(entity).ok()?;
-    let mut current = entity;
-    let mut cell = initial_cell.copied().unwrap_or_default();
-    let mut chain = Vec::with_capacity(8);
-
-    for _ in 0..32 {
-        let (_, tf, _, child_of, _, _, _) = q.get(current).ok()?;
-        let edge = child_of.and_then(|parent| {
-            q.get(parent.parent())
-                .ok()
-                .and_then(|(_, _, _, _, grid, _, _)| grid.map(Grid::cell_edge_length))
-        });
-        let cell_offset = edge.map_or(DVec3::ZERO, |edge| {
-            DVec3::new(
-                cell.x as f64 * edge as f64,
-                cell.y as f64 * edge as f64,
-                cell.z as f64 * edge as f64,
-            )
-        });
-        chain.push((cell_offset + tf.translation.as_dvec3(), tf.rotation));
-
-        let Some(parent) = child_of.map(ChildOf::parent) else {
-            break;
-        };
-        let Ok((_, _, parent_cell, _, _, _, _)) = q.get(parent) else {
-            break;
-        };
-        current = parent;
-        cell = parent_cell.copied().unwrap_or_default();
-    }
-
-    let mut position = DVec3::ZERO;
-    let mut rotation = DQuat::IDENTITY;
-    for (offset, local_rotation) in chain.iter().rev() {
-        position += rotation.mul_vec3(*offset);
-        rotation *= local_rotation.as_dquat();
-    }
-    Some((position, rotation))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

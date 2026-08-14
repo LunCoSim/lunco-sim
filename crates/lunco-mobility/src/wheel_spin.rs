@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::InputPorts;
 
-use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
+use crate::wheel_kinematics::{wheel_heading, wheel_hub_pose, wheel_hub_velocity};
 use crate::WheelRaycast;
 
 /// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
@@ -48,14 +48,7 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
-    mut q_wheels: Query<(
-        Entity,
-        &mut WheelRaycast,
-        &Transform,
-        &GlobalTransform,
-        &RayHits,
-        &ChildOf,
-    )>,
+    mut q_wheels: Query<(Entity, &mut WheelRaycast, &Transform, &RayHits, &ChildOf)>,
     q_ports: Query<&lunco_core::architecture::Port>,
     q_chassis: Query<
         (
@@ -96,7 +89,7 @@ pub(crate) fn update_wheel_spin(
         return;
     }
 
-    for (entity, mut wheel, local_tf, global_tf, hits, parent) in q_wheels.iter_mut() {
+    for (entity, mut wheel, local_tf, hits, parent) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -233,9 +226,8 @@ pub(crate) fn update_wheel_spin(
                 local_tf.rotation.as_dquat(),
             );
             let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, GridPos(pos.0));
-            let wheel_rot = GridRot::from_render_rotation(global_tf.rotation());
-            let wheel_forward = wheel_rot.0 * DVec3::NEG_Z;
-            let wheel_right = wheel_rot.0 * DVec3::X;
+            let (wheel_forward, wheel_right) =
+                wheel_heading(GridRot(rot.0), local_tf.rotation.as_dquat());
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.

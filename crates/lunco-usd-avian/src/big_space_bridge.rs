@@ -11,12 +11,14 @@
 //! This bridge turns ALL of avian's f32 transform sync off
 //! (`propagate_before_physics`, `transform_to_position`,
 //! `position_to_transform`) and owns the sync itself in the f64 cell-chain
-//! domain (`world_pose_seeded`): render `GlobalTransform`s are big_space's
+//! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s are big_space's
 //! alone; physics `Position`/`Rotation` are fed from (and written back to)
-//! `CellCoord` + `Transform` truth. The `Position` frame is the BigSpace root
-//! frame — for site content under the site-anchored `WorldGrid` this is the
-//! same small-magnitude frame avian solved in before, now with cell offsets
-//! honoured (a body more than one cell from the site no longer collapses).
+//! `CellCoord` + `Transform` truth. The `Position` frame is the explicit
+//! [`lunco_core::ActivePhysicsFrame`] selected for the loaded physical site.
+//! Every Avian body and collider uses that one frame; sibling BigSpace branches
+//! are converted through their nearest shared grid. A body-fixed surface frame
+//! therefore keeps Avian local and stationary while the render hierarchy
+//! follows the celestial body's rotation.
 //!
 //! ## Sync rules (per body, per physics tick)
 //!
@@ -63,7 +65,9 @@ use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::{world_pose_seeded, GridPos, GridRot};
+use lunco_core::coords::{
+    grid_relative_pose_seeded, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
+};
 
 // ─── Cell-split composition helpers ──────────────────────────────────────
 // The bridge composes big_space's stored `(CellCoord, Transform)` split in
@@ -196,6 +200,7 @@ pub struct BridgeShadow {
     cell: CellCoord,
     translation: Vec3,
     rotation: Quat,
+    physics_frame: Entity,
 }
 
 impl Default for BridgeShadow {
@@ -204,21 +209,24 @@ impl Default for BridgeShadow {
             cell: CellCoord::ZERO,
             translation: Vec3::NAN,
             rotation: Quat::NAN,
+            physics_frame: Entity::PLACEHOLDER,
         }
     }
 }
 
 impl BridgeShadow {
-    fn matches(&self, cell: Option<&CellCoord>, tf: &Transform) -> bool {
+    fn matches(&self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) -> bool {
         self.cell == cell.copied().unwrap_or_default()
             && self.translation == tf.translation
             && self.rotation == tf.rotation
+            && self.physics_frame == physics_frame
     }
 
-    fn capture(&mut self, cell: Option<&CellCoord>, tf: &Transform) {
+    fn capture(&mut self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) {
         self.cell = cell.copied().unwrap_or_default();
         self.translation = tf.translation;
         self.rotation = tf.rotation;
+        self.physics_frame = physics_frame;
     }
 
     /// Has [`pose_to_position`] written a real world pose for this entity yet?
@@ -245,6 +253,61 @@ impl BridgeShadow {
 /// `update_child_collider_position` derives their pose from the body.
 type BridgeSynced = Or<(With<RigidBody>, Without<ColliderOf>)>;
 
+/// Return whether a moved ancestor is a physical input for `body`.
+///
+/// Bodies below the active frame are solved in that frame, so transforms above
+/// it are only the celestial render representation and must not be copied into
+/// Avian. Bodies outside that branch (for example a planet picking collider)
+/// must follow every changed ancestor when their pose is projected into the
+/// active frame.
+fn moved_in_active_frame(
+    body: Entity,
+    moved: Entity,
+    active_frame: Entity,
+    q_parents: &Query<&ChildOf>,
+) -> bool {
+    let mut current = body;
+    let mut reached_active_frame = false;
+    for _ in 0..32 {
+        let Ok(child_of) = q_parents.get(current) else {
+            return false;
+        };
+        current = child_of.parent();
+        if current == active_frame {
+            reached_active_frame = true;
+            // The active frame itself is part of the render representation.
+            // Its transform must never be copied into descendants' physics
+            // poses, even when it is the changed ancestor being inspected.
+            if current == moved {
+                return false;
+            }
+            continue;
+        }
+        if current == moved {
+            return !reached_active_frame;
+        }
+    }
+    false
+}
+
+fn is_below_active_frame(
+    entity: Entity,
+    active_frame: Entity,
+    q_parents: &Query<&ChildOf>,
+) -> bool {
+    let mut current = entity;
+    for _ in 0..32 {
+        if current == active_frame {
+            return true;
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            return false;
+        };
+        current = child_of.parent();
+    }
+    false
+}
+
 /// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
 /// carrying the change to descendant bodies (chassis teleport moves wheels).
 ///
@@ -257,6 +320,7 @@ fn pose_to_position(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
     // Plain chain nodes (no RigidBody, no Collider) carry no `BridgeShadow`,
     // so their motion is probed via change detection instead: a gizmo-dragged
@@ -288,14 +352,16 @@ fn pose_to_position(
         BridgeSynced,
     >,
 ) {
+    let active_frame = active_frame.0;
     // Pass 1 (read-only): which entities did an external writer touch?
     let mut moved = EntityHashSet::default();
     for (e, cell, tf, _, _, shadow, pose_override) in q_bodies.iter() {
         if pose_override.is_some() {
             continue;
         }
-        let internal_rebranch = shadow.is_seeded() && q_rebranched.contains(e);
-        let mismatch = !shadow.matches(cell, tf);
+        let internal_rebranch =
+            shadow.is_seeded() && q_rebranched.contains(e) && shadow.physics_frame == active_frame;
+        let mismatch = !shadow.matches(cell, tf, active_frame);
         if !internal_rebranch && mismatch {
             moved.insert(e);
         }
@@ -320,8 +386,8 @@ fn pose_to_position(
         // while preserving its world pose. Refresh the shadow so the bridge
         // accepts the new representation; Position/Rotation remain the
         // authoritative physics pose written by the solver.
-        if shadow.is_seeded() && q_rebranched.contains(e) {
-            shadow.capture(cell, tf);
+        if shadow.is_seeded() && q_rebranched.contains(e) && shadow.physics_frame == active_frame {
+            shadow.capture(cell, tf, active_frame);
             continue;
         }
         let direct_move = moved.contains(&e);
@@ -331,7 +397,7 @@ fn pose_to_position(
             for _ in 0..32 {
                 let Ok(co) = q_parents.get(cur) else { break };
                 cur = co.parent();
-                if moved.contains(&cur) {
+                if moved.contains(&cur) && moved_in_active_frame(e, cur, active_frame, &q_parents) {
                     hit = true;
                     break;
                 }
@@ -342,15 +408,37 @@ fn pose_to_position(
         if !fired {
             continue;
         }
-        let seed_cell = cell.copied().unwrap_or_default();
         // Typed until the component write: the cell chain composes a
         // grid-absolute pose, and avian's `Position`/`Rotation` carry exactly
         // that frame — `.0` at the write IS the frame assertion.
-        let (p, r): (GridPos, GridRot) =
-            world_pose_seeded(e, &seed_cell, tf, &q_parents, &q_grids, &q_spatial);
+        let seed_cell = cell.copied().unwrap_or_default();
+        let (position, rotation) = if is_below_active_frame(e, active_frame, &q_parents) {
+            grid_relative_pose_seeded(
+                e,
+                active_frame,
+                &seed_cell,
+                tf,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+            .expect("active PhysicsFrame must be an ancestor of every physical body")
+        } else {
+            pose_in_grid_seeded(
+                e,
+                active_frame,
+                &seed_cell,
+                tf,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+            .expect("active PhysicsFrame must share a BigSpace root with every collider")
+        };
+        let (p, r) = (GridPos(position), GridRot(rotation));
         pos.0 = p.0;
         rot.0 = r.0;
-        shadow.capture(cell, tf);
+        shadow.capture(cell, tf, active_frame);
         // avian's `wake_on_changed` only sees Position writes made OUTSIDE
         // the physics schedule (it compares against `LastPhysicsTick`), so an
         // external Transform teleport applied here would leave a sleeping
@@ -375,6 +463,7 @@ fn position_to_pose(
     mut commands: Commands,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     // Chain nodes that are not bodies or colliders (grids, plain group
     // nodes). Disjoint from `q_dyn`'s `&mut Transform` via the filters.
     q_plain: Query<(Option<&CellCoord>, &Transform), (Without<RigidBody>, Without<Collider>)>,
@@ -404,6 +493,7 @@ fn position_to_pose(
     // would assert a frame they are not in.
     mut chain: Local<Vec<(DVec3, Quat)>>,
 ) {
+    let active_frame = active_frame.0;
     // Pass A: solved world poses — the parent frames for jointed sub-bodies,
     // fresher than any Transform this tick. avian's `Position` carries the
     // grid-absolute frame; wrap at the read.
@@ -485,17 +575,11 @@ fn position_to_pose(
         let (mut fp, mut fr) = match anchor {
             Anchor::Body(p, r) => (p, r),
             Anchor::GridEntity(g) => {
-                let Ok((g_cell, g_tf)) = q_plain.get(g) else {
+                let Some((p, r)) = pose_in_grid(g, active_frame, &q_parents, &q_grids, &q_plain)
+                else {
                     continue;
                 };
-                world_pose_seeded(
-                    g,
-                    &g_cell.copied().unwrap_or_default(),
-                    g_tf,
-                    &q_parents,
-                    &q_grids,
-                    &q_plain,
-                )
+                (GridPos(p), GridRot(r))
             }
             Anchor::Root => (GridPos(DVec3::ZERO), GridRot(DQuat::IDENTITY)),
         };
@@ -534,7 +618,7 @@ fn position_to_pose(
             tf.translation = new_t;
             tf.rotation = local_rot;
         }
-        shadow.capture(cell, &tf);
+        shadow.capture(cell, &tf, active_frame);
         if pose_override.is_some() {
             commands
                 .entity(e)

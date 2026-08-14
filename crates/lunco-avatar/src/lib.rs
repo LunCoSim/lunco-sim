@@ -42,7 +42,7 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
 )>;
-use lunco_celestial::{LeaveSurface, LocalGravityField, TeleportToSurface};
+use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
@@ -1211,14 +1211,90 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
 
 // ─── Shared Math Helpers (CQ-113 DRY) ────────────────────────────────────────
 
+/// Return the body's ENU tangent frame in an entity's immediate Grid frame.
+///
+/// The tangent frame is owned by celestial geodesy and is expressed in the
+/// body's body-fixed axes. The two rotations returned by BigSpace's shared
+/// `grid_relative_pose` then provide the exact body-local → camera-Grid map.
+/// This is the only surface-camera frame boundary: no global-Y projection and
+/// no root-frame subtraction can silently change the meaning of heading.
+fn surface_axes_in_grid(
+    grid_entity: Entity,
+    gravity: &LocalGravityField,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+) -> Option<(Vec3, Vec3, Vec3)> {
+    let body_entity = gravity.body_entity?;
+    let (_, _, grid_to_body_frame, _, body_to_body_frame) = lunco_core::coords::common_grid_poses(
+        grid_entity,
+        body_entity,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let body_to_grid = grid_to_body_frame.inverse() * body_to_body_frame;
+    Some(surface_axes_from_body_position(
+        gravity.body_relative_position,
+        body_to_grid,
+    ))
+}
+
+/// Map a body-fixed ENU frame into a camera Grid after the caller has resolved
+/// the exact body-local position and BigSpace rotation for that Grid.
+fn surface_axes_from_body_position(
+    body_relative_position: DVec3,
+    body_to_grid: DQuat,
+) -> (Vec3, Vec3, Vec3) {
+    let tangent = LocalTangentFrame::from_body_fixed_position(body_relative_position);
+    (
+        (body_to_grid * tangent.east)
+            .normalize_or(DVec3::X)
+            .as_vec3(),
+        (body_to_grid * tangent.north)
+            .normalize_or(DVec3::NEG_Z)
+            .as_vec3(),
+        (body_to_grid * tangent.up).normalize_or(DVec3::Y).as_vec3(),
+    )
+}
+
+/// Resolve a body-fixed ENU frame for a point already expressed in a Grid.
+///
+/// `grid_position` is a BigSpace grid-absolute position, exactly the value
+/// returned by [`lunco_core::coords::grid_relative_pose`] for a target. The
+/// conversion stays in the shared body-frame branch and never goes through a
+/// root `GlobalTransform`.
+fn surface_axes_for_grid_position<F: bevy::ecs::query::QueryFilter>(
+    grid_entity: Entity,
+    grid_position: DVec3,
+    body_entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(Vec3, Vec3, Vec3)> {
+    let (_, grid_body_position, grid_to_body_frame, body_position, body_to_body_frame) =
+        lunco_core::coords::common_grid_poses(
+            grid_entity,
+            body_entity,
+            q_parents,
+            q_grids,
+            q_spatial,
+        )?;
+    let body_relative_position = body_to_body_frame.inverse()
+        * (grid_body_position + grid_to_body_frame * grid_position - body_position);
+    let body_to_grid = grid_to_body_frame.inverse() * body_to_body_frame;
+    Some(surface_axes_from_body_position(
+        body_relative_position,
+        body_to_grid,
+    ))
+}
+
 /// Return gravity-up in an entity's immediate Grid frame.
 ///
 /// A surface camera's gravity is authored in its body's body-fixed frame. If
 /// the camera grid is under that same body frame, convert through only the
-/// local grid chain. Composing through the solar/world ancestors would make a
-/// local camera orientation depend on AU-scale f32 state and reintroduce the
-/// BigSpace precision problem this boundary is meant to avoid. The world-frame
-/// path remains the canonical fallback for flat gravity and non-surface views.
+/// local BigSpace grid branch. The world-frame path is the semantic fallback
+/// for flat gravity and non-surface views, which have no body-fixed ENU frame.
 fn gravity_up_in_grid(
     grid_entity: Entity,
     gravity: &LocalGravityField,
@@ -1226,16 +1302,10 @@ fn gravity_up_in_grid(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
 ) -> Vec3 {
-    if let Some(body_entity) = gravity.body_entity {
-        if let Some(body_frame) = q_parents.get(body_entity).ok().map(ChildOf::parent) {
-            if let Some(body_to_grid) =
-                rotation_to_descendant_grid(body_frame, grid_entity, q_parents, q_spatial)
-            {
-                return (body_to_grid.inverse() * gravity.local_up)
-                    .normalize_or(DVec3::Y)
-                    .as_vec3();
-            }
-        }
+    if let Some((_, _, up)) =
+        surface_axes_in_grid(grid_entity, gravity, q_parents, q_grids, q_spatial)
+    {
+        return up;
     }
 
     lunco_core::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
@@ -1245,33 +1315,6 @@ fn gravity_up_in_grid(
                 .as_vec3()
         })
         .unwrap_or_else(|| gravity.local_up.normalize_or(DVec3::Y).as_vec3())
-}
-
-/// Return the rotation that maps `descendant`-local axes into an ancestor's
-/// local axes. The walk is deliberately limited to the local hierarchy: it
-/// never reads a root-frame pose and therefore cannot inherit astronomical
-/// translation precision loss.
-fn rotation_to_descendant_grid(
-    ancestor: Entity,
-    descendant: Entity,
-    q_parents: &Query<&ChildOf>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-) -> Option<DQuat> {
-    if ancestor == descendant {
-        return Some(DQuat::IDENTITY);
-    }
-
-    let mut current = descendant;
-    let mut descendant_to_ancestor = DQuat::IDENTITY;
-    for _ in 0..32 {
-        let transform = q_spatial.get(current).ok()?.1;
-        descendant_to_ancestor = transform.rotation.as_dquat() * descendant_to_ancestor;
-        current = q_parents.get(current).ok()?.parent();
-        if current == ancestor {
-            return Some(descendant_to_ancestor);
-        }
-    }
-    None
 }
 
 /// The site anchor's body: `(body entity, radius, body centre in the SITE
@@ -1293,30 +1336,78 @@ fn site_body_center(
     ))
 }
 
-/// Build a surface-relative camera orientation from a local `up` (surface
-/// normal) plus `heading` and `pitch`.
+/// Build a surface-relative camera orientation from the body's ENU axes plus
+/// `heading` and `pitch`.
 ///
-/// Forward starts at local north (world-Y projected onto the tangent plane,
-/// falling back to Z near the poles), is yawed by `heading` about `up`, then
-/// pitched about the resulting right axis. Rebuilt from scratch (no incremental
-/// accumulation) so there is zero roll drift.
+/// Forward starts at the geodetic north axis, is yawed by `heading` about the
+/// exact surface normal, then pitched about the resulting right axis. Rebuilt
+/// from scratch (no incremental accumulation) so there is zero roll drift.
 ///
-/// Consolidates the CQ-113 duplicate tangent-frame math that was byte-identical
-/// in `spring_arm_system` and `surface_camera_system`.
-fn tangent_frame(up: Vec3, heading: f32, pitch: f32) -> Quat {
-    let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 {
-        Vec3::Y
-    } else {
-        Vec3::Z
-    };
-    let east = up.cross(ref_dir).normalize();
-    let north = east.cross(up).normalize();
+pub fn surface_camera_rotation(
+    east: Vec3,
+    north: Vec3,
+    up: Vec3,
+    heading: f32,
+    pitch: f32,
+) -> Quat {
+    let (_, north, up) = orthonormal_surface_axes(east, north, up);
     let heading_q = Quat::from_axis_angle(up, heading);
     let forward = heading_q.mul_vec3(north);
     let right = forward.cross(up).normalize();
     let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up, -forward));
     let pitch_q = Quat::from_axis_angle(right, pitch);
     (pitch_q * base_rot).normalize()
+}
+
+/// Decompose a camera rotation into the same surface-frame heading and pitch
+/// consumed by [`surface_camera_rotation`].
+///
+/// This is the only legal way to enter surface mode from another camera mode:
+/// Euler angles are coordinates in the old frame, not surface heading/pitch.
+pub fn surface_camera_angles(east: Vec3, north: Vec3, up: Vec3, rotation: Quat) -> (f32, f32) {
+    let (east, north, up) = orthonormal_surface_axes(east, north, up);
+    let forward = rotation * Vec3::NEG_Z;
+    let pitch = forward.dot(up).clamp(-1.0, 1.0).asin();
+    let tangent_forward = (forward - up * forward.dot(up)).normalize_or(north);
+    let heading = (-tangent_forward.dot(east)).atan2(tangent_forward.dot(north));
+    (heading, pitch)
+}
+
+/// Normalize a surface ENU basis with the engine's right-handed convention.
+fn orthonormal_surface_axes(east: Vec3, north: Vec3, up: Vec3) -> (Vec3, Vec3, Vec3) {
+    let east = east.normalize_or(Vec3::X);
+    let up = up.normalize_or(Vec3::Y);
+    // Re-derive north from the handed ENU pair so a tiny input drift cannot
+    // introduce roll. The fallback is only for the physically undefined
+    // body-centre frame.
+    let north = up.cross(east).normalize_or(north.normalize_or(Vec3::NEG_Z));
+    (east, north, up)
+}
+
+/// Resolve a surface-bound target's local up vector and authored heading.
+///
+/// The target and the surface grid are siblings under the body's rotating
+/// frame, so this composes only that local branch. It never subtracts solar
+/// coordinates and never assumes that the surface grid is world-Y aligned.
+fn surface_target_frame(
+    target_position: DVec3,
+    target_rotation: DQuat,
+    target_grid: Entity,
+    body_entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+) -> Option<(Vec3, Vec3, Vec3, f32)> {
+    let (east, north, up) = surface_axes_for_grid_position(
+        target_grid,
+        target_position,
+        body_entity,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let heading = surface_camera_angles(east, north, up, target_rotation.as_quat()).0;
+    Some((east, north, up, heading))
 }
 
 /// Apply an accumulated mouse-scroll delta as a multiplicative (exponential)
@@ -1674,6 +1765,7 @@ fn spring_arm_system(
         ),
         (
             With<Avatar>,
+            Without<Grid>,
             Without<FrameBlend>,
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
@@ -1689,7 +1781,7 @@ fn spring_arm_system(
     q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
-    spatial_query: Option<avian3d::prelude::SpatialQuery>,
+    spatial_query: Option<lunco_physics::GridSpatialQuery>,
     joints: VesselJoints,
     mut collision_filters: Local<VesselCollisionFilterCache>,
     mut topology: VesselCollisionTopology,
@@ -1721,6 +1813,18 @@ fn spring_arm_system(
         ) else {
             continue;
         };
+        let surface_axes = surface_mode.and_then(|_| {
+            gravity.body_entity.and_then(|body_entity| {
+                surface_axes_for_grid_position(
+                    child_of.0,
+                    target_pos,
+                    body_entity,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                )
+            })
+        });
 
         // Multiplicative zoom using exponential scaling — same formula as
         // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
@@ -1761,20 +1865,22 @@ fn spring_arm_system(
             // up = surface normal or world-Y.
             FollowAttitude::Heading => {
                 let target_heading_d = if arm.track_heading {
-                    let target_fwd_d = target_rotation.mul_vec3(Vec3::NEG_Z.as_dvec3());
-                    if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
-                        -target_fwd_d.x.atan2(-target_fwd_d.z)
+                    if let Some((east, north, up)) = surface_axes {
+                        surface_camera_angles(east, north, up, target_rotation.as_quat()).0 as f64
                     } else {
-                        0.0
+                        let target_fwd_d = target_rotation.mul_vec3(Vec3::NEG_Z.as_dvec3());
+                        if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+                            -target_fwd_d.x.atan2(-target_fwd_d.z)
+                        } else {
+                            0.0
+                        }
                     }
                 } else {
                     0.0
                 };
                 let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
-                if surface_mode.is_some() {
-                    let up =
-                        gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
-                    tangent_frame(up, final_yaw, arm.pitch)
+                if let Some((east, north, up)) = surface_axes {
+                    surface_camera_rotation(east, north, up, final_yaw, arm.pitch)
                 } else {
                     Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0)
                 }
@@ -1790,7 +1896,11 @@ fn spring_arm_system(
         // Desired camera position: behind target along smoothed rotation.
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
         let vertical_offset: DVec3 = if surface_mode.is_some() {
-            let up = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+            let up = surface_axes
+                .map(|(_, _, up)| up)
+                .unwrap_or_else(|| {
+                    gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+                })
                 .as_dvec3();
             up * arm.vertical_offset as f64
         } else {
@@ -1815,11 +1925,12 @@ fn spring_arm_system(
         // the camera. No hit means the arm simply does not shorten, which is the
         // right behaviour for a frame with nothing valid to look at.
         let castable = ray_origin.is_finite() && ray_len.is_finite();
-        let hit = match spatial_query {
-            Some(ref sq) if castable => {
+        let hit = match &spatial_query {
+            Some(sq) if castable => {
                 let filter = collision_filters.filter_for(arm.target, &q_children);
-                sq.cast_ray(
-                    ray_origin,
+                sq.cast_ray_in_grid(
+                    child_of.0,
+                    lunco_core::coords::GridPos(ray_origin),
                     bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
                     ray_len,
                     true,
@@ -2108,7 +2219,7 @@ fn orbit_system(
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
     q_frames_ids: Query<&lunco_celestial::CelestialReferenceFrame>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_sc: Query<&Spacecraft>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
@@ -2297,23 +2408,20 @@ fn orbit_system(
             let Ok(host_ref) = q_grids.get(host_grid) else {
                 continue;
             };
-            let Ok((p_cell, p_tf)) = q_spatial.get(pose_ent) else {
-                continue;
-            };
-
             // The camera pose is expressed DIRECTLY in the host grid's axes:
             // inertial grids carry identity rotation, so host +Y is the
-            // engine/ecliptic NORTH pole. (The previous code referenced the
-            // WORLD axes and counter-rotated by the stored chain — i.e. the
-            // site pin's ENU `align`. At a south-polar site the ENU up is
-            // inertially SOUTH, so the Moon rendered south-up with the
-            // moonbase at the TOP of the disk; and because the site frame
-            // spins with the body, the yaw reference slowly crept. Bodies now
-            // always render north-up, wherever the site anchor is.)
-            let edge = host_ref.cell_edge_length() as f64;
-            let body_local =
-                bevy::math::DVec3::new(p_cell.x as f64, p_cell.y as f64, p_cell.z as f64) * edge
-                    + p_tf.translation.as_dvec3();
+            // engine/ecliptic NORTH pole. Resolve the body with the shared
+            // cell-aware pose helper; do not reconstruct `cell * edge + tf` at
+            // this call site.
+            let Some((body_local, _)) = lunco_core::coords::grid_relative_pose(
+                physical_target,
+                host_grid,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                continue;
+            };
 
             // Ease the arm LENGTH toward the commanded distance, mirroring the
             // non-celestial branch ("zoom glides instead of snapping"). Without
@@ -2329,9 +2437,7 @@ fn orbit_system(
             let arm_len = if child_of.parent() != host_grid {
                 orbit.distance
             } else {
-                let cam_local = bevy::math::DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64)
-                    * edge
-                    + tf.translation.as_dvec3();
+                let cam_local = host_ref.grid_position_double(&cell, &tf);
                 let current_len = (cam_local - body_local).length();
                 let err = (orbit.distance - current_len).abs();
                 if err < orbit.distance * 5e-4 {
@@ -2595,9 +2701,9 @@ fn freeflight_system(
 ) {
     for (mut tf, mut ff, _cell, child_of, surface_mode) in q_avatar.iter_mut() {
         let rot = if surface_mode.is_some() {
-            let up_v = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
-
             // In surface mode, apply yaw/pitch as incremental rotations.
+            let axes = surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
+            let up_v = axes.map(|(_, _, up)| up).unwrap_or(Vec3::Y);
             let yaw_q = Quat::from_axis_angle(up_v, ff.yaw);
             let right: Vec3 = *tf.right();
             let right_after_yaw = yaw_q.mul_vec3(right);
@@ -2772,12 +2878,16 @@ fn surface_camera_system(
             continue;
         }
 
-        let up = gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
+        let Some((east, north, up)) =
+            surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+        else {
+            continue;
+        };
 
-        // Rebuild the rotation from scratch each frame from heading + pitch
-        // around the surface normal (local north = world-Y onto the tangent
-        // plane, Z near the poles). No incremental rotations -> zero roll drift.
-        tf.rotation = tangent_frame(up, cam.heading, cam.pitch);
+        // Rebuild the rotation from the body's exact ENU frame each frame.
+        // The camera remains upright relative to the curved surface while the
+        // heading stays tied to the body's prime meridian.
+        tf.rotation = surface_camera_rotation(east, north, up, cam.heading, cam.pitch);
     }
 }
 
@@ -3002,7 +3112,9 @@ fn avatar_behavior_input_system(
         if let Some((mut tf, _cell, child_of)) = q_tf.iter_mut().next() {
             if surface_mode.is_some() {
                 let up_v =
-                    gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
+                    surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+                        .map(|(_, _, up)| up)
+                        .unwrap_or(Vec3::Y);
                 let yaw_q = Quat::from_axis_angle(up_v, delta_yaw);
                 let right: Vec3 = *tf.right();
                 let right_yawed = yaw_q.mul_vec3(right);
@@ -3370,6 +3482,7 @@ fn on_release_command(
             &Transform,
             Option<&ControllerLink>,
             Option<&SurfaceRelativeMode>,
+            &ChildOf,
         ),
         With<Avatar>,
     >,
@@ -3377,6 +3490,11 @@ fn on_release_command(
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
+    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    gravity: Res<LocalGravityField>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
     mut viewport: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
@@ -3408,9 +3526,33 @@ fn on_release_command(
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
     let (yaw, pitch, opt_link, is_surface) =
-        if let Ok((tf, link, surface)) = q_avatar.get(avatar_ent) {
+        if let Ok((tf, link, surface, child_of)) = q_avatar.get(avatar_ent) {
             let rot = restored_from_orbit.map(|(_, r)| r).unwrap_or(tf.rotation);
-            let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+            let (y, p) = if surface.is_some() {
+                let axes = restored_from_orbit
+                    .and_then(|(anchor_world, _)| {
+                        let world_grid = q_world_grid.iter().next()?;
+                        surface_axes_for_grid_position(
+                            world_grid,
+                            anchor_world,
+                            gravity.body_entity?,
+                            &q_parents,
+                            &q_grids,
+                            &q_spatial,
+                        )
+                    })
+                    .or_else(|| {
+                        surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
+                    });
+                axes.map(|(east, north, up)| surface_camera_angles(east, north, up, rot))
+                    .unwrap_or_else(|| {
+                        let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+                        (y, p)
+                    })
+            } else {
+                let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+                (y, p)
+            };
             (y, p, link, surface.is_some())
         } else {
             (0.0, 0.0, None, false)
@@ -3452,10 +3594,10 @@ fn on_release_command(
     // otherwise use FreeFlightCamera (incremental euler angles).
     if is_surface {
         commands.entity(avatar_ent).try_insert(SurfaceCamera {
-            heading: yaw, // approximate mapping from euler yaw
+            heading: yaw,
             pitch,
         });
-    } else if let (Some((anchor_world, rot)), Some((_, _, center))) =
+    } else if let (Some((anchor_world, rot)), Some((body_entity, _, _))) =
         (restored_from_orbit, site_body_center(&q_site, &q_bodies))
     {
         // Descending out of an orbital view on a site-anchored scene resumes
@@ -3465,17 +3607,20 @@ fn on_release_command(
         // directly over the site. Decompose the parked attitude against the
         // LOCAL up with the SAME reference `tangent_frame` uses, so the
         // resume doesn't visibly rotate the view.
-        let up = (anchor_world - center).normalize_or_zero().as_vec3();
-        let fwd = rot * Vec3::NEG_Z;
-        let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 {
-            Vec3::Y
-        } else {
-            Vec3::Z
+        let Some(world_grid) = q_world_grid.iter().next() else {
+            return;
         };
-        let east = up.cross(ref_dir).normalize();
-        let north = east.cross(up).normalize();
-        let heading = fwd.dot(east).atan2(fwd.dot(north));
-        let s_pitch = fwd.dot(up).clamp(-1.0, 1.0).asin();
+        let Some((east, north, up)) = surface_axes_for_grid_position(
+            world_grid,
+            anchor_world,
+            body_entity,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            return;
+        };
+        let (heading, s_pitch) = surface_camera_angles(east, north, up, rot);
         commands.entity(avatar_ent).try_insert((
             SurfaceCamera {
                 heading,
@@ -3507,7 +3652,7 @@ fn on_release_command(
         "Released possession → camera unchanged at local {:?} (surface={})",
         q_avatar
             .get(avatar_ent)
-            .map(|(tf, _, _)| tf.translation)
+            .map(|(tf, _, _, _)| tf.translation)
             .ok(),
         is_surface
     );
@@ -3630,7 +3775,7 @@ fn on_possess_command(
         warn!(target = ?cmd.target, "[possess] refused: target has no live Grid frame");
         return;
     };
-    let Some((target_local_pos, _target_local_rotation)) = lunco_core::coords::grid_relative_pose(
+    let Some((target_local_pos, target_local_rotation)) = lunco_core::coords::grid_relative_pose(
         cmd.target,
         target_grid_entity,
         &q_parents,
@@ -3664,6 +3809,18 @@ fn on_possess_command(
     let end_yaw = 0.0;
     let end_pitch = -0.25;
 
+    let surface_frame = q_vessel_gravity.get(cmd.target).ok().and_then(|gb| {
+        surface_target_frame(
+            target_local_pos,
+            target_local_rotation,
+            target_grid_entity,
+            gb.body_entity,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+    });
+
     // Snap to vessel immediately. Orbit/Chase preserve the current look angles so
     // possession doesn't jerk the view; Heading adopts the fixed rover start pose.
     let (current_yaw, current_pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);
@@ -3671,10 +3828,22 @@ fn on_possess_command(
         CameraFollow::Heading => (end_yaw, end_pitch),
         _ => (current_yaw, current_pitch),
     };
-    let final_rot = Quat::from_euler(EulerRot::YXZ, init_yaw, init_pitch, 0.0);
+    let final_rot = if matches!(follow, CameraFollow::Heading) {
+        if let Some((east, north, up, target_heading)) = surface_frame {
+            surface_camera_rotation(east, north, up, target_heading + init_yaw, init_pitch)
+        } else {
+            Quat::from_euler(EulerRot::YXZ, init_yaw, init_pitch, 0.0)
+        }
+    } else {
+        Quat::from_euler(EulerRot::YXZ, init_yaw, init_pitch, 0.0)
+    };
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
-    let final_local_pos =
-        target_local_pos + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
+    let final_local_pos = target_local_pos
+        + final_offset
+        + surface_frame
+            .map(|(_, _, up, _)| up.as_dvec3())
+            .unwrap_or(DVec3::Y)
+            * end_vert_off as f64;
 
     info!(
         avatar = ?avatar_ent,
@@ -3806,7 +3975,7 @@ fn on_follow_command(
         warn!(target = ?cmd.target, "[follow] refused: target has no live Grid frame");
         return;
     };
-    let Some((target_local_pos, _target_local_rotation)) = lunco_core::coords::grid_relative_pose(
+    let Some((target_local_pos, target_local_rotation)) = lunco_core::coords::grid_relative_pose(
         cmd.target,
         target_grid_entity,
         &q_parents,
@@ -3824,11 +3993,31 @@ fn on_follow_command(
     let end_vert_off = 2.0_f32;
     let end_pitch = -0.25_f32;
 
+    let surface_frame = q_vessel_gravity.get(cmd.target).ok().and_then(|gb| {
+        surface_target_frame(
+            target_local_pos,
+            target_local_rotation,
+            target_grid_entity,
+            gb.body_entity,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+    });
+
     // Snap behind the target with a default chase pose.
-    let final_rot = Quat::from_euler(EulerRot::YXZ, 0.0, end_pitch, 0.0);
+    let final_rot = surface_frame
+        .map(|(east, north, up, target_heading)| {
+            surface_camera_rotation(east, north, up, target_heading, end_pitch)
+        })
+        .unwrap_or_else(|| Quat::from_euler(EulerRot::YXZ, 0.0, end_pitch, 0.0));
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
-    let final_local_pos =
-        target_local_pos + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
+    let final_local_pos = target_local_pos
+        + final_offset
+        + surface_frame
+            .map(|(_, _, up, _)| up.as_dvec3())
+            .unwrap_or(DVec3::Y)
+            * end_vert_off as f64;
 
     migrate_avatar_to_target_grid(
         &mut commands,
@@ -4129,10 +4318,10 @@ fn update_avatar_clip_planes_system(
 
 /// Teleports the avatar to a body's surface.
 ///
-/// The camera is parented to the Body's Grid (inertial anchor), NOT the Body
-/// itself. `SurfaceCamera` rebuilds world-space rotation every frame from
-/// `LocalGravityField.local_up`, so the camera stays surface-relative without
-/// inheriting the Body's rotation. `FloatingOrigin` must be on a Grid.
+/// The camera is parented to the body's surface Grid, not to the Body entity.
+/// That keeps the camera in the same body-fixed BigSpace branch as streamed
+/// terrain while `SurfaceCamera` derives its orientation from the canonical
+/// body-fixed ENU frame. `FloatingOrigin` must be on a Grid.
 #[on_command(TeleportToSurface)]
 fn on_surface_teleport_command(
     trigger: On<TeleportToSurface>,
@@ -4140,8 +4329,9 @@ fn on_surface_teleport_command(
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    _q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
+    q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<(Entity, &CelestialBody)>,
+    q_globe_lods: Query<&lunco_celestial::GlobeLod>,
     q_gravity_providers: Query<&GravityProvider>,
     mut field: ResMut<LocalGravityField>,
 ) {
@@ -4170,61 +4360,110 @@ fn on_surface_teleport_command(
     debug!("TELEPORT: triggered for avatar {:?}", avatar_ent);
 
     // Get camera cell for position lookup
-    let Some((_, cam_tf, _cam_cell, _cam_child_of)) = q_avatar.iter().next() else {
+    let Ok((_, _cam_tf, _cam_cell, _cam_child_of)) = q_avatar.get(avatar_ent) else {
         return;
     };
 
-    // Find the Body's Grid (the inertial anchor that the Body is a child of).
-    let body_grid = q_parents
-        .get(body_entity)
-        .ok()
-        .map(|c| c.0)
-        .filter(|e| q_grids.contains(*e));
-
-    let Some(grid_entity) = body_grid else {
-        warn!("TELEPORT: body {:?} has no Grid parent", body_entity);
+    // GlobeLod is the authoritative owner of a body's surface Grid. This is
+    // deliberately data-driven: adding another celestial body does not add a
+    // second Rust-side list of surface-grid marker types.
+    let Ok(globe_lod) = q_globe_lods.get(body_entity) else {
+        warn!("TELEPORT: body {:?} has no surface LOD Grid", body_entity);
         return;
     };
-    debug!("TELEPORT: parenting camera to grid {:?}", grid_entity);
-
-    // Compute surface position: use camera look direction projected onto body.
-    let (surface_local_pos, surface_normal) = {
-        let surface_normal = -cam_tf.forward().as_dvec3().normalize();
-        (surface_normal * (body_radius + 50.0), surface_normal)
+    let target_grid = globe_lod.surface_grid;
+    let Ok(target_grid_ref) = q_grids.get(target_grid) else {
+        warn!(
+            "TELEPORT: target surface Grid {:?} is not live",
+            target_grid
+        );
+        return;
     };
+    debug!(
+        "TELEPORT: parenting camera to surface grid {:?}",
+        target_grid
+    );
 
-    // Since the Body sits at the Grid origin (CellCoord::default, Transform::default),
-    // the camera's grid-local position IS the body-relative position.
-    // No absolute coordinate math needed.
+    {
+        // Resolve the camera pose and its look direction in the same shared
+        // BigSpace branch as the body. The old code read `Transform::forward`
+        // directly, which is only correct while the avatar and body happen to
+        // share one parent frame; it becomes a sideways teleport after an
+        // orbital/body-grid handoff.
+        let Some((_common_grid, avatar_position, avatar_rotation, body_position, body_rotation)) =
+            lunco_core::coords::common_grid_poses(
+                avatar_ent,
+                body_entity,
+                &q_parents,
+                &q_grids,
+                &q_spatial_abs,
+            )
+        else {
+            warn!("TELEPORT: avatar and body have no shared BigSpace Grid");
+            return;
+        };
+        let Some((_, grid_position, grid_to_common, _, body_to_common)) =
+            lunco_core::coords::common_grid_poses(
+                target_grid,
+                body_entity,
+                &q_parents,
+                &q_grids,
+                &q_spatial_abs,
+            )
+        else {
+            warn!("TELEPORT: target Grid cannot be composed with the body");
+            return;
+        };
+        let body_to_grid = grid_to_common.inverse() * body_to_common;
+        let origin_body = body_rotation.inverse() * (avatar_position - body_position);
+        let direction_body = body_rotation.inverse() * (avatar_rotation * Vec3::NEG_Z.as_dvec3());
+        let b = origin_body.dot(direction_body);
+        let c = origin_body.length_squared() - body_radius * body_radius;
+        let discriminant = b * b - c;
+        if discriminant < 0.0 {
+            warn!("TELEPORT: avatar view does not intersect the body's surface");
+            return;
+        }
+        let root = discriminant.sqrt();
+        let t = [-b - root, -b + root]
+            .into_iter()
+            .filter(|t| *t > 0.0)
+            .next()
+            .unwrap_or(0.0);
+        let surface_body_pos = origin_body + direction_body * t;
+        let surface_normal = surface_body_pos.normalize_or(DVec3::Y);
+        let body_center_in_grid = grid_to_common.inverse() * (body_position - grid_position);
+        let surface_local_pos = body_center_in_grid + body_to_grid * surface_body_pos;
+        let Some((east, north, up)) = surface_axes_for_grid_position(
+            target_grid,
+            surface_local_pos,
+            body_entity,
+            &q_parents,
+            &q_grids,
+            &q_spatial_abs,
+        ) else {
+            warn!("TELEPORT: body-fixed tangent frame is not reachable from the target Grid");
+            return;
+        };
 
-    if let Ok(grid_ref) = q_grids.get(grid_entity) {
-        let (new_cell, new_tf_translation) = grid_ref.translation_to_grid(surface_local_pos);
+        let (new_cell, new_tf_translation) = target_grid_ref.translation_to_grid(surface_local_pos);
 
         // Surface gravity from body's GravityProvider
         let surface_g = if let Ok(gp) = q_gravity_providers.get(body_entity) {
-            let accel = gp.model.acceleration(surface_normal * body_radius);
+            let accel = gp.model.acceleration(surface_body_pos);
             accel.length()
         } else {
             0.0
         };
 
-        // Build camera rotation in world space: Y = surface_normal (up), Z = horizontal.
-        // Since the camera is on the Grid (identity rotation), world-space = local-space.
-        let up_n = surface_normal.normalize();
-        let up_v = up_n.as_vec3();
-        let ref_north = if up_n.abs().dot(DVec3::Y) < 0.9 {
-            DVec3::Y
-        } else {
-            DVec3::Z
-        };
-        let right_v = up_n.cross(ref_north).normalize().as_vec3();
-        let fwd_v = up_v.cross(right_v);
-        let surface_rot = Quat::from_mat3(&Mat3::from_cols(right_v, up_v, -fwd_v));
+        // Build the initial attitude from the same body-fixed ENU frame used
+        // by SurfaceCamera. No world-axis reference is valid here.
+        let surface_rot = surface_camera_rotation(east, north, up, 0.0, -0.2);
 
-        // Parent camera to the Body's Grid (inertial), NOT the Body.
+        // Parent camera to the same surface Grid as terrain and rover content.
         // FloatingOrigin must be on a Grid.
         let local_tf = Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
-        migrate_to_grid(&mut commands, avatar_ent, grid_entity, new_cell, local_tf);
+        migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
 
         commands
             .entity(avatar_ent)
@@ -4241,17 +4480,21 @@ fn on_surface_teleport_command(
 
         // Update LocalGravityField (world-space "up")
         field.body_entity = Some(body_entity);
-        field.body_relative_position = surface_local_pos;
+        field.body_relative_position = surface_body_pos;
         field.local_up = surface_normal;
         field.surface_g = surface_g;
-        field.up = surface_normal;
+        let Some((_, body_world_rotation)) =
+            lunco_core::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs)
+        else {
+            warn!("TELEPORT: body has no complete world BigSpace pose");
+            return;
+        };
+        field.up = body_world_rotation.0 * surface_normal;
 
         debug!(
-            "TELEPORT: done — camera now on grid {:?} at alt ~50m",
-            grid_entity
+            "TELEPORT: done — camera now on surface grid {:?} at alt ~50m",
+            target_grid
         );
-    } else {
-        warn!("TELEPORT: grid entity {:?} not found", grid_entity);
     }
 }
 
@@ -4263,16 +4506,15 @@ fn on_surface_teleport_command(
 fn on_leave_surface_command(
     trigger: On<LeaveSurface>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, Option<&GravityBody>), With<Avatar>>,
+    q_avatar: Query<(Entity, Option<&GravityBody>), With<Avatar>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_emb: Query<Entity, With<lunco_celestial::EMBRoot>>,
     mut field: ResMut<LocalGravityField>,
 ) {
-    let cmd = trigger.event();
-    let avatar_ent = cmd.target;
-
-    let Some((_, cam_tf, gravity_body)) = q_avatar.iter().next() else {
+    let Some((avatar_ent, gravity_body)) = q_avatar.iter().next() else {
         return;
     };
 
@@ -4294,12 +4536,29 @@ fn on_leave_surface_command(
         return;
     };
 
-    // Teleport to 3x body radius altitude, relative to EMB Grid.
+    // Resolve the body's current pose in the orbit frame through BigSpace's
+    // cell-aware hierarchy, then place the camera relative to that pose.
+    // The old code placed it relative to the EMB origin, which is wrong for
+    // the Moon and became visibly sideways after a surface-grid handoff.
     let altitude = body_radius * 3.0;
-    let orbit_pos_local = DVec3::new(0.0, altitude, altitude * 0.5);
+    let body_position = if body_entity != Entity::PLACEHOLDER {
+        lunco_core::coords::grid_relative_pose(
+            body_entity,
+            emb_grid,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+        .map(|(position, _)| position)
+        .unwrap_or(DVec3::ZERO)
+    } else {
+        DVec3::ZERO
+    };
+    let orbit_rotation = Quat::from_euler(EulerRot::YXZ, 0.0, -0.3, 0.0);
+    let orbit_pos_local = body_position + orbit_rotation.mul_vec3(Vec3::Z).as_dvec3() * altitude;
     let (new_cell, new_tf) = emb_grid_ref.translation_to_grid(orbit_pos_local);
 
-    let local_tf = Transform::from_translation(new_tf).with_rotation(cam_tf.rotation);
+    let local_tf = Transform::from_translation(new_tf).with_rotation(orbit_rotation);
     migrate_to_grid(&mut commands, avatar_ent, emb_grid, new_cell, local_tf);
 
     commands
@@ -4345,14 +4604,18 @@ fn surface_mode_transition_system(
         (
             Entity,
             &Transform,
+            &ChildOf,
             Option<&GravityBody>,
             Option<&SurfaceRelativeMode>,
-            Option<&FreeFlightCamera>,
             Option<&SurfaceCamera>,
+            Option<&SpringArmCamera>,
         ),
         (With<Avatar>, Without<OrbitCamera>),
     >,
     q_bodies: Query<&CelestialBody>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     thresholds: Res<SurfaceModeThreshold>,
     field: Res<LocalGravityField>,
     q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
@@ -4368,7 +4631,7 @@ fn surface_mode_transition_system(
     // flew the view away ("right click moved somewhere else"), while the two
     // writers alternating produced the residual per-frame wobble. An orbital
     // view owns the camera; leave it alone.
-    let Some((avatar_ent, transform, maybe_gb, maybe_mode, maybe_ff, maybe_sc)) =
+    let Some((avatar_ent, transform, child_of, maybe_gb, maybe_mode, maybe_sc, maybe_spring)) =
         q_avatar.iter().next()
     else {
         return;
@@ -4389,11 +4652,16 @@ fn surface_mode_transition_system(
     let engage_altitude_m = engage_body.and_then(altitude_to).unwrap_or(f64::MAX);
     let altitude = disengage_body.and_then(altitude_to).unwrap_or(f64::MAX);
 
-    // SurfaceRelativeMode is a policy marker; SurfaceCamera is the actual
-    // writer.  The two must never be allowed to disagree.  In particular,
-    // `SurfaceRelativeMode + FreeFlightCamera` lets the free-flight writer
-    // overwrite a surface-frame rotation every interaction step.
+    // SurfaceRelativeMode is a coordinate-policy marker, not a camera mode.
+    // `SurfaceCamera` owns a free camera's complete surface-relative pose;
+    // `SpringArmCamera` owns a followed vessel pose and consumes the marker to
+    // choose body-fixed ENU instead of world-Y.  Treating SurfaceCamera as the
+    // only valid writer used to insert it over an active spring arm immediately
+    // after possession. The camera-mode hook then removed SpringArmCamera, so
+    // the rover drove away while the view remained at the possession pose.
     let camera_is_surface = maybe_sc.is_some();
+    let spring_is_surface = maybe_spring.is_some();
+    let has_surface_relative_writer = camera_is_surface || spring_is_surface;
     let marker_is_surface = maybe_mode.is_some();
 
     // Site-anchored scenes NEVER altitude-disengage: the user's frame of
@@ -4405,8 +4673,10 @@ fn surface_mode_transition_system(
     // scroll transit hands the camera to the orbital mode anyway.
     let site_anchored = !q_site.is_empty();
 
-    if camera_is_surface && altitude > thresholds.disengage_altitude && !site_anchored {
-        // Too high → exit surface mode. Swap SurfaceCamera → FreeFlightCamera.
+    if has_surface_relative_writer && altitude > thresholds.disengage_altitude && !site_anchored {
+        // Too high → leave the surface coordinate policy. A free surface
+        // camera swaps back to free flight; a spring arm remains the same
+        // writer and simply resumes its non-surface heading basis.
         commands.entity(avatar_ent).remove::<SurfaceRelativeMode>();
         if let Some(sc) = maybe_sc {
             // Note: heading→yaw is approximate (different reference frames)
@@ -4423,18 +4693,20 @@ fn surface_mode_transition_system(
     } else if engage_altitude_m < thresholds.engage_altitude {
         // Low enough and explicitly bound to a body → enter surface mode.
         commands.entity(avatar_ent).try_insert(SurfaceRelativeMode);
-        // Swap any non-surface camera into the sole surface camera writer.
-        if !camera_is_surface {
-            let (heading, pitch) = maybe_ff.map(|ff| (ff.yaw, ff.pitch)).unwrap_or_else(|| {
-                let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-                (yaw, pitch)
-            });
-            commands
-                .entity(avatar_ent)
-                .remove::<FreeFlightCamera>()
-                .try_insert(SurfaceCamera { heading, pitch });
+        // A free camera needs the dedicated surface writer. A spring arm
+        // already is the sole writer and derives its ENU orientation itself.
+        if !has_surface_relative_writer {
+            if let Some((east, north, up)) =
+                surface_axes_in_grid(child_of.0, &field, &q_parents, &q_grids, &q_spatial)
+            {
+                let (heading, pitch) = surface_camera_angles(east, north, up, transform.rotation);
+                commands
+                    .entity(avatar_ent)
+                    .remove::<FreeFlightCamera>()
+                    .try_insert(SurfaceCamera { heading, pitch });
+            }
         }
-    } else if marker_is_surface && !camera_is_surface {
+    } else if marker_is_surface && !has_surface_relative_writer {
         // Repair a stale marker even when the body is no longer in the engage
         // band.  Leaving it behind is not a valid intermediate state.
         commands.entity(avatar_ent).remove::<SurfaceRelativeMode>();
@@ -4817,6 +5089,69 @@ mod tests {
         .filter(|present| *present)
         .count();
         assert_eq!(mode_count, 1);
+    }
+
+    #[test]
+    fn surface_transition_preserves_possessed_spring_arm_writer() {
+        let mut app = App::new();
+        register_camera_mode_hooks(&mut app);
+        app.init_resource::<SurfaceModeThreshold>()
+            .insert_resource(LocalGravityField {
+                body_entity: None,
+                body_relative_position: DVec3::ZERO,
+                up: DVec3::Y,
+                local_up: DVec3::Y,
+                surface_g: 1.0,
+            })
+            .add_systems(Update, surface_mode_transition_system);
+
+        let body = app
+            .world_mut()
+            .spawn(CelestialBody {
+                name: "test body".into(),
+                ephemeris_id: 1,
+                radius_m: 100.0,
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<LocalGravityField>()
+            .body_entity = Some(body);
+        app.world_mut()
+            .resource_mut::<LocalGravityField>()
+            .body_relative_position = DVec3::Y * 101.0;
+
+        let grid = app.world_mut().spawn(Grid::new(2_000.0, 0.0)).id();
+        let target = app.world_mut().spawn_empty().id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                Transform::default(),
+                CellCoord::ZERO,
+                ChildOf(grid),
+                GravityBody { body_entity: body },
+                SurfaceRelativeMode,
+                SpringArmCamera {
+                    target,
+                    distance: 15.0,
+                    yaw: 0.0,
+                    pitch: -0.25,
+                    damping: None,
+                    vertical_offset: 2.0,
+                    track_heading: true,
+                    attitude: FollowAttitude::Heading,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert!(
+            app.world().get::<SpringArmCamera>(avatar).is_some(),
+            "surface policy must not replace the possessed spring-arm writer"
+        );
+        assert!(app.world().get::<SurfaceCamera>(avatar).is_none());
+        assert!(app.world().get::<SurfaceRelativeMode>(avatar).is_some());
     }
 
     #[test]

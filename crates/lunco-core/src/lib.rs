@@ -101,8 +101,8 @@ pub use session::{
 };
 pub use telemetry::Severity;
 pub use world::{
-    ensure_world_root, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,
-    WorldShellSet,
+    ensure_world_root, ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot,
+    WorldShellPlugin, WorldShellSet,
 };
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────

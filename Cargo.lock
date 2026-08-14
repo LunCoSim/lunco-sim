@@ -7180,6 +7180,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
+ "lunco-physics",
  "lunco-render",
  "lunco-settings",
  "lunco-theme",
@@ -7682,6 +7683,7 @@ version = "0.1.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
  "lunco-readiness",
 ]

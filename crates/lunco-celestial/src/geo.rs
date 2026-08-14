@@ -141,11 +141,22 @@ pub struct LocalTangentFrame {
 impl LocalTangentFrame {
     /// Body-fixed ENU basis at a geodetic point (before body rotation).
     pub fn body_fixed(geo: &Geodetic, radius_m: f64) -> Self {
-        let lon = geo.lon_deg.to_radians();
-        let origin = geodetic_to_body_fixed(geo, radius_m);
+        Self::from_body_fixed_position(geodetic_to_body_fixed(geo, radius_m))
+    }
+
+    /// Body-fixed ENU basis at a body-fixed Cartesian position.
+    ///
+    /// This is the position form of [`Self::body_fixed`]. It is the canonical
+    /// tangent frame for runtime consumers, which already have a BigSpace
+    /// composed body-relative position rather than an authored geodetic
+    /// anchor. Longitude is recovered from the body-fixed position, so the
+    /// basis remains tied to the body's prime meridian instead of an arbitrary
+    /// engine axis.
+    pub fn from_body_fixed_position(origin: DVec3) -> Self {
         let up = origin.normalize_or_zero();
-        let east = DVec3::new(-lon.sin(), 0.0, -lon.cos());
-        let north = up.cross(east).normalize_or_zero();
+        let lon = (-up.z).atan2(up.x);
+        let east_at_equator = DVec3::new(-lon.sin(), 0.0, -lon.cos());
+        let north = up.cross(east_at_equator).normalize_or_zero();
         // Re-orthogonalize east (up is not exactly perpendicular to the
         // equatorial east direction off the equator).
         let east = north.cross(up).normalize_or_zero();
@@ -625,6 +636,19 @@ mod tests {
                 (f.east.cross(f.north) - f.up * f.east.cross(f.north).dot(f.up)).length() < 1e-9
             );
         }
+    }
+
+    #[test]
+    fn position_tangent_frame_matches_geodetic_tangent_frame() {
+        let geo = Geodetic::new(26.0462, 3.6049, 50.0);
+        let position = geodetic_to_body_fixed(&geo, 1_737_400.0);
+        let from_geo = LocalTangentFrame::body_fixed(&geo, 1_737_400.0);
+        let from_position = LocalTangentFrame::from_body_fixed_position(position);
+
+        assert!((from_position.origin - from_geo.origin).length() < 1e-9);
+        assert!((from_position.east - from_geo.east).length() < 1e-12);
+        assert!((from_position.north - from_geo.north).length() < 1e-12);
+        assert!((from_position.up - from_geo.up).length() < 1e-12);
     }
 
     #[test]

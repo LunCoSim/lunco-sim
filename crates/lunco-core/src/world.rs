@@ -43,6 +43,15 @@ pub struct WorldGrid;
 #[reflect(Component)]
 pub struct WorldRoot;
 
+/// The single Avian coordinate partition currently mounted in the world.
+///
+/// Rendering may contain many nested BigSpace grids, but one Avian world must
+/// not put bodies from different local frames at the same numeric origin. The
+/// scene mount changes this resource atomically when it selects a surface
+/// physics frame; all bridge, gravity, and spatial-query consumers use it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct ActivePhysicsFrame(pub Entity);
+
 /// The set [`setup_world`] runs in. Subsystems that need the shell to exist
 /// (e.g. celestial's hierarchy) order `.after(WorldShellSet)`. Ordering is a
 /// convenience — `ensure_world_root` is create-or-get, so it is never required
@@ -105,6 +114,15 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         q.iter(world).next()
     };
     if let Some(grid) = existing {
+        if world.get_resource::<ActivePhysicsFrame>().is_none() {
+            let root = {
+                let mut q = world.query_filtered::<Entity, With<WorldRoot>>();
+                q.iter(world).next()
+            };
+            if let Some(root) = root {
+                world.insert_resource(ActivePhysicsFrame(root));
+            }
+        }
         return grid;
     }
 
@@ -165,6 +183,7 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
             Name::new("WorldRoot"),
         ))
         .id();
+    world.insert_resource(ActivePhysicsFrame(root));
 
     // The canonical grid scenes mount under.
     let grid = world

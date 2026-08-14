@@ -182,7 +182,7 @@ pub fn update_terrain_brush_ghost(
             &mut Transform,
             &mut lunco_render::PbrLook,
         ),
-        With<TerrainBrushGhost>,
+        (With<TerrainBrushGhost>, Without<big_space::prelude::Grid>),
     >,
     raycaster: lunco_physics::GridSpatialQuery,
     surface: lunco_terrain_surface::GridSurfaceQuery,
