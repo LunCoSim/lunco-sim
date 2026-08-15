@@ -54,7 +54,7 @@ lunco-cosim = { path = "../lunco-cosim" }
 # `default-features = false` keeps the networked headless server (and this crate)
 # egui/winit-free.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
-# `default-features = false`: we read only `CelestialReferenceFrame` (the
+# `default-features = false`: we read only `ReferenceFrame` (the
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
@@ -103,9 +103,9 @@ lunco-storage = { path = "../lunco-storage" }
 # feature. Headless servers never link egui.
 bevy_egui = { workspace = true, optional = true }
 leafwing-input-manager = { workspace = true }
-# Read by the wire's `gather_snapshot`: avian velocity (LinearVelocity/
-# AngularVelocity) for client-side prediction, big_space `CellCoord` so
-# replication carries the integer cell alongside the f64 absolute position.
+# Read by the wire's `gather_snapshot`: Avian f64 pose/velocity for prediction;
+# BigSpace is used only to convert between local precision grids and the named
+# semantic frame carried by the protocol.
 avian3d = { workspace = true }
 big_space = { workspace = true }
 serde = { workspace = true, optional = true }

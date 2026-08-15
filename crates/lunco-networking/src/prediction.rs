@@ -117,8 +117,8 @@ struct InterpSample {
     pos_world: GridPos,
     /// Authoritative velocities from the snapshot (owned-rover prediction uses
     /// these; remote interpolation ignores them).
-    lv: Vec3,
-    av: Vec3,
+    lv: DVec3,
+    av: DVec3,
     /// Highest input seq the host applied for this gid as of this snapshot (the
     /// reconcile ack). 0 = none.
     last_input_seq: u32,
@@ -288,8 +288,8 @@ fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(GridPos, Quat, 
             // ds = dt/span, so dp/ds = v·span). lv is units/sec.
             let p0 = a.pos_world.0;
             let p1 = b.pos_world.0;
-            let m0 = a.lv.as_dvec3() * span;
-            let m1 = b.lv.as_dvec3() * span;
+            let m0 = a.lv * span;
+            let m1 = b.lv * span;
             let s2 = s * s;
             let s3 = s2 * s;
             let h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
@@ -298,21 +298,21 @@ fn sample_curve(buf: &VecDeque<InterpSample>, t: f64) -> Option<(GridPos, Quat, 
             let h11 = s3 - s2;
             let pos = p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
             let rot = a.rot.slerp(b.rot, s as f32);
-            Some((GridPos(pos), rot, a.lv.as_dvec3(), a.av.as_dvec3()))
+            Some((GridPos(pos), rot, a.lv, a.av))
         }
         // t before the oldest sample → snap to oldest.
-        (None, Some(b)) => Some((b.pos_world, b.rot, b.lv.as_dvec3(), b.av.as_dvec3())),
+        (None, Some(b)) => Some((b.pos_world, b.rot, b.lv, b.av)),
         // Starved (t past the newest sample). Glide linearly along the sample's
         // velocity so a mover keeps going instead of freezing then snapping;
         // capped in time and distance so a stalled/diverging body can't fly off.
         (Some(a), None) => {
             let dt = (t - a.gen_t).clamp(0.0, INTERP_MAX_EXTRAPOLATION);
-            let mut delta = a.lv.as_dvec3() * dt;
+            let mut delta = a.lv * dt;
             let len = delta.length();
             if len > INTERP_MAX_EXTRAP_DIST {
                 delta *= INTERP_MAX_EXTRAP_DIST / len;
             }
-            Some((a.pos_world + delta, a.rot, a.lv.as_dvec3(), a.av.as_dvec3()))
+            Some((a.pos_world + delta, a.rot, a.lv, a.av))
         }
         (None, None) => None,
     }
@@ -370,8 +370,8 @@ pub fn ingest_snapshots(
             // Wire boundary: `s.pos` is the raw grid-absolute [f64;3] (byte-locked
             // serde array) — it becomes typed here, at ingest.
             pos_world: GridPos(DVec3::from_array(s.pos)),
-            lv: Vec3::from(s.lv),
-            av: Vec3::from(s.av),
+            lv: DVec3::from_array(s.lv),
+            av: DVec3::from_array(s.av),
             last_input_seq: s.last_input_seq,
         });
         while buf.len() > INTERP_MAX_SAMPLES {
@@ -852,10 +852,10 @@ pub fn maintain_owned_locally(
                             r.0 = s.rot.as_dquat();
                         }
                         if let Some(mut lv) = em.get_mut::<LinearVelocity>() {
-                            lv.0 = s.lv.as_dvec3();
+                            lv.0 = s.lv;
                         }
                         if let Some(mut av) = em.get_mut::<AngularVelocity>() {
-                            av.0 = s.av.as_dvec3();
+                            av.0 = s.av;
                         }
                     });
                 }
@@ -1441,8 +1441,8 @@ pub fn rollback_owned_prediction(world: &mut World) {
         let auth = RbState {
             pos: sample.pos_world.0,
             rot: sample.rot.as_dquat(),
-            lv: sample.lv.as_dvec3(),
-            av: sample.av.as_dvec3(),
+            lv: sample.lv,
+            av: sample.av,
         };
 
         // ── Divergence test: did the prediction actually miss? ──
@@ -1778,12 +1778,10 @@ pub fn reconcile_owned_prediction(
         let auth_lv = sample.lv;
         let auth_av = sample.av;
         if let Some(mut l) = lin {
-            let auth = DVec3::new(auth_lv.x as f64, auth_lv.y as f64, auth_lv.z as f64);
-            l.0 = (l.0 + auth) * 0.5;
+            l.0 = (l.0 + auth_lv) * 0.5;
         }
         if let Some(mut a) = ang {
-            let auth = DVec3::new(auth_av.x as f64, auth_av.y as f64, auth_av.z as f64);
-            a.0 = (a.0 + auth) * 0.5;
+            a.0 = (a.0 + auth_av) * 0.5;
         }
     }
 }
@@ -2634,8 +2632,8 @@ mod pose_write_tests {
                 pos: Vec3::ZERO,
                 rot: authoritative,
                 pos_world: GridPos(DVec3::ZERO),
-                lv: Vec3::ZERO,
-                av: Vec3::ZERO,
+                lv: DVec3::ZERO,
+                av: DVec3::ZERO,
                 last_input_seq: 1,
             });
 
@@ -2721,8 +2719,8 @@ mod pose_write_tests {
                 pos: Vec3::ZERO,
                 rot: target,
                 pos_world: GridPos(DVec3::ZERO),
-                lv: Vec3::ZERO,
-                av: Vec3::ZERO,
+                lv: DVec3::ZERO,
+                av: DVec3::ZERO,
                 last_input_seq: 0,
             });
 
@@ -2798,7 +2796,6 @@ mod pose_write_tests {
                     av: [0.0; 3],
                     last_input_seq: 0,
                     pos: [gen_t * 100.0, 0.0, 0.0],
-                    cell: [0; 3],
                 });
         }
 
@@ -2868,8 +2865,8 @@ mod pose_write_tests {
                 pos: Vec3::new(50.0, 0.0, 0.0), // ≫ snap_pos (6.0) from origin
                 rot: Quat::IDENTITY,
                 pos_world: GridPos(DVec3::new(50.0, 0.0, 0.0)),
-                lv: Vec3::new(2.0, 0.0, 0.0),
-                av: Vec3::ZERO,
+                lv: DVec3::new(2.0, 0.0, 0.0),
+                av: DVec3::ZERO,
                 last_input_seq: 0,
             });
 
@@ -2930,8 +2927,8 @@ mod pose_write_tests {
                 pos: Vec3::new(0.05, 0.0, 0.0), // within eps_pos (0.25) of the body
                 rot: Quat::IDENTITY,
                 pos_world: GridPos(DVec3::new(0.05, 0.0, 0.0)),
-                lv: Vec3::ZERO, // authority says 0 — must NOT overwrite local 5.0
-                av: Vec3::ZERO,
+                lv: DVec3::ZERO, // authority says 0 — must NOT overwrite local 5.0
+                av: DVec3::ZERO,
                 last_input_seq: 0,
             });
 
@@ -3014,8 +3011,8 @@ mod pose_write_tests {
                 pos: Vec3::new(100.0, 0.0, 0.0),
                 rot: Quat::IDENTITY,
                 pos_world: GridPos(DVec3::new(100.0, 0.0, 0.0)),
-                lv: Vec3::ZERO,
-                av: Vec3::ZERO,
+                lv: DVec3::ZERO,
+                av: DVec3::ZERO,
                 last_input_seq: 5000,
             });
         world.run_system_once(reconcile_owned_prediction).unwrap();
@@ -3040,8 +3037,8 @@ mod pose_write_tests {
                 pos: Vec3::new(100.0, 0.0, 0.0),
                 rot: Quat::IDENTITY,
                 pos_world: GridPos(DVec3::new(100.0, 0.0, 0.0)),
-                lv: Vec3::ZERO,
-                av: Vec3::ZERO,
+                lv: DVec3::ZERO,
+                av: DVec3::ZERO,
                 last_input_seq: 1,
             });
         world.run_system_once(reconcile_owned_prediction).unwrap();
@@ -3234,14 +3231,14 @@ mod avian_kinematic_probe {
 mod step1_curve_tests {
     use super::*;
 
-    fn sample(gen_t: f64, pos: DVec3, lv: Vec3, rot: Quat) -> InterpSample {
+    fn sample(gen_t: f64, pos: DVec3, lv: DVec3, rot: Quat) -> InterpSample {
         InterpSample {
             gen_t,
             pos: pos.as_vec3(),
             rot,
             pos_world: GridPos(pos),
             lv,
-            av: Vec3::ZERO,
+            av: DVec3::ZERO,
             last_input_seq: 0,
         }
     }
@@ -3253,13 +3250,13 @@ mod step1_curve_tests {
         buf.push_back(sample(
             0.0,
             DVec3::new(0.0, 0.0, 0.0),
-            Vec3::X,
+            DVec3::X,
             Quat::IDENTITY,
         ));
         buf.push_back(sample(
             1.0,
             DVec3::new(5.0, 0.0, 0.0),
-            Vec3::X,
+            DVec3::X,
             Quat::IDENTITY,
         ));
 
@@ -3279,7 +3276,7 @@ mod step1_curve_tests {
     /// exactly the straight line: the midpoint is the geometric midpoint.
     #[test]
     fn hermite_constant_velocity_is_linear() {
-        let v = Vec3::new(2.0, 0.0, 0.0);
+        let v = DVec3::new(2.0, 0.0, 0.0);
         let mut buf = VecDeque::new();
         buf.push_back(sample(0.0, DVec3::ZERO, v, Quat::IDENTITY));
         buf.push_back(sample(1.0, DVec3::new(2.0, 0.0, 0.0), v, Quat::IDENTITY)); // p0 + v·1
@@ -3298,7 +3295,7 @@ mod step1_curve_tests {
         buf.push_back(sample(
             0.0,
             DVec3::ZERO,
-            Vec3::new(1.0, 0.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
             Quat::IDENTITY,
         ));
 

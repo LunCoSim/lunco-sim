@@ -538,11 +538,11 @@ mod tests {
             .map(|e| (e.key.clone(), declared_body(e)))
             .collect();
         assert!(
-            bodies.contains(&("earth".to_string(), Some(399))),
+            bodies.contains(&("earth".to_string(), Some(crate::ephemeris_id::EARTH))),
             "earth imagery must name NAIF 399: {bodies:?}"
         );
         assert!(
-            bodies.contains(&("moon".to_string(), Some(301))),
+            bodies.contains(&("moon".to_string(), Some(crate::ephemeris_id::MOON))),
             "moon imagery must name NAIF 301: {bodies:?}"
         );
     }

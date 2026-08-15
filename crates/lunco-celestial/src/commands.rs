@@ -24,8 +24,8 @@ pub struct TeleportToSurface {
 
 /// Leave the current body's surface and return to orbit view.
 ///
-/// Teleports the camera to 3x body radius altitude and switches to
-/// `OrbitCamera` mode, re-parenting to the EMB Grid.
+/// Opens a transactional `OrbitCamera` view in the body's explicit star-fixed
+/// orbit grid. Returning restores the avatar's exact prior surface frame.
 #[Command]
 pub struct LeaveSurface {
     /// The avatar entity leaving the surface.

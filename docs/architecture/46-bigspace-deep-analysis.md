@@ -5,6 +5,19 @@
 > A decision record. Supersedes the interim reasoning in
 [45](45-big-space-correct-usage.md) and the view-pin workarounds it motivated.
 
+> **Current implementation:** the inverted/single-cell architecture diagnosed
+> below is retired. The concise as-built contract is the “Current coordinate
+> contract” in doc 45: official upstream 0.13/Bevy 0.19, one canonical root and
+> floating origin, 2 km cells with 100 m switching thresholds, explicit
+> body-fixed/inertial sibling grids, typed `f64` frame transforms, and Avian
+> `f64` state in `ActivePhysicsFrame`. Named-frame lookup is unique and
+> fail-closed; precision sub-grids inherit semantics; user-authored anchors and
+> orbits are projected and migrated automatically. Physics snapshots and
+> perspective/AOI crossings carry explicit semantic frames; capture/apply
+> convert automatically between those frames and each peer's private f64
+> physics grid. The remainder preserves the measurements
+> and rejected architecture that explain those invariants.
+
 ---
 
 > ## ⚠ Correction (2026-07-10) — this document's diagnosis was NECESSARY BUT NOT SUFFICIENT
@@ -59,7 +72,7 @@ here is carried forward on trust.
 
 ---
 
-## 0. Executive summary
+## 0. Historical failure summary
 
 We use `big_space` **inverted**. The crate keeps rendered f32 coordinates small
 near the camera by storing positions as an **integer cell + small f32 offset**;

@@ -21,6 +21,7 @@ use lunco_time::WorldTime;
 
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisResource;
+use crate::frames::{BodyInertial, Pos};
 use crate::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
 use crate::kepler::KeplerOrbit;
 use crate::link::LinkNode;
@@ -313,9 +314,6 @@ pub fn update_solar_poses(
                     let Some(desc) = body_of(orbit.body) else {
                         continue;
                     };
-                    let Some(center) = body_center(orbit.body, &mut centers) else {
-                        continue;
-                    };
                     let Some(offset) =
                         placement_offset(entity, orbit_entity, &q_parents, &q_grids, &q_spatial)
                     else {
@@ -326,8 +324,15 @@ pub fn update_solar_poses(
                     else {
                         continue;
                     };
+                    let body_inertial = Pos::<BodyInertial>::at_body(
+                        orbit.body,
+                        orbit.elements.position_bevy_m(desc.gm, jd),
+                    );
+                    let Some(solar) = tree.body_inertial_to_solar(body_inertial) else {
+                        continue;
+                    };
                     (
-                        center + orbit.elements.position_bevy_m(desc.gm, jd) + offset,
+                        solar.raw() + offset,
                         entity_rotation.0,
                         Horizon::Free { body: orbit.body },
                     )

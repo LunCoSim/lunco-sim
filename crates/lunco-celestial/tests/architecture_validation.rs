@@ -1,7 +1,6 @@
 //! Critical architecture validation tests for the body-fixed Grid transition.
 //!
-//! These tests verify the 4 key assumptions that the implementation plan depends on.
-//! If any of these fail, the architecture must be redesigned before implementation.
+//! These tests verify the BigSpace mechanics used by the production hierarchy.
 
 // One-time test scene construction, which `clippy.toml` already names as exempt
 // for `set_parent_in_place` ("bootstrap code — runs before any observer is
@@ -9,16 +8,12 @@
 // so that exemption has to be written here rather than in clippy.toml.
 #![allow(clippy::disallowed_methods)]
 //!
-//! **Important**: Tests 1-3 use isolated big_space setups (no CelestialPlugin)
-//! because the CelestialPlugin's integration tests have pre-existing breakage
-//! unrelated to these architectural questions.
-//!
-//! ## Architecture Decision (confirmed by tests)
-//!
-//! **DO NOT rotate the Grid.** big_space ignores Grid rotation when the
-//! FloatingOrigin is in the same Grid. Instead, rotate the **Body** entity
-//! and make rovers children of Body. big_space's `propagate_low_precision`
-//! handles transform propagation for Body children automatically.
+//! Production rotates the body-fixed Grid. Terrain, site roots, avatars and
+//! physical assemblies live below its nested surface Grid and therefore inherit
+//! body rotation together. Orbit cameras instead live in a co-located inertial
+//! sibling Grid. Physics is solved in the surface Grid selected by
+//! `ActivePhysicsFrame`; celestial ancestors above it are render representation,
+//! not Avian input.
 
 use bevy::math::{DQuat, DVec3, Quat};
 use bevy::prelude::*;
@@ -308,22 +303,24 @@ fn test_avian3d_collider_on_rotated_grid_child() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 5 (THE SOLUTION): Rover as child of Body inherits rotation
+// Test 5: Rover and floating origin share one stable surface frame
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// This test proves the CORRECT architecture: rovers as children of Body.
-// Body rotates → rover inherits rotation via big_space's propagate_low_precision.
-// No Grid rotation needed. No big_space patch needed. Works today.
+// This test proves the production hierarchy: the rotating body-fixed Grid owns
+// a nested surface Grid; rover and camera are high-precision children of that
+// surface Grid. An external inertial observer sees the body rotate (tests 1/2),
+// while LocalFloatingOrigin propagation removes shared ancestor motion so the
+// surface does not rotate under a stationary surface camera.
 
 #[test]
-fn test_body_child_rover_inherits_rotation() {
+fn test_surface_grid_rover_is_stable_relative_to_its_floating_origin() {
     use avian3d::prelude::*;
 
     let mut app = App::new();
     app.add_plugins(BigSpaceMinimalPlugins);
 
-    // Grid (translates, identity rotation — like Moon Grid)
-    let grid = app
+    // Body-fixed Grid: ephemeris supplies translation and IAU supplies rotation.
+    let body_fixed_grid = app
         .world_mut()
         .spawn((
             Grid::new(10_000.0, 1_000.0),
@@ -333,31 +330,35 @@ fn test_body_child_rover_inherits_rotation() {
         ))
         .id();
 
-    // Body at Grid origin (rotates — like Moon Body)
-    let body = app
+    // Nested surface Grid shared by terrain, camera and physical site content.
+    let surface_grid = app
         .world_mut()
         .spawn((
+            Grid::new(10_000.0, 1_000.0),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
-            Collider::sphere(1737.0e3), // Moon radius
         ))
         .id();
 
-    // Rover as child of Body at surface position (body-fixed coordinates)
+    // Rover at a body-fixed surface position. CellCoord carries the lunar-radius
+    // magnitude; the f32 Transform only carries a bounded residual.
     let moon_radius = 1_737_000.0;
     let rover_local_pos = Vec3::new(0.0, moon_radius + 5.0, 0.0); // 5m above surface at pole
+    let surface = Grid::new(10_000.0, 1_000.0);
+    let (rover_cell, rover_translation) = surface.translation_to_grid(rover_local_pos.as_dvec3());
     let rover = app
         .world_mut()
         .spawn((
-            Transform::from_translation(rover_local_pos),
+            rover_cell,
+            Transform::from_translation(rover_translation),
             GlobalTransform::default(),
             Collider::cuboid(1.0, 0.5, 2.0),
             RigidBody::Dynamic,
         ))
         .id();
 
-    // FloatingOrigin co-located with Body (at Grid origin) — camera at center of Moon
+    // Floating origin shares the same semantic surface frame.
     let fo = app
         .world_mut()
         .spawn((
@@ -368,12 +369,16 @@ fn test_body_child_rover_inherits_rotation() {
         ))
         .id();
 
-    // Hierarchy: BigSpaceRoot → Grid → {Body → Rover, FO}
+    // Hierarchy: BigSpaceRoot → body-fixed Grid → surface Grid → {rover, FO}
     app.world_mut()
         .spawn(BigSpaceRootBundle::default())
-        .add_child(grid);
-    app.world_mut().entity_mut(grid).add_children(&[body, fo]);
-    app.world_mut().entity_mut(body).add_child(rover);
+        .add_child(body_fixed_grid);
+    app.world_mut()
+        .entity_mut(body_fixed_grid)
+        .add_child(surface_grid);
+    app.world_mut()
+        .entity_mut(surface_grid)
+        .add_children(&[rover, fo]);
 
     app.update();
 
@@ -385,65 +390,41 @@ fn test_body_child_rover_inherits_rotation() {
         .translation();
     info!("Rover pos before: {:?}", rover_pos_before);
 
-    // Rotate the Body 90° around Z (like Moon spinning)
+    // Rotate the body-fixed Grid 90° around Z (like Moon spinning)
     let body_rot: Quat = DQuat::from_axis_angle(DVec3::Z, std::f64::consts::PI / 2.0).as_quat();
     {
-        let mut body_tf = app.world_mut().get_mut::<Transform>(body).unwrap();
+        let mut body_tf = app
+            .world_mut()
+            .get_mut::<Transform>(body_fixed_grid)
+            .unwrap();
         body_tf.rotation = body_rot;
     }
 
     app.update();
 
-    // Body's GlobalTransform should have the rotation
-    let body_gtf = app.world().get::<GlobalTransform>(body).unwrap();
-    let body_rot_actual = body_gtf.compute_transform().rotation;
-    let body_rot_error = (body_rot_actual - body_rot).length();
-    assert!(
-        body_rot_error < 1e-5,
-        "Body rotation error: {:.6}",
-        body_rot_error
-    );
-
-    // Rover's GlobalTransform should include Body's rotation
-    // (100, 500, 200) rotated 90° around Z → (-500, 100, 200)
-    // Actually our rover is at (0, moon_radius+5, 0) → rotated 90° Z → (-(moon_radius+5), 0, 0)
+    // Rover and camera share the rotating ancestor, so their render-space
+    // relation must remain unchanged.
     let rover_gtf = app.world().get::<GlobalTransform>(rover).unwrap();
     let rover_pos_after = rover_gtf.translation();
-    let rover_rot_after = rover_gtf.compute_transform().rotation;
-
-    // Expected: body_rot * (0, moon_radius+5, 0) = (-(moon_radius+5), 0, 0)
-    let expected_pos: Vec3 = body_rot * rover_local_pos;
-    let pos_error = (rover_pos_after - expected_pos).length();
-
-    // Rover should inherit Body's rotation
-    let rot_error = (rover_rot_after - body_rot).length();
-
     assert!(
-        pos_error < 1.0,
-        "Rover position not rotated with Body.\nExpected: {:?}\nGot: {:?}\nError: {:.6} (0.14m is fine for f32 at 1.7M scale)",
-        expected_pos, rover_pos_after, pos_error
-    );
-    assert!(
-        rot_error < 1e-5,
-        "Rover rotation doesn't match Body rotation.\nExpected: {:?}\nGot: {:?}\nError: {:.6}",
-        body_rot,
-        rover_rot_after,
-        rot_error
+        (rover_pos_after - rover_pos_before).length() < 1.0,
+        "shared body-fixed ancestor motion changed the rover/camera render relation: before={rover_pos_before:?}, after={rover_pos_after:?}"
     );
 
-    // Key: rover's LOCAL Transform (relative to Body) is unchanged
+    // Key: rover's high-precision surface-grid representation is unchanged.
     let rover_tf = app.world().get::<Transform>(rover).unwrap();
-    let local_pos_unchanged = (rover_tf.translation - rover_local_pos).length();
+    let local_pos_unchanged = (rover_tf.translation - rover_translation).length();
     assert!(
         local_pos_unchanged < 1e-5,
         "Rover local position should NOT change — it stays in body-fixed coords.\n\
-         Expected: {:?}\nGot: {:?}\nError: {:.6}",
-        rover_local_pos,
+         Expected residual: {:?}\nGot: {:?}\nError: {:.6}",
+        rover_translation,
         rover_tf.translation,
         local_pos_unchanged
     );
 
-    info!("PASS: Rover as child of Body inherits rotation, stays in body-fixed coords");
+    assert_eq!(*app.world().get::<CellCoord>(rover).unwrap(), rover_cell);
+    info!("PASS: surface-grid rover remains stable relative to its floating origin");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

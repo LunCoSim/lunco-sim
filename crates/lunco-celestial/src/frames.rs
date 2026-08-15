@@ -31,7 +31,7 @@
 //!   Mixing kinds does not compile.
 //! - **Frame identity** — *which* body, *which* site — is open and data-driven, so it is a
 //!   **value** ([`Frame::Origin`]), checked at run time. Mixing Moon-fixed with Earth-fixed
-//!   trips a `debug_assert`, not a compile error.
+//!   is rejected in every build, not only in debug mode.
 //!
 //! Adding "Earth rotating / non-rotating" is therefore **two marker structs and no new
 //! machinery** — [`BodyFixed`] and [`BodyInertial`] already cover them, scoped by body id.
@@ -42,12 +42,11 @@
 //! (`size_of::<Pos<Solar>>() == size_of::<DVec3>()`, asserted in the tests). The refactor
 //! changes no math — only what the compiler will let you *say*.
 //!
-//! # What is deliberately NOT typed
-//!
-//! The render/root frame (`OrbitalViewPin`, `LocalGravityField`) and grid-local
-//! `CellCoord`+f32. They sit downstream of every conversion, have never been an incident site,
-//! and typing them would drag four more crates in for no prevention value. **Type frames where
-//! they get MIXED, not everywhere** — a type system nobody can afford to keep gets bypassed.
+//! BigSpace's grid-local `CellCoord + Transform` remains a representation, not
+//! a second analytical frame system. Its owning Grid carries a semantic
+//! [`crate::ReferenceFrame`] tag, and all public crossings resolve that tag and
+//! convert through the shared frame services. The GPU-facing local remainder
+//! is never exposed as user or wire state.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -193,7 +192,7 @@ impl Frame for Solar {
 /// Moon). Pole = +Y, prime meridian = +X.
 ///
 /// Body-scoped: an Earth-fixed vector and a Moon-fixed vector are both `Pos<BodyFixed>`, and
-/// combining them trips a `debug_assert` on the origin. Making them distinct *types* would mean
+/// combining them is rejected on the origin in every build. Making them distinct *types* would mean
 /// a type per body — which the registry, quite rightly, does not have.
 #[derive(Debug, Clone, Copy)]
 pub struct BodyFixed;
@@ -207,9 +206,9 @@ impl Frame for BodyFixed {
 /// GCRF for Earth). This is the frame Kepler elements live in.
 ///
 /// The distinction is load-bearing: `KeplerianElements::position_bevy_m` returns *this*, and
-/// `placement.rs` lifts it with `equatorial_frame()` before use — while `pose.rs` currently does
-/// **not**, so an orbiting node's solar pose and its rendered position are computed in different
-/// frames. That is a live bug this type makes visible.
+/// Both rendered placement and analytical pose tracking lift it through the
+/// body's equatorial orientation before entering the solar frame. The typed
+/// conversion is the shared guard that keeps those consumers consistent.
 #[derive(Debug, Clone, Copy)]
 pub struct BodyInertial;
 impl Frame for BodyInertial {
@@ -251,7 +250,7 @@ impl Frame for SiteEnu {
 /// A position in frame `F`.
 ///
 /// Cross-frame arithmetic does not compile. Same-kind/different-origin arithmetic
-/// (Earth-fixed + Moon-fixed) trips a `debug_assert`.
+/// (Earth-fixed + Moon-fixed) is rejected in every build.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pos<F: Frame> {
     v: DVec3,
@@ -352,7 +351,7 @@ impl<F: Frame> Pos<F> {
     /// Interpolate within one frame (an ephemeris table lookup between two samples).
     #[inline]
     pub fn lerp(self, rhs: Self, t: f64) -> Self {
-        debug_assert!(self.same_origin(rhs), "lerp across two different origins");
+        assert!(self.same_origin(rhs), "lerp across two different origins");
         Self {
             v: self.v.lerp(rhs.v, t),
             ..self
@@ -392,7 +391,7 @@ impl<F: Frame> std::ops::Add for Pos<F> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        debug_assert!(
+        assert!(
             self.same_origin(rhs),
             "{}: added vectors from two different origins ({:?} vs {:?}) — e.g. an Earth-fixed \
              vector and a Moon-fixed one. Same frame KIND, different frame.",
@@ -418,7 +417,7 @@ impl<F: Frame> std::ops::Sub for Pos<F> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        debug_assert!(
+        assert!(
             self.same_origin(rhs),
             "{}: subtracted vectors from two different origins ({:?} vs {:?})",
             F::NAME,
@@ -505,9 +504,9 @@ mod tests {
     /// "Moon rotating" be the same type without being the same frame, without a type per body.
     #[test]
     fn a_centred_frame_carries_its_center() {
-        let earth = Pos::<BodyFixed>::at_body(399, DVec3::X);
-        let moon = Pos::<BodyFixed>::at_body(301, DVec3::X);
-        assert_eq!(earth.center(), Center::Body(399));
+        let earth = Pos::<BodyFixed>::at_body(crate::ephemeris_id::EARTH, DVec3::X);
+        let moon = Pos::<BodyFixed>::at_body(crate::ephemeris_id::MOON, DVec3::X);
+        assert_eq!(earth.center(), Center::Body(crate::ephemeris_id::EARTH));
         assert_ne!(earth.center(), moon.center());
     }
 
@@ -515,8 +514,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "two different origins")]
     fn adding_two_bodies_fixed_frames_is_caught() {
-        let earth = Pos::<BodyFixed>::at_body(399, DVec3::X);
-        let moon = Pos::<BodyFixed>::at_body(301, DVec3::X);
+        let earth = Pos::<BodyFixed>::at_body(crate::ephemeris_id::EARTH, DVec3::X);
+        let moon = Pos::<BodyFixed>::at_body(crate::ephemeris_id::MOON, DVec3::X);
         let _ = earth + moon;
     }
 
@@ -526,23 +525,23 @@ mod tests {
     #[test]
     fn a_libration_point_is_a_center_in_a_synodic_frame() {
         let em = Pair {
-            primary: 399,
-            secondary: 301,
+            primary: crate::ephemeris_id::EARTH,
+            secondary: crate::ephemeris_id::MOON,
         };
         // A halo orbit sample about Earth–Moon L2, in the co-rotating frame.
         let halo = Pos::<Synodic>::in_pair(em, DVec3::new(1.0e7, 0.0, 5.0e6));
         assert_eq!(halo.pair(), em);
 
         let l2 = Center::Libration {
-            primary: 399,
-            secondary: 301,
+            primary: crate::ephemeris_id::EARTH,
+            secondary: crate::ephemeris_id::MOON,
             point: LPoint::L2,
         };
         assert_ne!(
             l2,
             Center::Libration {
-                primary: 399,
-                secondary: 301,
+                primary: crate::ephemeris_id::EARTH,
+                secondary: crate::ephemeris_id::MOON,
                 point: LPoint::L1
             },
             "L1 and L2 are different centres of the same frame"
@@ -550,8 +549,8 @@ mod tests {
 
         // A Sun–Earth L2 halo is a different frame entirely, and says so.
         let se = Pair {
-            primary: 10,
-            secondary: 399,
+            primary: crate::ephemeris_id::SUN,
+            secondary: crate::ephemeris_id::EARTH,
         };
         assert_ne!(halo.pair(), se);
     }

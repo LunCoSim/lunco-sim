@@ -342,8 +342,8 @@ Summaries:
 - **Compression stack.** Three layers — semantic (position quantization `DVec3`→`u16×3`,
   smallest-three quaternions, delta encoding, dead reckoning, bit-packed bools, varint ids,
   command dictionary; ~5–10x), protocol-level (~2–3x), and LZ4/Zstd with per-channel threshold
-  policy (~1.5x). Today snapshots carry absolute f64 pos + `CellCoord` with **no** quantization
-  or LZ4.
+  policy (~1.5x). Today snapshots carry absolute f64 dynamics in an explicit semantic
+  reference frame, with **no** position/velocity quantization or LZ4.
 - **Interest management.** Distance/possession-tiered subscription (HIGH ±500 m full @60 Hz,
   MEDIUM state-only @10 Hz, LOW aggregates only) to avoid the 1000-entity state explosion.
   Targeted ~33x bandwidth reduction (≈1.5 KB/s per client, ≈15 KB/s server egress for 10
@@ -398,7 +398,7 @@ delivered.
 | **2. Collaborative Editing** (EditLog, Lamport, replay) | ❌ **PLANNED** — op-log substrate exists (`Mutation<P>`/`OpId`); EditLog/checkpoint not built |
 | **3. Networked Undo** | ❌ **PLANNED** — not built |
 | **4. Client-Side Prediction** | ✅ **SHIPPED** — predict-all-vehicles + input-replay reconciliation + physics-space smoothing (see [Client-Side Prediction](#client-side-prediction-as-built)) |
-| **5. Compression** (quantization, delta, dead-reckoning, LZ4) | ❌ **PLANNED** — snapshot carries absolute f64 pos + CellCoord; no quantization/LZ4/dead-reckoning |
+| **5. Compression** (quantization, delta, dead-reckoning, LZ4) | ❌ **PLANNED** — snapshot carries named-frame f64 position/velocities; no position quantization/LZ4/dead-reckoning |
 | **6. Interest Management** | ❌ **PLANNED** — not built (all clients get all entities) |
 | **7. Yjs for Modelica Collaboration** | ❌ **PLANNED** — no `yrs` dependency |
 | **8. Dynamic USD Support** | ❌ **PLANNED** — not built |
@@ -415,13 +415,11 @@ are in git history). The model itself — **state replication + client predictio
 (Source/Overwatch/Unreal/lightyear), *not* lockstep (avian is not cross-platform
 deterministic) and *not* full physics rollback (global solver) — is settled. Still open:
 
-- **Gap A — per-client `big_space` cell→origin rebase.** PARTIALLY DONE: snapshots carry
-  absolute **f64 `pos`** + `CellCoord`, interpolated in f64 and seated into avian `Position`.
-  The live app runs a single huge cell so `CellCoord` is always `[0,0,0]` — the cell is
-  *carried but not consumed*. TODO: once recentering is enabled, the apply must decompose `pos`
-  into the client's own `(CellCoord, Transform)` via
-  `lunco_core::coords::world_to_grid_local` (rebase math already proven by the `proto-tests`
-  `rebase_*`/`world_roundtrip_*` suite).
+- **Per-client BigSpace projection — DONE.** Snapshot batches identify a semantic frame and
+  carry f64 Avian position, linear velocity, and angular velocity in that frame. Capture
+  converts the host's private `ActivePhysicsFrame` into the semantic frame; apply converts
+  that frame into the receiver's private active grid. The Avian bridge alone performs the
+  terminal `(CellCoord, Transform)` render split. Private grid topology never crosses peers.
 - **Gap G — M4 input hardening (redundancy + server-side jitter buffer).** UNBUILT. Inputs
   ride an unreliable channel; a dropped input is a hitch. Need: each packet carries the last N
   unacked inputs; the host keeps a small per-client input buffer. This shrinks prediction

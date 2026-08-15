@@ -35,7 +35,7 @@ use crate::geo::{
     LocalTangentFrame, SiteAnchor,
 };
 use crate::kepler::KeplerOrbit;
-use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
+use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
 
 /// Map a site-authored pose into the body's rotating surface frame.
 ///
@@ -87,37 +87,28 @@ fn direct_grid_pose(
 /// short settle window before reporting a structural anchoring failure.
 const ANCHOR_SETTLE_FRAMES: u32 = 30;
 
-/// Orbital view MODE state. Since the traveling-origin change (doc 47 Phase
-/// 6) this resource no longer re-poses the world: the CAMERA — it carries the
-/// `FloatingOrigin` — migrates onto the focused body's inertial parent grid
-/// and orbits there (`lunco-avatar::orbit_system`), so a drag moves only the
-/// floating origin and big_space recomputes every `GlobalTransform` against
-/// it atomically. (The previous design slid the entire solar tree around a
-/// parked camera each drag frame; at Earth range that moved the tree by
-/// ~1e6 m per frame, and ANY writer that lagged one frame — mesh rebuild,
-/// body spin, LOD tiles, markers — displaced its entity by megameters:
-/// "planets jump around when I rotate".)
+/// Orbital view mode state.
+///
+/// The camera itself lives in the target body's explicit
+/// [`crate::ReferenceFrame::EclipticJ2000`]. `big_space` propagates the floating origin through
+/// that nested grid hierarchy in high precision. This resource is only the
+/// cross-domain presentation fact consumed by visibility, gravity and lighting;
+/// camera return state belongs to the avatar that owns the camera.
 ///
 /// Remaining consumers of the mode flag:
 /// * [`orbital_pin_scene_visibility`] — hides the local scene while orbital;
 /// * `compute_local_gravity` — holds the last surface field;
-/// * exit paths — `anchor_world`/`anchor_rotation` restore the parked
-///   surface camera pose.
-#[derive(Resource, Debug, Clone, Copy, Default)]
+/// * exit paths — the avatar restores its transactional orbit-entry snapshot.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub struct OrbitalViewPin {
     pub active: bool,
     /// Ephemeris id of the focused body.
     pub body: i32,
-    /// Unit direction from the body centre toward the viewpoint, in the
-    /// focused body's INERTIAL host-grid axes (+Y = engine north — the frame
-    /// the orbital camera renders in; only `orbit_system` consumes this).
+    /// Unit direction from the body centre toward the viewpoint in the body's
+    /// star-fixed orbit-view frame.
     pub dir: DVec3,
     /// Viewpoint distance from the body centre, metres.
     pub distance: f64,
-    /// The parked camera's root-frame position at mode entry (constant).
-    pub anchor_world: DVec3,
-    /// The parked camera's rotation at mode entry (constant).
-    pub anchor_rotation: Quat,
 }
 
 /// Pin the solar hierarchy so the authored site anchor coincides with the
@@ -129,6 +120,7 @@ pub fn anchor_solar_frame_to_site(
     world_time: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
+    frame_index: Res<crate::ReferenceFrameIndex>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_site_changed: Query<(), Or<(Added<SiteAnchor>, Changed<GeodeticAnchor>)>>,
     // `With<Grid>` states a PRECONDITION of the code below (it does cell
@@ -145,18 +137,12 @@ pub fn anchor_solar_frame_to_site(
         (
             With<crate::big_space_setup::SiteAlignGrid>,
             Without<SolarSystemRoot>,
-            Without<CelestialReferenceFrame>,
+            Without<ReferenceFrame>,
         ),
     >,
     mut commands: Commands,
     q_frames_stored: Query<
-        (
-            Entity,
-            &CelestialReferenceFrame,
-            &CellCoord,
-            &Transform,
-            &ChildOf,
-        ),
+        (Entity, &ReferenceFrame, &CellCoord, &Transform, &ChildOf),
         (With<Grid>, Without<SolarSystemRoot>),
     >,
     q_parents: Query<&ChildOf, Without<SiteAnchor>>,
@@ -224,11 +210,7 @@ pub fn anchor_solar_frame_to_site(
 
     // Site tangent alignment (world axes) — identity when there is no anchor.
     let (align, site_frame_origin, site_geo_offset) = if let Some(anchor) = anchor_opt {
-        let Some(desc) = registry
-            .bodies
-            .iter()
-            .find(|b| b.ephemeris_id == anchor.body)
-        else {
+        let Some(desc) = registry.get(anchor.body) else {
             *unresolved_frames = (*unresolved_frames).saturating_add(1);
             if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
                 *warned = true;
@@ -296,9 +278,8 @@ pub fn anchor_solar_frame_to_site(
     // rotating) frame, walk up to the Solar Grid over stored (cell,
     // Transform) values — every f32 read back into f64 is exact.
     let stored_in_solar = |ephemeris_id: i32, p0: DVec3| -> Option<DVec3> {
-        let mut current = q_frames_stored
-            .iter()
-            .find(|(_, f, ..)| f.ephemeris_id == ephemeris_id);
+        let start = frame_index.resolve(ReferenceFrame::BodyFixed { body: ephemeris_id })?;
+        let mut current = q_frames_stored.get(start).ok();
         let mut p = p0;
         let mut steps = 0;
         loop {
@@ -343,9 +324,18 @@ pub fn anchor_solar_frame_to_site(
     let align_f32 = align.as_quat();
     // Site offset in the (rotating) body frame — rotated by the STORED
     // frame quat inside the walk, matching what tiles/children inherit.
-    let site_in_solar = site_geo_offset
-        .and_then(|(body_id, geo_local)| stored_in_solar(body_id, geo_local))
-        .unwrap_or(site_frame_origin);
+    let site_in_solar = if let Some((body_id, geo_local)) = site_geo_offset {
+        let Some(stored) = stored_in_solar(body_id, geo_local) else {
+            error_once!(
+                "[celestial] site pin refused: body-fixed frame {} has no complete stored Grid chain to the Solar frame",
+                body_id
+            );
+            return;
+        };
+        stored
+    } else {
+        site_frame_origin
+    };
     let translation = -site_in_solar;
 
     // The site pin is the ONE writer of the scene's ecliptic→world placement, so
@@ -687,7 +677,8 @@ pub fn orbital_pin_scene_visibility(
 pub fn place_celestial_bound_entities(
     world_time: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
-    q_frames: Query<(Entity, &CelestialReferenceFrame, &Grid)>,
+    frame_index: Res<crate::ReferenceFrameIndex>,
+    q_grids: Query<&Grid>,
     mut q_bound: Query<
         (
             Entity,
@@ -736,13 +727,10 @@ pub fn place_celestial_bound_entities(
     for (entity, anchor, orbit, visibility) in q_bound.iter_mut() {
         let body = anchor.map(|a| a.body).or_else(|| orbit.map(|o| o.body));
         let Some(body) = body else { continue };
-        let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == body) else {
+        let Some(desc) = registry.get(body) else {
             continue;
         };
-        let grid = q_frames
-            .iter()
-            .find(|(_, frame, _)| frame.ephemeris_id == body);
-        let Some((grid_entity, _, grid)) = grid else {
+        let Some(grid_entity) = frame_index.resolve(ReferenceFrame::BodyFixed { body }) else {
             // No solar hierarchy for this body: keep the prim out of the local
             // scene view. Comms math places it analytically regardless.
             if let Some(mut vis) = visibility {
@@ -750,6 +738,13 @@ pub fn place_celestial_bound_entities(
                     *vis = Visibility::Hidden;
                 }
             }
+            continue;
+        };
+        let Ok(grid) = q_grids.get(grid_entity) else {
+            error_once!(
+                "[celestial] resolved body-fixed frame {:?} is not a Grid",
+                grid_entity
+            );
             continue;
         };
 
@@ -918,26 +913,24 @@ pub fn sync_terrain_body_curvature(
         let b = georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |g| g.body);
         match body {
             None => body = Some(b),
-            Some(prev) if prev != b => {
-                mixed = true;
-                body = Some(prev.min(b));
-            }
+            Some(prev) if prev != b => mixed = true,
             Some(_) => {}
         }
     }
     // No DEM is NOT "nothing to do" for curvature bookkeeping: a scene can stand
     // on a plain authored ground slab and still be site-anchored. It simply has no
     // source-driven globe handoff because there is no measured footprint.
+    if mixed {
+        error_once!(
+            "terrains in this scene author different `lunco:anchor:body` values; \
+             curvature is a single global radius, so the terrain projection is refused. \
+             Author one body per scene."
+        );
+        return;
+    }
     let has_dem = body.is_some();
     let body = body.unwrap_or(anchor.body);
-    if mixed {
-        warn_once!(
-            "terrains in this scene author different `lunco:anchor:body` values; \
-             curvature is a single global radius, so body {body} was taken. Author one \
-             body per scene."
-        );
-    }
-    let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == body) else {
+    let Some(desc) = registry.get(body) else {
         return;
     };
     if has_dem && current.is_none_or(|c| c.radius_m != desc.radius_m) {
@@ -1028,7 +1021,7 @@ mod tests {
         let desc = registry
             .bodies
             .iter()
-            .find(|b| b.ephemeris_id == 301)
+            .find(|b| b.ephemeris_id == crate::ephemeris_id::MOON)
             .unwrap();
         let center = DVec3::new(1.0e11, 2.0e10, -3.0e10);
         let geo = Geodetic::new(-89.45, -136.7, 1200.0);
@@ -1056,10 +1049,10 @@ mod tests {
         let body = registry
             .bodies
             .iter()
-            .find(|b| b.ephemeris_id == 301)
+            .find(|b| b.ephemeris_id == crate::ephemeris_id::MOON)
             .unwrap();
         let anchor = GeodeticAnchor {
-            body: 301,
+            body: crate::ephemeris_id::MOON,
             geodetic: Geodetic::new(25.28, 307.60, 0.0),
         };
         let (position, rotation) =
@@ -1069,5 +1062,128 @@ mod tests {
         assert!((rotation * DVec3::Y - tangent.up).length() < 1e-9);
         assert!((rotation * DVec3::X - tangent.east).length() < 1e-9);
         assert!((rotation * DVec3::NEG_Z - tangent.north).length() < 1e-9);
+    }
+
+    #[test]
+    fn site_scene_avatar_and_physics_share_the_authored_surface_grid() {
+        let mut app = App::new();
+        app.add_systems(Update, attach_site_scene_to_surface_grid);
+
+        let world_grid = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO))
+            .id();
+        let body_fixed_grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let surface_grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(body_fixed_grid),
+            ))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                crate::CelestialBody {
+                    name: "Moon".into(),
+                    ephemeris_id: crate::ephemeris_id::MOON,
+                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                },
+                crate::globe_lod::GlobeLod {
+                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    surface_grid,
+                    look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
+                    res: 8,
+                    max_lod: 1,
+                    lod_distance_factor: 1.0,
+                },
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                SiteAnchor,
+                GeodeticAnchor {
+                    body: crate::ephemeris_id::MOON,
+                    geodetic: Geodetic::new(25.28, 307.60, 0.0),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let rigid_body = app
+            .world_mut()
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                Transform::from_xyz(3.0, 1.0, -2.0),
+                GlobalTransform::default(),
+                ChildOf(site),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                FloatingOrigin,
+                CellCoord::ZERO,
+                Transform::from_xyz(0.0, 4.0, 8.0),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        assert_eq!(
+            world.resource::<lunco_core::ActivePhysicsFrame>().0,
+            surface_grid
+        );
+        assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
+        assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
+        assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
+        assert_eq!(
+            world
+                .get::<lunco_environment::GravityBody>(avatar)
+                .unwrap()
+                .body_entity,
+            body
+        );
+        assert_eq!(
+            world
+                .get::<lunco_environment::GravityBody>(rigid_body)
+                .unwrap()
+                .body_entity,
+            body
+        );
+
+        let site_cell = *world.get::<CellCoord>(site).unwrap();
+        let site_transform = *world.get::<Transform>(site).unwrap();
+        let avatar_cell = *world.get::<CellCoord>(avatar).unwrap();
+        let avatar_transform = *world.get::<Transform>(avatar).unwrap();
+        app.world_mut()
+            .get_mut::<Transform>(body_fixed_grid)
+            .unwrap()
+            .rotation = Quat::from_rotation_y(0.5);
+        app.update();
+
+        let world = app.world();
+        assert_eq!(*world.get::<CellCoord>(site).unwrap(), site_cell);
+        assert_eq!(*world.get::<Transform>(site).unwrap(), site_transform);
+        assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), avatar_cell);
+        assert_eq!(*world.get::<Transform>(avatar).unwrap(), avatar_transform);
     }
 }

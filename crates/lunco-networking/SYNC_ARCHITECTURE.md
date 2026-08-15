@@ -55,7 +55,7 @@ Seven. That's the whole vocabulary. Everything below is *routing*.
 | Content entity existence/topology | Content | Static | Reconstructible | **M1** |
 | Cosim wiring (`SimConnection`) | Content (USD) | Static | Reconstructible | **M1** |
 | Asset files (USD/glTF/meshes) | Content-addressed | Static | Reconstructible (fetch by hash) | **M1** |
-| Pose of **rover you drive** `(CellCoord,Transform)` | any | Continuous | **Predictable** (local avian) | **M2-Predicted** |
+| Pose of **rover you drive** (named-frame f64 Avian state) | any | Continuous | **Predictable** (local avian) | **M2-Predicted** |
 | Pose of **other** rovers | any | Continuous | partial | **M2-Interpolated** |
 | Pose of **cosim-driven** body (balloon) | any | Continuous | **Opaque** (server-only forces) | **M2-Interpolated** |
 | Velocities / forces | any | Continuous | predicted only | **M2** |
@@ -97,11 +97,13 @@ world stays coherent. Everything is stamped in **M6** sim-ticks, never wall-cloc
 3. **M2** on snapshot: reconcile predicted (smooth error-correct, *not* full avian rollback); push interpolated into the snapshot buffer.
 4. **M3** apply received commands in `OpId` order (idempotent via `OpId` dedupe); **M5** apply CRDT updates (any time, commutative).
 5. **M1** content is loaded at join / on content-edit — *never* per tick.
-6. **Render** (decoupled): interpolate **M2-Interpolated** at `now − interp_delay`; draw **M2-Predicted** at `now`; **rebase all poses into this client's floating origin** (big_space cell+offset → local).
+6. **Render** (decoupled): interpolate **M2-Interpolated** at `now − interp_delay`; draw **M2-Predicted** at `now`; the Avian/BigSpace bridge projects the f64 physics pose into this client's grid/cell/local representation.
 
-The render-step rebasing is where gap A lives: M2 carries `(CellCoord, Transform)`;
-each client maps it into its *own* origin. Identity (M1) and coordinates (M2) are
-orthogonal, so a content entity keeps its derived id while its cell+offset stream.
+M2 never transmits a sender's private BigSpace split. Physics and awareness state
+carry an explicit semantic frame. Capture converts from the sender's private
+`ActivePhysicsFrame`; apply converts into the receiver's private active frame, and
+the local bridge performs the terminal cell/local split. Identity (M1) and
+coordinates (M2) remain orthogonal.
 
 ### 4.1 M2-Predicted — Client Prediction Status
 
@@ -224,10 +226,9 @@ mechanism is independently convergent — therefore the world converges.**
   see a half-migrated `(parent, cell, local_tf)` and mis-tag the entity (the bug
   that marked rover chassis `RigidBody::Static`). `migrate_to_grid` is the single
   sanctioned path; the workspace `clippy.toml` bans raw `add_child` /
-  `set_parent_in_place` to enforce it. M2's `(CellCoord, Transform)` payload writes
-  through here, so replicated **orientation now survives grid crossings** (the
-  helper preserves `tf.rotation`; it previously reset to identity). The §4 render
-  rebasing (gap A) reads the cell+offset this path establishes.
+  `set_parent_in_place` to enforce it. M2 named-frame state is converted before
+  this local projection, so replicated position, orientation and velocity axes
+  survive grid crossings together; the private split never crosses peers.
 - **M3** ⇐ the existing `#[Command]` + `lunco-core::Mutation<P>` envelope (already
   built — it *is* the op-log).
 - **M5** ⇐ the Yjs/yrs plan in the README (Modelica text).

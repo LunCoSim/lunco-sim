@@ -42,6 +42,37 @@ pub struct GridPos(pub DVec3);
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct GridRot(pub DQuat);
 
+/// Rigid f64 transform from one concrete BigSpace grid into another.
+///
+/// Grid topology is a precision implementation detail. Systems that need to
+/// cross it resolve their semantic source/target frames first, obtain this
+/// transform once, then apply it consistently to positions, orientations and
+/// free vectors such as linear/angular velocity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridFrameTransform {
+    pub translation: DVec3,
+    pub rotation: DQuat,
+}
+
+impl GridFrameTransform {
+    pub const IDENTITY: Self = Self {
+        translation: DVec3::ZERO,
+        rotation: DQuat::IDENTITY,
+    };
+
+    pub fn transform_position(self, position: DVec3) -> DVec3 {
+        self.translation + self.rotation * position
+    }
+
+    pub fn transform_rotation(self, rotation: DQuat) -> DQuat {
+        (self.rotation * rotation).normalize()
+    }
+
+    pub fn transform_vector(self, vector: DVec3) -> DVec3 {
+        self.rotation * vector
+    }
+}
+
 /// A point in the FLOATING-ORIGIN render frame (camera-relative). f64 so the
 /// blessed conversions don't round-trip through f32; construct from render
 /// `Transform`/`GlobalTransform` data via [`RenderPos::from_render_f32`].
@@ -434,6 +465,51 @@ pub fn pose_in_grid<F: QueryFilter>(
     ))
 }
 
+/// Convert a complete f64 pose from one arbitrary BigSpace Grid to another.
+///
+/// This is the representation boundary used by networking, camera migration,
+/// and frame handover. Callers supply semantic source/target grid identities;
+/// this function owns the hierarchy composition, including every translated
+/// cell and rotated parent. No caller should reproduce the origin/axes formula.
+pub fn transform_pose_between_grids<F: QueryFilter>(
+    position: DVec3,
+    rotation: DQuat,
+    source_grid: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    let transform =
+        grid_transform_between_grids(source_grid, target_grid, q_parents, q_grids, q_spatial)?;
+    Some((
+        transform.transform_position(position),
+        transform.transform_rotation(rotation),
+    ))
+}
+
+/// Resolve the complete rigid transform between two concrete BigSpace grids.
+///
+/// This is the lower-level counterpart of [`transform_pose_between_grids`]
+/// used when one conversion must be applied to a complete dynamics state.
+pub fn grid_transform_between_grids<F: QueryFilter>(
+    source_grid: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<GridFrameTransform> {
+    if source_grid == target_grid {
+        return Some(GridFrameTransform::IDENTITY);
+    }
+    let (translation, rotation) =
+        pose_in_grid(source_grid, target_grid, q_parents, q_grids, q_spatial)?;
+    Some(GridFrameTransform {
+        translation,
+        rotation: rotation.normalize(),
+    })
+}
+
 /// Seeded counterpart of [`pose_in_grid`] for a mutably borrowed entity.
 pub fn pose_in_grid_seeded<F: QueryFilter>(
     entity: Entity,
@@ -559,6 +635,36 @@ pub fn grid_absolute_seeded(
     parent_grid(entity, q_parents, q_grids)
         .map(|grid| GridPos(grid.grid_position_double(cell, tf)))
         .unwrap_or_else(|| GridPos(tf.translation.as_dvec3()))
+}
+
+/// Reassemble BigSpace's stored cell/local split in the parent grid frame.
+///
+/// `edge == None` means the entity is not grid-direct, so its Transform is an
+/// ordinary parent-local point and the optional cell has no spatial meaning.
+pub fn compose_cell_local(
+    cell: Option<&CellCoord>,
+    edge: Option<f64>,
+    local_translation: Vec3,
+) -> GridPos {
+    let local = local_translation.as_dvec3();
+    match (cell, edge) {
+        (Some(cell), Some(edge)) => GridPos(
+            DVec3::new(
+                cell.x as f64 * edge,
+                cell.y as f64 * edge,
+                cell.z as f64 * edge,
+            ) + local,
+        ),
+        _ => GridPos(local),
+    }
+}
+
+/// Inverse of [`compose_cell_local`] for an already-selected BigSpace cell.
+///
+/// This does not choose or mutate a cell; BigSpace owns re-splitting. It only
+/// returns the f64 remainder that the terminal render `Transform` stores.
+pub fn cell_local_remainder(point: GridPos, cell: Option<&CellCoord>, edge: Option<f64>) -> DVec3 {
+    point - compose_cell_local(cell, edge, Vec3::ZERO)
 }
 
 /// Split a grid-absolute position back into the `(CellCoord, Transform)` pair

@@ -164,6 +164,28 @@ pub struct CelestialEpochSet;
 
 pub struct CelestialPlugin;
 
+/// Give the persistent BigSpace root an explicit semantic frame as soon as it
+/// exists. This lets generic camera/network state use the same framed-pose
+/// path in non-celestial scenes instead of falling back to an unnamed parent
+/// grid convention.
+fn tag_world_reference_frame(trigger: On<Add, lunco_core::WorldRoot>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(ReferenceFrame::World);
+}
+
+/// Backfill the semantic tag when a host installed its world shell before the
+/// celestial plugin. Normal production startup is handled by the observer;
+/// this keeps plugin composition order from changing frame semantics.
+fn tag_existing_world_reference_frame(
+    mut commands: Commands,
+    roots: Query<Entity, (With<lunco_core::WorldRoot>, Without<ReferenceFrame>)>,
+) {
+    for root in &roots {
+        commands.entity(root).try_insert(ReferenceFrame::World);
+    }
+}
+
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         // EmbeddedAssetsPlugin embeds mission data on wasm32, no-op on desktop.
@@ -189,6 +211,13 @@ impl Plugin for CelestialPlugin {
         }
         app.init_resource::<CelestialConfig>();
         app.init_resource::<globe_lod::GlobeLodBudget>();
+        // Celestial content always lives in the canonical persistent BigSpace
+        // shell. Installing the shell here when a host has not already done so
+        // keeps headless/test apps on the same hierarchy as production and
+        // removes the former celestial-only root fallback.
+        if !app.is_plugin_added::<lunco_core::WorldShellPlugin>() {
+            app.add_plugins(lunco_core::WorldShellPlugin);
+        }
         // Generic celestial geometry queries (Occultation / BodyPosition /
         // SolarPose) — the domain-free substrate authored subsystems compose
         // over (docs 10/12) — plus the solar-pose tracking system that feeds
@@ -242,6 +271,17 @@ impl Plugin for CelestialPlugin {
         app.register_type::<TrajectoryView>();
         app.register_type::<TrajectoryFrame>();
         app.register_type::<TrajectoryPath>();
+        app.register_type::<ReferenceFrame>();
+        app.init_resource::<ReferenceFrameIndex>();
+        app.add_observer(tag_world_reference_frame);
+        app.add_systems(
+            First,
+            (
+                tag_existing_world_reference_frame,
+                update_reference_frame_index,
+            )
+                .chain(),
+        );
         app.insert_resource(CelestialBodyRegistry::default_system());
 
         // Insert a no-op `EphemerisResource` so downstream systems
@@ -342,10 +382,6 @@ impl Plugin for CelestialPlugin {
             (
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system,
-                // Star-fixed frames co-located with the rotating body grids (the
-                // orbit camera lives in one). After the ephemeris, whose pose it
-                // copies.
-                systems::sync_inertial_anchors,
                 // Doc 43: site-anchored solar frame + geodetic/orbit placement.
                 // `ephemeris_update_system` never touches the Solar Grid (id 10),
                 // so the pin persists between anchor runs — no mid-chain window
@@ -472,9 +508,20 @@ impl Plugin for CelestialPlugin {
 fn teardown_celestial_when_undeclared(
     mut commands: Commands,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
+    q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     mut registry: ResMut<MissionRegistry>,
     curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
 ) {
+    // `attach_site_scene_to_surface_grid` selects a celestial surface Grid as
+    // Avian's active frame. That Grid is part of the scene-owned hierarchy and
+    // is about to be despawned, so restore the persistent shell frame in the
+    // same lifecycle operation. Leaving an Entity id to a dead Grid makes the
+    // physics bridge's next frame conversion structurally impossible.
+    let world_root = q_world_root
+        .single()
+        .expect("WorldShellPlugin must provide exactly one persistent WorldRoot");
+    commands.insert_resource(lunco_core::ActivePhysicsFrame(world_root));
+
     let mut n = 0;
     for e in &q_derived {
         // `try_despawn` (not `despawn`): a marked entity already parented under the

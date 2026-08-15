@@ -45,6 +45,17 @@ pub struct ReleaseVessel {
     pub target: Entity,
 }
 
+/// Return the local camera from a celestial orbit view to the exact camera
+/// mode and BigSpace frame from which that view was entered.
+///
+/// Unlike [`ReleaseVessel`], this is a presentation transition: it does not
+/// release control authority or remove a `ControllerLink`.
+#[Command]
+pub struct ReturnFromOrbit {
+    /// The local avatar camera returning from orbit view.
+    pub target: Entity,
+}
+
 /// Focus on a target without taking control.
 ///
 /// Switches the avatar to `OrbitCamera` mode centered on the target.

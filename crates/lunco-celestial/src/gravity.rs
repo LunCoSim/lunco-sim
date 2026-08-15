@@ -154,25 +154,32 @@ pub fn update_local_gravity_field(
         return;
     };
 
-    // GravityBody is the authoritative surface-frame association for the
-    // avatar. Publish that exact association alongside the derived vectors so
-    // camera/UI consumers cannot observe a vector from one body paired with a
-    // stale or missing body id.
-    field.body_entity = gravity_body.map(|gb| gb.body_entity);
-
-    let (body_relative_position, body_up_local, body_up_world, surface_g) =
-        if let Some(gb) = gravity_body {
-            gravity_at_body(
-                gb.body_entity,
-                avatar_ent,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-                &q_bodies,
-            )
-        } else {
-            (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0)
+    let derived = if let Some(gb) = gravity_body {
+        let Some(derived) = gravity_at_body(
+            gb.body_entity,
+            avatar_ent,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+            &q_bodies,
+        ) else {
+            error_once!(
+                    "cannot publish gravity for avatar {:?}: body {:?} is disconnected or has no gravity provider",
+                    avatar_ent,
+                    gb.body_entity
+                );
+            return;
         };
+        derived
+    } else {
+        (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0)
+    };
+    let (body_relative_position, body_up_local, body_up_world, surface_g) = derived;
+
+    // Publish the association and all values together only after the complete
+    // body-frame evaluation succeeded. A structural failure therefore cannot
+    // pair a new body id with stale vectors from the preceding frame.
+    field.body_entity = gravity_body.map(|gb| gb.body_entity);
 
     field.body_relative_position = body_relative_position;
     field.surface_g = surface_g;
@@ -200,27 +207,12 @@ fn gravity_at_body(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: &Query<&GravityProvider>,
-) -> (DVec3, DVec3, DVec3, f64) {
-    let Some((body_world, body_rotation)) =
-        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)
-    else {
-        return (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0);
-    };
+) -> Option<(DVec3, DVec3, DVec3, f64)> {
+    let (_, body_rotation) =
+        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)?;
     let relative_body =
-        local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)
-            .or_else(|| {
-                let camera_world = lunco_core::coords::world_position(
-                    camera_entity,
-                    q_parents,
-                    q_grids,
-                    q_spatial,
-                )?;
-                Some(body_rotation.0.inverse() * (camera_world - body_world))
-            })
-            .unwrap_or(DVec3::ZERO);
-    let Some(provider) = q_bodies.get(body_entity).ok() else {
-        return (relative_body, DVec3::Y, body_rotation.0 * DVec3::Y, 0.0);
-    };
+        local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)?;
+    let provider = q_bodies.get(body_entity).ok()?;
     let acceleration = provider.model.acceleration(relative_body);
     let magnitude = acceleration.length();
     let up_body = if magnitude > 1e-12 {
@@ -230,7 +222,7 @@ fn gravity_at_body(
         // undefined.  +Y is the canonical frame basis, not an approximation.
         DVec3::Y
     };
-    (relative_body, up_body, body_rotation.0 * up_body, magnitude)
+    Some((relative_body, up_body, body_rotation.0 * up_body, magnitude))
 }
 
 /// Express a camera position in the active body's body-fixed frame without
@@ -245,13 +237,8 @@ fn local_body_relative_position(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<DVec3> {
     let body_frame = q_parents.get(body_entity).ok()?.parent();
-    let (camera_position, _) = lunco_core::coords::grid_relative_pose(
-        camera_entity,
-        body_frame,
-        q_parents,
-        q_grids,
-        q_spatial,
-    )?;
+    let (camera_position, _) =
+        lunco_core::coords::pose_in_grid(camera_entity, body_frame, q_parents, q_grids, q_spatial)?;
     let (body_position, body_rotation) = lunco_core::coords::grid_relative_pose(
         body_entity,
         body_frame,

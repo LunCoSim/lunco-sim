@@ -1105,7 +1105,7 @@ mod tests {
                     rotation: DQuat::IDENTITY,
                     local: pos,
                     horizon: crate::pose::Horizon::Surface {
-                        body: 301,
+                        body: crate::ephemeris_id::MOON,
                         up: DVec3::Y,
                     },
                 },
@@ -1481,7 +1481,7 @@ mod tests {
                     rotation: DQuat::IDENTITY,
                     local: DVec3::ZERO,
                     horizon: crate::pose::Horizon::Surface {
-                        body: 301,
+                        body: crate::ephemeris_id::MOON,
                         up: DVec3::Y,
                     },
                 },
@@ -1559,7 +1559,7 @@ mod tests {
                 rotation: DQuat::IDENTITY,
                 local: DVec3::new(10.0, 0.0, 0.0),
                 horizon: crate::pose::Horizon::Surface {
-                    body: 301,
+                    body: crate::ephemeris_id::MOON,
                     up: DVec3::Y,
                 },
             },
@@ -1591,7 +1591,7 @@ mod tests {
             rotation: DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64),
             local: pos,
             horizon: crate::pose::Horizon::Surface {
-                body: 301,
+                body: crate::ephemeris_id::MOON,
                 up: DVec3::Y,
             },
         }

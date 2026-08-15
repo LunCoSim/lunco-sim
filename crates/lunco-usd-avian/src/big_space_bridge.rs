@@ -26,7 +26,10 @@
 //! recomputed from the cell chain ONLY when its own `(CellCoord, Transform)`
 //! differs from the [`BridgeShadow`] copy taken at the bridge's last write —
 //! i.e. when an EXTERNAL writer (spawn, teleport command, gizmo, USD
-//! animation, anchor system, big_space recentring) touched it. A fired body
+//! animation, anchor system) touched it. BigSpace recentring is identified by
+//! reproducing its exact cell re-split from the previous representation, not by
+//! guessing from Bevy change flags; a real cross-cell teleport therefore cannot
+//! be mistaken for internal maintenance. A fired body
 //! also re-reads every descendant body, so teleporting a chassis carries its
 //! jointed wheels. Plain chain nodes (no body, no collider) carry no shadow;
 //! their motion is probed via `Changed<Transform>`/`Changed<CellCoord>`
@@ -66,35 +69,9 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::{
-    grid_relative_pose_seeded, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
+    cell_local_remainder, compose_cell_local, grid_relative_pose_seeded, pose_in_grid,
+    pose_in_grid_seeded, GridPos, GridRot,
 };
-
-// ─── Cell-split composition helpers ──────────────────────────────────────
-// The bridge composes big_space's stored `(CellCoord, Transform)` split in
-// several places; these two helpers name that math once. Deliberately LOCAL
-// to this file: they encode the bridge's single-step composition (the parent
-// grid's edge already resolved), while `lunco_core::coords` keeps the
-// entity-walking variants.
-
-/// `cell × edge + local translation` — reassemble big_space's split into a
-/// point in the parent grid's frame. `edge == None` (not grid-direct) means
-/// there is no cell offset and the translation already IS the point.
-fn grid_from_cell(cell: Option<&CellCoord>, edge: Option<f64>, local_translation: Vec3) -> GridPos {
-    let base = local_translation.as_dvec3();
-    match (cell, edge) {
-        (Some(c), Some(e)) => {
-            GridPos(DVec3::new(c.x as f64 * e, c.y as f64 * e, c.z as f64 * e) + base)
-        }
-        _ => GridPos(base),
-    }
-}
-
-/// Inverse of [`grid_from_cell`] against a FIXED cell: the cell-relative
-/// remainder the writeback stores in `Transform`. The cell itself is never
-/// rewritten by the bridge — big_space's recentring owns the re-split.
-fn cell_local_from_grid(point: GridPos, cell: Option<&CellCoord>, edge: Option<f64>) -> DVec3 {
-    point - grid_from_cell(cell, edge, Vec3::ZERO)
-}
 
 /// The bridge's two passes, as orderable sets.
 ///
@@ -136,6 +113,10 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // lived inside the disabled `transform_to_position`).
         app.register_required_components::<RigidBody, BridgeShadow>();
         app.register_required_components::<Collider, BridgeShadow>();
+        // Plain Grid/CellCoord chain nodes can carry physical descendants. Keep
+        // the same exact previous-representation record on them so a BigSpace
+        // re-split is distinguishable from a semantic ancestor teleport.
+        app.register_required_components::<CellCoord, SpatialBridgeShadow>();
         app.add_systems(
             PhysicsSchedule,
             pose_to_position
@@ -229,6 +210,43 @@ impl BridgeShadow {
         self.physics_frame = physics_frame;
     }
 
+    /// Whether the current representation is exactly what BigSpace's
+    /// `CellCoord::recenter_large_transforms` produces from this shadow.
+    ///
+    /// This is a semantic/provenance test derived from the owning algorithm:
+    /// merely observing that both components changed is insufficient because a
+    /// legitimate cross-cell teleport changes the same pair.
+    fn is_representation_only(
+        &self,
+        cell: Option<&CellCoord>,
+        tf: &Transform,
+        parent_grid: Option<&Grid>,
+        physics_frame: Entity,
+    ) -> bool {
+        if !self.is_seeded() || self.physics_frame != physics_frame || self.rotation != tf.rotation
+        {
+            return false;
+        }
+        let (Some(cell), Some(grid)) = (cell, parent_grid) else {
+            return false;
+        };
+        let old_position = grid.cell_to_float(&self.cell) + self.translation.as_dvec3();
+        let new_position = grid.cell_to_float(cell) + tf.translation.as_dvec3();
+        if old_position == new_position {
+            return true;
+        }
+
+        // BigSpace computes the new f32 remainder through a dvec split. For
+        // non-power-of-two cell edges the reconstructed DVec3 can differ by
+        // the final f32 rounding even though the operation is its exact
+        // canonical re-split. Validate that operation directly as the second
+        // exact representation-only case; no distance epsilon is involved.
+        let (delta, expected_translation) = grid.imprecise_translation_to_grid(self.translation);
+        delta != CellCoord::ZERO
+            && *cell == self.cell + delta
+            && tf.translation == expected_translation
+    }
+
     /// Has [`pose_to_position`] written a real world pose for this entity yet?
     ///
     /// The bridge owns `Position` initialisation in this app (avian's own
@@ -245,6 +263,65 @@ impl BridgeShadow {
     /// body was admitted to the island graph, never that its pose is real.
     pub fn is_seeded(&self) -> bool {
         self.translation.is_finite() && !self.rotation.is_nan()
+    }
+}
+
+/// Previous raw BigSpace representation for a non-physical chain node.
+///
+/// A plain Grid/Xform can carry rigid bodies below it, so moving it is a
+/// physical teleport. BigSpace also rewrites its `(CellCoord, Transform)` pair
+/// when the local remainder crosses a cell. This shadow makes those two cases
+/// structurally distinguishable using BigSpace's own re-split operation.
+#[derive(Component, Clone, Copy, Debug)]
+struct SpatialBridgeShadow {
+    cell: CellCoord,
+    translation: Vec3,
+    rotation: Quat,
+    parent: Entity,
+}
+
+impl Default for SpatialBridgeShadow {
+    fn default() -> Self {
+        Self {
+            cell: CellCoord::ZERO,
+            translation: Vec3::NAN,
+            rotation: Quat::NAN,
+            parent: Entity::PLACEHOLDER,
+        }
+    }
+}
+
+impl SpatialBridgeShadow {
+    fn is_seeded(&self) -> bool {
+        self.translation.is_finite() && self.rotation.is_finite()
+    }
+
+    fn is_representation_only(
+        &self,
+        cell: &CellCoord,
+        tf: &Transform,
+        parent: Entity,
+        grid: &Grid,
+    ) -> bool {
+        if !self.is_seeded() || self.parent != parent || self.rotation != tf.rotation {
+            return false;
+        }
+        let old_position = grid.cell_to_float(&self.cell) + self.translation.as_dvec3();
+        let new_position = grid.cell_to_float(cell) + tf.translation.as_dvec3();
+        if old_position == new_position {
+            return true;
+        }
+        let (delta, expected_translation) = grid.imprecise_translation_to_grid(self.translation);
+        delta != CellCoord::ZERO
+            && *cell == self.cell + delta
+            && tf.translation == expected_translation
+    }
+
+    fn capture(&mut self, cell: &CellCoord, tf: &Transform, parent: Entity) {
+        self.cell = *cell;
+        self.translation = tf.translation;
+        self.rotation = tf.rotation;
+        self.parent = parent;
     }
 }
 
@@ -322,23 +399,23 @@ fn pose_to_position(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
-    // Plain chain nodes (no RigidBody, no Collider) carry no `BridgeShadow`,
-    // so their motion is probed via change detection instead: a gizmo-dragged
-    // or USD-animated group Xform must still re-read every descendant body.
-    q_moved_plain: Query<
-        Entity,
+    // Plain chain nodes have a representation shadow when they carry a
+    // CellCoord. Transform-only nodes cannot be recentered and every change is
+    // semantic. Either kind can carry physical descendants.
+    mut q_moved_plain: Query<
+        (
+            Entity,
+            Option<&CellCoord>,
+            &Transform,
+            Option<&mut SpatialBridgeShadow>,
+            Option<&ChildOf>,
+        ),
         (
             Or<(Changed<Transform>, Changed<CellCoord>)>,
             Without<RigidBody>,
             Without<Collider>,
         ),
     >,
-    // big_space's recenter system owns the only paired CellCoord + Transform
-    // rewrite in this hierarchy. It is a representation re-split of the same
-    // world pose, not an external teleport. Keep it separate from ordinary
-    // transform changes so the READ pass cannot overwrite Avian's Position
-    // with the pre-recenter render representation.
-    q_rebranched: Query<Entity, (Changed<CellCoord>, Changed<Transform>)>,
     mut q_bodies: Query<
         (
             Entity,
@@ -359,18 +436,32 @@ fn pose_to_position(
         if pose_override.is_some() {
             continue;
         }
-        let internal_rebranch =
-            shadow.is_seeded() && q_rebranched.contains(e) && shadow.physics_frame == active_frame;
+        let parent_grid = q_parents
+            .get(e)
+            .ok()
+            .and_then(|parent| q_grids.get(parent.parent()).ok());
+        let internal_rebranch = shadow.is_representation_only(cell, tf, parent_grid, active_frame);
         let mismatch = !shadow.matches(cell, tf, active_frame);
         if !internal_rebranch && mismatch {
             moved.insert(e);
         }
     }
-    moved.extend(
-        q_moved_plain
-            .iter()
-            .filter(|entity| !q_rebranched.contains(*entity)),
-    );
+    for (entity, cell, tf, shadow, child_of) in &mut q_moved_plain {
+        let representation_only = match (cell, shadow, child_of) {
+            (Some(cell), Some(mut shadow), Some(child_of)) => {
+                let parent = child_of.parent();
+                let representation_only = q_grids
+                    .get(parent)
+                    .is_ok_and(|grid| shadow.is_representation_only(cell, tf, parent, grid));
+                shadow.capture(cell, tf, parent);
+                representation_only
+            }
+            _ => false,
+        };
+        if !representation_only {
+            moved.insert(entity);
+        }
+    }
     if moved.is_empty() {
         return;
     }
@@ -382,11 +473,13 @@ fn pose_to_position(
         if pose_override.is_some() {
             continue;
         }
-        // big_space has just moved the cell-local representation of this body
-        // while preserving its world pose. Refresh the shadow so the bridge
-        // accepts the new representation; Position/Rotation remain the
-        // authoritative physics pose written by the solver.
-        if shadow.is_seeded() && q_rebranched.contains(e) && shadow.physics_frame == active_frame {
+        let parent_grid = q_parents
+            .get(e)
+            .ok()
+            .and_then(|parent| q_grids.get(parent.parent()).ok());
+        // BigSpace has re-split the same pose into a new cell/local pair.
+        // Refresh only the representation shadow; Avian remains unchanged.
+        if shadow.is_representation_only(cell, tf, parent_grid, active_frame) {
             shadow.capture(cell, tf, active_frame);
             continue;
         }
@@ -566,7 +659,7 @@ fn position_to_pose(
             // `.0`: the composed point re-enters the mixed-frame chain as a
             // parent-frame offset (see the `chain` note above).
             chain.push((
-                grid_from_cell(p_cell, edge, p_tf.translation).0,
+                compose_cell_local(p_cell, edge, p_tf.translation).0,
                 p_tf.rotation,
             ));
             cur = parent;
@@ -606,7 +699,7 @@ fn position_to_pose(
             .ok()
             .and_then(|co| q_grids.get(co.parent()).ok())
             .map(|g| g.cell_edge_length() as f64);
-        let rem = cell_local_from_grid(local, cell, direct_edge);
+        let rem = cell_local_remainder(local, cell, direct_edge);
         // The `Transform` write below stays raw: `rem` leaves the grid frame
         // here and becomes render currency (cell-local f32).
         let new_t = rem.as_vec3();
@@ -811,13 +904,13 @@ mod tests {
 
         // WRITEBACK direction: world → parent-grid-local → remainder against
         // the CURRENT cell (the bridge never rewrites the cell itself) —
-        // the same `cell_local_from_grid` split the live writeback uses.
+        // the same `cell_local_remainder` split the live writeback uses.
         let (gp, grot) = world_pose(grid_e, &q_parents, &q_grids, &q_spatial).unwrap();
         let inv = grot.0.inverse();
         let local = GridPos(inv * (p - gp));
         let local_rot = inv * r.0;
         let e64 = edge as f64;
-        let rem = cell_local_from_grid(local, Some(&b_cell), Some(e64));
+        let rem = cell_local_remainder(local, Some(&b_cell), Some(e64));
 
         assert!(
             (rem.as_vec3() - Vec3::new(120.0, -40.0, 80.0)).length() < 1e-2,

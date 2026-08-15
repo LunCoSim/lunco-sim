@@ -22,7 +22,7 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_materials::ShaderLook;
+use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
 use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
@@ -214,13 +214,12 @@ impl GlobeHandoff {
 pub struct GlobeTiles {
     /// Live tiles (in the desired LOD set).
     pub resident: HashMap<TileCoord, Entity>,
-    /// Tiles that left the desired set, kept alive for a few frames while
-    /// their replacements' meshes reach the GPU. Despawning old and spawning
-    /// new in the SAME frame opened a one-frame hole per swap (a fresh
-    /// `Mesh3d` renders only after render-world extraction/prepare) — with a
-    /// moving camera the LOD churns continuously and the whole sphere
-    /// flickered ("still blinking"). The brief overlap of coplanar identical
-    /// surfaces is invisible; a hole is not.
+    /// Hidden tiles retained briefly after an atomic draw-cover handoff.
+    ///
+    /// Material-ready parent/child coverage is exchanged through visibility;
+    /// the old entity is then kept hidden for two render extraction turns so
+    /// removal cannot race the extracted render world. Parent and child are
+    /// never drawable together.
     pub retiring: Vec<(Entity, u8, TileCoord)>,
     /// Reusable mesh handles for recently streamed tiles. The cache is bounded
     /// and only keeps handles that are not currently needed when it evicts; live
@@ -373,6 +372,126 @@ fn branch_has_gap(
     })
 }
 
+fn tile_parent(coord: TileCoord) -> Option<TileCoord> {
+    (coord.level > 0).then(|| TileCoord {
+        body: coord.body,
+        face: coord.face,
+        level: coord.level - 1,
+        i: coord.i >> 1,
+        j: coord.j >> 1,
+    })
+}
+
+fn tile_children(coord: TileCoord) -> [TileCoord; 4] {
+    let level = coord.level + 1;
+    [
+        TileCoord {
+            body: coord.body,
+            face: coord.face,
+            level,
+            i: coord.i * 2,
+            j: coord.j * 2,
+        },
+        TileCoord {
+            body: coord.body,
+            face: coord.face,
+            level,
+            i: coord.i * 2 + 1,
+            j: coord.j * 2,
+        },
+        TileCoord {
+            body: coord.body,
+            face: coord.face,
+            level,
+            i: coord.i * 2,
+            j: coord.j * 2 + 1,
+        },
+        TileCoord {
+            body: coord.body,
+            face: coord.face,
+            level,
+            i: coord.i * 2 + 1,
+            j: coord.j * 2 + 1,
+        },
+    ]
+}
+
+/// Collect an exact ready cover at or below `coord`.
+///
+/// Prefer the node itself. If it is not drawable, all four child branches must
+/// be drawable; a partial child set is not a cover and must fall back to an
+/// ancestor instead. `max_level` bounds recursion to the deepest resident tile.
+fn collect_ready_subtree(
+    coord: TileCoord,
+    resident: &HashMap<TileCoord, Entity>,
+    ready: &HashSet<TileCoord>,
+    max_level: u32,
+    out: &mut Vec<TileCoord>,
+) -> bool {
+    if resident.contains_key(&coord) && ready.contains(&coord) {
+        out.push(coord);
+        return true;
+    }
+    if coord.level >= max_level {
+        return false;
+    }
+    let start = out.len();
+    for child in tile_children(coord) {
+        if !collect_ready_subtree(child, resident, ready, max_level, out) {
+            out.truncate(start);
+            return false;
+        }
+    }
+    true
+}
+
+/// Build the one disjoint drawable cover for a desired quadtree leaf set.
+///
+/// A resident entity is only a resource allocation. It becomes drawable after
+/// [`ShaderLookReady`] proves its complete shader/texture state. Refinement keeps
+/// the nearest ready ancestor until all replacement branches are ready;
+/// coarsening keeps the complete ready child cover until the parent is ready.
+/// Parent and child are therefore never visible together.
+fn build_draw_cover(
+    desired: &HashSet<TileCoord>,
+    resident: &HashMap<TileCoord, Entity>,
+    ready: &HashSet<TileCoord>,
+) -> HashSet<TileCoord> {
+    let max_level = resident.keys().map(|coord| coord.level).max().unwrap_or(0);
+    let mut draw = HashSet::new();
+    let mut subtree = Vec::new();
+    for leaf in desired {
+        subtree.clear();
+        if collect_ready_subtree(*leaf, resident, ready, max_level, &mut subtree) {
+            draw.extend(subtree.iter().copied());
+            continue;
+        }
+        let mut ancestor = tile_parent(*leaf);
+        while let Some(coord) = ancestor {
+            if resident.contains_key(&coord) && ready.contains(&coord) {
+                draw.insert(coord);
+                break;
+            }
+            ancestor = tile_parent(coord);
+        }
+    }
+
+    // Desired leaves can share a fallback ancestor. If one branch inserted an
+    // ancestor after another inserted descendants, retain the ancestor only.
+    let snapshot: Vec<TileCoord> = draw.iter().copied().collect();
+    for coord in snapshot {
+        let mut ancestor = tile_parent(coord);
+        while let Some(parent) = ancestor {
+            if draw.contains(&parent) {
+                draw.remove(&coord);
+                break;
+            }
+            ancestor = tile_parent(parent);
+        }
+    }
+    draw
+}
+
 /// Per-frame: stream each body's cube-sphere tile set against the camera.
 pub(crate) fn update_globe_lod(
     mut commands: Commands,
@@ -384,6 +503,8 @@ pub(crate) fn update_globe_lod(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<SceneCamera>>,
     transforms: Query<&GlobalTransform>,
     grids: Query<&Grid>,
+    material_ready: Query<(), With<ShaderLookReady>>,
+    visibility: Query<&Visibility>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobeHandoff>)>,
 ) {
     // ONLY the active window camera may steer the LOD. `iter().next()` picked
@@ -457,10 +578,16 @@ pub(crate) fn update_globe_lod(
         // but it cannot BE that gate: the tile set depends on the CAMERA, which
         // no epoch tolerance can see. A body's LOD must react to a camera that
         // moves while the clock is paused.
+        let all_resident_ready = tiles
+            .resident
+            .values()
+            .all(|entity| material_ready.contains(*entity));
         if let Some(prev_cam) = tiles.last_solve_cam {
             let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
             let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
             if tiles.last_solve_handoff.as_ref() == handoff
+                && all_resident_ready
+                && tiles.retiring.is_empty()
                 && (camera_body_local - prev_cam).length_squared() < slack * slack
             {
                 continue;
@@ -614,7 +741,11 @@ pub(crate) fn update_globe_lod(
                     tile_cell,
                     Transform::from_translation(tile_local_pos),
                     GlobalTransform::default(),
-                    Visibility::Visible,
+                    // Residency and drawability are separate. The render binder
+                    // promotes this entity with `ShaderLookReady`; the disjoint
+                    // cover below then swaps visibility atomically with its
+                    // parent/children.
+                    Visibility::Hidden,
                     InheritedVisibility::default(),
                     // NO `NoFrustumCulling`. It was here from the era when tile
                     // meshes were built at full body-local magnitude (vertices
@@ -650,29 +781,48 @@ pub(crate) fn update_globe_lod(
             tiles.resident.insert(coord, ent);
         }
 
-        // Retire resident tiles that left the desired set — but ONLY once
-        // every desired tile overlapping their footprint is itself resident.
-        // With budgeted spawning the replacements arrive before retirement:
-        // this check requires every desired overlapping tile to be resident.
-        // Do not keep the old tile for an additional grace period: parent/child
-        // globe tiles occupy the same surface and depth-fight during close/far
-        // camera jumps, which presents as Earth blinking.
-        let resident_now: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
+        let ready: HashSet<TileCoord> = tiles
+            .resident
+            .iter()
+            .filter_map(|(coord, entity)| material_ready.contains(*entity).then_some(*coord))
+            .collect();
+        let draw = build_draw_cover(&desired, &tiles.resident, &ready);
+
+        // Visibility is one exact quadtree partition. This is the critical LOD
+        // invariant: no coplanar parent/child overlap (z-fighting/brightness
+        // squares), and no newly-created but materially-unready replacement.
+        for (coord, entity) in &tiles.resident {
+            let target = if draw.contains(coord) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if visibility
+                .get(*entity)
+                .is_ok_and(|current| *current == target)
+            {
+                continue;
+            }
+            commands.entity(*entity).try_insert(target);
+        }
+
+        // A non-desired tile remains resident only while it is part of the
+        // drawable fallback cover. Once a complete replacement is ready, hide
+        // it in the same command batch that reveals the replacement, then keep
+        // the hidden entity alive for two extraction turns before despawning.
         let mut newly_retired: Vec<(Entity, u8, TileCoord)> = Vec::new();
         tiles.resident.retain(|coord, ent| {
-            if desired.contains(coord) {
+            if desired.contains(coord) || draw.contains(coord) {
                 return true;
             }
-            let covered = desired
-                .iter()
-                .filter(|d| tiles_overlap(d, coord))
-                .all(|d| resident_now.contains(d));
-            if covered {
-                newly_retired.push((*ent, 0, *coord));
-                false
-            } else {
-                true
+            if !visibility
+                .get(*ent)
+                .is_ok_and(|current| *current == Visibility::Hidden)
+            {
+                commands.entity(*ent).try_insert(Visibility::Hidden);
             }
+            newly_retired.push((*ent, 2, *coord));
+            false
         });
         tiles.retiring.extend(newly_retired);
         let mut despawned = 0usize;
@@ -691,13 +841,13 @@ pub(crate) fn update_globe_lod(
         });
         evict_unused_mesh_cache(&mut tiles, &budget);
 
-        // Arm the camera-motion gate ONLY if this pass left nothing outstanding:
-        // every desired tile is resident (the spawn budget may have deferred
-        // some) and nothing is still retiring (those carry a per-frame
-        // countdown). Otherwise the gate stays open and the next frame continues
-        // the work — the budget's whole point is to finish over several frames.
-        let settled =
-            tiles.retiring.is_empty() && desired.iter().all(|c| tiles.resident.contains_key(c));
+        // Arm the camera-motion gate only when the desired set itself is the
+        // complete ready draw cover. Residency without material readiness is not
+        // settled, and a fallback ancestor/descendant must keep reconciliation
+        // running until its exact replacement can take ownership.
+        let settled = tiles.retiring.is_empty()
+            && draw == desired
+            && desired.iter().all(|coord| ready.contains(coord));
         tiles.last_solve_cam = settled.then_some(camera_body_local);
         tiles.last_solve_handoff = handoff.cloned();
 
@@ -796,5 +946,70 @@ mod tests {
         assert!(branch_has_gap(&desired, &resident, 3));
         resident.insert(root, Entity::PLACEHOLDER);
         assert!(!branch_has_gap(&desired, &resident, 3));
+    }
+
+    fn face_root(body: Entity) -> TileCoord {
+        TileCoord {
+            body,
+            face: 0,
+            level: 0,
+            i: 0,
+            j: 0,
+        }
+    }
+
+    #[test]
+    fn refinement_draws_one_disjoint_cover_only_after_all_children_are_ready() {
+        let body = Entity::PLACEHOLDER;
+        let root = face_root(body);
+        let children = tile_children(root);
+        let desired = HashSet::from(children);
+        let mut resident = HashMap::from([(root, Entity::PLACEHOLDER)]);
+        let mut ready = HashSet::from([root]);
+
+        assert!(build_draw_cover(&desired, &resident, &ready) == HashSet::from([root]));
+
+        for child in children.into_iter().take(3) {
+            resident.insert(child, Entity::PLACEHOLDER);
+            ready.insert(child);
+        }
+        assert!(
+            build_draw_cover(&desired, &resident, &ready) == HashSet::from([root]),
+            "a partial child set must not overlap its drawable parent"
+        );
+
+        let last = children[3];
+        resident.insert(last, Entity::PLACEHOLDER);
+        ready.insert(last);
+        assert!(
+            build_draw_cover(&desired, &resident, &ready) == desired,
+            "the complete ready child cover must atomically replace its parent"
+        );
+    }
+
+    #[test]
+    fn coarsening_keeps_complete_ready_children_until_parent_is_ready() {
+        let body = Entity::PLACEHOLDER;
+        let root = face_root(body);
+        let children = tile_children(root);
+        let desired = HashSet::from([root]);
+        let mut resident = HashMap::new();
+        let mut ready = HashSet::new();
+        for child in children {
+            resident.insert(child, Entity::PLACEHOLDER);
+            ready.insert(child);
+        }
+
+        assert!(
+            build_draw_cover(&desired, &resident, &ready) == HashSet::from(children),
+            "coarsening must retain the previous exact cover, not expose a hole"
+        );
+
+        resident.insert(root, Entity::PLACEHOLDER);
+        ready.insert(root);
+        assert!(
+            build_draw_cover(&desired, &resident, &ready) == HashSet::from([root]),
+            "a ready parent must atomically replace all children"
+        );
     }
 }

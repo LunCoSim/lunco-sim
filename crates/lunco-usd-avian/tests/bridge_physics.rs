@@ -7,8 +7,10 @@
 //! (`islands/mod.rs:547` via `update_narrow_phase`) reproduced under the old
 //! every-tick static writes; any regression panics these tests.
 
+use avian3d::math::Vector;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
@@ -423,6 +425,95 @@ fn external_teleport_carries_child_body() {
 }
 
 #[test]
+fn paired_cell_transform_teleport_reaches_physics() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let grid = shell(&mut app);
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            CellCoord::ZERO,
+            Transform::from_xyz(10.0, 0.0, 0.0),
+            GlobalTransform::default(),
+            ChildOf(grid),
+        ))
+        .id();
+    step(&mut app, 2);
+
+    // This changes both components, just like a BigSpace re-split, but it is
+    // semantically a move to x=2250 m. Change flags cannot distinguish the two.
+    // The bridge must compare the represented pose and deliver this to Avian.
+    {
+        let mut entity = app.world_mut().entity_mut(body);
+        entity.insert(CellCoord::new(1, 0, 0));
+        entity.get_mut::<Transform>().unwrap().translation.x = 250.0;
+    }
+    step(&mut app, 1);
+
+    let position = app.world().get::<Position>(body).unwrap().0;
+    assert!(
+        (position.x - 2250.0).abs() < 1e-6,
+        "paired cross-cell teleport was mistaken for a representation re-split: {position:?}"
+    );
+}
+
+#[test]
+fn plain_ancestor_resplit_and_teleport_are_distinguished() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let grid = shell(&mut app);
+    let carrier = app
+        .world_mut()
+        .spawn((
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(grid),
+        ))
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            Transform::from_xyz(10.0, 0.0, 0.0),
+            GlobalTransform::default(),
+            ChildOf(carrier),
+        ))
+        .id();
+    step(&mut app, 2);
+    let initial = app.world().get::<Position>(body).unwrap().0;
+
+    // Different storage representation, identical carrier pose.
+    {
+        let mut entity = app.world_mut().entity_mut(carrier);
+        entity.insert(CellCoord::new(1, 0, 0));
+        entity.get_mut::<Transform>().unwrap().translation.x = -EDGE;
+    }
+    step(&mut app, 1);
+    let after_resplit = app.world().get::<Position>(body).unwrap().0;
+    assert_eq!(
+        after_resplit, initial,
+        "representation-only ancestor re-split moved its physical descendant"
+    );
+
+    // Same paired component shape, but now the carrier really moved +2000 m.
+    {
+        let mut entity = app.world_mut().entity_mut(carrier);
+        entity.insert(CellCoord::new(2, 0, 0));
+        entity.get_mut::<Transform>().unwrap().translation.x = -EDGE;
+    }
+    step(&mut app, 1);
+    let after_teleport = app.world().get::<Position>(body).unwrap().0;
+    assert!(
+        (after_teleport.x - (initial.x + f64::from(EDGE))).abs() < 1e-6,
+        "semantic ancestor teleport did not carry its physical descendant: initial={initial:?}, after={after_teleport:?}"
+    );
+}
+
+#[test]
 fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
     let mut app = make_app();
     let grid = shell(&mut app);
@@ -473,6 +564,11 @@ fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
 
     step(&mut app, 600);
     let initial = app.world().get::<Position>(body).unwrap().0;
+    let initial_rotation = app.world().get::<Rotation>(body).unwrap().0;
+    let initial_linear_velocity = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let initial_angular_velocity = app.world().get::<AngularVelocity>(body).unwrap().0;
+    let initial_specific_energy = 0.5 * initial_linear_velocity.length_squared()
+        + 0.5 * initial_angular_velocity.length_squared();
     assert!((initial.x - 3.0).abs() < 0.1);
     assert!((initial.z + 4.0).abs() < 0.1);
     assert!((initial.y - 0.5).abs() < 0.1);
@@ -486,6 +582,142 @@ fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
     }
 
     let final_pos = app.world().get::<Position>(body).unwrap().0;
+    let final_rotation = app.world().get::<Rotation>(body).unwrap().0;
+    let final_linear_velocity = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let final_angular_velocity = app.world().get::<AngularVelocity>(body).unwrap().0;
+    let final_specific_energy = 0.5 * final_linear_velocity.length_squared()
+        + 0.5 * final_angular_velocity.length_squared();
     assert!((final_pos - initial).length() < 0.05);
+    assert!(
+        final_rotation.angle_between(initial_rotation) < 1e-4,
+        "rotation above ActivePhysicsFrame leaked into Avian: before={initial_rotation:?}, after={final_rotation:?}"
+    );
+    assert!(final_linear_velocity.is_finite());
+    assert!(final_angular_velocity.is_finite());
+    assert!(
+        (final_linear_velocity - initial_linear_velocity).length() < 1e-3,
+        "rotating celestial parent injected linear velocity: before={initial_linear_velocity:?}, after={final_linear_velocity:?}"
+    );
+    assert!(
+        (final_angular_velocity - initial_angular_velocity).length() < 1e-3,
+        "rotating celestial parent injected angular velocity: before={initial_angular_velocity:?}, after={final_angular_velocity:?}"
+    );
+    assert!(
+        final_specific_energy <= initial_specific_energy + 1e-6,
+        "rotating celestial parent injected specific kinetic energy: before={initial_specific_energy:e}, after={final_specific_energy:e}"
+    );
     assert!((app.world().get::<Transform>(body).unwrap().translation.x - 3.0).abs() < 0.1);
+
+    // A paired CellCoord/Transform re-split is a representation change of the
+    // same active-frame pose, not a physical teleport. This is the exact shape
+    // emitted by BigSpace recentring.
+    {
+        let mut entity = app.world_mut().entity_mut(body);
+        entity.insert(CellCoord::new(1, 0, 0));
+        entity.get_mut::<Transform>().unwrap().translation.x -= EDGE;
+    }
+    step(&mut app, 1);
+    let after_rebranch = app.world().get::<Position>(body).unwrap().0;
+    assert!(
+        // The dynamic body remains in contact and advances one solver tick;
+        // compare below the contact solver's sub-millimetre resting motion,
+        // while a misclassified cell move would be 2 km.
+        (after_rebranch - final_pos).length() < 1e-3,
+        "representation-only BigSpace rebranch changed physics pose: before={final_pos:?}, after={after_rebranch:?}"
+    );
+}
+
+#[test]
+fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root_grid = shell(&mut app);
+    let rotating_parent = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(root_grid),
+        ))
+        .id();
+    let physics_frame = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(rotating_parent),
+        ))
+        .id();
+    app.world_mut()
+        .insert_resource(ActivePhysicsFrame(physics_frame));
+
+    let chassis = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::cuboid(2.0, 1.0, 2.0),
+            CellCoord::ZERO,
+            Transform::from_xyz(10.0, 20.0, -30.0),
+            GlobalTransform::default(),
+            ChildOf(physics_frame),
+        ))
+        .id();
+    let offsets = [
+        DVec3::new(1.5, -1.0, 1.5),
+        DVec3::new(-1.5, -1.0, 1.5),
+        DVec3::new(1.5, -1.0, -1.5),
+        DVec3::new(-1.5, -1.0, -1.5),
+    ];
+    let mut legs = Vec::new();
+    for offset in offsets {
+        let leg = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Collider::cuboid(0.25, 1.0, 0.25),
+                Transform::from_translation(offset.as_vec3()),
+                GlobalTransform::default(),
+                ChildOf(chassis),
+            ))
+            .id();
+        app.world_mut()
+            .spawn(FixedJoint::new(chassis, leg).with_local_anchor1(offset));
+        legs.push(leg);
+    }
+
+    step(&mut app, 20);
+    let initial_chassis = app.world().get::<Position>(chassis).unwrap().0;
+    let initial_relative: Vec<DVec3> = legs
+        .iter()
+        .map(|leg| app.world().get::<Position>(*leg).unwrap().0 - initial_chassis)
+        .collect();
+
+    for n in 1..=120 {
+        app.world_mut()
+            .get_mut::<Transform>(rotating_parent)
+            .unwrap()
+            .rotation = Quat::from_euler(EulerRot::YXZ, n as f32 * 0.01, n as f32 * 0.003, 0.0);
+        step(&mut app, 1);
+    }
+
+    let final_chassis = app.world().get::<Position>(chassis).unwrap().0;
+    assert!(
+        (final_chassis - initial_chassis).length() < 1e-4,
+        "celestial parent motion displaced the chassis in its active physics frame"
+    );
+    for (leg, expected) in legs.iter().zip(initial_relative) {
+        let actual = app.world().get::<Position>(*leg).unwrap().0 - final_chassis;
+        assert!(
+            (actual - expected).length() < 1e-3,
+            "celestial parent motion changed a jointed leg offset: expected={expected:?}, actual={actual:?}"
+        );
+        let linear = app.world().get::<LinearVelocity>(*leg).unwrap().0;
+        let angular = app.world().get::<AngularVelocity>(*leg).unwrap().0;
+        assert!(linear.is_finite() && linear.length() < 1e-4);
+        assert!(angular.is_finite() && angular.length() < 1e-4);
+    }
 }

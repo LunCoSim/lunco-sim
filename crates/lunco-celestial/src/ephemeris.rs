@@ -8,9 +8,9 @@
 //! and an `EphemerisPlugin` that drops it into `EphemerisResource`.
 //!
 //! Apps that don't add `lunco-celestial-ephemeris` get the [`NoOpEphemerisProvider`]
-//! installed by [`crate::CelestialPlugin`]: bodies stay put (every position
-//! returns zero). That's fine for the Modelica workbench and any sandbox
-//! scene that places bodies explicitly; orbital sims add the heavy crate.
+//! installed by [`crate::CelestialPlugin`]. It reports no orbital data, so
+//! ephemeris-driven placement is skipped; explicitly authored bodies remain
+//! available to non-orbital scenes. Orbital simulations add the heavy crate.
 
 use crate::frames::EclipticAu;
 use bevy::prelude::*;
@@ -73,7 +73,7 @@ pub trait EphemerisProvider: Send + Sync + 'static {
             let Some(parent_id) = self.parent_id(current_id) else {
                 break;
             };
-            if parent_id == SUN_NAIF_ID {
+            if parent_id == crate::ephemeris_id::SUN {
                 break;
             }
             pos += self.position(parent_id, epoch_jd)?;
@@ -83,16 +83,13 @@ pub trait EphemerisProvider: Send + Sync + 'static {
     }
 }
 
-/// The Sun. The origin of the heliocentric frame — walking the parent tree stops here.
-pub const SUN_NAIF_ID: i32 = 10;
-
 /// Thread-safe resource facilitating access to the active ephemeris engine.
 #[derive(Resource)]
 pub struct EphemerisResource {
     pub provider: Arc<dyn EphemerisProvider>,
 }
 
-/// Returns zero for every body at every epoch. Installed by default so
+/// Reports no data for every body at every epoch. Installed by default so
 /// downstream systems that depend on `Res<EphemerisResource>` don't panic.
 /// Apps that want real planetary positions add `lunco-celestial-ephemeris`
 /// and its `EphemerisPlugin`, which overwrites the resource.
@@ -119,17 +116,19 @@ mod p8_tests {
     impl EphemerisProvider for Partial {
         fn position(&self, body_id: i32, _jd: f64) -> Option<EclipticAu> {
             match body_id {
-                10 => Some(EclipticAu::ZERO),
-                3 => Some(EclipticAu::new(DVec3::new(1.0, 0.0, 0.0))),
-                399 => Some(EclipticAu::new(DVec3::new(0.00001, 0.0, 0.0))),
+                crate::ephemeris_id::SUN => Some(EclipticAu::ZERO),
+                crate::ephemeris_id::EARTH_MOON_BARYCENTER => {
+                    Some(EclipticAu::new(DVec3::new(1.0, 0.0, 0.0)))
+                }
+                crate::ephemeris_id::EARTH => Some(EclipticAu::new(DVec3::new(0.00001, 0.0, 0.0))),
                 _ => None, // the mission's fetch failed
             }
         }
         fn parent_id(&self, body_id: i32) -> Option<i32> {
             match body_id {
-                399 => Some(3),
-                3 => Some(SUN_NAIF_ID),
-                -1024 => Some(399),
+                crate::ephemeris_id::EARTH => Some(crate::ephemeris_id::EARTH_MOON_BARYCENTER),
+                crate::ephemeris_id::EARTH_MOON_BARYCENTER => Some(crate::ephemeris_id::SUN),
+                -1024 => Some(crate::ephemeris_id::EARTH),
                 _ => None,
             }
         }
@@ -157,7 +156,7 @@ mod p8_tests {
     fn a_known_body_still_resolves_through_the_parent_chain() {
         // Earth = Earth-rel-EMB + EMB-rel-Sun.
         let earth = Partial
-            .global_position(399, 2_451_545.0)
+            .global_position(crate::ephemeris_id::EARTH, 2_451_545.0)
             .expect("Earth is known");
         assert!(
             (earth.raw().x - 1.00001).abs() < 1.0e-9,
@@ -179,7 +178,9 @@ mod p8_tests {
         // With the old hardcoded match, 399 would have walked 399→3→10 and summed THREE
         // positions (3.0). With the tree supplied by the provider — and this one supplies
         // none — it is just the body's own position.
-        let p = Flat.global_position(399, 0.0).unwrap();
+        let p = Flat
+            .global_position(crate::ephemeris_id::EARTH, 0.0)
+            .unwrap();
         assert_eq!(
             p.raw().x,
             1.0,

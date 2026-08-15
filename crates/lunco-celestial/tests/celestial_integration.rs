@@ -44,7 +44,11 @@ fn celestial_test_app() -> App {
     app.init_asset::<Image>();
     app.add_plugins(CelestialPlugin);
     // The scene asks for a sky: Sun, Earth, Moon.
-    for naif in [10, 399, 301] {
+    for naif in [
+        lunco_celestial::ephemeris_id::SUN,
+        lunco_celestial::ephemeris_id::EARTH,
+        lunco_celestial::ephemeris_id::MOON,
+    ] {
         app.world_mut()
             .spawn(lunco_celestial::CelestialBodyDecl { naif });
     }
@@ -126,7 +130,7 @@ fn site_anchor_waits_for_the_deferred_solar_grid_then_aligns() {
     app.world_mut().spawn((
         lunco_celestial::geo::SiteAnchor,
         lunco_celestial::geo::GeodeticAnchor {
-            body: 301,
+            body: lunco_celestial::ephemeris_id::MOON,
             geodetic: lunco_celestial::geo::Geodetic::new(26.13, 3.63, 0.3),
         },
     ));
@@ -168,11 +172,11 @@ fn site_anchor_waits_for_the_deferred_solar_grid_then_aligns() {
 /// `big_space_setup`'s doc block claimed "Grid Anchor (inertial) — does NOT
 /// rotate", and the Observer Camera was parented to the Earth Grid on the
 /// strength of that claim ("On Earth Grid (inertial) for orbit view"). The
-/// opposite is true: `body_rotation_system` queries `CelestialReferenceFrame`,
-/// which lives on the **grids**, so the Earth Grid spins once per sidereal day
+/// opposite is true: `body_rotation_system` rotates only
+/// `ReferenceFrame::BodyFixed`, so the Earth body-fixed Grid spins once per sidereal day
 /// and dragged the camera around a ~19,000 km circle with it.
 ///
-/// The camera now hangs off an `InertialAnchor`: tracks Earth's position, never
+/// The camera now hangs off an `EclipticJ2000` frame: tracks Earth's position, never
 /// its rotation. Assert exactly that split — the body grid DOES rotate, the
 /// camera's parent does NOT, and the two stay co-located.
 #[test]
@@ -199,9 +203,14 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
 
     assert!(
         app.world()
-            .get::<lunco_celestial::InertialAnchor>(parent)
-            .is_some(),
-        "the Observer Camera must be parented to an InertialAnchor"
+            .get::<lunco_celestial::ReferenceFrame>(parent)
+            .is_some_and(|frame| {
+                *frame
+                    == lunco_celestial::ReferenceFrame::EclipticJ2000 {
+                        center: lunco_celestial::ephemeris_id::EARTH,
+                    }
+            }),
+        "the Observer Camera must be parented to Earth's EclipticJ2000 frame"
     );
     assert!(
         app.world()
@@ -249,7 +258,7 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     let anchor_tf = *app.world().get::<Transform>(parent).unwrap();
     assert!(
         anchor_tf.rotation.angle_between(Quat::IDENTITY) < 1e-6,
-        "the InertialAnchor must never rotate — the orbit view is star-fixed \
+        "the EclipticJ2000 frame must never rotate — the orbit view is star-fixed \
          (got {:?})",
         anchor_tf.rotation
     );
@@ -267,6 +276,256 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     assert!(
         (anchor_tf.translation - earth_tf.translation).length() < 1e-3,
         "the anchor must track Earth's translation"
+    );
+}
+
+#[test]
+fn each_builtin_orbit_target_has_one_colocated_star_fixed_grid() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    app.update();
+    app.update();
+
+    let orbit_frames: Vec<(Entity, i32, CellCoord, Transform)> = {
+        let mut query = app.world_mut().query::<(
+            Entity,
+            &lunco_celestial::ReferenceFrame,
+            &CellCoord,
+            &Transform,
+        )>();
+        query
+            .iter(app.world())
+            .filter_map(|(entity, frame, cell, transform)| match *frame {
+                lunco_celestial::ReferenceFrame::EclipticJ2000 { center } => {
+                    Some((entity, center, *cell, *transform))
+                }
+                lunco_celestial::ReferenceFrame::World
+                | lunco_celestial::ReferenceFrame::BodyFixed { .. } => None,
+            })
+            .collect()
+    };
+
+    for body_id in [
+        lunco_celestial::ephemeris_id::SUN,
+        lunco_celestial::ephemeris_id::EARTH,
+        lunco_celestial::ephemeris_id::MOON,
+    ] {
+        let matches: Vec<_> = orbit_frames
+            .iter()
+            .filter(|(_, id, _, _)| *id == body_id)
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "body {body_id} must own exactly one unambiguous EclipticJ2000 frame"
+        );
+        assert!(
+            app.world().get::<Grid>(matches[0].0).is_some(),
+            "EclipticJ2000 frame for body {body_id} must be a BigSpace Grid"
+        );
+    }
+
+    for body_id in [
+        lunco_celestial::ephemeris_id::EARTH,
+        lunco_celestial::ephemeris_id::MOON,
+    ] {
+        let (_, _, orbit_cell, orbit_transform) = orbit_frames
+            .iter()
+            .find(|(_, id, _, _)| *id == body_id)
+            .unwrap();
+        assert!(
+            orbit_transform.rotation.angle_between(Quat::IDENTITY) < 1e-6,
+            "body {body_id} orbit frame must remain star-fixed"
+        );
+
+        let (body_cell, body_transform) = {
+            let mut query =
+                app.world_mut()
+                    .query::<(&lunco_celestial::ReferenceFrame, &CellCoord, &Transform)>();
+            query
+                .iter(app.world())
+                .find(|(frame, _, _)| {
+                    **frame == lunco_celestial::ReferenceFrame::BodyFixed { body: body_id }
+                })
+                .map(|(_, cell, transform)| (*cell, *transform))
+                .expect("body-fixed frame must exist")
+        };
+        assert_eq!(*orbit_cell, body_cell);
+        assert!(
+            orbit_transform
+                .translation
+                .abs_diff_eq(body_transform.translation, 1e-6),
+            "body {body_id} inertial and body-fixed grids must be co-located"
+        );
+    }
+}
+
+#[test]
+fn trajectories_mount_only_in_their_declared_frame_class() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    app.update();
+    app.update();
+
+    let moon = lunco_celestial::ephemeris_id::MOON;
+    let earth = lunco_celestial::ephemeris_id::EARTH;
+    let body_fixed = app
+        .world_mut()
+        .spawn((
+            lunco_celestial::TrajectoryView {
+                tracked_id: earth,
+                reference_id: moon,
+                frame: lunco_celestial::TrajectoryFrame::BodyFixed,
+                ..Default::default()
+            },
+            lunco_celestial::TrajectoryPath::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    let inertial = app
+        .world_mut()
+        .spawn((
+            lunco_celestial::TrajectoryView {
+                tracked_id: -10_001,
+                reference_id: moon,
+                frame: lunco_celestial::TrajectoryFrame::Inertial,
+                ..Default::default()
+            },
+            lunco_celestial::TrajectoryPath::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+
+    app.update();
+    app.update();
+
+    let fixed_parent = app.world().get::<ChildOf>(body_fixed).unwrap().parent();
+    let fixed_frame = app
+        .world()
+        .get::<lunco_celestial::ReferenceFrame>(fixed_parent)
+        .expect("a body-fixed trajectory must parent to a body-fixed frame Grid");
+    assert_eq!(
+        *fixed_frame,
+        lunco_celestial::ReferenceFrame::BodyFixed { body: moon }
+    );
+
+    let inertial_parent = app.world().get::<ChildOf>(inertial).unwrap().parent();
+    let inertial_frame = app
+        .world()
+        .get::<lunco_celestial::ReferenceFrame>(inertial_parent)
+        .expect("an inertial trajectory must parent to an inertial frame Grid");
+    assert_eq!(
+        *inertial_frame,
+        lunco_celestial::ReferenceFrame::EclipticJ2000 { center: moon }
+    );
+}
+
+#[test]
+fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    app.update();
+    app.update();
+
+    let moon = lunco_celestial::ephemeris_id::MOON;
+    let spacecraft = app
+        .world_mut()
+        .spawn((
+            lunco_core::Spacecraft {
+                name: "Frame probe".into(),
+                ephemeris_id: -10_001,
+                reference_id: moon,
+                user_visible: true,
+                ..Default::default()
+            },
+            Transform::from_scale(Vec3::splat(2.0)),
+            GlobalTransform::default(),
+            Visibility::default(),
+        ))
+        .id();
+
+    app.update();
+
+    let parent = app
+        .world()
+        .get::<ChildOf>(spacecraft)
+        .expect("spacecraft must be mounted atomically in its reference grid")
+        .parent();
+    let inertial = app
+        .world()
+        .get::<lunco_celestial::ReferenceFrame>(parent)
+        .expect("spacecraft state vectors are inertial and require an inertial frame Grid");
+    assert_eq!(
+        *inertial,
+        lunco_celestial::ReferenceFrame::EclipticJ2000 { center: moon }
+    );
+    assert!(app.world().get::<Grid>(parent).is_some());
+    assert!(app.world().get::<CellCoord>(spacecraft).is_some());
+    assert_eq!(
+        app.world().get::<Transform>(spacecraft).unwrap().scale,
+        Vec3::splat(2.0),
+        "atomic frame migration must preserve the authored marker scale"
+    );
+}
+
+#[test]
+fn rendered_and_analytical_orbit_use_the_same_typed_frame_transform() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+    let earth = lunco_celestial::ephemeris_id::EARTH;
+    let orbit = lunco_celestial::KeplerOrbit {
+        body: earth,
+        elements: lunco_celestial::KeplerianElements {
+            semi_major_axis_m: 7_000_000.0,
+            inclination_deg: 51.6,
+            raan_deg: 37.0,
+            ..Default::default()
+        },
+    };
+    let satellite = app
+        .world_mut()
+        .spawn((orbit, Transform::default(), GlobalTransform::default()))
+        .id();
+
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let jd = app.world().resource::<WorldTime>().epoch_jd;
+    let registry = app
+        .world()
+        .resource::<lunco_celestial::CelestialBodyRegistry>();
+    let ephemeris = app.world().resource::<EphemerisResource>();
+    let descriptor = registry.get(earth).unwrap();
+    let body_inertial =
+        lunco_celestial::frames::Pos::<lunco_celestial::frames::BodyInertial>::at_body(
+            earth,
+            orbit.elements.position_bevy_m(descriptor.gm, jd),
+        );
+    let expected =
+        lunco_celestial::transform::FrameTree::new(jd, registry, ephemeris.provider.as_ref())
+            .body_inertial_to_solar(body_inertial)
+            .unwrap()
+            .raw();
+    let tracked = app
+        .world()
+        .get::<lunco_celestial::SolarFramePose>(satellite)
+        .expect("KeplerOrbit must produce a SolarFramePose");
+
+    assert!(
+        tracked.pos.abs_diff_eq(expected, 1e-6),
+        "analytical orbit pose bypassed the body-inertial to solar transform: expected={expected:?}, got={:?}",
+        tracked.pos
     );
 }
 
@@ -292,6 +551,17 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
             .count()
     };
     assert!(count_derived(&mut app) > 0, "the sky should have spawned");
+
+    // A site scene selects a celestial surface Grid as Avian's frame. Reproduce
+    // that lifecycle state explicitly: teardown must not leave the resource
+    // pointing at an entity it is about to despawn.
+    let surface_frame = app
+        .world_mut()
+        .query_filtered::<Entity, With<lunco_celestial::MoonSurfaceRoot>>()
+        .single(app.world())
+        .expect("Moon surface frame should exist");
+    app.world_mut()
+        .insert_resource(lunco_core::ActivePhysicsFrame(surface_frame));
 
     // Reload into a scene WITHOUT bodies: despawn every `CelestialBodyDecl` (that is
     // what scene-clear does to the USD-projected declaration entities).
@@ -320,9 +590,23 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
             .is_none(),
         "the hierarchy root must be gone"
     );
+    let persistent_root = app
+        .world_mut()
+        .query_filtered::<Entity, With<lunco_core::WorldRoot>>()
+        .single(app.world())
+        .expect("the persistent world shell must survive scene teardown");
+    assert_eq!(
+        app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+        persistent_root,
+        "scene teardown must restore Avian's frame before despawning the celestial surface Grid"
+    );
 
     // …and re-declaring bodies rebuilds it (the idempotent gate, not a spent latch).
-    for naif in [10, 399, 301] {
+    for naif in [
+        lunco_celestial::ephemeris_id::SUN,
+        lunco_celestial::ephemeris_id::EARTH,
+        lunco_celestial::ephemeris_id::MOON,
+    ] {
         app.world_mut()
             .spawn(lunco_celestial::CelestialBodyDecl { naif });
     }
@@ -362,7 +646,11 @@ fn test_celestial_startup_and_movement() {
     app.add_plugins(CelestialPlugin);
     // The scene declares its bodies — celestial content is opt-in (doc 19 §11e), so
     // without these there is no hierarchy, no globes and no ephemeris at all.
-    for naif in [10, 399, 301] {
+    for naif in [
+        lunco_celestial::ephemeris_id::SUN,
+        lunco_celestial::ephemeris_id::EARTH,
+        lunco_celestial::ephemeris_id::MOON,
+    ] {
         app.world_mut()
             .spawn(lunco_celestial::CelestialBodyDecl { naif });
     }
@@ -481,7 +769,7 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     impl EphemerisProvider for SunAndMoon {
         fn position(&self, body_id: i32, _jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
             Some(match body_id {
-                301 => {
+                lunco_celestial::ephemeris_id::MOON => {
                     lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(1.0, 0.0, 0.0))
                 }
                 _ => lunco_celestial::frames::EclipticAu::ZERO,
@@ -535,8 +823,14 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     let ephem = app.world().resource::<EphemerisResource>();
     assert!(
         lunco_celestial::sun_emit_direction(
-            ephem.provider.global_position(10, 0.0).unwrap(),
-            ephem.provider.global_position(301, 0.0).unwrap(),
+            ephem
+                .provider
+                .global_position(lunco_celestial::ephemeris_id::SUN, 0.0)
+                .unwrap(),
+            ephem
+                .provider
+                .global_position(lunco_celestial::ephemeris_id::MOON, 0.0)
+                .unwrap(),
         )
         .is_some(),
         "the stub ephemeris is degenerate — this test would pass without steering ever \
@@ -655,7 +949,7 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
             Transform::IDENTITY,
             lunco_celestial::geo::SiteAnchor,
             lunco_celestial::geo::GeodeticAnchor {
-                body: 301,
+                body: lunco_celestial::ephemeris_id::MOON,
                 geodetic: lunco_celestial::geo::Geodetic::new(-86.0, 3.0, 0.3),
             },
         ))
@@ -666,7 +960,7 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
             Transform::IDENTITY,
             ChildOf(site),
             lunco_celestial::geo::GeodeticAnchor {
-                body: 399,
+                body: lunco_celestial::ephemeris_id::EARTH,
                 geodetic: lunco_celestial::geo::Geodetic::new(40.4, -4.2, 837.0),
             },
         ))
@@ -697,8 +991,8 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
         .get::<lunco_celestial::pose::SolarFramePose>(endpoint)
         .expect("the descendant link endpoint must receive a solar pose");
 
-    assert_eq!(station_pose.body(), 399);
-    assert_eq!(endpoint_pose.body(), 399);
+    assert_eq!(station_pose.body(), lunco_celestial::ephemeris_id::EARTH);
+    assert_eq!(endpoint_pose.body(), lunco_celestial::ephemeris_id::EARTH);
     assert!(
         (endpoint_pose.pos - station_pose.pos).length() < 28.0,
         "the feed should remain near its Earth station, not at the lunar site: {:?} vs {:?}",

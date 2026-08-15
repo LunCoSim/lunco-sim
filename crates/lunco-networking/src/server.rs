@@ -976,7 +976,7 @@ fn host_send_outbox(
 /// the client freezes its proxy at the last pose, and a later re-entry resends a
 /// fresh baseline.
 ///
-/// The `(pos_q, rot_packed, last_input_seq)` key matches `gather_snapshot`'s own
+/// The `(position_bits, rot_packed, last_input_seq)` key matches `gather_snapshot`'s own
 /// change test (velocity is intentionally excluded, so a body isn't re-sent for
 /// sub-quantum velocity wobble). Runs on the `Update` ferry but early-outs unless
 /// `ReplicationState.generation` advanced, so it diffs at most once per gather.
@@ -991,7 +991,7 @@ fn assemble_and_send_snapshots(
     mut sender: ServerMultiMessageSender,
     mut last_gen: Local<u64>,
     // Per-session digest of the last pose ([`crate::sync::PoseDigest`] —
-    // `(cell, pos_q, rot_packed, last_input_seq)`) SENT to that peer per gid.
+    // `(position_bits, rot_packed, last_input_seq)`) SENT to that peer per gid.
     // Diffed each assemble to decide what to send; out-of-interest gids are
     // evicted so a re-entry re-baselines.
     mut sent_last: Local<
@@ -1058,6 +1058,9 @@ fn assemble_and_send_snapshots(
         if batch.is_empty() {
             continue;
         }
+        let Some(frame) = repl.frame else {
+            continue;
+        };
         for chunk in batch.chunks(MAX_SNAPSHOT_ENTRIES) {
             server_send(
                 &mut sender,
@@ -1066,6 +1069,7 @@ fn assemble_and_send_snapshots(
                 config.snapshot_channel,
                 &SyncEnvelope::Snapshot(SnapshotMsg {
                     tick: repl.tick,
+                    frame,
                     entries: chunk.to_vec(),
                 }),
             );
@@ -1443,7 +1447,7 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((mut manifest, cid_paths)) => {
+        Some((manifest, cid_paths)) => {
             info!(
                 "[net] scenario manifest built: {} assets",
                 manifest.assets.len()

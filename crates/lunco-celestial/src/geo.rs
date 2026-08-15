@@ -392,7 +392,7 @@ mod tests {
         crate::registry::CelestialBodyRegistry::default_system()
             .bodies
             .into_iter()
-            .find(|b| b.ephemeris_id == 301)
+            .find(|b| b.ephemeris_id == crate::ephemeris_id::MOON)
             .unwrap()
     }
 
@@ -718,7 +718,7 @@ mod tests {
         let earth = crate::registry::CelestialBodyRegistry::default_system()
             .bodies
             .into_iter()
-            .find(|b| b.ephemeris_id == 399)
+            .find(|b| b.ephemeris_id == crate::ephemeris_id::EARTH)
             .unwrap();
         let el = KeplerianElements {
             semi_major_axis_m: 6_778.0e3,

@@ -28,26 +28,27 @@ use avian3d::prelude::{
     AngularVelocity, LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation,
 };
 use bevy::ecs::reflect::ReflectEvent;
-use bevy::math::DVec3;
+use bevy::ecs::system::SystemParam;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use bevy::reflect::TypePath;
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, Grid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::session::{IncomingSnapshots, SnapshotSample};
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{
-    authorize, AppliedInputSeq, GlobalEntityId, LocalAvatar, LocalSession, Mutation, NetReplicate,
-    NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
-    SessionProfiles, SessionRegistry, SimTick, SyncApplyGuard, SyncChannel,
+    authorize, ActivePhysicsFrame, AppliedInputSeq, GlobalEntityId, LocalAvatar, LocalSession,
+    Mutation, NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn,
+    SessionId, SessionProfiles, SessionRegistry, SimTick, SyncApplyGuard, SyncChannel,
 };
 use lunco_doc::DocumentId;
 
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_celestial::CelestialReferenceFrame;
+use lunco_celestial::ReferenceFrame;
 use lunco_doc_bevy::JournalResource;
 pub use lunco_doc_bevy::{Presence, PresenceInfo, UserId};
 use lunco_settings::{AppSettingsExt, SettingsSection};
@@ -66,82 +67,37 @@ pub struct SyncCommand {
     pub data: String,
 }
 
-/// One entity's replicated transform (+ velocity), keyed by [`GlobalEntityId`]
-/// raw `u64`. **Compact wire form:** the position is fixed-point quantized to
-/// **1 mm** in `i32` ([`POS_SCALE`]) and the world rotation is a 32-bit
-/// smallest-three packing. Velocities stay f32 to protect owned-rover
-/// reconcile precision.
+/// One entity's replicated physics pose (+ velocity), keyed by
+/// [`GlobalEntityId`] raw `u64`.
 ///
-/// **Cell-aware (doc 47 Phase 3):** `pos_q` is the CELL-RELATIVE remainder
-/// and `cell` carries the big_space `CellCoord`, so the ±2 147 km i32 span
-/// bounds the remainder — never the world position. For every replicated
-/// body today `cell == [0,0,0]` and the remainder IS the absolute position.
+/// Position and velocities are authoritative f64 Avian state expressed in the
+/// semantic frame on the enclosing [`SnapshotMsg`]. A sender's private BigSpace
+/// cell/local split and active precision grid never cross the wire. Rotation
+/// remains the compact 32-bit smallest-three representation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     pub gid: u64,
-    /// Cell-relative position (= absolute while `cell == [0,0,0]`),
-    /// fixed-point at [`POS_SCALE`]. Decode with [`dequantize_pos`] and
-    /// compose with `cell × cell_edge`.
-    pub pos_q: [i32; 3],
-    /// big_space `CellCoord` of the body (i64/axis). NOTE: bincode is
-    /// positional — this field is a WIRE-BREAKING addition; peers must run
-    /// the same build (no protocol-version handshake exists).
-    pub cell: [i64; 3],
+    pub position_m: [f64; 3],
     /// World-space rotation, smallest-three packed ([`encode_quat`] /
     /// [`decode_quat`]).
     pub rot_packed: u32,
-    /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32) — the
-    /// owned-rover prediction seats the body with this for replay.
+    /// Authoritative linear velocity (Avian f64) in the batch frame.
     #[serde(default)]
-    pub lv: [f32; 3],
-    /// Authoritative angular velocity (avian `AngularVelocity`, f64→f32).
+    pub lv: [f64; 3],
+    /// Authoritative angular velocity (Avian f64) in the batch frame.
     #[serde(default)]
-    pub av: [f32; 3],
+    pub av: [f64; 3],
     /// Highest input `seq` the host has applied for this gid (0 = none) — the
     /// reconcile ack for the owning client.
     #[serde(default)]
     pub last_input_seq: u32,
 }
 
-/// Fixed-point scale for wire position quantization: units per metre. `1000` ⇒
-/// 1 mm resolution; `i32` then spans ±(2³¹−1)/1000 ≈ ±2 147 km from origin.
-pub const POS_SCALE: f64 = 1000.0;
-
-/// Quantize an absolute world position to fixed-point `i32` at [`POS_SCALE`].
-/// Rust's float→int `as` **saturates**, so a body beyond ±2 147 km clamps to the
-/// bound (a visible offset, never a wrapping teleport).
-pub fn quantize_pos(p: DVec3) -> [i32; 3] {
-    [
-        (p.x * POS_SCALE).round() as i32,
-        (p.y * POS_SCALE).round() as i32,
-        (p.z * POS_SCALE).round() as i32,
-    ]
-}
-
-/// Inverse of [`quantize_pos`].
-pub fn dequantize_pos(q: [i32; 3]) -> DVec3 {
-    DVec3::new(
-        q[0] as f64 / POS_SCALE,
-        q[1] as f64 / POS_SCALE,
-        q[2] as f64 / POS_SCALE,
-    )
-}
-
 /// The per-body pose fingerprint used for change detection and per-peer send
-/// diffing: `(cell, pos_q, rot_packed, last_input_seq)`. One alias so
+/// diffing: `(position_bits, rot_packed, last_input_seq)`. One alias so
 /// `gather_snapshot`'s change key and [`diff_peer_batch`]'s digest cannot
 /// drift apart (a field missing from one of them = silently unsent updates).
-pub type PoseDigest = ([i64; 3], [i32; 3], u32, u32);
-
-/// Compose a wire `(cell, remainder)` pair back into the absolute f64 world
-/// position, given the grid cell edge (metres).
-pub fn compose_cell_pos(cell: [i64; 3], remainder: DVec3, edge: f64) -> DVec3 {
-    DVec3::new(
-        cell[0] as f64 * edge + remainder.x,
-        cell[1] as f64 * edge + remainder.y,
-        cell[2] as f64 * edge + remainder.z,
-    )
-}
+pub type PoseDigest = ([u64; 3], u32, u32);
 
 /// Pack a unit quaternion into 32 bits (smallest-three): a 2-bit largest-component
 /// index + three 10-bit components over ±1/√2. `q` and `−q` encode identically
@@ -197,7 +153,52 @@ pub fn decode_quat(packed: u32) -> Quat {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotMsg {
     pub tick: u64,
+    /// Shared semantic frame for every entry in this batch. Concrete BigSpace
+    /// precision grids are process-local and are never serialized.
+    pub frame: ReferenceFrame,
     pub entries: Vec<SnapshotEntry>,
+}
+
+fn snapshot_entry_in_frame(
+    gid: u64,
+    position: DVec3,
+    rotation: DQuat,
+    linear_velocity: DVec3,
+    angular_velocity: DVec3,
+    last_input_seq: u32,
+    transform: lunco_core::coords::GridFrameTransform,
+) -> SnapshotEntry {
+    SnapshotEntry {
+        gid,
+        position_m: transform.transform_position(position).to_array(),
+        rot_packed: encode_quat(transform.transform_rotation(rotation).as_quat()),
+        lv: transform.transform_vector(linear_velocity).to_array(),
+        av: transform.transform_vector(angular_velocity).to_array(),
+        last_input_seq,
+    }
+}
+
+fn snapshot_sample_in_active_frame(
+    entry: SnapshotEntry,
+    tick: u64,
+    transform: lunco_core::coords::GridFrameTransform,
+) -> SnapshotSample {
+    let position = transform.transform_position(DVec3::from_array(entry.position_m));
+    let rotation = transform.transform_rotation(decode_quat(entry.rot_packed).as_dquat());
+    SnapshotSample {
+        gid: entry.gid,
+        tick,
+        t: position.as_vec3().to_array(),
+        r: rotation.as_quat().to_array(),
+        lv: transform
+            .transform_vector(DVec3::from_array(entry.lv))
+            .to_array(),
+        av: transform
+            .transform_vector(DVec3::from_array(entry.av))
+            .to_array(),
+        last_input_seq: entry.last_input_seq,
+        pos: position.to_array(),
+    }
 }
 
 /// Host → clients: instantiate this catalog entry locally pinned to the
@@ -224,9 +225,8 @@ pub struct DespawnReplicationMsg {
 /// **Why this exists.** The envelope codec is `bincode` — positional and NOT
 /// self-describing. A peer built against a different field layout does not fail to
 /// decode; it decodes *wrong*, field-for-field. A stale cached wasm bundle against
-/// a fresh host mis-reads `SnapshotEntry` and the garbage `cell` it lands on is
-/// multiplied by `cell_edge` in [`compose_cell_pos`] — **every body teleports by
-/// kilometres**, silently, with no error anywhere. The enum-discriminant tests
+/// a fresh host mis-reads `SnapshotEntry` and applies garbage coordinates — every
+/// body teleports silently, with no error anywhere. The enum-discriminant tests
 /// below lock variant ORDER; nothing detected field-layout skew until this.
 ///
 /// **BUMP THIS whenever any wire type's field layout changes** — a field added,
@@ -236,7 +236,7 @@ pub struct DespawnReplicationMsg {
 ///
 /// The handshake is the host's first reliable message, so a mismatched peer is
 /// rejected before it can apply a single snapshot.
-pub const WIRE_VERSION: u32 = 2;
+pub const WIRE_VERSION: u32 = 4;
 
 /// Host → a freshly-connected client: the **wire version**, the **server-assigned**
 /// session id, the connection-bound journal author, and the current tick. The
@@ -261,24 +261,20 @@ pub struct HandshakeMsg {
 
 /// Low-use resources bundled so [`drain_sync_inbox`] stays within Bevy's
 /// 16-param ceiling: the clock (tutor-status timestamps), the per-command/-capability
-/// authorization policy registry (relay gates), the AOI view centers, the world grid
-/// config, and the client's scenario-manifest stash.
+/// authorization policy registry (relay gates), the AOI view centers, and the
+/// client's scenario-manifest stash.
 ///
 /// (It no longer carries a client-side session-credential store: that resource was
 /// deleted in review N6 — the client stored the handshake token and never read it
 /// back, while authority is bound to the CONNECTION. See [`HandshakeMsg`].)
 #[derive(bevy::ecs::system::SystemParam)]
-pub struct InboundClientCtx<'w> {
+pub struct InboundClientCtx<'w, 's> {
     time: Res<'w, Time>,
     command_policies: Res<'w, lunco_core::session::CommandPolicyRegistry>,
     // Host-side AOI view centers, updated from inbound `ViewCenter` reports (B4 Phase 1).
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
     // 16-argument system limit.
     view_centers: ResMut<'w, ViewCenters>,
-    // Cell edge for composing wire `(cell, remainder)` pairs into absolute
-    // positions (doc 47 Phase 3). `Option`: tests/minimal apps may not install
-    // the world shell. Bundled for the same 16-arg-limit reason.
-    grid_cfg: Option<Res<'w, lunco_core::WorldGridConfig>>,
     // Client-side stash of the host's scenario manifest (filled by the
     // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
     // host-side arms are no-ops.
@@ -299,6 +295,13 @@ pub struct InboundClientCtx<'w> {
     // `append_remote` (merge). `Option` so the drain still runs in a build with
     // no journal (e.g. a minimal networking-only test); host arm is a no-op.
     journal: Option<ResMut<'w, JournalResource>>,
+    // Named-frame conversion service for observer AOI reports. A sender's
+    // private Grid nesting never crosses the network boundary.
+    frame_index: Res<'w, lunco_celestial::ReferenceFrameIndex>,
+    active_physics_frame: Res<'w, ActivePhysicsFrame>,
+    frame_parents: Query<'w, 's, &'static ChildOf>,
+    frame_grids: Query<'w, 's, &'static Grid>,
+    frame_spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -319,40 +322,26 @@ pub struct ProfilesMsg {
     pub entries: Vec<(u64, String, [u8; 3])>,
 }
 
-/// Avatar pose as it crosses the wire: position, rotation, big-space cell, and
-/// optional ephemeris id.
-pub type WireAvatarState = ([f32; 3], [f32; 4], [i64; 3], Option<i32>);
-/// Decoded avatar pose (as held in [`TutorStatusResource`]).
-pub type AvatarState = (Vec3, Quat, CellCoord, Option<i32>);
-
-/// Pack an avatar pose for the wire. One definition shared by the tutor, student,
-/// and share-perspective senders so the field order can't drift between them.
-fn encode_avatar_state(
-    transform: &Transform,
-    cell: &CellCoord,
-    ephem_id: Option<i32>,
-) -> WireAvatarState {
-    (
-        transform.translation.to_array(),
-        transform.rotation.to_array(),
-        [cell.x, cell.y, cell.z],
-        ephem_id,
-    )
+/// Avatar pose in an explicit semantic reference frame.
+///
+/// The wire never exposes BigSpace's private `(CellCoord, f32 remainder)`
+/// representation. That split depends on the sender's concrete grid nesting
+/// and cannot be interpreted safely by another scene. Position and orientation
+/// cross the boundary in f64; the receiver resolves `frame` and performs its
+/// own terminal BigSpace split automatically.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FramedAvatarPose {
+    pub position_m: [f64; 3],
+    pub orientation_xyzw: [f64; 4],
+    pub frame: ReferenceFrame,
 }
 
-/// Inverse of [`encode_avatar_state`]: decode a wire avatar pose for local use.
-fn decode_avatar_state(w: WireAvatarState) -> AvatarState {
-    let (pos, rot, cell, ephem_id) = w;
-    (
-        Vec3::from_array(pos),
-        Quat::from_array(rot),
-        CellCoord {
-            x: cell[0],
-            y: cell[1],
-            z: cell[2],
-        },
-        ephem_id,
-    )
+/// Position in a named semantic frame. Internal BigSpace cell splits are not
+/// stable across processes and therefore never appear here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FramedPosition {
+    pub position_m: [f64; 3],
+    pub frame: ReferenceFrame,
 }
 
 /// Build the `(session, name, color)` wire rows for a [`ProfilesMsg`] from the
@@ -384,14 +373,7 @@ pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, Stri
 /// last center for one recompute; AOI hysteresis tolerates the staleness).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewCenterMsg {
-    /// CELL-RELATIVE position of the reporting peer's view (= world-space
-    /// while the avatar sits in cell `[0,0,0]`). Compose with
-    /// `cell × cell_edge`.
-    pub pos: [f32; 3],
-    /// big_space `CellCoord` of the reporting avatar (doc 47 Phase 3) — an
-    /// orbital-view camera carries real cells since the traveling origin.
-    /// Wire-breaking addition (positional bincode); peers run the same build.
-    pub cell: [i64; 3],
+    pub center: FramedPosition,
 }
 
 /// Host/client update for mouse cursor positions.
@@ -439,8 +421,8 @@ pub struct TutorStatusMsg {
     pub active_doc: Option<DocumentId>,
     /// The active perspective on the tutor's screen.
     pub active_perspective: Option<String>,
-    /// The tutor avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
-    pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
+    /// The tutor avatar's f64 pose in a named semantic frame.
+    pub avatar_state: Option<FramedAvatarPose>,
     /// The target client ID, if any (None = Everyone).
     pub target_client: Option<u64>,
     /// Whether the tutor is observing the target's view.
@@ -458,8 +440,8 @@ pub struct StudentStatusMsg {
     pub active_doc: Option<DocumentId>,
     /// The active perspective on the student's screen.
     pub active_perspective: Option<String>,
-    /// The student avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
-    pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
+    /// The student avatar's f64 pose in a named semantic frame.
+    pub avatar_state: Option<FramedAvatarPose>,
 }
 
 /// Tutor → clients: one-shot perspective sharing.
@@ -471,8 +453,8 @@ pub struct SharePerspectiveMsg {
     pub active_doc: Option<DocumentId>,
     /// The active perspective on the tutor's screen.
     pub active_perspective: Option<String>,
-    /// The tutor avatar's position ([f32; 3]), rotation ([f32; 4]), cell coordinates ([i64; 3]), and ephemeris ID.
-    pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
+    /// The tutor avatar's f64 pose in a named semantic frame.
+    pub avatar_state: Option<FramedAvatarPose>,
 }
 
 /// Host → clients presence: an experiment run's status advanced (Queued →
@@ -551,13 +533,13 @@ impl SettingsSection for TutorialSettings {
 pub struct TutorStatusResource {
     pub active_doc: Option<DocumentId>,
     pub active_perspective: Option<String>,
-    pub avatar_state: Option<(Vec3, Quat, CellCoord, Option<i32>)>,
+    pub avatar_state: Option<FramedAvatarPose>,
     pub target_client: Option<u64>,
     pub observe_mode: bool,
     pub allow_free_movement: bool,
     pub observed_student_doc: Option<DocumentId>,
     pub observed_student_perspective: Option<String>,
-    pub observed_student_avatar_state: Option<(Vec3, Quat, CellCoord, Option<i32>)>,
+    pub observed_student_avatar_state: Option<FramedAvatarPose>,
     pub tutor_active: bool,
     pub last_received_time: Option<f64>,
     pub one_shot_snap_request: Option<SharePerspectiveMsg>,
@@ -691,6 +673,9 @@ impl Default for NetworkConfig {
 pub struct ReplicationState {
     /// Latest snapshot entry per live gid (overwritten every tick, pruned on despawn).
     pub entries: HashMap<u64, SnapshotEntry>,
+    /// Semantic frame of `entries`. `None` means no valid physics-frame
+    /// projection has been captured yet, so the assembler must send nothing.
+    pub frame: Option<ReferenceFrame>,
     /// gids whose `(pos, rot, ack)` changed this tick (the `only_if_changed` delta).
     /// Global observability only — per-peer send decisions live in the assembler.
     pub changed_this_tick: HashSet<u64>,
@@ -721,7 +706,7 @@ pub struct PeerInterest(pub HashMap<SessionId, HashSet<u64>>);
 /// [`ViewCenterMsg`]. Read by [`recompute_interest`] for FREE observers (possessing
 /// peers use their vehicle position instead). Pruned when a session disconnects.
 #[derive(Resource, Default)]
-pub struct ViewCenters(pub HashMap<SessionId, Vec3>);
+pub struct ViewCenters(pub HashMap<SessionId, DVec3>);
 
 /// short type name → its declared [`SyncChannel`].
 #[derive(Resource, Default)]
@@ -1110,11 +1095,6 @@ pub fn drain_sync_inbox(
     if inbox.0.is_empty() {
         return;
     }
-    let cell_edge = ctx
-        .grid_cfg
-        .as_deref()
-        .map(|c| c.cell_edge_length as f64)
-        .unwrap_or_else(|| lunco_core::WorldGridConfig::default().cell_edge_length as f64);
     let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
     // Order within a frame: possession/structural commands BEFORE control commands.
     // Only sort when a control command is actually present — otherwise every entry
@@ -1154,28 +1134,33 @@ pub fn drain_sync_inbox(
                 if tick.0 < host_tick {
                     tick.0 = host_tick;
                 }
+                let Some(source_grid) = ctx.frame_index.resolve(s.frame) else {
+                    error_once!(
+                        "snapshot references absent or ambiguous semantic frame {:?}; dropping batch",
+                        s.frame
+                    );
+                    continue;
+                };
+                let Some(frame_transform) = lunco_core::coords::grid_transform_between_grids(
+                    source_grid,
+                    ctx.active_physics_frame.0,
+                    &ctx.frame_parents,
+                    &ctx.frame_grids,
+                    &ctx.frame_spatial,
+                ) else {
+                    error_once!(
+                        "cannot project snapshot frame {:?} into local ActivePhysicsFrame {:?}; dropping batch",
+                        s.frame,
+                        ctx.active_physics_frame.0
+                    );
+                    continue;
+                };
                 for entry in s.entries {
-                    // Dequantize the CELL-RELATIVE remainder once: it IS the
-                    // f32 render-space `t`; the f64 world-space `pos` composes
-                    // the cell back in (identical while cell == [0,0,0]).
-                    // IMPORTANT: `t` must NOT be zero — `reconcile_owned_prediction`
-                    // passes `sample.t` as the authority position to `reconcile_decision`
-                    // for the apples-to-apples f32 comparison against the predicted-
-                    // Transform history. A zeroed `t` reads authority as (0,0,0) every
-                    // snapshot → perpetual Snap reconcile back to world origin.
-                    let remainder = dequantize_pos(entry.pos_q);
-                    let world_pos = compose_cell_pos(entry.cell, remainder, cell_edge);
-                    snapshots.0.push(SnapshotSample {
-                        gid: entry.gid,
-                        tick: s.tick,
-                        t: remainder.as_vec3().to_array(), // f32 cell-relative
-                        r: decode_quat(entry.rot_packed).to_array(),
-                        lv: entry.lv,
-                        av: entry.av,
-                        last_input_seq: entry.last_input_seq,
-                        pos: world_pos.to_array(), // f64 absolute world position
-                        cell: entry.cell,
-                    });
+                    snapshots.0.push(snapshot_sample_in_active_frame(
+                        entry,
+                        s.tick,
+                        frame_transform,
+                    ));
                 }
             }
             SyncEnvelope::Spawn(spawn) => {
@@ -1333,16 +1318,30 @@ pub fn drain_sync_inbox(
                 // Host-only: record the peer's reported free-observer center keyed on
                 // the TRUSTED sender (the connection-bound session), so a peer can't
                 // report a center "as" another session. Clients ignore it (the host is
-                // the sole consumer — it never relays view centers). Composed to the
-                // absolute position (cell-aware, doc 47 Phase 3): f32 loses metres at
-                // orbital magnitudes, which AOI radii don't care about.
+                // the sole consumer — it never relays view centers). Convert the
+                // named f64 position into the host's canonical World frame; private
+                // sender cells and local mounts never cross this boundary.
                 if role.is_host() && sender != SessionId::LOCAL {
-                    let abs = compose_cell_pos(
-                        vc.cell,
-                        DVec3::new(vc.pos[0] as f64, vc.pos[1] as f64, vc.pos[2] as f64),
-                        cell_edge,
-                    );
-                    ctx.view_centers.0.insert(sender, abs.as_vec3());
+                    let Some((world_position, _)) =
+                        lunco_celestial::transform_pose_between_reference_frames(
+                            DVec3::from_array(vc.center.position_m),
+                            DQuat::IDENTITY,
+                            vc.center.frame,
+                            ReferenceFrame::World,
+                            &ctx.frame_index,
+                            &ctx.frame_parents,
+                            &ctx.frame_grids,
+                            &ctx.frame_spatial,
+                        )
+                    else {
+                        error_once!(
+                            "cannot consume view center from {:?}: {:?} -> World is missing or disconnected",
+                            sender,
+                            vc.center.frame
+                        );
+                        continue;
+                    };
+                    ctx.view_centers.0.insert(sender, world_position);
                 }
             }
             SyncEnvelope::TutorStatus(mut msg) => {
@@ -1373,7 +1372,7 @@ pub fn drain_sync_inbox(
                     tutor_status.active_perspective = msg.active_perspective.clone();
                     tutor_status.target_client = msg.target_client;
                     tutor_status.observe_mode = msg.observe_mode;
-                    tutor_status.avatar_state = msg.avatar_state.map(decode_avatar_state);
+                    tutor_status.avatar_state = msg.avatar_state;
 
                     // Update timestamp and active status
                     let elapsed = ctx.time.elapsed_secs_f64();
@@ -1448,8 +1447,7 @@ pub fn drain_sync_inbox(
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
                     tutor_status.observed_student_perspective = msg.active_perspective.clone();
-                    tutor_status.observed_student_avatar_state =
-                        msg.avatar_state.map(decode_avatar_state);
+                    tutor_status.observed_student_avatar_state = msg.avatar_state;
                 }
             }
             SyncEnvelope::SharePerspective(mut msg) => {
@@ -1646,15 +1644,19 @@ pub fn gather_snapshot(
     // gids are never reused, so without it the map grows by one slot per despawned
     // vessel forever on a long-lived host (review N1, failure C).
     mut applied: ResMut<AppliedInputSeq>,
+    active_physics_frame: Res<ActivePhysicsFrame>,
+    frame_index: Res<lunco_celestial::ReferenceFrameIndex>,
+    q_frame_parents: Query<&ChildOf>,
+    q_frames: Query<&ReferenceFrame>,
+    q_grids: Query<&Grid>,
+    q_grid_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q: Query<
         (
             &GlobalEntityId,
-            &Transform,
             Option<&LinearVelocity>,
             Option<&AngularVelocity>,
             Option<&Position>,
             Option<&Rotation>,
-            Option<&CellCoord>,
         ),
         With<NetReplicate>,
     >,
@@ -1672,6 +1674,44 @@ pub fn gather_snapshot(
         return;
     }
     *acc = 0.0;
+
+    let Some(frame) = lunco_celestial::inherited_reference_frame(
+        active_physics_frame.0,
+        &q_frame_parents,
+        &q_frames,
+    ) else {
+        error_once!(
+            "ActivePhysicsFrame {:?} has no semantic ReferenceFrame ancestor; refusing to replicate private grid coordinates",
+            active_physics_frame.0
+        );
+        return;
+    };
+    let Some(canonical_grid) = frame_index.resolve(frame) else {
+        error_once!(
+            "ActivePhysicsFrame semantic frame {frame:?} is absent or ambiguous; refusing snapshot generation"
+        );
+        return;
+    };
+    let Some(frame_transform) = lunco_core::coords::grid_transform_between_grids(
+        active_physics_frame.0,
+        canonical_grid,
+        &q_frame_parents,
+        &q_grids,
+        &q_grid_spatial,
+    ) else {
+        error_once!(
+            "cannot project ActivePhysicsFrame {:?} into canonical {frame:?}; refusing snapshot generation",
+            active_physics_frame.0
+        );
+        return;
+    };
+    if repl.frame != Some(frame) {
+        // Numeric coordinates are not comparable across semantic frames. Force
+        // every peer's next digest to be a fresh baseline after a frame change.
+        last_sent.clear();
+        repl.entries.clear();
+        repl.frame = Some(frame);
+    }
     repl.changed_this_tick.clear();
     // Fresh generation: the assembler edge-detects this to send exactly once per
     // gather, skipping the (render-throttled) `Update` frames where no new pose exists.
@@ -1679,45 +1719,24 @@ pub fn gather_snapshot(
     repl.tick = tick.0;
 
     let mut live: HashSet<u64> = HashSet::with_capacity(last_sent.len());
-    for (gid, tf, lin, ang, position, rotation, cell_coord) in q.iter() {
+    for (gid, lin, ang, position, rotation) in q.iter() {
         let key = gid.get();
         live.insert(key);
-        // Rotation on the wire is WORLD-space: prefer avian's world `Rotation`,
-        // fall back to `Transform.rotation` for bodies without a physics Rotation.
-        let rot = rotation.map(|r| r.0.as_quat()).unwrap_or(tf.rotation);
-        // Cell-aware position (doc 47 Phase 3). The wire carries
-        // `(cell, remainder)`:
-        // * cell [0,0,0] (every physics body today): prefer the precise avian
-        //   f64 `Position` — it IS the remainder when the cell is zero.
-        // * real cells: the f32 `Transform.translation` is the cell-relative
-        //   truth (bounded by the grid, so f64-exact). Avian `Position` is
-        //   NOT consulted here — its frame under real cells is defined by the
-        //   Phase 5 bubble bridge; revisit this branch when that lands.
-        let cell = cell_coord.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3]);
-        let pos = if cell == [0i64; 3] {
-            position.map(|p| p.0).unwrap_or_else(|| {
-                DVec3::new(
-                    tf.translation.x as f64,
-                    tf.translation.y as f64,
-                    tf.translation.z as f64,
-                )
-            })
-        } else {
-            DVec3::new(
-                tf.translation.x as f64,
-                tf.translation.y as f64,
-                tf.translation.z as f64,
-            )
+        let (Some(position), Some(rotation)) = (position, rotation) else {
+            error_once!(
+                "NetReplicate gid {key} has no complete Avian f64 pose; refusing to serialize a render Transform"
+            );
+            continue;
         };
+        let pos = frame_transform.transform_position(position.0);
+        let rot = frame_transform.transform_rotation(rotation.0).as_quat();
         // A cosim blow-up emits a NaN/inf `Position` — or velocity, which integrates
-        // to inf a frame EARLIER than the pose does. `quantize_pos` maps NaN→0 via
-        // `as i32`, decoding to world origin (→ a perpetual snap-to-origin reconcile
-        // per the zeroed-authority warning in `drain_sync_inbox`); a non-finite lv/av
-        // poisons the client's dead-reckoning the same way (`pos += lv*dt` → ±inf).
+        // to inf a frame EARLIER than the pose does. A non-finite value poisons
+        // client dead-reckoning (`pos += lv*dt` → ±inf), so drop the whole sample.
         // Check all four and drop the entry so the proxy latches its last good pose.
         // Warn once per gid (cleared on recovery) to avoid per-tick spam.
-        let lv = lin.map(|v| v.0.as_vec3()).unwrap_or(Vec3::ZERO);
-        let av = ang.map(|v| v.0.as_vec3()).unwrap_or(Vec3::ZERO);
+        let lv = frame_transform.transform_vector(lin.map_or(DVec3::ZERO, |v| v.0));
+        let av = frame_transform.transform_vector(ang.map_or(DVec3::ZERO, |v| v.0));
         if !pos.is_finite() || !rot.is_finite() || !lv.is_finite() || !av.is_finite() {
             if nonfinite_warned.insert(key) {
                 warn!("[sync] non-finite pose/velocity for gid {key}, skipping: pos={pos:?} rot={rot:?} lv={lv:?} av={av:?}");
@@ -1725,7 +1744,8 @@ pub fn gather_snapshot(
             continue;
         }
         nonfinite_warned.remove(&key);
-        let pos_q = quantize_pos(pos);
+        let position_m = pos.to_array();
+        let position_bits = position_m.map(f64::to_bits);
         let rot_packed = encode_quat(rot);
         // Fold the reconcile ack into the change key. An owned body that is
         // quantize-stationary (pushing an obstacle, brake+throttle, steering in
@@ -1735,29 +1755,29 @@ pub fn gather_snapshot(
         // unchanged, so client prediction can't silently diverge during the stall
         // and then pop on motion resume.
         let last_input_seq = applied.ack(key);
-        let entry = SnapshotEntry {
-            gid: key,
-            pos_q,
-            cell,
-            rot_packed,
-            lv: lv.to_array(),
-            av: av.to_array(),
+        let entry = snapshot_entry_in_frame(
+            key,
+            position.0,
+            rotation.0,
+            lin.map_or(DVec3::ZERO, |v| v.0),
+            ang.map_or(DVec3::ZERO, |v| v.0),
             last_input_seq,
-        };
+            frame_transform,
+        );
         // Did this entity change since its last *sent* state? (the existing
         // `only_if_changed` diff). Computed before we move `entry` into the
         // persistent store below.
         let changed = !config.only_if_changed
-            || last_sent.get(&key).is_none_or(|&(lc, lp, lr, ls)| {
-                lc != cell || lp != pos_q || lr != rot_packed || ls != last_input_seq
+            || last_sent.get(&key).is_none_or(|&(lp, lr, ls)| {
+                lp != position_bits || lr != rot_packed || ls != last_input_seq
             });
         if changed {
-            last_sent.insert(key, (cell, pos_q, rot_packed, last_input_seq));
+            last_sent.insert(key, (position_bits, rot_packed, last_input_seq));
             repl.changed_this_tick.insert(key);
         }
         // Persist the latest entry for EVERY live gid (not just changed ones), so the
         // assembler can seed a body that's static-but-just-entered a peer's interest
-        // (the soft-enter baseline). Cheap (~52 B) and decoupled from the wire.
+        // (the soft-enter baseline). Decoupled from the wire.
         repl.entries.insert(key, entry);
     }
     // Prune diff-cache + warn-set entries for despawned gids (gids are never
@@ -1779,15 +1799,18 @@ pub fn gather_snapshot(
 }
 
 /// Max `SnapshotEntry`s per `SnapshotMsg`. L2: cap so each serialized message fits in
-/// ONE lightyear fragment (`FRAGMENT_SIZE` = 1180 B). A `SnapshotEntry` is ≈52 B, so
-/// ~22 fit; 20 leaves headroom for the enum tag + tick + Vec length prefix. The
+/// ONE lightyear fragment ([`SNAPSHOT_FRAGMENT_PAYLOAD_BYTES`]). The f64 frame position
+/// makes a worst-case entry about 91 B; 12 leaves headroom for the enum tag,
+/// semantic frame, tick, and Vec length prefix. The
 /// `SnapChannel` is `UnorderedUnreliable` with NO fragment retransmit, so a
 /// multi-fragment message is lost wholesale if any single fragment drops (delivery
 /// ≈ (1 − p_loss)^num_fragments — it gets WORSE as the scene grows). One lost datagram
-/// then costs ≤20 entities for one tick (interp hides it), not every body's update.
+/// then costs ≤12 entities for one tick (interp hides it), not every body's update.
 /// The per-peer assembler (`assemble_and_send_snapshots`) chunks each peer's batch at
 /// this bound.
-pub const MAX_SNAPSHOT_ENTRIES: usize = 20;
+pub const MAX_SNAPSHOT_ENTRIES: usize = 12;
+/// Lightyear's configured single-fragment payload ceiling for this channel.
+pub const SNAPSHOT_FRAGMENT_PAYLOAD_BYTES: usize = 1180;
 
 /// Upper bound on the gids a peer with **no view center** is fed (review N5). Big
 /// enough that an ordinary scene is unaffected (the fail-open stays a true fail-open
@@ -1805,18 +1828,18 @@ pub const FAIL_OPEN_CAP: usize = 200;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_interest_sets(
     sessions: &[SessionId],
-    positions: &HashMap<u64, Vec3>,
+    positions: &HashMap<u64, DVec3>,
     dynamic: &HashSet<u64>,
     table: &[(u64, u64)],
-    view_centers: &HashMap<SessionId, Vec3>,
+    view_centers: &HashMap<SessionId, DVec3>,
     prev: &HashMap<SessionId, HashSet<u64>>,
     radius: f32,
     exit_radius: f32,
     predict_radius: f32,
 ) -> HashMap<SessionId, HashSet<u64>> {
-    let r_enter2 = radius * radius;
-    let r_exit2 = exit_radius * exit_radius;
-    let r_pred2 = predict_radius * predict_radius;
+    let r_enter2 = f64::from(radius).powi(2);
+    let r_exit2 = f64::from(exit_radius).powi(2);
+    let r_pred2 = f64::from(predict_radius).powi(2);
     let all: HashSet<u64> = positions.keys().copied().collect();
 
     let mut next: HashMap<SessionId, HashSet<u64>> = HashMap::with_capacity(sessions.len());
@@ -1878,7 +1901,7 @@ pub(crate) fn compute_interest_sets(
 /// Pure per-peer snapshot diff — the send decision of `assemble_and_send_snapshots`,
 /// extracted for testability (no `ServerMultiMessageSender`). Given a peer's interest
 /// `set`, the latest `entries`, and that peer's `digest` of last-sent
-/// `(pos_q, rot_packed, last_input_seq)` per gid, returns the batch to send and
+/// `(position_bits, rot_packed, last_input_seq)` per gid, returns the batch to send and
 /// updates `digest` in place: a body is sent if the peer lacks it (soft-enter
 /// baseline) or holds a stale pose/ack; out-of-interest gids are evicted so a later
 /// re-entry re-baselines (soft exit). Velocity is intentionally excluded from the key
@@ -1894,8 +1917,7 @@ pub(crate) fn diff_peer_batch(
             continue;
         };
         let key = (
-            entry.cell,
-            entry.pos_q,
+            entry.position_m.map(f64::to_bits),
             entry.rot_packed,
             entry.last_input_seq,
         );
@@ -1936,16 +1958,10 @@ pub fn recompute_interest(
     registry: Res<SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
     view_centers: Res<ViewCenters>,
-    q: Query<
-        (
-            &GlobalEntityId,
-            &Transform,
-            Option<&big_space::prelude::CellCoord>,
-            Option<&RigidBody>,
-        ),
-        With<NetReplicate>,
-    >,
-    grid_cfg: Option<Res<lunco_core::WorldGridConfig>>,
+    q: Query<(Entity, &GlobalEntityId, Option<&RigidBody>), With<NetReplicate>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut interest: ResMut<PeerInterest>,
 ) {
     if !role.is_host() {
@@ -1958,30 +1974,22 @@ pub fn recompute_interest(
     }
     *acc = 0.0;
 
-    // One pass over replicated bodies: world position per gid, the full live set, and
-    // the ownerless-Dynamic set (predict candidates). Cell-aware (doc 47 Phase 3):
-    // compose `cell × edge + translation` — identical to the raw translation while a
-    // body sits in cell [0,0,0]. f32 metres of error at orbital magnitudes are
-    // irrelevant against km-scale AOI radii.
-    let cell_edge = grid_cfg
-        .map(|c| c.cell_edge_length as f64)
-        .unwrap_or_else(|| lunco_core::WorldGridConfig::default().cell_edge_length as f64);
-    let mut positions: HashMap<u64, Vec3> = HashMap::new();
+    // One f64 root-frame composition per replicated body. The hierarchy owns
+    // all translated/rotated nested grids; AOI never assumes a global cell edge
+    // or treats an immediate-grid cell as world coordinates.
+    let mut positions: HashMap<u64, DVec3> = HashMap::new();
     let mut dynamic: HashSet<u64> = HashSet::new();
     let table = registry.snapshot(); // hoist the ownership table once
     let owned_any: HashSet<u64> = table.iter().map(|&(g, _)| g).collect();
-    for (gid, tf, cell, rb) in q.iter() {
+    for (entity, gid, rb) in q.iter() {
         let key = gid.get();
-        let abs = compose_cell_pos(
-            cell.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3]),
-            DVec3::new(
-                tf.translation.x as f64,
-                tf.translation.y as f64,
-                tf.translation.z as f64,
-            ),
-            cell_edge,
-        );
-        positions.insert(key, abs.as_vec3());
+        let Some(abs) =
+            lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
+        else {
+            error_once!("cannot compute AOI position for disconnected gid {key}");
+            continue;
+        };
+        positions.insert(key, abs.0);
         // Predict candidate = Dynamic AND ownerless (owned Dynamic bodies are already
         // force-included for their owner; here we mean the free rocks/balloons every
         // nearby client predicts).
@@ -2299,9 +2307,9 @@ pub fn send_local_cursor_updates(
 pub fn send_view_center_updates(
     role: Res<NetworkRole>,
     config: Res<NetworkConfig>,
-    q_avatar: Query<(&Transform, Option<&big_space::prelude::CellCoord>), With<LocalAvatar>>,
+    avatar_pose: AvatarPoseContext,
     mut timer: Local<f32>,
-    mut last_sent: Local<Option<Vec3>>,
+    mut last_sent: Local<Option<FramedPosition>>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
@@ -2314,27 +2322,29 @@ pub fn send_view_center_updates(
     if *timer < interval {
         return;
     }
-    let Some((pos, cell)) = q_avatar
-        .iter()
-        .next()
-        .map(|(tf, c)| (tf.translation, c.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3])))
-    else {
+    let Some(pose) = avatar_pose.capture() else {
         return;
+    };
+    let center = FramedPosition {
+        position_m: pose.position_m,
+        frame: pose.frame,
     };
     // Delta gate: skip the send while the avatar is parked. 1 m floor — sub-meter
     // drift can't change AOI membership at hundred-metre radii, and recompute reuses
     // the last reported center, so a skipped report costs nothing.
-    if last_sent.is_some_and(|last| pos.distance_squared(last) < 1.0) {
+    if last_sent.is_some_and(|last| {
+        last.frame == center.frame
+            && DVec3::from_array(last.position_m)
+                .distance_squared(DVec3::from_array(center.position_m))
+                < 1.0
+    }) {
         return;
     }
     *timer = 0.0;
-    *last_sent = Some(pos);
+    *last_sent = Some(center);
     outbox.0.push((
         SyncChannel::ControlStream,
-        SyncEnvelope::ViewCenter(ViewCenterMsg {
-            pos: pos.to_array(),
-            cell,
-        }),
+        SyncEnvelope::ViewCenter(ViewCenterMsg { center }),
     ));
 }
 
@@ -2346,8 +2356,7 @@ pub fn send_tutor_status_updates(
     // Optional: a headless (`--no-ui`) host has no workspace UI, so the
     // resource is absent. Tutor status simply reports no active document then.
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
-    q_reference_frames: Query<&CelestialReferenceFrame>,
+    avatar_pose: AvatarPoseContext,
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
@@ -2381,7 +2390,7 @@ pub fn send_tutor_status_updates(
             None
         }
     };
-    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
+    let avatar_state = avatar_pose.capture();
 
     outbox.0.push((
         SyncChannel::ControlStream,
@@ -2404,8 +2413,7 @@ pub fn send_student_status_updates(
     tutor_status: Res<TutorStatusResource>,
     // Optional for headless hosts (see `send_tutor_status_updates`).
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
-    q_reference_frames: Query<&CelestialReferenceFrame>,
+    avatar_pose: AvatarPoseContext,
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
@@ -2440,7 +2448,7 @@ pub fn send_student_status_updates(
             None
         }
     };
-    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
+    let avatar_state = avatar_pose.capture();
 
     outbox.0.push((
         SyncChannel::ControlStream,
@@ -2453,29 +2461,65 @@ pub fn send_student_status_updates(
     ));
 }
 
-/// Capture the local avatar's pose into the positional wire tuple
-/// (`translation`, `rotation`, cell coordinate, grid `ephemeris_id`) that the
-/// tutor/student/share-perspective envelopes carry. Reads the first
-/// `LocalAvatar` and resolves its grid's ephemeris id from the parent
-/// reference frame; `None` when no local avatar exists.
+/// Read-only frame service shared by all perspective senders.
 ///
-/// CQ-112: was duplicated verbatim in `send_tutor_status_updates`,
-/// `send_student_status_updates`, and `on_share_perspective`.
-fn capture_avatar_state(
-    q_avatar: &Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
-    q_reference_frames: &Query<&CelestialReferenceFrame>,
-) -> Option<WireAvatarState> {
-    q_avatar.iter().next().map(|(transform, cell, child_of)| {
-        let ephem_id = q_reference_frames
-            .get(child_of.0)
-            .ok()
-            .map(|rf| rf.ephemeris_id);
-        encode_avatar_state(transform, cell, ephem_id)
-    })
+/// It resolves the avatar's inherited semantic frame and composes the complete
+/// hierarchy into that frame in f64. Senders never inspect cells or parent-grid
+/// conventions themselves.
+#[derive(SystemParam)]
+pub struct AvatarPoseContext<'w, 's> {
+    avatars: Query<'w, 's, Entity, With<LocalAvatar>>,
+    frames: Query<'w, 's, &'static ReferenceFrame>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    grids: Query<'w, 's, &'static Grid>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    frame_index: Res<'w, lunco_celestial::ReferenceFrameIndex>,
+}
+
+impl AvatarPoseContext<'_, '_> {
+    fn capture(&self) -> Option<FramedAvatarPose> {
+        let avatar = self.avatars.iter().next()?;
+        let Some(frame) =
+            lunco_celestial::inherited_reference_frame(avatar, &self.parents, &self.frames)
+        else {
+            error_once!(
+                "cannot share avatar {:?}: it is not attached to a semantic reference frame",
+                avatar
+            );
+            return None;
+        };
+        let Some(frame_grid) = self.frame_index.resolve(frame) else {
+            error_once!(
+                "cannot share avatar {:?}: {:?} is missing or ambiguous",
+                avatar,
+                frame
+            );
+            return None;
+        };
+        let Some((position, rotation)) = lunco_core::coords::pose_in_grid(
+            avatar,
+            frame_grid,
+            &self.parents,
+            &self.grids,
+            &self.spatial,
+        ) else {
+            error_once!(
+                "cannot share avatar {:?}: its BigSpace branch is disconnected from {:?}",
+                avatar,
+                frame
+            );
+            return None;
+        };
+        Some(FramedAvatarPose {
+            position_m: position.to_array(),
+            orientation_xyzw: rotation.to_array(),
+            frame,
+        })
+    }
 }
 
 /// Snap every `LocalAvatar` to a target pose, migrating to the grid that owns
-/// `grid_ephemeris_id` (resolved via `CelestialReferenceFrame`) when it differs
+/// `reference_frame` when it differs
 /// from the avatar's current parent. Shared by all three mirroring paths
 /// (follow, observe, one-shot look-at) so the snap logic lives in one place.
 fn snap_avatars_to(
@@ -2490,27 +2534,65 @@ fn snap_avatars_to(
         ),
         With<LocalAvatar>,
     >,
-    q_reference_frames: &Query<(Entity, &CelestialReferenceFrame)>,
-    pos: Vec3,
-    rot: Quat,
-    target_cell: CellCoord,
-    grid_ephemeris_id: Option<i32>,
+    frame_index: &lunco_celestial::ReferenceFrameIndex,
+    q_frames: &Query<&ReferenceFrame>,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_grid_spatial: &Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
+    pose: FramedAvatarPose,
 ) {
-    let target_grid_entity = grid_ephemeris_id.and_then(|ephem_id| {
-        q_reference_frames
-            .iter()
-            .find(|(_, rf)| rf.ephemeris_id == ephem_id)
-            .map(|(ent, _)| ent)
-    });
-    // `freeflight_system` rebuilds `Transform.rotation` from the camera's stored
-    // `yaw`/`pitch` every frame (`Quat::from_euler(YXZ, yaw, pitch, 0)`), so
-    // writing `transform.rotation` alone is clobbered next frame. Decompose the
-    // target rotation back into yaw/pitch and write those so the camera system
-    // reproduces the mirrored orientation instead of fighting it.
-    let (target_yaw, target_pitch, _roll) = rot.to_euler(EulerRot::YXZ);
-    let target_tf = Transform::from_translation(pos).with_rotation(rot);
+    let Some(canonical_grid) = frame_index.resolve(pose.frame) else {
+        error_once!(
+            "cannot mirror avatar into {:?}: semantic frame is missing or ambiguous",
+            pose.frame
+        );
+        return;
+    };
+    let canonical_position = DVec3::from_array(pose.position_m);
+    let canonical_rotation = DQuat::from_array(pose.orientation_xyzw);
     for (avatar_entity, mut transform, mut cell_coord, child_of, freeflight) in q_avatar.iter_mut()
     {
+        // Keep an existing precision sub-grid when it inherits the requested
+        // frame (for example MoonSurfaceGrid under Moon-fixed). Otherwise mount
+        // on the canonical owner. The wire pose is converted into either target
+        // by the same arbitrary-grid f64 transform.
+        let current_frame =
+            lunco_celestial::inherited_reference_frame(child_of.parent(), q_parents, q_frames);
+        let target_grid =
+            if current_frame == Some(pose.frame) && q_grids.contains(child_of.parent()) {
+                child_of.parent()
+            } else {
+                canonical_grid
+            };
+        let Some((target_position, target_rotation)) =
+            lunco_core::coords::transform_pose_between_grids(
+                canonical_position,
+                canonical_rotation,
+                canonical_grid,
+                target_grid,
+                q_parents,
+                q_grids,
+                q_grid_spatial,
+            )
+        else {
+            error_once!(
+                "cannot mirror avatar: {:?} is disconnected from its local mount {:?}",
+                pose.frame,
+                target_grid
+            );
+            continue;
+        };
+        let Ok(target_grid_component) = q_grids.get(target_grid) else {
+            continue;
+        };
+        let (target_cell, target_translation) =
+            target_grid_component.translation_to_grid(target_position);
+        let target_tf = Transform::from_translation(target_translation)
+            .with_rotation(target_rotation.as_quat());
+        // `freeflight_system` rebuilds `Transform.rotation` from stored
+        // yaw/pitch every frame. Update that authoritative rig state from the
+        // converted local rotation so it cannot fight the framed snap.
+        let (target_yaw, target_pitch, _roll) = target_tf.rotation.to_euler(EulerRot::YXZ);
         if let Some(mut ff) = freeflight {
             if ff.yaw != target_yaw {
                 ff.yaw = target_yaw;
@@ -2519,7 +2601,6 @@ fn snap_avatars_to(
                 ff.pitch = target_pitch;
             }
         }
-        let target_grid = target_grid_entity.unwrap_or(child_of.0);
         if child_of.0 != target_grid {
             lunco_core::attach::migrate_to_grid(
                 commands,
@@ -2539,6 +2620,153 @@ fn snap_avatars_to(
                 *cell_coord = target_cell;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod framed_avatar_pose_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct Captured(Option<FramedAvatarPose>);
+
+    #[derive(Resource)]
+    struct Incoming(FramedAvatarPose);
+
+    fn capture_once(context: AvatarPoseContext, mut captured: ResMut<Captured>) {
+        captured.0 = context.capture();
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn apply_once(
+        mut commands: Commands,
+        incoming: Res<Incoming>,
+        frame_index: Res<lunco_celestial::ReferenceFrameIndex>,
+        mut avatars: Query<
+            (
+                Entity,
+                &mut Transform,
+                &mut CellCoord,
+                &ChildOf,
+                Option<&mut lunco_avatar::FreeFlightCamera>,
+            ),
+            With<LocalAvatar>,
+        >,
+        frames: Query<&ReferenceFrame>,
+        parents: Query<&ChildOf>,
+        grids: Query<&Grid>,
+        grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
+    ) {
+        snap_avatars_to(
+            &mut commands,
+            &mut avatars,
+            &frame_index,
+            &frames,
+            &parents,
+            &grids,
+            &grid_spatial,
+            incoming.0,
+        );
+    }
+
+    fn semantic_surface(world: &mut World) -> (Entity, Entity) {
+        let frame = ReferenceFrame::BodyFixed {
+            body: lunco_celestial::ephemeris_id::MOON,
+        };
+        let canonical = world
+            .spawn((
+                frame,
+                Grid::new(2_000.0, 100.0),
+                CellCoord::ZERO,
+                Transform::IDENTITY,
+            ))
+            .id();
+        let canonical_grid = world.get::<Grid>(canonical).unwrap();
+        let (cell, translation) =
+            canonical_grid.translation_to_grid(DVec3::new(384_000_000.0, 0.0, 0.0));
+        let surface = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                cell,
+                Transform::from_translation(translation),
+                ChildOf(canonical),
+            ))
+            .id();
+        (canonical, surface)
+    }
+
+    #[test]
+    fn capture_exports_f64_pose_in_inherited_semantic_frame() {
+        let mut app = App::new();
+        app.init_resource::<lunco_celestial::ReferenceFrameIndex>()
+            .init_resource::<Captured>()
+            .add_systems(First, lunco_celestial::update_reference_frame_index)
+            .add_systems(Update, capture_once);
+        let (_, surface) = semantic_surface(app.world_mut());
+        app.world_mut().spawn((
+            LocalAvatar,
+            CellCoord::ZERO,
+            Transform::from_xyz(0.25, 3.0, -7.0),
+            ChildOf(surface),
+        ));
+
+        app.update();
+
+        let pose = app.world().resource::<Captured>().0.expect("captured pose");
+        assert_eq!(
+            pose.frame,
+            ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON
+            }
+        );
+        let position = DVec3::from_array(pose.position_m);
+        assert!((position.x - 384_000_000.25).abs() < 1.0e-6);
+        assert_eq!(position.y, 3.0);
+        assert_eq!(position.z, -7.0);
+    }
+
+    #[test]
+    fn apply_converts_named_pose_into_receivers_private_surface_grid() {
+        let pose = FramedAvatarPose {
+            position_m: [384_000_012.5, 4.0, -9.0],
+            orientation_xyzw: DQuat::from_rotation_y(0.3).to_array(),
+            frame: ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON,
+            },
+        };
+        let mut app = App::new();
+        app.init_resource::<lunco_celestial::ReferenceFrameIndex>()
+            .insert_resource(Incoming(pose))
+            .add_systems(First, lunco_celestial::update_reference_frame_index)
+            .add_systems(Update, apply_once);
+        let (_, surface) = semantic_surface(app.world_mut());
+        let avatar = app
+            .world_mut()
+            .spawn((
+                LocalAvatar,
+                CellCoord::ZERO,
+                Transform::IDENTITY,
+                ChildOf(surface),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ChildOf>(avatar).unwrap().parent(),
+            surface
+        );
+        let surface_grid = app.world().get::<Grid>(surface).unwrap();
+        let cell = app.world().get::<CellCoord>(avatar).unwrap();
+        let transform = app.world().get::<Transform>(avatar).unwrap();
+        let local = surface_grid.grid_position_double(cell, transform);
+        assert!((local - DVec3::new(12.5, 4.0, -9.0)).length() < 1.0e-6);
+        assert!(
+            transform
+                .rotation
+                .angle_between(DQuat::from_rotation_y(0.3).as_quat())
+                < 1.0e-6
+        );
     }
 }
 
@@ -2590,7 +2818,11 @@ pub fn apply_tutorial_mirroring(
         ),
         With<LocalAvatar>,
     >,
-    q_reference_frames: Query<(Entity, &CelestialReferenceFrame)>,
+    frame_index: Res<lunco_celestial::ReferenceFrameIndex>,
+    q_frames: Query<&ReferenceFrame>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
     #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     // Case 1: Student is in follow mode, mirroring tutor status
@@ -2632,15 +2864,16 @@ pub fn apply_tutorial_mirroring(
             }
 
             // Mirror avatar transform, cell coordinate, and grid parent
-            if let Some((pos, rot, cell, grid_ephemeris_id)) = tutor_status.avatar_state {
+            if let Some(pose) = tutor_status.avatar_state {
                 snap_avatars_to(
                     &mut commands,
                     &mut q_avatar,
-                    &q_reference_frames,
-                    pos,
-                    rot,
-                    cell,
-                    grid_ephemeris_id,
+                    &frame_index,
+                    &q_frames,
+                    &q_parents,
+                    &q_grids,
+                    &q_grid_spatial,
+                    pose,
                 );
             }
         }
@@ -2669,17 +2902,16 @@ pub fn apply_tutorial_mirroring(
         }
 
         // Mirror avatar transform, cell coordinate, and grid parent from the observed student
-        if let Some((pos, rot, cell, grid_ephemeris_id)) =
-            tutor_status.observed_student_avatar_state
-        {
+        if let Some(pose) = tutor_status.observed_student_avatar_state {
             snap_avatars_to(
                 &mut commands,
                 &mut q_avatar,
-                &q_reference_frames,
-                pos,
-                rot,
-                cell,
-                grid_ephemeris_id,
+                &frame_index,
+                &q_frames,
+                &q_parents,
+                &q_grids,
+                &q_grid_spatial,
+                pose,
             );
         }
     }
@@ -2707,16 +2939,16 @@ pub fn apply_tutorial_mirroring(
         }
 
         // Snap avatar transform, cell, and grid parent
-        if let Some(state) = msg.avatar_state {
-            let (pos, rot, cell, grid_ephemeris_id) = decode_avatar_state(state);
+        if let Some(pose) = msg.avatar_state {
             snap_avatars_to(
                 &mut commands,
                 &mut q_avatar,
-                &q_reference_frames,
-                pos,
-                rot,
-                cell,
-                grid_ephemeris_id,
+                &frame_index,
+                &q_frames,
+                &q_parents,
+                &q_grids,
+                &q_grid_spatial,
+                pose,
             );
         }
         info!("[net] Snapped to tutor's perspective (one-shot).");
@@ -2985,8 +3217,7 @@ fn on_share_perspective(
     _trigger: On<SharePerspective>,
     local: Res<LocalSession>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
-    q_reference_frames: Query<&CelestialReferenceFrame>,
+    avatar_pose: AvatarPoseContext,
     mut outbox: ResMut<SyncOutbox>,
     #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
@@ -3004,7 +3235,7 @@ fn on_share_perspective(
             None
         }
     };
-    let avatar_state = capture_avatar_state(&q_avatar, &q_reference_frames);
+    let avatar_state = avatar_pose.capture();
 
     outbox.0.push((
         SyncChannel::CommandBus, // reliable
@@ -3236,14 +3467,16 @@ mod codec_roundtrip {
 
     #[test]
     fn snapshot_envelope_roundtrips_through_bincode() {
-        let pos_q = quantize_pos(DVec3::new(1.0, 2.0, 3.0));
+        let position_m = [384_400_000.125, -12_345.5, 3.0];
         let rot_packed = encode_quat(Quat::IDENTITY);
         let env = SyncEnvelope::Snapshot(SnapshotMsg {
             tick: 42,
+            frame: ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON,
+            },
             entries: vec![SnapshotEntry {
                 gid: 7,
-                pos_q,
-                cell: [1, -2, 3],
+                position_m,
                 rot_packed,
                 lv: [0.1, 0.0, -0.2],
                 av: [0.0, 0.5, 0.0],
@@ -3258,43 +3491,114 @@ mod codec_roundtrip {
                 assert_eq!(s.entries.len(), 1);
                 assert_eq!(s.entries[0].gid, 7);
                 assert_eq!(s.entries[0].last_input_seq, 99);
-                assert_eq!(s.entries[0].pos_q, pos_q);
-                assert_eq!(s.entries[0].cell, [1, -2, 3]);
+                assert_eq!(s.entries[0].position_m, position_m);
                 assert_eq!(s.entries[0].rot_packed, rot_packed);
             }
             _ => panic!("wrong variant after round-trip"),
         }
     }
 
-    /// Doc 47 Phase 3: the wire `(cell, remainder)` pair must compose back to
-    /// the exact world position — including a remainder that would SATURATE
-    /// the i32 span if it carried the whole magnitude (an Earth-vicinity body
-    /// at 3.67e8 m with 2 km cells stays mm-exact through the wire).
+    /// Physics truth crosses as f64 in a named semantic frame. Orbital magnitudes
+    /// therefore cannot saturate or depend on a sender's private Grid edge.
     #[test]
-    fn cell_remainder_composition_is_exact_at_orbital_range() {
-        let edge = 2000.0_f64;
+    fn f64_snapshot_position_is_exact_at_orbital_range() {
         let world = DVec3::new(3.667e8, -1.2e7, 2.5e5) + DVec3::new(123.456, -0.789, 987.654);
-        // Split the way big_space stores it: integer cell + small remainder.
-        let cell = [
-            (world.x / edge).round() as i64,
-            (world.y / edge).round() as i64,
-            (world.z / edge).round() as i64,
-        ];
-        let remainder = world - DVec3::new(cell[0] as f64, cell[1] as f64, cell[2] as f64) * edge;
-        assert!(remainder.length() < edge, "remainder must stay sub-cell");
-        let through_wire = dequantize_pos(quantize_pos(remainder));
-        let composed = compose_cell_pos(cell, through_wire, edge);
-        let err = (composed - world).length();
-        assert!(
-            err < 2e-3,
-            "wire composition must be mm-exact at orbital range, got {err} m"
+        let env = SyncEnvelope::Snapshot(SnapshotMsg {
+            tick: 1,
+            frame: ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON,
+            },
+            entries: vec![SnapshotEntry {
+                gid: 1,
+                position_m: world.to_array(),
+                rot_packed: encode_quat(Quat::IDENTITY),
+                lv: [0.0; 3],
+                av: [0.0; 3],
+                last_input_seq: 0,
+            }],
+        });
+        let back = deserialize_env(&serialize_env(&env).unwrap()).unwrap();
+        let SyncEnvelope::Snapshot(snapshot) = back else {
+            panic!("wrong variant after round-trip");
+        };
+        assert_eq!(snapshot.entries[0].position_m, world.to_array());
+    }
+
+    #[test]
+    fn snapshot_crosses_private_grids_through_one_semantic_frame() {
+        use lunco_core::coords::GridFrameTransform;
+
+        let host_to_semantic = GridFrameTransform {
+            translation: DVec3::new(384_400_000.0, -12_000.0, 800.0),
+            rotation: DQuat::from_euler(EulerRot::YXZ, 0.4, -0.2, 0.1),
+        };
+        let semantic_to_client = GridFrameTransform {
+            translation: DVec3::new(-250.0, 75.0, 12.0),
+            rotation: DQuat::from_euler(EulerRot::ZYX, -0.3, 0.15, 0.05),
+        };
+        let host_position = DVec3::new(12.5, -4.0, 88.25);
+        let host_rotation = DQuat::from_rotation_y(0.7);
+        let host_lv = DVec3::new(2.0, -0.25, 0.5);
+        let host_av = DVec3::new(0.01, 0.03, -0.02);
+
+        let entry = snapshot_entry_in_frame(
+            17,
+            host_position,
+            host_rotation,
+            host_lv,
+            host_av,
+            91,
+            host_to_semantic,
         );
-        // The OLD format (absolute in pos_q) saturates at ±2 147 km — prove the
-        // failure this change removes.
-        let saturated = dequantize_pos(quantize_pos(world));
+        let sample = snapshot_sample_in_active_frame(entry, 123, semantic_to_client);
+
+        let expected_position = semantic_to_client
+            .transform_position(host_to_semantic.transform_position(host_position));
+        let expected_rotation = semantic_to_client
+            .transform_rotation(host_to_semantic.transform_rotation(host_rotation));
+        let expected_lv =
+            semantic_to_client.transform_vector(host_to_semantic.transform_vector(host_lv));
+        let expected_av =
+            semantic_to_client.transform_vector(host_to_semantic.transform_vector(host_av));
+
+        assert!((DVec3::from_array(sample.pos) - expected_position).length() < 1.0e-8);
         assert!(
-            (saturated - world).length() > 1e8,
-            "absolute quantization at 3.67e8 m must saturate (sanity)"
+            Quat::from_array(sample.r)
+                .as_dquat()
+                .angle_between(expected_rotation)
+                < 4.0e-3,
+            "only the documented 32-bit quaternion packing error is permitted"
+        );
+        assert!((DVec3::from_array(sample.lv) - expected_lv).length() < 1.0e-12);
+        assert!((DVec3::from_array(sample.av) - expected_av).length() < 1.0e-12);
+        assert_eq!(sample.last_input_seq, 91);
+        assert_eq!(sample.tick, 123);
+    }
+
+    #[test]
+    fn max_snapshot_batch_fits_one_transport_fragment() {
+        let entry = SnapshotEntry {
+            gid: u64::MAX,
+            position_m: [f64::MAX; 3],
+            rot_packed: u32::MAX,
+            lv: [f64::MAX; 3],
+            av: [f64::MAX; 3],
+            last_input_seq: u32::MAX,
+        };
+        let bytes = serialize_env(&SyncEnvelope::Snapshot(SnapshotMsg {
+            tick: u64::MAX,
+            frame: ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON,
+            },
+            entries: vec![entry; MAX_SNAPSHOT_ENTRIES],
+        }))
+        .unwrap();
+        assert!(
+            bytes.len() <= SNAPSHOT_FRAGMENT_PAYLOAD_BYTES,
+            "{} entries serialize to {} B, exceeding the {} B transport fragment",
+            MAX_SNAPSHOT_ENTRIES,
+            bytes.len(),
+            SNAPSHOT_FRAGMENT_PAYLOAD_BYTES
         );
     }
 
@@ -3419,6 +3723,22 @@ mod codec_roundtrip {
         );
     }
 
+    #[test]
+    fn view_center_roundtrips_named_f64_frame() {
+        let center = FramedPosition {
+            position_m: [384_400_000.125, -2.5, 8.0],
+            frame: ReferenceFrame::BodyFixed {
+                body: lunco_celestial::ephemeris_id::MOON,
+            },
+        };
+        let env = SyncEnvelope::ViewCenter(ViewCenterMsg { center });
+        let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
+        match back {
+            SyncEnvelope::ViewCenter(msg) => assert_eq!(msg.center, center),
+            _ => panic!("wrong variant after round-trip"),
+        }
+    }
+
     /// The chunked journal replay (review N5) rides a NEW envelope variant, appended
     /// last so no existing discriminant shifts.
     #[test]
@@ -3456,8 +3776,10 @@ mod codec_roundtrip {
         // silently breaking a version-skewed peer (stale wasm bundle vs fresh host).
         assert_eq!(
             discriminant_of(&SyncEnvelope::ViewCenter(ViewCenterMsg {
-                pos: [0.0; 3],
-                cell: [0; 3]
+                center: FramedPosition {
+                    position_m: [0.0; 3],
+                    frame: ReferenceFrame::World,
+                }
             })),
             12,
             "ViewCenter discriminant moved"
@@ -3696,18 +4018,18 @@ mod aoi {
     const R_EXIT: f32 = 1500.0;
     const R_PRED: f32 = 1500.0;
 
-    fn pos_at(x: f32) -> Vec3 {
-        Vec3::new(x, 0.0, 0.0)
+    fn pos_at(x: f32) -> DVec3 {
+        DVec3::new(f64::from(x), 0.0, 0.0)
     }
 
     /// Run `compute_interest_sets` for ONE session with the given world, no hysteresis
     /// history. Returns that session's interest set.
     fn interest_for(
         session: SessionId,
-        positions: &HashMap<u64, Vec3>,
+        positions: &HashMap<u64, DVec3>,
         dynamic: &HashSet<u64>,
         table: &[(u64, u64)],
-        view_centers: &HashMap<SessionId, Vec3>,
+        view_centers: &HashMap<SessionId, DVec3>,
         radius: f32,
         exit_radius: f32,
         predict_radius: f32,
@@ -3880,7 +4202,7 @@ mod aoi {
     fn fail_open_is_capped_on_a_large_scene() {
         let peer = SessionId(10);
         let n = FAIL_OPEN_CAP as u64 * 3;
-        let mut positions: HashMap<u64, Vec3> =
+        let mut positions: HashMap<u64, DVec3> =
             (0..n).map(|g| (g, pos_at(g as f32 * 10.0))).collect();
         // The peer owns one body way out past everything else.
         let owned_gid = 999_999u64;
@@ -3931,7 +4253,7 @@ mod aoi {
     fn fail_open_cap_never_drops_the_peers_own_vessels() {
         let peer = SessionId(10);
         let n = FAIL_OPEN_CAP as u64 * 2;
-        let positions: HashMap<u64, Vec3> = (0..n).map(|g| (g, pos_at(g as f32 * 10.0))).collect();
+        let positions: HashMap<u64, DVec3> = (0..n).map(|g| (g, pos_at(g as f32 * 10.0))).collect();
         // Owned gid that has no entry in `positions` → no derivable center → fail-open.
         let owned_gid = 888_888u64;
         let set = interest_for(
@@ -4002,8 +4324,7 @@ mod aoi {
     fn entry(gid: u64, x: i32, seq: u32) -> SnapshotEntry {
         SnapshotEntry {
             gid,
-            pos_q: [x, 0, 0],
-            cell: [0; 3],
+            position_m: [f64::from(x), 0.0, 0.0],
             rot_packed: 0,
             lv: [0.0; 3],
             av: [0.0; 3],
