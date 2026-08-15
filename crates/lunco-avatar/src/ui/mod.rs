@@ -8,7 +8,6 @@ use lunco_workbench::{
 };
 
 use crate::RoverNameTagSettings;
-use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
@@ -223,8 +222,7 @@ pub fn populate_avatar_status_view(
     palette: Option<Res<lunco_theme::Theme>>,
     gravity: Option<Res<LocalGravityField>>,
     avatars: Query<Entity, With<Avatar>>,
-    avatar_pos: Query<(&Transform, &CellCoord, &ChildOf)>,
-    grids: Query<&Grid>,
+    surface_pose: lunco_celestial::SurfacePoseQuery,
     bodies: Query<&CelestialBody>,
     blends: Query<&FrameBlend>,
     spring: Query<&SpringArmCamera>,
@@ -261,8 +259,15 @@ pub fn populate_avatar_status_view(
     // ── Surface readout ──
     view.surface = gravity.as_ref().and_then(|gf| {
         let body = gf.body_entity?;
-        let lat_lon_height = avatar_ent
-            .and_then(|ae| compute_lat_lon_height(ae, body, &avatar_pos, &grids, &bodies));
+        let body_id = bodies.get(body).ok()?.ephemeris_id;
+        let lat_lon_height = avatar_ent.and_then(|avatar| {
+            let pose = surface_pose.get(avatar)?;
+            (pose.body == body_id).then_some((
+                pose.geodetic.lat_deg,
+                pose.geodetic.lon_deg,
+                pose.geodetic.height_m,
+            ))
+        });
         Some(SurfaceInfo {
             body: Some(body),
             surface_g: gf.surface_g,
@@ -298,36 +303,6 @@ pub fn populate_avatar_status_view(
     view.mode_color = color;
     view.mode_label = label;
     view.mode_detail = detail;
-}
-
-/// Derive geodetic lat (°), lon (°), and altitude (m) for `avatar_ent` on
-/// `body`, in the body's surface grid frame. Returns `None` when any of
-/// the avatar's positional components, the parent grid, or the body's
-/// `CelestialBody` are missing.
-fn compute_lat_lon_height(
-    avatar_ent: Entity,
-    body: Entity,
-    avatar_pos: &Query<(&Transform, &CellCoord, &ChildOf)>,
-    grids: &Query<&Grid>,
-    bodies: &Query<&CelestialBody>,
-) -> Option<(f64, f64, f64)> {
-    let (tf, cell, child_of) = avatar_pos.get(avatar_ent).ok()?;
-    let tf_pos = tf.translation.as_dvec3();
-    let parent = child_of.0;
-
-    let grid = grids.get(parent).ok()?;
-    let dummy_tf = Transform::from_translation(tf_pos.as_vec3());
-    let body_local = grid.grid_position_double(cell, &dummy_tf);
-
-    let body_comp = bodies.get(body).ok()?;
-    // ONE geodetic convention for the whole engine: `lunco_celestial::geo` owns
-    // the body-fixed ⇄ geodetic pair (and its inverse `geodetic_to_body_fixed`).
-    // This HUD used to hand-roll `lon = atan2(x, z)`, which is 90° off the
-    // canonical `atan2(-z, x)` — so this panel and the rover HUD (which already
-    // calls the shared function) reported different longitudes for one rover.
-    // Degrees out, which is what the panel formats.
-    let geo = lunco_celestial::geo::body_fixed_to_geodetic(body_local, body_comp.radius_m);
-    Some((geo.lat_deg, geo.lon_deg, geo.height_m))
 }
 
 fn trigger_tutorial_next(commands: &mut Commands) {

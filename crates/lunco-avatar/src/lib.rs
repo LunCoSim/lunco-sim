@@ -21,6 +21,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use leafwing_input_manager::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use lunco_controller::ControllerLink;
 use lunco_core::{
@@ -45,7 +46,7 @@ type Controllable = bevy::prelude::Or<(
 use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
-use lunco_settings::{AppSettingsExt, ProfileSettings};
+use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 pub mod commands;
@@ -104,18 +105,87 @@ pub use intents::*;
 
 // ─── Resources ───────────────────────────────────────────────────────────────
 
-/// Mouse sensitivity for look rotation speed.
-#[derive(Resource, Reflect)]
+/// Persisted camera-input response.
+///
+/// Pointer deltas and Bevy camera angles are f32 presentation values. Distances
+/// that choose an orbit response remain f64, matching the BigSpace/celestial
+/// coordinate boundary; only the resulting dimensionless scale is cast at the
+/// final camera-angle write.
+#[derive(Resource, Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 #[reflect(Resource)]
-pub struct MouseSensitivity {
-    pub sensitivity: f32,
+#[serde(default)]
+pub struct CameraInputSettings {
+    /// Camera radians per pointer-motion unit before behavior-specific scaling.
+    pub look_radians_per_pointer_unit: f32,
+    /// Lower bound for orbital rotation at the body's surface.
+    pub orbit_surface_min_scale: f64,
+    /// Shapes the geometric visible-horizon response. `1` is physically linear;
+    /// larger values retain slower rotation farther from the surface.
+    pub orbit_distance_curve_exponent: f64,
 }
 
-impl Default for MouseSensitivity {
+impl Default for CameraInputSettings {
     fn default() -> Self {
         Self {
-            sensitivity: 0.1125,
+            look_radians_per_pointer_unit: 0.001125,
+            orbit_surface_min_scale: 0.04,
+            orbit_distance_curve_exponent: 0.75,
         }
+    }
+}
+
+impl SettingsSection for CameraInputSettings {
+    const KEY: &'static str = "camera_input";
+}
+
+/// Scale an orbit gesture from the target body's apparent geometry.
+///
+/// `sqrt(1 - (r/d)^2)` is the cosine of the body's apparent angular radius:
+/// zero at the surface and asymptotically one far away. This gives a continuous,
+/// body-size-independent response without altitude bands or scene heuristics.
+fn body_orbit_look_scale(distance_m: f64, radius_m: f64, settings: &CameraInputSettings) -> f64 {
+    let min_scale = settings.orbit_surface_min_scale.clamp(0.0, 1.0);
+    let exponent = settings.orbit_distance_curve_exponent.max(f64::EPSILON);
+    if !distance_m.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
+        return 1.0;
+    }
+    let ratio = (radius_m / distance_m.max(radius_m)).clamp(0.0, 1.0);
+    let visible_horizon = (1.0 - ratio * ratio).max(0.0).sqrt();
+    min_scale + (1.0 - min_scale) * visible_horizon.powf(exponent)
+}
+
+#[cfg(test)]
+mod camera_input_settings_tests {
+    use super::*;
+
+    #[test]
+    fn orbit_look_scale_is_continuous_monotonic_and_body_size_independent() {
+        let settings = CameraInputSettings::default();
+        let moon = 1_737_400.0;
+        let surface = body_orbit_look_scale(moon, moon, &settings);
+        let low = body_orbit_look_scale(moon + 100.0, moon, &settings);
+        let high = body_orbit_look_scale(moon + 100_000.0, moon, &settings);
+        let far = body_orbit_look_scale(moon * 100.0, moon, &settings);
+
+        assert_eq!(surface, settings.orbit_surface_min_scale);
+        assert!(
+            surface < low && low < high && high < far,
+            "{surface} {low} {high} {far}"
+        );
+        assert!(far < 1.0);
+
+        let same_ratio_on_earth = body_orbit_look_scale(6_378_137.0 * 2.0, 6_378_137.0, &settings);
+        let same_ratio_on_moon = body_orbit_look_scale(moon * 2.0, moon, &settings);
+        assert!((same_ratio_on_earth - same_ratio_on_moon).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn orbit_look_scale_honours_the_configured_surface_floor() {
+        let settings = CameraInputSettings {
+            orbit_surface_min_scale: 0.125,
+            ..default()
+        };
+        assert_eq!(body_orbit_look_scale(10.0, 10.0, &settings), 0.125);
     }
 }
 
@@ -634,8 +704,7 @@ fn enforce_ownership(
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         register_camera_mode_hooks(app);
-        app.init_resource::<MouseSensitivity>()
-            .init_resource::<CameraDefaults>()
+        app.init_resource::<CameraDefaults>()
             .init_resource::<SurfaceModeThreshold>();
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
         // spring arm follows the final rendered body pose in `PostUpdate` below. The
@@ -705,8 +774,9 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<SurfaceRelativeMode>()
             .register_type::<SurfaceCamera>()
             .register_type::<SurfaceModeThreshold>()
-            .register_type::<MouseSensitivity>();
+            .register_type::<CameraInputSettings>();
 
+        app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
         app.init_resource::<RoverNameTagSettings>()
             .register_type::<RoverNameTagSettings>();
@@ -2712,9 +2782,11 @@ fn avatar_behavior_input_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    sensitivity: Res<MouseSensitivity>,
+    settings: Res<CameraInputSettings>,
     keys: Res<ButtonInput<KeyCode>>,
     gravity: Res<LocalGravityField>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
+    q_children: Query<&Children>,
 ) {
     let Some((analog, surface_mode)) = q_avatar.iter().next() else {
         return;
@@ -2724,8 +2796,8 @@ fn avatar_behavior_input_system(
         return;
     }
 
-    let delta_yaw = -look_delta.x * sensitivity.sensitivity * 0.01;
-    let delta_pitch = -look_delta.y * sensitivity.sensitivity * 0.01;
+    let delta_yaw = -look_delta.x * settings.look_radians_per_pointer_unit;
+    let delta_pitch = -look_delta.y * settings.look_radians_per_pointer_unit;
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
     if ctrl_pressed {
@@ -2759,8 +2831,12 @@ fn avatar_behavior_input_system(
             arm.pitch = (arm.pitch + delta_pitch).clamp(-1.5, 1.5);
         }
         if let Some(mut orbit) = q_orbit.iter_mut().next() {
-            orbit.yaw += delta_yaw;
-            orbit.pitch = (orbit.pitch + delta_pitch).clamp(-1.5, 1.5);
+            let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
+            let scale = q_bodies.get(physical_target).map_or(1.0, |(_, body)| {
+                body_orbit_look_scale(orbit.distance, body.radius_m, &settings)
+            }) as f32;
+            orbit.yaw += delta_yaw * scale;
+            orbit.pitch = (orbit.pitch + delta_pitch * scale).clamp(-1.5, 1.5);
         }
         if let Some(mut ff) = q_freeflight.iter_mut().next() {
             ff.yaw += delta_yaw;
@@ -2888,7 +2964,7 @@ pub fn avatar_raycast_possession(
     // global observer can fire on a scene entity behind the panel.
     mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     keys: Res<ButtonInput<KeyCode>>,
-    camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
+    camera_q: Query<(&Camera, &GlobalTransform, Entity, &IntentState), With<Avatar>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
@@ -2915,8 +2991,13 @@ pub fn avatar_raycast_possession(
     if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
         return;
     }
-    // Alt-click is likewise reserved for the editor.
-    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+    // Waypoint placement is a semantic intent, not an Alt-key convention. The
+    // bundled map currently binds Alt, but any user-authored rebind must reserve
+    // the click from possession in exactly the same way.
+    let Some((camera, cam_gtf, avatar_entity, intents)) = camera_q.iter().next() else {
+        return;
+    };
+    if intents.pressed(&UserIntent::PlaceWaypoint) {
         return;
     }
     // Ctrl-click appends a patrol checkpoint (`on_scene_click_checkpoint`, the
@@ -2960,9 +3041,6 @@ pub fn avatar_raycast_possession(
     // `hit.position.is_none()` chrome check). Returns `None` on an egui-chrome
     // click; the ray drives the analytic hit-sphere tests (celestial bodies /
     // spacecraft, which have no pickable mesh) alongside the mesh pick.
-    let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else {
-        return;
-    };
     let Some(ray) = lunco_core::scene_click_ray(
         &egui_focus,
         camera,

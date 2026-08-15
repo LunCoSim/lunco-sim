@@ -38,6 +38,7 @@ pub mod pose;
 pub mod queries;
 pub mod registry;
 mod soi;
+mod surface_pose;
 mod systems;
 mod trajectories;
 /// Frame CONVERSIONS over [`frames`] — hub-and-spoke through `Solar`, like SPICE.
@@ -70,6 +71,7 @@ pub use placement::*;
 pub use pose::*;
 pub use registry::*;
 pub use soi::*;
+pub use surface_pose::*;
 pub use systems::*;
 pub use trajectories::*;
 pub use wifi::*;

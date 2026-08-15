@@ -54,6 +54,12 @@ impl Plugin for TerrainSurfacePlugin {
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.
         crate::query::register_terrain_queries(app);
+        // Publish the terrain oracle's complete rigid pose in the active
+        // physics frame before any Update-stage input/tool consumer runs.
+        app.add_systems(
+            PreUpdate,
+            crate::surface_query::update_terrain_physics_frame_poses,
+        );
         // Analysis-overlay VIEW: the `TerrainOverlayParams` resource + `SetTerrainOverlay`
         // command + live-sync system that paints the slope-hazard transfer over the lit
         // tiles (in-material shading plane of Data→Transfer→Blend). See `crate::overlay`.

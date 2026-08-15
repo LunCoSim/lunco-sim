@@ -412,13 +412,12 @@ pub fn anchor_solar_frame_to_site(
 /// Attach the site scene to the body's body-fixed surface frame.
 ///
 /// The scene is initially mounted under `WorldGrid` because the USD loader has
-/// no celestial knowledge at mount time. Keeping it there permanently leaves
-/// the DEM on one branch while the globe tiles live under `MoonSurfaceGrid` or
-/// `EarthSurfaceGrid`; their stored f32 transforms then accumulate different
-/// long-chain rounding and the seam moves independently. The scene's authored
-/// ENU pose is converted into the target body's fixed frame before the atomic
-/// migration, so the handoff changes representation without changing the
-/// authored site pose.
+/// no celestial knowledge at mount time. The root is atomically placed under
+/// the body's rotating surface grid and becomes a nested BigSpace [`Grid`].
+/// That nested grid is the authored ENU site frame and Avian's one stable
+/// [`lunco_core::ActivePhysicsFrame`]. The Moon/Earth rotation remains above it,
+/// so celestial motion changes rendering but never rewrites local physics
+/// position, velocity, contacts, or joints.
 pub fn attach_site_scene_to_surface_grid(
     q_site: Query<(Entity, &GeodeticAnchor, &ChildOf), With<SiteAnchor>>,
     q_bodies: Query<(
@@ -444,10 +443,11 @@ pub fn attach_site_scene_to_surface_grid(
             Without<Grid>,
         ),
     >,
+    grid_config: Res<lunco_core::WorldGridConfig>,
     active_physics_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
     mut commands: Commands,
 ) {
-    let Some((scene_root, anchor, child_of)) = q_site.iter().next() else {
+    let Ok((scene_root, anchor, child_of)) = q_site.single() else {
         return;
     };
     let Some((body_entity, body, lod)) = q_bodies
@@ -456,72 +456,74 @@ pub fn attach_site_scene_to_surface_grid(
     else {
         return;
     };
-    let target_grid = lod.surface_grid;
-    let Ok(target_grid_component) = q_grids.get(target_grid) else {
+    let body_surface_grid = lod.surface_grid;
+    let Ok(body_surface_grid_component) = q_grids.get(body_surface_grid) else {
         return;
     };
-    if active_physics_frame.is_none_or(|frame| frame.0 != target_grid) {
-        commands.insert_resource(lunco_core::ActivePhysicsFrame(target_grid));
-    }
-
-    let scene_pose = if child_of.parent() != target_grid {
-        let Some((scene_position, scene_rotation)) =
-            direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
-        else {
-            return;
-        };
-        Some((scene_position, scene_rotation))
-    } else {
-        None
+    let make_site_grid = || {
+        Grid::new(
+            grid_config.cell_edge_length,
+            grid_config.switching_threshold,
+        )
     };
-    if let Some((scene_position, scene_rotation)) = scene_pose {
-        let (body_position, body_rotation) =
-            site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
-        let (cell, translation) = target_grid_component.translation_to_grid(body_position);
-        let local_transform =
-            Transform::from_translation(translation).with_rotation(body_rotation.as_quat());
-        lunco_core::attach::migrate_to_grid(
-            &mut commands,
-            scene_root,
-            target_grid,
-            cell,
-            local_transform,
-        );
-        // The migration makes the scene root a high-precision cell entity.
-        // Its USD-spawned visual descendants remain plain Transform entities;
-        // tag their low-precision roots in the same command batch so big_space
-        // owns their GlobalTransforms from the first frame of the new branch.
-        // The built-in tagger cannot see this transition because the children
-        // themselves are not reparented.
+
+    // Capture the relative avatar pose before changing the root's parent or
+    // making it a Grid. The avatar is grid-direct because it carries the one
+    // FloatingOrigin, while the rover/terrain remain descendants of the scene
+    // root; this is the one intentional branch crossing in the handoff.
+    let scene_root_world_pose =
+        lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial);
+
+    let root_is_site_grid = q_grids.get(scene_root).is_ok();
+    if !root_is_site_grid {
+        if child_of.parent() != body_surface_grid {
+            let Some((scene_position, scene_rotation)) =
+                direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
+            else {
+                return;
+            };
+            let (body_position, body_rotation) =
+                site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
+            let (cell, translation) =
+                body_surface_grid_component.translation_to_grid(body_position);
+            lunco_core::attach::migrate_to_grid(
+                &mut commands,
+                scene_root,
+                body_surface_grid,
+                cell,
+                Transform::from_translation(translation).with_rotation(body_rotation.as_quat()),
+            );
+        }
+
+        // The site root is both the authored frame identity (`SiteAnchor`) and
+        // its BigSpace precision representation. No parallel frame entity or
+        // lookup table can drift away from it.
+        commands.entity(scene_root).try_insert(make_site_grid());
         stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
         info!(
-            "[celestial] site scene re-branched onto body surface grid {:?} (body {})",
-            target_grid, anchor.body
+            "[celestial] site scene mounted as ENU physics grid {:?} on body surface grid {:?} (body {})",
+            scene_root, body_surface_grid, anchor.body
         );
     }
 
-    // The USD avatar projection is grid-direct for `FloatingOrigin`, so its
-    // Transform is no longer necessarily local to the authored scene root.
-    // Recover the avatar's pose relative to that root before the handoff. Using
-    // the avatar's direct-grid absolute pose here would include the root pose a
-    // second time (or omit it when the branches differ), which separates the
-    // camera from the rover after the scene is moved onto the body grid.
-    let scene_root_world_pose = scene_pose
-        .and_then(|_| lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial));
+    if active_physics_frame.is_none_or(|frame| frame.0 != scene_root) {
+        commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
+    }
+
+    // Move the FloatingOrigin avatar into the same site grid. The conversion is
+    // relative to the root sampled above; ancestor translation/rotation cancels
+    // and no body-fixed vector is ever mistaken for ENU.
     for (avatar, _avatar_transform, _avatar_cell, avatar_child) in &q_avatars {
-        let (body_position, body_rotation) = if avatar_child.parent() == target_grid {
-            // Already in the body-fixed frame: do not apply the site transform
-            // twice when this system runs again after a reload or re-anchor.
-            let Some((position, rotation)) =
-                direct_grid_pose(avatar, target_grid, &q_grids, &q_spatial)
-            else {
-                continue;
-            };
-            (position, rotation)
+        if avatar_child.parent() == scene_root {
+            commands
+                .entity(avatar)
+                .try_insert(lunco_environment::GravityBody { body_entity });
+            continue;
+        }
+
+        let site_pose = if root_is_site_grid {
+            lunco_core::coords::pose_in_grid(avatar, scene_root, &q_parents, &q_grids, &q_spatial)
         } else {
-            let Some((scene_position, scene_rotation)) = scene_pose else {
-                continue;
-            };
             let Some((scene_world_position, scene_world_rotation)) = scene_root_world_pose else {
                 continue;
             };
@@ -530,33 +532,22 @@ pub fn attach_site_scene_to_surface_grid(
             else {
                 continue;
             };
-            let root_local_position = scene_world_rotation.0.inverse()
-                * (avatar_world_position.0 - scene_world_position.0);
-            let root_local_rotation = scene_world_rotation.0.inverse() * avatar_world_rotation.0;
-            let scene_avatar_position = scene_position + scene_rotation * root_local_position;
-            let scene_avatar_rotation = scene_rotation * root_local_rotation;
-            site_enu_to_body_fixed_pose(
-                anchor,
-                body.radius_m,
-                scene_avatar_position,
-                scene_avatar_rotation,
-            )
+            let inverse = scene_world_rotation.0.inverse();
+            Some((
+                inverse * (avatar_world_position.0 - scene_world_position.0),
+                inverse * avatar_world_rotation.0,
+            ))
         };
-        let (cell, translation) = target_grid_component.translation_to_grid(body_position);
-        let local_transform =
-            Transform::from_translation(translation).with_rotation(body_rotation.as_quat());
-        if avatar_child.parent() == target_grid {
-            commands
-                .entity(avatar)
-                .try_insert(lunco_environment::GravityBody { body_entity });
+        let Some((site_position, site_rotation)) = site_pose else {
             continue;
-        }
+        };
+        let (cell, translation) = make_site_grid().translation_to_grid(site_position);
         lunco_core::attach::migrate_to_grid(
             &mut commands,
             avatar,
-            target_grid,
+            scene_root,
             cell,
-            local_transform,
+            Transform::from_translation(translation).with_rotation(site_rotation.as_quat()),
         );
         // A site-anchored avatar is physically associated with the authored
         // body even before it possesses a rover.  The avatar plugin consumes
@@ -566,8 +557,8 @@ pub fn attach_site_scene_to_surface_grid(
             .entity(avatar)
             .try_insert(lunco_environment::GravityBody { body_entity });
         info!(
-            "[celestial] site avatar {:?} re-branched onto body surface grid {:?}",
-            avatar, target_grid
+            "[celestial] site avatar {:?} attached to ENU physics grid {:?}",
+            avatar, scene_root
         );
     }
 
@@ -1067,6 +1058,7 @@ mod tests {
     #[test]
     fn site_scene_avatar_and_physics_share_the_authored_surface_grid() {
         let mut app = App::new();
+        app.insert_resource(lunco_core::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
 
         let world_grid = app
@@ -1148,12 +1140,10 @@ mod tests {
         app.update();
 
         let world = app.world();
-        assert_eq!(
-            world.resource::<lunco_core::ActivePhysicsFrame>().0,
-            surface_grid
-        );
+        assert_eq!(world.resource::<lunco_core::ActivePhysicsFrame>().0, site);
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
-        assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
+        assert!(world.get::<Grid>(site).is_some());
+        assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), site);
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
         assert_eq!(
             world

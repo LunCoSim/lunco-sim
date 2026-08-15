@@ -277,12 +277,15 @@ fn pick_ground_world(
     // ORIGIN (as this used to) means the analytic surface was marched in the
     // render frame, so at an elevated site the oracle never answered and only
     // physics colliders — the ring around the rover — could place a waypoint.
-    let origin = surface.to_grid(lunco_core::coords::RenderPos(ray.origin.as_dvec3()))?;
-    let dir = ray.direction.as_dvec3();
+    let (origin, direction) = surface.ray_to_grid(
+        lunco_core::coords::RenderPos(ray.origin.as_dvec3()),
+        ray.direction,
+    )?;
+    let dir = direction.as_dvec3();
     let phys_hit = raycaster
         .cast_ray_grid(
             origin,
-            ray.direction,
+            direction,
             1.0e6,
             false,
             &avian3d::prelude::SpatialQueryFilter::default(),
@@ -292,7 +295,7 @@ fn pick_ground_world(
         // waypoint coordinates; static props remain eligible physics hits.
         .filter(|hit| !frame.terrain_colliders.contains(hit.entity));
     let phys = phys_hit.map(|hit| hit.distance);
-    let terr = surface.raycast(origin, ray.direction, 1.0e6);
+    let terr = surface.raycast(origin, direction, 1.0e6);
     select_ground_point(origin.0, dir, phys, terr)
 }
 
@@ -2376,6 +2379,7 @@ mod tests {
     fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {
         let terrain = lunco_terrain_surface::surface_query::SurfaceHit {
             point: lunco_core::coords::GridPos(DVec3::new(0.0, -100.0, 0.0)),
+            frame: Entity::PLACEHOLDER,
             distance: 100.0,
             terrain: Entity::PLACEHOLDER,
         };
