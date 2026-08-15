@@ -1100,7 +1100,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             if group.is_empty() {
                 continue;
             }
-            ui.menu_button(format!("🌍 {name}  ({})", group.len()), |ui| {
+            ui.menu_button(format!("◉ {name}  ({})", group.len()), |ui| {
                 render(ui, ctx, &group);
             });
         }
@@ -1111,13 +1111,16 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .filter(|(a, _)| a.twin.is_none())
             .collect();
         if !library.is_empty() {
-            ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
+            ui.menu_button(format!("▤ Library  ({})", library.len()), |ui| {
                 render(ui, ctx, &library);
             });
         }
         if show_tests {
             ui.separator();
-            ui.menu_button(format!("🧪 Test scenes  ({})", tests.len()), |ui| {
+            // U+1F9EA is missing from the bundled fallback and rendered as
+            // tofu on clean installs; use the same supported tool glyph as
+            // the rest of the test/build UI.
+            ui.menu_button(format!("⚒ Test scenes  ({})", tests.len()), |ui| {
                 if tests.is_empty() {
                     ui.label(
                         bevy_egui::egui::RichText::new("(no test scenes discovered)")

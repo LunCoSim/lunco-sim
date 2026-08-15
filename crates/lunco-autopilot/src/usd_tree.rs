@@ -70,7 +70,7 @@ use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use lunco_core::coords::GridPos;
+use lunco_core::{coords::GridPos, paths::prim_path_matches};
 use serde_json::Value;
 
 /// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the
@@ -430,11 +430,7 @@ fn strip_reached_legs(v: &mut Value, reached: &std::collections::HashSet<String>
                     child
                         .get("target")
                         .and_then(|t| t.as_str())
-                        .map(|t| {
-                            !reached
-                                .iter()
-                                .any(|r| r == t || r.ends_with(t) || t.ends_with(r))
-                        })
+                        .map(|t| !reached.iter().any(|r| prim_path_matches(r, t)))
                         .unwrap_or(true)
                 });
             }

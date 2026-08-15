@@ -57,6 +57,7 @@ pub mod mobility;
 pub mod tools;
 
 pub mod pacing;
+pub mod paths;
 
 /// Run-condition effectiveness — see [`gate::tracked`].
 pub mod gate;

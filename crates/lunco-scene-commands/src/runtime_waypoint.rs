@@ -12,6 +12,7 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
+use lunco_core::paths::prim_path_matches;
 use lunco_core::{
     on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
     TelemetryEvent, TelemetryValue, TriggerZone,
@@ -340,7 +341,7 @@ pub fn mark_reached_waypoints_on_enter(
                             collect_targets(&value, &mut targets);
                             if !targets
                                 .iter()
-                                .any(|target| target_matches(target, marker_path))
+                                .any(|target| prim_path_matches(target, marker_path))
                             {
                                 continue;
                             }
@@ -420,10 +421,6 @@ enum ArrivalOrder {
     Runtime { index: usize },
 }
 
-fn target_matches(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(b) || b.ends_with(a)
-}
-
 fn authored_waypoint_is_next(
     targets: &[String],
     reached: &std::collections::HashSet<String>,
@@ -431,8 +428,8 @@ fn authored_waypoint_is_next(
 ) -> bool {
     targets
         .iter()
-        .find(|target| !reached.iter().any(|done| target_matches(done, target)))
-        .is_some_and(|next| target_matches(next, candidate))
+        .find(|target| !reached.iter().any(|done| prim_path_matches(done, target)))
+        .is_some_and(|next| prim_path_matches(next, candidate))
 }
 
 fn runtime_waypoint_is_next(index: usize, reached: &std::collections::HashSet<String>) -> bool {

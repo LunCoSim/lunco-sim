@@ -468,8 +468,10 @@ fn drain_pending_layout_requests(
             }
             LayoutRequest::RemoveSingleton(id) => {
                 layout.side_browser.retain(|panel| *panel != id);
+                layout.side_browser_bottom.retain(|panel| *panel != id);
                 layout.center.retain(|panel| *panel != id);
                 layout.right_inspector.retain(|panel| *panel != id);
+                layout.right_inspector_bottom.retain(|panel| *panel != id);
                 layout.bottom.retain(|panel| *panel != id);
                 layout.remove_panel_from_dock(id);
             }
@@ -971,11 +973,14 @@ pub struct WorkbenchLayout {
     // Slot intent — kept so perspectives can rebuild the dock when activated.
     // User drags after that mutate `dock` directly; intent goes stale until
     // the next perspective activation. Each side slot is a Vec so multiple
-    // panels can be tabbed in the same dock region.
+    // panels can be tabbed in the same dock region. The secondary vectors
+    // describe the optional lower leaf used by the split Build layout.
     pub(crate) side_browser: Vec<PanelId>,
+    pub(crate) side_browser_bottom: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
     pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 
     /// App-wide Settings menu contributions. Domain plugins push a
@@ -1065,9 +1070,11 @@ pub struct WorkbenchLayout {
 pub(crate) struct PerspectiveDockSlot {
     pub(crate) dock: DockState<TabId>,
     pub(crate) side_browser: Vec<PanelId>,
+    pub(crate) side_browser_bottom: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
     pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 }
 
@@ -1117,9 +1124,11 @@ impl Default for WorkbenchLayout {
             active_perspective: None,
             activity_bar: false,
             side_browser: Vec::new(),
+            side_browser_bottom: Vec::new(),
             center: Vec::new(),
             active_center_tab: 0,
             right_inspector: Vec::new(),
+            right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
@@ -1709,9 +1718,11 @@ impl WorkbenchLayout {
             PerspectiveDockSlot {
                 dock: self.dock.clone(),
                 side_browser: self.side_browser.clone(),
+                side_browser_bottom: self.side_browser_bottom.clone(),
                 center: self.center.clone(),
                 active_center_tab: self.active_center_tab,
                 right_inspector: self.right_inspector.clone(),
+                right_inspector_bottom: self.right_inspector_bottom.clone(),
                 bottom: self.bottom.clone(),
             },
         );
@@ -1725,16 +1736,20 @@ impl WorkbenchLayout {
         let PerspectiveDockSlot {
             dock,
             side_browser,
+            side_browser_bottom,
             center,
             active_center_tab,
             right_inspector,
+            right_inspector_bottom,
             bottom,
         } = slot;
         self.dock = dock;
         self.side_browser = side_browser;
+        self.side_browser_bottom = side_browser_bottom;
         self.center = center;
         self.active_center_tab = active_center_tab;
         self.right_inspector = right_inspector;
+        self.right_inspector_bottom = right_inspector_bottom;
         self.bottom = bottom;
     }
 
@@ -2022,8 +2037,10 @@ impl WorkbenchLayout {
             if !self.chrome_complete(
                 &slot.dock,
                 &slot.side_browser,
+                &slot.side_browser_bottom,
                 &slot.center,
                 &slot.right_inspector,
+                &slot.right_inspector_bottom,
                 &slot.bottom,
             ) {
                 continue;
@@ -2036,9 +2053,11 @@ impl WorkbenchLayout {
                 PerspectiveDockSnapshot {
                     dock,
                     side_browser: slot.side_browser.clone(),
+                    side_browser_bottom: slot.side_browser_bottom.clone(),
                     center: slot.center.clone(),
                     active_center_tab: slot.active_center_tab,
                     right_inspector: slot.right_inspector.clone(),
+                    right_inspector_bottom: slot.right_inspector_bottom.clone(),
                     bottom: slot.bottom.clone(),
                 },
             );
@@ -2051,9 +2070,11 @@ impl WorkbenchLayout {
                         PerspectiveDockSnapshot {
                             dock,
                             side_browser: self.side_browser.clone(),
+                            side_browser_bottom: self.side_browser_bottom.clone(),
                             center: self.center.clone(),
                             active_center_tab: self.active_center_tab,
                             right_inspector: self.right_inspector.clone(),
+                            right_inspector_bottom: self.right_inspector_bottom.clone(),
                             bottom: self.bottom.clone(),
                         },
                     );
@@ -2128,9 +2149,11 @@ impl WorkbenchLayout {
         Some(PerspectiveDockSlot {
             dock,
             side_browser: snap.side_browser.clone(),
+            side_browser_bottom: snap.side_browser_bottom.clone(),
             center: snap.center.clone(),
             active_center_tab: snap.active_center_tab,
             right_inspector: snap.right_inspector.clone(),
+            right_inspector_bottom: snap.right_inspector_bottom.clone(),
             bottom: snap.bottom.clone(),
         })
     }
@@ -2317,7 +2340,9 @@ impl WorkbenchLayout {
                 .collect()
         };
         let side_browser_tabs = known(&self.side_browser);
+        let side_browser_bottom_tabs = known(&self.side_browser_bottom);
         let right_inspector_tabs = known(&self.right_inspector);
+        let right_inspector_bottom_tabs = known(&self.right_inspector_bottom);
         let bottom_tabs = known(&self.bottom);
         let center_tabs: Vec<TabId> = self
             .center
@@ -2430,8 +2455,11 @@ impl WorkbenchLayout {
         //   Centre after compounding = 0.765 × (1 - 0.15) = 0.650 ✓
         if !right_inspector_tabs.is_empty() {
             let main = dock.main_surface_mut();
-            let [_old_root, _right] =
+            let [_old_root, right] =
                 main.split_right(NodeIndex::root(), 0.765, right_inspector_tabs);
+            if !right_inspector_bottom_tabs.is_empty() {
+                let [_top, _bottom] = main.split_below(right, 0.5, right_inspector_bottom_tabs);
+            }
         }
 
         if !side_browser_tabs.is_empty() {
@@ -2440,7 +2468,10 @@ impl WorkbenchLayout {
             // the table in the doc above. Bumped from 0.15 → 0.22 so
             // the Twin Browser shows full library names ("Modelica
             // Standard Library") without truncation at default zoom.
-            let [_old_root, _left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
+            let [_old_root, left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
+            if !side_browser_bottom_tabs.is_empty() {
+                let [_top, _bottom] = main.split_below(left, 0.5, side_browser_bottom_tabs);
+            }
         }
 
         let _ = central;
@@ -2510,8 +2541,10 @@ impl WorkbenchLayout {
         self.chrome_complete(
             &self.dock,
             &self.side_browser,
+            &self.side_browser_bottom,
             &self.center,
             &self.right_inspector,
+            &self.right_inspector_bottom,
             &self.bottom,
         )
     }
@@ -2530,8 +2563,10 @@ impl WorkbenchLayout {
         &self,
         dock: &DockState<TabId>,
         side_browser: &[PanelId],
+        side_browser_bottom: &[PanelId],
         center: &[PanelId],
         right_inspector: &[PanelId],
+        right_inspector_bottom: &[PanelId],
         bottom: &[PanelId],
     ) -> bool {
         let is_centre_driven = center.iter().any(|id| self.panels.contains_key(id));
@@ -2550,7 +2585,9 @@ impl WorkbenchLayout {
             .collect();
         side_browser
             .iter()
+            .chain(side_browser_bottom.iter())
             .chain(right_inspector.iter())
+            .chain(right_inspector_bottom.iter())
             .chain(bottom.iter())
             .chain(center.iter())
             .filter(|id| self.panels.contains_key(id))
@@ -3324,12 +3361,16 @@ fn render_layout(
         // menu bar bumped to 30px the buttons would stick to the top
         // edge. Explicit `Align::Center` keeps them vertically centred
         // in the bar.
-        egui::MenuBar::new()
-            .config(
-                egui::menu::MenuConfig::new()
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
-            )
-            .ui(ui, |ui| {
+        // MenuBar creates its own compact horizontal child. Put that child
+        // inside the full-height title-bar layout so the row is centred in
+        // the 30px bar rather than starting at its top edge.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            egui::MenuBar::new()
+                .config(
+                    egui::menu::MenuConfig::new()
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                )
+                .ui(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // Collected screen-rects of the menu buttons + transport
             // controls. Published to `HelpAnchors` after this layout
@@ -4171,7 +4212,7 @@ fn render_layout(
                     .collect();
                 // TODO: re-enable the perspective switcher once more
                 // than one perspective is registered. With a single
-                // perspective (Lunica ships only "📐 Design" today) the
+                // perspective (Lunica ships only "⚙ Lunica" today) the
                 // lone tab is just noise — hide it, but keep the render
                 // logic intact for when "Build" / "Simulate" / etc. land.
                 if tabs.len() > 1 {
@@ -4196,7 +4237,8 @@ fn render_layout(
                 }
             }
                 });
-            });
+        });
+    });
     });
 
     // ── Status bar ──────────────────────────────────────────────────
@@ -4269,14 +4311,10 @@ fn render_layout(
         // Drop the per-tab body border (the rectangle around every
         // panel content area). This is the "border when unfolded".
         style.tab.tab_body.stroke = egui::Stroke::NONE;
-        // Tab body fill is set further below alongside the
-        // per-state tab colours so the body matches the active tab.
-        // Always opaque, in every app. Transparency on the bar made
-        // the Modelica workbench look broken, and the luncosim's
-        // centre is a transparent `ViewportPanel` anyway — a dark
-        // strip above its invisible header just looks like the top
-        // edge of the viewport tile, which is fine.
-        style.tab_bar.bg_fill = get_panel_backdrop(theme);
+        // Keep the tab strip itself transparent. Panel bodies retain their
+        // own themed fill below; only the chrome behind the tab labels must
+        // let the viewport/background show through.
+        style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
         // Drop the hairline under the active tab name too — same
         // visual-noise reason as the tab body stroke.
         style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
@@ -4286,31 +4324,28 @@ fn render_layout(
         // washed out and active tabs lose contrast against the bar.
         // Bind every interaction state to the theme so tabs read
         // consistently in both modes.
-        // Bar = `mantle`. Active tab = `surface0` so it visually
-        // joins the body area (which we also paint `surface0` below
-        // for the same reason). Inactive tab = `crust` (a step away
-        // from the bar) so the strip is legible in both modes —
-        // using `mantle` for inactive made every tab vanish into the
-        // bar in Light mode where mantle/bar contrast is minimal.
+        // The tab labels themselves are transparent as well: the selected
+        // state is communicated by text colour, not a black rectangle.
+        // Panel bodies remain themed below.
         let palette = &theme.colors;
         style.tab.tab_body.bg_fill = palette.surface0;
-        style.tab.active.bg_fill = palette.surface0;
+        style.tab.active.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.active.text_color = palette.text;
         style.tab.active.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive.bg_fill = palette.crust;
+        style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.inactive.text_color = palette.subtext1;
         style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.hovered.bg_fill = palette.surface1;
+        style.tab.hovered.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.hovered.text_color = palette.text;
         style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.focused.bg_fill = palette.surface0;
+        style.tab.focused.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.focused.text_color = palette.mauve;
         style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive_with_kb_focus.bg_fill = palette.crust;
+        style.tab.inactive_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.inactive_with_kb_focus.text_color = palette.text;
-        style.tab.active_with_kb_focus.bg_fill = palette.surface0;
+        style.tab.active_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.active_with_kb_focus.text_color = palette.mauve;
-        style.tab.focused_with_kb_focus.bg_fill = palette.surface0;
+        style.tab.focused_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.focused_with_kb_focus.text_color = palette.mauve;
         // TODO(egui_dock 0.18 bug — remove when fixed/updated upstream):
         // egui_dock writes a NaN split fraction into the tree from inside its
@@ -5032,6 +5067,55 @@ mod tests {
             .iter_all_tabs()
             .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
+    }
+
+    struct DockPanel(PanelId);
+
+    impl Panel for DockPanel {
+        fn id(&self) -> PanelId {
+            self.0
+        }
+
+        fn title(&self) -> String {
+            self.0 .0.to_string()
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::Center
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+    }
+
+    #[test]
+    fn stacked_side_slots_build_independent_top_and_bottom_leaves() {
+        let mut layout = WorkbenchLayout::default();
+        for id in ["entities", "telemetry", "viewport", "inspector", "spawn"] {
+            layout.register(DockPanel(PanelId(id)));
+        }
+
+        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
+        layout.set_center(vec![PanelId("viewport")]);
+        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+
+        let leaves: Vec<Vec<TabId>> = layout
+            .dock
+            .main_surface()
+            .iter()
+            .filter_map(|node| match node {
+                egui_dock::Node::Leaf(leaf) => Some(leaf.tabs.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(leaves.len(), 5, "center plus two stacked side regions");
+        for id in ["entities", "telemetry", "viewport", "inspector", "spawn"] {
+            assert!(
+                leaves
+                    .iter()
+                    .any(|tabs| tabs.contains(&TabId::Singleton(PanelId(id)))),
+                "missing dock panel {id}"
+            );
+        }
     }
 
     struct TestPerspective {

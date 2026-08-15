@@ -703,12 +703,8 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — structure + telemetry left, 3D centre, Inspector/spawn right,
-/// and graph instances below.
-///
-/// Telemetry is a singleton, therefore it has exactly one dock location. Graph
-/// instances own the bottom dock; placing Telemetry in both used the same egui
-/// widget ids twice and produced the red collision diagnostics.
+/// Build mode — Entities over Telemetry on the left, 3D centre, and Inspector
+/// over Spawn on the right.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -722,9 +718,15 @@ impl Perspective for BuildPerspective {
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser_tabs(vec![PanelId("entity_list"), PanelId("telemetry_browser")]);
+        layout.set_side_browser_stacked(
+            vec![PanelId("entity_list")],
+            vec![PanelId("telemetry_browser")],
+        );
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
-        layout.set_right_inspector_tabs(vec![PanelId("sandbox_inspector")]);
+        layout.set_right_inspector_stacked(
+            vec![PanelId("sandbox_inspector")],
+            vec![PanelId("spawn_palette")],
+        );
         layout.set_bottom(None);
     }
 }

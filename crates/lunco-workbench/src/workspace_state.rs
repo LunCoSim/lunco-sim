@@ -215,7 +215,7 @@ pub struct PerspectiveDockSnapshot {
     /// arrangement, active leaf. Parsed + reconciled on restore.
     #[serde(default)]
     pub dock: serde_json::Value,
-    // The five fields below are the SLOT INTENT at save time — the
+    // The seven fields below are the SLOT INTENT at save time — the
     // perspective's declared panel ids per slot, plus which centre tab was
     // active. Restored into the cache slot verbatim, so a later rebuild/reset
     // reproduces the saved layout even though `dock` above already encodes the
@@ -223,6 +223,9 @@ pub struct PerspectiveDockSnapshot {
     /// Panel ids declared for the left/side browser slot.
     #[serde(default)]
     pub side_browser: Vec<PanelId>,
+    /// Panel ids declared for the lower leaf of the left/side browser split.
+    #[serde(default)]
+    pub side_browser_bottom: Vec<PanelId>,
     /// Panel ids declared for the centre slot (one tab each).
     #[serde(default)]
     pub center: Vec<PanelId>,
@@ -232,6 +235,9 @@ pub struct PerspectiveDockSnapshot {
     /// Panel ids declared for the right inspector slot.
     #[serde(default)]
     pub right_inspector: Vec<PanelId>,
+    /// Panel ids declared for the lower leaf of the right inspector split.
+    #[serde(default)]
+    pub right_inspector_bottom: Vec<PanelId>,
     /// Panel ids declared for the bottom slot.
     #[serde(default)]
     pub bottom: Vec<PanelId>,
@@ -928,9 +934,11 @@ mod tests {
                     PerspectiveDockSnapshot {
                         dock: serde_json::json!({"surfaces": []}),
                         side_browser: vec![PanelId("browser")],
+                        side_browser_bottom: vec![],
                         center: vec![PanelId("canvas")],
                         active_center_tab: 2,
                         right_inspector: vec![],
+                        right_inspector_bottom: vec![],
                         bottom: vec![PanelId("plots")],
                     },
                 ),

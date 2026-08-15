@@ -36,8 +36,8 @@ use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
 use lunco_core::session::SessionRegistry;
 use lunco_core::{
-    Avatar, EguiFocus, GlobalEntityId, InputPorts, IntentState, SpawnToolActive, TerrainToolActive,
-    UserIntent,
+    paths::prim_path_matches, Avatar, EguiFocus, GlobalEntityId, InputPorts, IntentState,
+    SpawnToolActive, TerrainToolActive, UserIntent,
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SceneCamera, SurfaceAlpha};
@@ -1010,8 +1010,11 @@ fn authored_route_loops(value: &Value) -> bool {
     }
 }
 
-fn target_matches(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(b) || b.ends_with(a)
+fn runtime_marker_is_visited(
+    reached: Option<&std::collections::HashSet<String>>,
+    index: usize,
+) -> bool {
+    reached.is_some_and(|reached| reached.contains(&runtime_waypoint_key(index)))
 }
 
 /// Runtime visual progress for one route. Only the collision-backed set is
@@ -1033,7 +1036,8 @@ fn route_visual_state(
     let visited = targets
         .iter()
         .map(|target| {
-            reached.is_some_and(|reached| reached.0.iter().any(|done| target_matches(done, target)))
+            reached
+                .is_some_and(|reached| reached.0.iter().any(|done| prim_path_matches(done, target)))
         })
         .collect::<Vec<_>>();
 
@@ -1234,7 +1238,10 @@ pub fn draw_waypoint_overlay(
             let screen = egui::pos2(viewport.x, viewport.y) + origin;
             let visited = progress.visited.get(i).copied().unwrap_or_else(|| {
                 reached.is_some_and(|reached| {
-                    reached.0.iter().any(|done| target_matches(done, &target))
+                    reached
+                        .0
+                        .iter()
+                        .any(|done| prim_path_matches(done, &target))
                 })
             });
 
@@ -2291,7 +2298,11 @@ pub(crate) fn sync_waypoint_marker_visuals(
     mut commands: Commands,
 ) {
     let mut routes = std::collections::HashMap::new();
+    let mut runtime_reached = std::collections::HashMap::new();
     for (vessel, xml, spec, reached) in q_vessels.iter() {
+        if let Some(reached) = reached {
+            runtime_reached.insert(vessel, reached);
+        }
         let targets = route_targets(xml, spec);
         if targets.is_empty() {
             continue;
@@ -2310,15 +2321,26 @@ pub(crate) fn sync_waypoint_marker_visuals(
     for (marker, path, binding) in q_markers.iter() {
         let visited = binding
             .and_then(|binding| {
-                routes
+                runtime_reached
                     .get(&binding.vessel)
-                    .and_then(|(_, state)| state.visited.get(binding.index).copied())
+                    .map(|reached| runtime_marker_is_visited(Some(&reached.0), binding.index))
             })
             .or_else(|| {
+                // Prefer an exact authored target before the relative/full-path
+                // fallback. This keeps a marker attached to its own route when
+                // two vessels use similarly named waypoints.
+                if let Some(visited) = routes.iter().find_map(|(_, (targets, state))| {
+                    targets
+                        .iter()
+                        .position(|target| target == &path.path)
+                        .and_then(|index| state.visited.get(index).copied())
+                }) {
+                    return Some(visited);
+                }
                 routes.iter().find_map(|(_, (targets, state))| {
                     targets
                         .iter()
-                        .position(|target| target_matches(target, &path.path))
+                        .position(|target| prim_path_matches(target, &path.path))
                         .and_then(|index| state.visited.get(index).copied())
                 })
             });
@@ -2367,13 +2389,15 @@ pub(crate) fn sync_waypoint_marker_visuals(
 mod tests {
     use super::{
         has_authored_movement_route, route_loops, route_ribbon_points, route_visual_state,
-        select_ground_point, BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        runtime_waypoint_key, select_ground_point, BehaviorXml, ReachedWaypoints,
+        WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
+    use lunco_core::paths::prim_path_matches;
 
     #[test]
     fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {
@@ -2599,6 +2623,23 @@ mod tests {
         );
         assert_eq!(state.visited, vec![true, false]);
         assert_eq!(state.active_index, None);
+    }
+
+    #[test]
+    fn appended_runtime_waypoint_does_not_reuse_reached_index() {
+        let reached = std::collections::HashSet::from([runtime_waypoint_key(0)]);
+
+        assert!(super::runtime_marker_is_visited(Some(&reached), 0));
+        assert!(
+            !super::runtime_marker_is_visited(Some(&reached), 1),
+            "a newly appended marker must remain green after waypoint zero was reached"
+        );
+    }
+
+    #[test]
+    fn waypoint_path_matching_requires_a_prim_boundary() {
+        assert!(prim_path_matches("/World/Route/W0", "/Route/W0"));
+        assert!(!prim_path_matches("/World/Route/W01", "/Route/W0"));
     }
 
     #[test]

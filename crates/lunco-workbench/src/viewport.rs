@@ -880,8 +880,10 @@ fn resolve_scene_viewport_layout(
 /// (the Design-style "panels but no viewport" branch) and blank the 3D.
 pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
     layout.side_browser.is_empty()
+        && layout.side_browser_bottom.is_empty()
         && layout.center.is_empty()
         && layout.right_inspector.is_empty()
+        && layout.right_inspector_bottom.is_empty()
         && layout.bottom.is_empty()
         && !layout
             .dock
@@ -891,8 +893,10 @@ pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
 
 pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
     if layout.side_browser.contains(&panel)
+        || layout.side_browser_bottom.contains(&panel)
         || layout.center.contains(&panel)
         || layout.right_inspector.contains(&panel)
+        || layout.right_inspector_bottom.contains(&panel)
         || layout.bottom.contains(&panel)
     {
         return true;
