@@ -788,11 +788,10 @@ pub fn populate_inspector_view(world: &mut World) {
 ///
 /// This gate used to ask `Changed<Transform>` on the sun. It fired on 296 of 300
 /// frames, i.e. it gated nothing while the Inspector paid for a full world scan
-/// every frame. The reason is upstream and deliberate:
-/// `lunco_celestial::touch_celestial_transforms` calls `set_changed()` on the
-/// celestial subtree EVERY frame (measured load-bearing — without it the tree
-/// strobes to the origin), so a transform's change tick carries no information in
-/// this app. Anything gated on it is gated on nothing.
+/// every frame. Celestial transforms are projection state and can legitimately
+/// change as the shared epoch advances, so a component change tick is not the
+/// same thing as a changed inspector value. The gate compares the displayed
+/// values directly instead.
 ///
 /// So the gate compares the handful of scalars the view actually holds against
 /// the world's current values: a few single-entity component reads, versus the

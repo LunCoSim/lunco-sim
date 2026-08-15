@@ -88,23 +88,17 @@ pub struct SnapshotSample {
     pub tick: u64,
     pub t: [f32; 3],
     pub r: [f32; 4],
-    /// Authoritative linear velocity (avian `LinearVelocity`, f64→f32). Used by
-    /// the owned-rover prediction to seat the body for replay; remote bodies
-    /// ignore it.
-    pub lv: [f32; 3],
-    /// Authoritative angular velocity (avian `AngularVelocity`, f64→f32).
-    pub av: [f32; 3],
+    /// Authoritative Avian f64 linear velocity in this peer's active physics frame.
+    pub lv: [f64; 3],
+    /// Authoritative Avian f64 angular velocity in this peer's active physics frame.
+    pub av: [f64; 3],
     /// The highest input `seq` the host has applied for this gid (0 = none). The
     /// owning client uses it to drop acked inputs and replay the rest.
     pub last_input_seq: u32,
-    /// Authoritative **absolute** position from avian f64 `Position` (gap A). `t`
-    /// above is the f32 render-space offset; `pos` is the precise physics truth
-    /// the proxy apply seats `Position` from, so lunar/orbital-scale bodies don't
-    /// lose precision to f32. Falls back to `t` when the host had no `Position`.
+    /// Authoritative f64 position after automatic conversion into this peer's
+    /// `ActivePhysicsFrame`. `t` is only the terminal f32 render projection;
+    /// `pos` is the physics truth seated into Avian.
     pub pos: [f64; 3],
-    /// big_space `CellCoord` (i64/axis). `[0,0,0]` in the current single-cell
-    /// config; carried so replication stays correct once recentering is enabled.
-    pub cell: [i64; 3],
 }
 
 /// Inbound transform samples awaiting application on a client.

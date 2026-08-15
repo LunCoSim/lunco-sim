@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
 use core::time::Duration;
+use lunco_core::ActivePhysicsFrame;
 use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
 const EDGE: f32 = 2000.0;
@@ -32,6 +33,7 @@ fn shell(app: &mut App) -> Entity {
             GlobalTransform::default(),
         ))
         .id();
+    app.world_mut().insert_resource(ActivePhysicsFrame(root));
     let grid = app
         .world_mut()
         .spawn((

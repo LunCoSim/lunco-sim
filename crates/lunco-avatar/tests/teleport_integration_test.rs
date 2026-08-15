@@ -3,10 +3,6 @@
 //! This test runs a headless Bevy app that:
 //! 1. Sets up the BigSpace hierarchy (Solar Grid → EMB Grid → Moon Grid → Moon Body)
 //!
-// One-time test scene construction — the `set_parent_in_place` exemption
-// `clippy.toml` already grants to bootstrap code that runs before any observer is
-// registered. Cargo has no path-scoped lint config, so it must be stated here.
-#![allow(clippy::disallowed_methods)]
 //! 2. Spawns an avatar camera on the Moon Grid (simulating orbit)
 //! 3. Triggers teleport by setting camera to surface position
 //! 4. Runs the app for several frames to propagate transforms
@@ -22,7 +18,7 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
-use lunco_celestial::{CelestialBody, CelestialReferenceFrame, PointMassGravity};
+use lunco_celestial::{CelestialBody, PointMassGravity, ReferenceFrame};
 use lunco_core::Avatar;
 use lunco_environment::GravityProvider;
 
@@ -44,47 +40,59 @@ fn test_full_teleport_workflow() {
         Startup,
         |mut commands: Commands, mut test_state: ResMut<TestState>| {
             // ── Build hierarchy ────────────────────────────────────────────────
-            let root = commands.spawn(BigSpace::default()).id();
+            let root = commands
+                .spawn((
+                    BigSpace::default(),
+                    Grid::new(2_000.0, 100.0),
+                    GlobalTransform::default(),
+                ))
+                .id();
 
             let solar_grid = commands
                 .spawn((
-                    CelestialReferenceFrame { ephemeris_id: 10 },
+                    ReferenceFrame::EclipticJ2000 {
+                        center: lunco_celestial::ephemeris_id::SUN,
+                    },
                     Grid::new(2_000.0, 100.0),
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),
+                    ChildOf(root),
                 ))
                 .id();
-            commands.entity(solar_grid).set_parent_in_place(root);
 
             let emb_grid = commands
                 .spawn((
-                    CelestialReferenceFrame { ephemeris_id: 3 },
+                    ReferenceFrame::EclipticJ2000 {
+                        center: lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER,
+                    },
                     Grid::new(2_000.0, 100.0),
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),
+                    ChildOf(solar_grid),
                 ))
                 .id();
-            commands.entity(emb_grid).set_parent_in_place(solar_grid);
 
             let moon_grid = commands
                 .spawn((
-                    CelestialReferenceFrame { ephemeris_id: 301 },
+                    ReferenceFrame::BodyFixed {
+                        body: lunco_celestial::ephemeris_id::MOON,
+                    },
                     Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),
+                    ChildOf(emb_grid),
                 ))
                 .id();
-            commands.entity(moon_grid).set_parent_in_place(emb_grid);
 
             // Moon Body: child of Moon Grid, at origin (identity transform)
             let moon_body = commands
                 .spawn((
                     CelestialBody {
                         name: "Moon".to_string(),
-                        ephemeris_id: 301,
+                        ephemeris_id: lunco_celestial::ephemeris_id::MOON,
                         radius_m: MOON_RADIUS,
                     },
                     GravityProvider {
@@ -93,9 +101,9 @@ fn test_full_teleport_workflow() {
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),
+                    ChildOf(moon_grid),
                 ))
                 .id();
-            commands.entity(moon_body).set_parent_in_place(moon_grid);
 
             // Avatar camera — start on Moon Grid in orbit (far from surface)
             let orbit_altitude = MOON_RADIUS * 3.0;
@@ -118,9 +126,9 @@ fn test_full_teleport_workflow() {
                     )),
                     GlobalTransform::default(),
                     Name::new("Avatar Camera"),
+                    ChildOf(moon_grid),
                 ))
                 .id();
-            commands.entity(avatar).set_parent_in_place(moon_grid);
 
             test_state.moon_grid = Some(moon_grid);
             test_state.moon_body = Some(moon_body);
@@ -178,8 +186,11 @@ fn test_full_teleport_workflow() {
 
         {
             let mut entity = world.entity_mut(avatar);
-            entity.insert(new_cell);
-            entity.insert(Transform::from_translation(new_tf_pos).with_rotation(surface_rot));
+            entity.insert((
+                ChildOf(moon_grid),
+                new_cell,
+                Transform::from_translation(new_tf_pos).with_rotation(surface_rot),
+            ));
             entity.insert(SurfaceCamera {
                 heading: 0.0,
                 pitch: -0.2,
@@ -188,9 +199,6 @@ fn test_full_teleport_workflow() {
             entity.remove::<FreeFlightCamera>();
             entity.remove::<OrbitCamera>();
         }
-
-        // Re-parent to Moon Grid (same as teleport does)
-        world.entity_mut(moon_grid).add_child(avatar);
     }
 
     // Run a few frames to propagate transforms

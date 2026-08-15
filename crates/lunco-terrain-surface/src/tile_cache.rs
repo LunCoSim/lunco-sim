@@ -21,7 +21,7 @@ use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 
-/// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, skirts,
+/// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, edge masks,
 /// detail gating) or the blob layout changes.
 /// v2: crater profile is band-limited per tile step and continuous at its reach
 /// (the layer's parameter `content_key` is unchanged, so only a version bump
@@ -44,7 +44,9 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// once as a padded `(even+2)²` lattice) instead of a 4-tap 0.5 m analytic probe
 /// per even vertex — same contract, computed the way the parent computes it, and
 /// ~44 % fewer oracle samples per tile.
-const CACHE_FORMAT_VERSION: u64 = 9;
+/// v10: seam walls were removed; edge membership is serialized for deterministic
+/// topology-driven vertex stitching, and morph targets preserve parent edge X/Z.
+const CACHE_FORMAT_VERSION: u64 = 10;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -146,7 +148,8 @@ pub fn bake_tile_mesh_cached(
 
 fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     let verts = m.positions.len();
-    let mut out = Vec::with_capacity(16 + verts * (3 + 3 + 3 + 3 + 2) * 4 + m.indices.len() * 4);
+    let mut out =
+        Vec::with_capacity(16 + verts * (3 + 3 + 3 + 3 + 4 + 2) * 4 + m.indices.len() * 4);
     out.extend_from_slice(&(verts as u64).to_le_bytes());
     out.extend_from_slice(&(m.indices.len() as u64).to_le_bytes());
     let push3 = |v: &[[f32; 3]], out: &mut Vec<u8>| {
@@ -160,6 +163,11 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     push3(&m.morph_targets, &mut out);
     push3(&m.morph_normals, &mut out);
     push3(&m.normals, &mut out);
+    for edge in &m.edge_masks {
+        for c in edge {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+    }
     for p in &m.uvs {
         for c in p {
             out.extend_from_slice(&c.to_le_bytes());
@@ -181,7 +189,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     let verts = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
     let idx_count = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
     // Sanity: total size must match exactly (corrupt / truncated → rebake).
-    let expect = 16 + verts * (3 + 3 + 3 + 3 + 2) * 4 + idx_count * 4;
+    let expect = 16 + verts * (3 + 3 + 3 + 3 + 4 + 2) * 4 + idx_count * 4;
     if b.len() != expect {
         return None;
     }
@@ -201,6 +209,16 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     let morph_targets = read3(&mut off)?;
     let morph_normals = read3(&mut off)?;
     let normals = read3(&mut off)?;
+    let mut edge_masks = Vec::with_capacity(verts);
+    for _ in 0..verts {
+        let s = take(&mut off, 16)?;
+        edge_masks.push([
+            f32::from_le_bytes(s[0..4].try_into().ok()?),
+            f32::from_le_bytes(s[4..8].try_into().ok()?),
+            f32::from_le_bytes(s[8..12].try_into().ok()?),
+            f32::from_le_bytes(s[12..16].try_into().ok()?),
+        ]);
+    }
     let mut uvs = Vec::with_capacity(verts);
     for _ in 0..verts {
         let s = take(&mut off, 8)?;
@@ -218,6 +236,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
         morph_targets,
         morph_normals,
         normals,
+        edge_masks,
         uvs,
         indices,
     })
@@ -236,6 +255,7 @@ mod tests {
             // aliased this array fails the roundtrip instead of passing by luck.
             morph_normals: vec![[0.0, 0.6, 0.8], [1.0, 0.0, 0.0]],
             normals: vec![[0.0, 1.0, 0.0], [0.0, 0.8, 0.6]],
+            edge_masks: vec![[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]],
             uvs: vec![[0.0, 0.0], [1.0, 1.0]],
             indices: vec![0, 1, 0],
         };

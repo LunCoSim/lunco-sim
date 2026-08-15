@@ -139,6 +139,7 @@ impl Plugin for MissionPlugin {
         app.add_systems(
             Update,
             (
+                spacecraft_alignment_system,
                 // On the SAME angular error budget as every other ephemeris
                 // consumer (`ephemeris_update_system`, `update_solar_poses`,
                 // `trajectory_alignment_system` — see `cadence`). A spacecraft
@@ -148,18 +149,10 @@ impl Plugin for MissionPlugin {
                 // different instants — the cluster must advance together or not
                 // at all. This was the only ephemeris consumer left ungated.
                 //
-                // `.or_else(spacecraft_reparented)` is load-bearing:
-                // `spacecraft_alignment_system` below reparents with
-                // `set_parent_in_place`, which OVERWRITES the craft's
-                // `Transform` from its (default) `GlobalTransform`. That clobber
-                // is documented as self-healing "next frame" — which is only
-                // true if this system runs next frame. `Changed<ChildOf>` is
-                // observed on the frame after the reparent command applies, and
-                // this system runs before the alignment system in the chain, so
-                // the repair still lands in that frame.
-                update_spacecraft_position_system
-                    .run_if(crate::cadence::tracked_needs_solve().or_else(spacecraft_reparented)),
-                spacecraft_alignment_system,
+                update_spacecraft_position_system.run_if(
+                    crate::cadence::tracked_needs_solve()
+                        .or_else(spacecraft_frame_assignment_changed),
+                ),
                 spacecraft_visibility_system,
                 // NOT gated: the billboard tracks the CAMERA, not the epoch, and
                 // a camera-facing label that only re-aims every ~71 s of sim
@@ -167,7 +160,8 @@ impl Plugin for MissionPlugin {
                 // write instead of an unconditional one.
                 spacecraft_billboard_system,
             )
-                .chain(),
+                .chain()
+                .after(spawn_declared_missions),
         );
     }
 }
@@ -190,12 +184,18 @@ fn shared_mesh(
         .clone()
 }
 
-/// Did a spacecraft change parent since last frame?
-///
-/// The second half of `update_spacecraft_position_system`'s gate — see the note
-/// at its registration. Kept as a named condition rather than an inline closure
-/// so the reason it exists stays attached to it.
-fn spacecraft_reparented(q: Query<(), (With<Spacecraft>, Changed<ChildOf>)>) -> bool {
+/// Frame assignment is structural state, not an ephemeris-cadence event. A new
+/// spacecraft or an external reparent must be placed immediately even while the
+/// celestial epoch is standing still.
+fn spacecraft_frame_assignment_changed(
+    q: Query<
+        (),
+        (
+            With<Spacecraft>,
+            Or<(Changed<Spacecraft>, Changed<ChildOf>)>,
+        ),
+    >,
+) -> bool {
     !q.is_empty()
 }
 
@@ -414,12 +414,7 @@ pub fn update_spacecraft_position_system(
     world: Res<lunco_time::WorldTime>,
     ephemeris: Res<crate::ephemeris::EphemerisResource>,
     q_grids: Query<&big_space::prelude::Grid>,
-    mut q_spacecraft: Query<(
-        &Spacecraft,
-        &mut Transform,
-        Option<&mut CellCoord>,
-        Option<&ChildOf>,
-    )>,
+    mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord, &ChildOf)>,
 ) {
     let jd = world.epoch_jd;
     // ONE ephemeris evaluation for the Sun (NAIF 10), not one PER SPACECRAFT: the
@@ -427,8 +422,10 @@ pub fn update_spacecraft_position_system(
     // provider call is a full VSOP2013 series evaluation. `None` here means the
     // sun's own ephemeris is unavailable, in which case no craft can aim its
     // panels — the per-craft `continue` below became this early-out.
-    let p_sun = ephemeris.provider.global_position(10, jd);
-    for (sc, mut tf, cell, child_of) in q_spacecraft.iter_mut() {
+    let p_sun = ephemeris
+        .provider
+        .global_position(crate::ephemeris_id::SUN, jd);
+    for (sc, mut tf, mut cell, child_of) in q_spacecraft.iter_mut() {
         // P8(d): a spacecraft whose ephemeris CSV failed to fetch used to be placed at its
         // reference body's centre — inside the Earth, looking exactly like a real position.
         // Now it simply is not moved.
@@ -444,26 +441,18 @@ pub fn update_spacecraft_position_system(
         // within one cell — precise placement instead of a raw f32 at up to
         // ~4e8 m (32 m ULP) for cislunar trajectories. `look_to` below only
         // sets rotation from a direction, so it is unaffected by the split.
-        // The cell is Optional: it arrives one frame after spawn, together
-        // with the grid parent (spacecraft_alignment_system) — until then the
-        // pose is a raw f32, matching the no-grid fallback.
-        match (cell, child_of.and_then(|c| q_grids.get(c.parent()).ok())) {
-            (Some(mut cell), Some(grid)) => {
-                let (new_cell, new_translation) = grid.translation_to_grid(rel_pos);
-                tf.translation = new_translation;
-                if *cell != new_cell {
-                    *cell = new_cell;
-                }
-            }
-            (cell, _) => {
-                tf.translation = rel_pos.as_vec3();
-                // A stale non-zero cell would still compose into the pose.
-                if let Some(mut cell) = cell {
-                    if *cell != CellCoord::default() {
-                        *cell = CellCoord::default();
-                    }
-                }
-            }
+        // A spacecraft is valid only as a direct child of its declared inertial
+        // reference Grid. `spacecraft_alignment_system` establishes that triple
+        // atomically before this system runs; an invalid external hierarchy is
+        // ignored here and converges through the alignment system, never through
+        // a raw-f32 alternate representation.
+        let Ok(grid) = q_grids.get(child_of.parent()) else {
+            continue;
+        };
+        let (new_cell, new_translation) = grid.translation_to_grid(rel_pos);
+        tf.translation = new_translation;
+        if *cell != new_cell {
+            *cell = new_cell;
         }
 
         // Point solar panels towards the Sun (hoisted out of the loop above).
@@ -485,53 +474,44 @@ pub fn update_spacecraft_position_system(
 
 pub fn spacecraft_alignment_system(
     mut commands: Commands,
-    q_frames: Query<(
-        Entity,
-        &crate::registry::CelestialReferenceFrame,
-        Has<big_space::prelude::Grid>,
-    )>,
-    q_sc: Query<(Entity, &Spacecraft, Option<&ChildOf>)>,
+    frame_index: Res<crate::ReferenceFrameIndex>,
+    q_sc: Query<(Entity, &Spacecraft, &Transform, Option<&ChildOf>)>,
     q_children: Query<&Children>,
 ) {
-    for (sc_entity, sc, current_parent) in q_sc.iter() {
-        for (f_entity, frame, frame_is_grid) in q_frames.iter() {
-            if frame.ephemeris_id == sc.reference_id {
-                let is_current_parent = if let Some(p) = current_parent {
-                    p.parent() == f_entity
-                } else {
-                    false
-                };
+    for (sc_entity, sc, transform, current_parent) in q_sc.iter() {
+        if let Some(f_entity) = frame_index.resolve(crate::ReferenceFrame::EclipticJ2000 {
+            center: sc.reference_id,
+        }) {
+            let is_current_parent = if let Some(p) = current_parent {
+                p.parent() == f_entity
+            } else {
+                false
+            };
 
-                if !is_current_parent {
-                    // Spacecraft here are NOT `GridAnchor`s, so the atomic-
-                    // migration contract doesn't apply; `set_parent_in_place`'s
-                    // Transform clobber self-heals next frame when
-                    // `update_spacecraft_position_system` rewrites the pose.
-                    #[allow(clippy::disallowed_methods)]
-                    commands.entity(sc_entity).set_parent_in_place(f_entity);
-                    // The cell arrives WITH the grid parent (doc 45: a
-                    // cell-entity must be a direct grid child — spawning with
-                    // an eager CellCoord tripped the validator in the
-                    // pre-parenting window). Frames without a Grid get no
-                    // cell; the position system falls back to raw f32 there.
-                    if frame_is_grid {
-                        commands.entity(sc_entity).try_insert(CellCoord::default());
-                        // Re-stamp the mesh/billboard children as low-precision
-                        // subtree roots: big_space strips the marker while the
-                        // spacecraft is still an invalid parent (pre-cell), and
-                        // never re-tags without a child-side trigger — leaving
-                        // their GlobalTransforms unowned (same trap as the
-                        // trajectory meshes in trajectories.rs).
-                        if let Ok(children) = q_children.get(sc_entity) {
-                            for child in children.iter() {
-                                commands
-                                    .entity(child)
-                                    .try_insert(big_space::grid::propagation::LowPrecisionRoot);
-                            }
-                        }
+            if !is_current_parent {
+                let initial_transform = Transform {
+                    translation: Vec3::ZERO,
+                    rotation: transform.rotation,
+                    scale: transform.scale,
+                };
+                lunco_core::attach::migrate_to_grid(
+                    &mut commands,
+                    sc_entity,
+                    f_entity,
+                    CellCoord::default(),
+                    initial_transform,
+                );
+                // Re-stamp the mesh/billboard children as low-precision
+                // subtree roots after the parent becomes a valid cell
+                // entity. This is the child-side trigger BigSpace needs
+                // after the pre-parenting spawn window.
+                if let Ok(children) = q_children.get(sc_entity) {
+                    for child in children.iter() {
+                        commands
+                            .entity(child)
+                            .try_insert(big_space::grid::propagation::LowPrecisionRoot);
                     }
                 }
-                break;
             }
         }
     }

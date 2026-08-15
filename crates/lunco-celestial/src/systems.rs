@@ -1,11 +1,10 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::big_space_setup::InertialAnchor;
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
 use crate::ephemeris::EphemerisResource;
-use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
+use crate::registry::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_time::WorldTime;
 
@@ -14,24 +13,7 @@ use lunco_time::WorldTime;
 pub fn ephemeris_update_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
-    // The `Option`s pick the branch; the FILTER is what keeps this off every
-    // other entity in the world. Without it the query matched anything with
-    // `CellCoord + Transform` — every rover wheel, every terrain tile, ~2373
-    // entities on `sandbox_scene.usda` — and `continue`d on all but a handful of
-    // bodies, for 3-5 ms a frame. An `Option<&T>` is a projection, never a
-    // predicate: if a system only wants `T`-ish entities, say so in the filter.
-    mut q_entities: Query<
-        (
-            Entity,
-            &mut CellCoord,
-            &mut Transform,
-            Option<&CelestialBody>,
-            Option<&CelestialReferenceFrame>,
-        ),
-        Or<(With<CelestialBody>, With<CelestialReferenceFrame>)>,
-    >,
-    _q_all_parents: Query<&ChildOf>,
-    _q_frames: Query<&CelestialReferenceFrame>,
+    mut q_frames: Query<(&mut CellCoord, &mut Transform, &ReferenceFrame, &ChildOf)>,
     q_grids: Query<&Grid>,
 ) {
     let Some(ephemeris) = ephemeris else {
@@ -50,12 +32,8 @@ pub fn ephemeris_update_system(
     // `Local`s drift, and a half-advanced celestial tree puts the sun and the
     // bodies at different instants.
 
-    for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
-        let ephemeris_id = if let Some(b) = body {
-            b.ephemeris_id
-        } else if let Some(f) = frame {
-            f.ephemeris_id
-        } else {
+    for (mut cell, mut tf, frame, child_of) in &mut q_frames {
+        let Some(ephemeris_id) = frame.center() else {
             continue;
         };
 
@@ -71,7 +49,7 @@ pub fn ephemeris_update_system(
         // Earth), camera teleports into empty space (click-to-focus black
         // screen). Skipping the write means no frame — mid-chain or otherwise
         // — ever holds the un-anchored pose.
-        if ephemeris_id == 10 {
+        if ephemeris_id == crate::ephemeris_id::SUN {
             continue;
         }
 
@@ -83,90 +61,19 @@ pub fn ephemeris_update_system(
         };
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
 
-        // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
-        // We need to resolve which grid we are relative to.
-        // In our setup, Earth Body is child of Earth Local Grid.
-        // If the provider returns pos relative to parent, then for Earth (399) it is relative to EMB (3).
-        // But Earth Body is in Earth Local Grid, which is child of EMB Grid.
-        // This means Earth Body should have translation = ZERO in its own local grid.
-
-        // WAIT: The design is:
-        // Solar Grid (10) -> Sun Body
-        // Solar Grid (10) -> EMB Grid (3)
-        // EMB Grid (3) -> Earth Grid (399)
-        // EMB Grid (3) -> Moon Grid (301)
-        // Earth Grid (399) -> Earth Body
-        // Moon Grid (301) -> Moon Body
-
-        // So:
-        // EMB Grid position relative to Solar Grid = EMB helio (rel 10)
-        // Earth Grid position relative to EMB Grid = Earth rel EMB (rel 3)
-        // Moon Grid position relative to EMB Grid = Moon rel EMB (rel 3)
-        // Earth Body position relative to Earth Grid = ZERO
-
-        let mut depth = 0;
-        let mut current = entity;
-        // Search up for the first Grid parent
-        while let Ok(child_of) = _q_all_parents.get(current) {
-            if depth > 10 {
-                break;
-            }
-            depth += 1;
-            let parent = child_of.parent();
-            if let Ok(grid) = q_grids.get(parent) {
-                // If this is a Body entity, its position relative to its own Local Grid should be zero?
-                // No, typically the Grid Anchor moves relative to ITS parent.
-                // If 'entity' is a ReferenceFrame (the Grid Anchor itself):
-                if frame.is_some() {
-                    let (new_cell, new_translation) = grid.translation_to_grid(pos_bevy_m);
-                    *cell = new_cell;
-                    tf.translation = new_translation;
-                } else if body.is_some() {
-                    // Body is usually at center of its local grid
-                    *cell = CellCoord::default();
-                    tf.translation = Vec3::ZERO;
-                }
-                break;
-            }
-            current = parent;
-        }
-    }
-}
-
-/// Keep each [`InertialAnchor`] co-located with its body's grid — **position
-/// only**.
-///
-/// The body grids rotate ([`body_rotation_system`]), which is right for the
-/// surface features parented to them and wrong for an orbit camera. This copies
-/// the body grid's `(CellCoord, translation)` onto the anchor and leaves the
-/// anchor's `rotation` at IDENTITY, giving a star-fixed frame that still follows
-/// the body through space.
-///
-/// Runs after `ephemeris_update_system` (which writes the pose being copied).
-/// Guarded writes: an unconditional write would dirty the Transform every frame
-/// on a paused clock and re-run propagation — the same re-rounding wobble
-/// `body_rotation_system` documents.
-pub fn sync_inertial_anchors(
-    q_frames: Query<(&CelestialReferenceFrame, &CellCoord, &Transform), Without<InertialAnchor>>,
-    mut q_anchors: Query<
-        (&InertialAnchor, &mut CellCoord, &mut Transform),
-        Without<CelestialReferenceFrame>,
-    >,
-) {
-    for (anchor, mut cell, mut tf) in q_anchors.iter_mut() {
-        let Some((_, src_cell, src_tf)) = q_frames
-            .iter()
-            .find(|(frame, _, _)| frame.ephemeris_id == anchor.ephemeris_id)
-        else {
+        // A frame is always a direct child of another Grid. Its local f64
+        // centre is encoded once into that parent's cells; body entities stay
+        // at identity inside their own frame and are not ephemeris writers.
+        let Ok(parent_grid) = q_grids.get(child_of.parent()) else {
+            error_once!(
+                "[celestial] reference frame {:?} is not directly parented to a Grid",
+                frame
+            );
             continue;
         };
-        if *cell != *src_cell {
-            *cell = *src_cell;
-        }
-        if tf.translation != src_tf.translation {
-            tf.translation = src_tf.translation;
-        }
-        // `tf.rotation` is deliberately NEVER written. That is the anchor.
+        let (new_cell, new_translation) = parent_grid.translation_to_grid(pos_bevy_m);
+        *cell = new_cell;
+        tf.translation = new_translation;
     }
 }
 
@@ -179,26 +86,24 @@ pub fn sync_inertial_anchors(
 pub fn body_rotation_system(
     world: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
-    mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
+    mut q_grids: Query<(&mut Transform, &ReferenceFrame)>,
 ) {
     for (mut tf, frame) in q_grids.iter_mut() {
-        if let Some(desc) = registry
-            .bodies
-            .iter()
-            .find(|d| d.ephemeris_id == frame.ephemeris_id)
-        {
-            if desc.spins() {
-                // Shared with the geodesy math (`geo::body_rotation`) so
-                // rendered grids and comms/anchor positions cannot diverge.
-                let next = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
-                // Guarded write: an unconditional `tf.rotation = …` dirties the
-                // Transform every frame even when the value is unchanged (paused
-                // clock), re-running propagation and re-rounding the f32 compose
-                // chain. At orbital-pin distances that re-rounding is a sub-pixel
-                // per-frame wobble of the focused body — worst at its limb
-                // ("Earth jitters" with the clock paused). Only write on change.
-                if tf.rotation != next {
-                    tf.rotation = next;
+        if let Some(body) = frame.body_fixed() {
+            if let Some(desc) = registry.get(body) {
+                if desc.spins() {
+                    // Shared with the geodesy math (`geo::body_rotation`) so
+                    // rendered grids and comms/anchor positions cannot diverge.
+                    let next = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
+                    // Guarded write: an unconditional `tf.rotation = …` dirties the
+                    // Transform every frame even when the value is unchanged (paused
+                    // clock), re-running propagation and re-rounding the f32 compose
+                    // chain. At orbital-pin distances that re-rounding is a sub-pixel
+                    // per-frame wobble of the focused body — worst at its limb
+                    // ("Earth jitters" with the clock paused). Only write on change.
+                    if tf.rotation != next {
+                        tf.rotation = next;
+                    }
                 }
             }
         }
@@ -277,7 +182,10 @@ pub fn update_sun_light_system(
     // `lunco_environment::horizon::SunQuery` for the same filter render-side.
     mut q_light: Query<
         (Entity, &mut Transform, &mut DirectionalLight, Option<&Name>),
-        Without<lunco_environment::Earthshine>,
+        (
+            Without<lunco_environment::Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+        ),
     >,
     // The site-ENU alignment lives on the Site Align Grid (the Solar Grid's
     // rotation is IDENTITY — see `anchor_solar_frame_to_site`).
@@ -319,15 +227,19 @@ pub fn update_sun_light_system(
     }
     let align_rot = align_grid_tf.rotation;
 
-    let observer_body = q_site
+    let Some(observer_body) = q_site
         .iter()
         .next()
         .map(|a| a.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
-        .unwrap_or(399);
+    else {
+        return;
+    };
 
     let (Some(p_sun), Some(p_observer)) = (
-        ephemeris.provider.global_position(10, world.epoch_jd),
+        ephemeris
+            .provider
+            .global_position(crate::ephemeris_id::SUN, world.epoch_jd),
         ephemeris
             .provider
             .global_position(observer_body, world.epoch_jd),
@@ -368,7 +280,7 @@ pub fn update_sun_light_system(
         let azimuth_deg = to_sun.x.atan2(-to_sun.z).to_degrees().rem_euclid(360.0);
         let body_elevation = q_bodies
             .iter()
-            .find(|(_, _, _, b)| b.ephemeris_id == 10)
+            .find(|(_, _, _, b)| b.ephemeris_id == crate::ephemeris_id::SUN)
             .map(|(e, cell, tf, _)| {
                 let p = lunco_core::coords::world_position_seeded(
                     e, cell, tf, &q_parents, &q_grids, &q_spatial,
@@ -400,7 +312,9 @@ pub fn update_sun_light_system(
     // flip. `lunco-environment` turns it into az/el and publishes the ports.
     if let (Some(earth_dir_out), Some(p_earth)) = (
         earth_dir_out.as_mut(),
-        ephemeris.provider.global_position(399, world.epoch_jd),
+        ephemeris
+            .provider
+            .global_position(crate::ephemeris_id::EARTH, world.epoch_jd),
     ) {
         let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_observer)
             .raw()
@@ -426,7 +340,12 @@ pub fn update_sun_light_system(
     // scene had two suns, and with equal illuminance it picked by archetype
     // iteration order. That guess is exactly how an engine-spawned duplicate
     // came to take the ephemeris aim while the scene's own sun stayed frozen.
-    if let Some((light_entity, mut light_tf, mut light, light_name)) = q_light.iter_mut().next() {
+    // Exactly one unscoped scene sun owns this write. ECS/archetype order is
+    // not a lighting policy, so an ambiguous scene must not silently choose.
+    if q_light.iter().count() != 1 {
+        return;
+    }
+    if let Ok((light_entity, mut light_tf, mut light, light_name)) = q_light.single_mut() {
         debug!("[celestial] selected scene sun entity={light_entity:?} name={light_name:?}");
         // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
         // from a direction that steps in f32-quat ULPs (the site pin's
@@ -467,64 +386,6 @@ pub fn update_sun_light_system(
         }
     }
 }
-
-/// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
-///
-/// **Measured to be load-bearing (2026-07-11, `LUNCO_JUMP_PROBE=1`).** An
-/// attempt to delete this after the root-grid fix strobed the ENTIRE
-/// celestial tree to the world origin ~1 frame in 5–9 (whole-chain
-/// plain-f32 compat output surviving to the renderer; 3385 jump events in
-/// 15 s). Ordering `PropagateHighPrecision.after(propagate_parent_transforms)`
-/// is evidently not sufficient on those frames for entities the HP pass
-/// doesn't rewrite — force-dirtying their `Transform` guarantees it rewrites
-/// them all, every frame. The real fix is retiring the root `Transform`
-/// (Avian bubble, doc 47 Phase 5 / doc 45 two-space split); until then this
-/// stays.
-///
-/// The `Or<>` must cover EVERY cell-entity living on a celestial grid.
-/// `GeodeticAnchor`/`KeplerOrbit` prims (ground stations, satellites) were
-/// missing — they kept flickering between their anchor pose and the collapsed
-/// compat pose while the listed entities were protected (the "DSS ping-pong",
-/// task #18). `Without<SiteAnchor>` is REQUIRED with them: the site-anchored
-/// SCENE ROOT also carries `GeodeticAnchor`, and force-dirtying it dirties
-/// the whole local scene every frame ("everything is jumping around",
-/// 2026-07-10 regression).
-#[allow(clippy::type_complexity)]
-pub fn touch_celestial_transforms(
-    q_site: Query<(), With<crate::geo::SiteAnchor>>,
-    mut q: Query<
-        &mut Transform,
-        (
-            Or<(
-                With<CelestialBody>,
-                With<CelestialReferenceFrame>,
-                With<lunco_terrain_globe::TerrainTile>,
-                With<crate::geo::GeodeticAnchor>,
-                With<crate::kepler::KeplerOrbit>,
-                With<crate::trajectories::TrajectoryPath>,
-            )>,
-            Without<crate::geo::SiteAnchor>,
-        ),
-    >,
-) {
-    // Only needed while a site anchor re-pins the solar frame; a plain scene
-    // has no moving grid chain to go stale against.
-    if q_site.is_empty() {
-        return;
-    }
-    for mut tf in q.iter_mut() {
-        tf.set_changed();
-    }
-}
-
-// NOTE (2026-07-12): an orbital-only "touch_site_scene_transforms" pass was
-// tried here to force the site subtree onto the HP propagation path while the
-// orbital camera is on a celestial grid. Measured result: it did NOT remove
-// the camera↔terrain divergence (the site branch and the celestial branch
-// still disagree at f32-ULP scale across the Solar Grid's ~1 AU joint) and it
-// cost whole-subtree GT recomputation every frame (~1 FPS in orbital view).
-// The structural fix is re-branching the site scene under its anchor body's
-// grid (task #24) so no 1 AU joint separates camera from terrain.
 
 pub fn celestial_visuals_system(
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,

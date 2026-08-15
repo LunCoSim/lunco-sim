@@ -211,6 +211,16 @@ pub struct ShaderLook {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ShaderLookBound;
 
+/// Main-world proof that a custom shader look is safe to expose.
+///
+/// `ShaderLookBound` means that the render binder installed a concrete
+/// material handle. Dynamic shader uniforms are initially packed against an
+/// empty schema, however, so the handle alone is not a readiness guarantee.
+/// The render binder adds this marker only after the shader source is loaded
+/// and the material has its reflected layout (or a synchronous fallback).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ShaderLookReady;
+
 impl ShaderLook {
     /// A look for `shader` (an asset path) with no parameters set — every value
     /// falls back to the shader's own declared default.

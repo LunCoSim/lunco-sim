@@ -36,6 +36,17 @@ pub fn wheel_hub_pose(
     )
 }
 
+/// Return the wheel's authored traction axes in Avian's grid-absolute physics
+/// frame.  `chassis_rot` is the rigid body's attitude and `wheel_local_rot` is
+/// the wheel's chassis-local (including steering) attitude.  The render tree is
+/// deliberately not an input: BigSpace may rebase that tree without changing
+/// the physical orientation of the body.
+#[inline]
+pub fn wheel_heading(chassis_rot: GridRot, wheel_local_rot: DQuat) -> (DVec3, DVec3) {
+    let wheel_rot = chassis_rot.0 * wheel_local_rot;
+    (wheel_rot * DVec3::NEG_Z, wheel_rot * DVec3::X)
+}
+
 /// Linear velocity of the hub: `v + ω × r`, where `r = hub_pos − chassis_pos`
 /// is the lever arm — both ends typed grid-absolute, so the CQ-201 invariant
 /// (same frame on both terms) holds by construction. `chassis_ang` is
@@ -104,5 +115,17 @@ mod tests {
         assert!((wheel_roll_rate(hub_vel, forward, 2.0) - 2.0).abs() < 1e-9);
         // Radius is floored to avoid div-by-zero.
         assert!(wheel_roll_rate(hub_vel, forward, 0.0).is_finite());
+    }
+
+    #[test]
+    fn wheel_heading_uses_physics_attitude_not_render_frame() {
+        // A site grid may rotate the physics frame relative to the renderer.
+        // A wheel whose authored forward is -Z must therefore be transformed
+        // by the Avian chassis attitude; using a rebased GlobalTransform would
+        // incorrectly leave it in the renderer's -Z direction.
+        let site_rotation = DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2);
+        let (forward, right) = wheel_heading(GridRot(site_rotation), DQuat::IDENTITY);
+        approx(forward, DVec3::NEG_X);
+        approx(right, DVec3::NEG_Z);
     }
 }

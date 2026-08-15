@@ -94,6 +94,7 @@ pub use stream_viz::{
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{
     fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit,
+    TerrainPoseInPhysicsFrame,
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,

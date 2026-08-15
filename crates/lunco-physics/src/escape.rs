@@ -283,6 +283,24 @@ fn report_escaped_bodies(
     }
 }
 
+/// The escape guard judges the result of an admitted solver step, never loading
+/// state that merely happens to carry a changed [`Position`].
+///
+/// Avian intentionally leaves the previous non-zero physics delta in place for
+/// the first fixed tick after [`Time<Physics>`] is paused, then clears it after
+/// entering `PhysicsSchedule`. Consequently the schedule can execute once while
+/// the authoritative physics clock is already paused. Scene readiness relies on
+/// that pause while USD entities are still being mounted into their final
+/// BigSpace frame. Looking only at schedule placement therefore mistakes the
+/// authored loading pose for a post-solver escape.
+///
+/// A cinematic single-step is admitted by temporarily unpausing this same
+/// clock, so the clock state is the complete contract for both normal and
+/// explicitly stepped simulation; no scene-specific exception is required.
+fn physics_step_admitted(physics_time: Res<Time<Physics>>) -> bool {
+    !physics_time.is_paused()
+}
+
 /// Forget an entity's report the moment its body dies, so a scene reload — or any
 /// id reuse — reports afresh.
 ///
@@ -345,6 +363,7 @@ impl Plugin for EscapeDiagnosticPlugin {
                     report_escaped_bodies,
                 )
                     .chain()
+                    .run_if(physics_step_admitted)
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
                     .before(PhysicsSystems::Last),
@@ -467,6 +486,74 @@ mod tests {
         assert!(
             app.world().resource::<ReportedEscapes>().0.len() == 1,
             "exactly one body should have been reported"
+        );
+    }
+
+    /// A readiness pause is an admission boundary, not merely a zero-delta
+    /// integration hint. Avian may enter `PhysicsSchedule` once with its prior
+    /// delta after the pause edge; that transitional schedule must not inspect
+    /// newly projected loading poses. Once the same clock is admitted again,
+    /// the real escape is reported normally.
+    #[test]
+    fn paused_physics_does_not_judge_loading_pose_but_reports_after_admission() {
+        use bevy::time::TimeUpdateStrategy;
+        use core::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            PhysicsPlugins::default(),
+            EscapeDiagnosticPlugin,
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+            15625,
+        )));
+        app.finish();
+        app.cleanup();
+
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(1000.0, 1.0, 1000.0),
+            Transform::default(),
+        ));
+        // Establish a real previous physics delta and the static-world bounds.
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(matches!(
+            *app.world().resource::<WorldBounds>(),
+            WorldBounds::Some { .. }
+        ));
+
+        app.world_mut().spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            Name::new("loading-pose"),
+            Transform::from_xyz(0.0, -1510.0, 0.0),
+        ));
+        app.world_mut().resource_mut::<Time<Physics>>().pause();
+
+        // This update exercises Avian's pause-edge schedule with the preceding
+        // non-zero delta. The body is authored but has not been admitted.
+        app.update();
+        assert!(
+            app.world().resource::<ReportedEscapes>().0.is_empty(),
+            "a held loading pose must not become a terminal runtime fault"
+        );
+        assert!(!app
+            .world()
+            .resource::<PhysicsHolds>()
+            .holds(PhysicsHolds::SAFETY_FAILURE));
+
+        app.world_mut().resource_mut::<Time<Physics>>().unpause();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ReportedEscapes>().0.len(),
+            1,
+            "the same body must be diagnosed after an admitted solver step"
         );
     }
 

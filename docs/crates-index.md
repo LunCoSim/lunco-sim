@@ -32,7 +32,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-celestial`** | Orbital mechanics (ephemeris abstraction), gravity, body-fixed rotation, and Sphere of Influence (SOI) transitions; sun-light driven from ephemeris. |
+| **`lunco-celestial`** | Orbital mechanics, canonical body catalog/NAIF identities, typed analytical frame transforms, named BigSpace frame projection, gravity, body rotation, and automatic SOI/frame transitions; sun-light driven from ephemeris. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -142,7 +142,7 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines the `Port` primitive for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML).
+The bedrock of the simulation. Defines the `Port` primitive for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Owns the canonical BigSpace world shell, arbitrary-grid f64 pose composition/conversion, atomic grid migration, and the `ActivePhysicsFrame` boundary; it does not assign celestial semantics.
 
 **`lunco-time`**
 The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/`WorldTime` (the world animation clock that also gates physics via `Time<Virtual>`), the `TimeDomain` clock tree (`Playback`, `TimeBinding`, `ResolvedDomains`) with the `AnimationPreview` domain + `ControlAnimation` transport, and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
@@ -185,7 +185,7 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Orbital mechanics and solar-system simulation spine. Handles body-fixed rotation, gravity vectors, and the Sphere of Influence (SOI) system for automatic coordinate frame transitions between bodies; the sun light is driven from ephemeris. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Orbital mechanics and solar-system simulation spine. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, gravity vectors, and automatic Sphere-of-Influence/frame migration. User-facing anchors/orbits declare physical intent; the crate resolves concrete BigSpace grids and performs the projection. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
 
 **`lunco-celestial-ephemeris`**
 Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.
@@ -252,7 +252,7 @@ Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` 
 ### Networking & API
 
 **`lunco-networking`**
-Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing via a verified `AuthorizedCommand` flow and Lamport-ordered `EditLog` for history and undo.
+Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing. Physics snapshots and camera/perspective state transfer f64 named-frame state; capture/apply automatically convert between each peer's private `ActivePhysicsFrame` and the semantic frame. No `CellCoord` is a public/wire reference-frame identity.
 
 **`lunco-api`**
 Transport-agnostic API core. Exposes simulation state and command discovery via HTTP, mapping ULID-based stable entity IDs to process-local Bevy entities for external control and inspection.

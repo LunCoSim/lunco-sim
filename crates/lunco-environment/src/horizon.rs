@@ -336,7 +336,7 @@ pub struct HorizonBakeTask(Task<BakeResult>);
 /// live in the Inspector.
 ///
 /// Defaults **off on wasm**: the streamed LOD tiles (the common web path) bypass
-/// the march entirely (`Plain` mode + `NotShadowReceiver`), and the static
+/// the march entirely in the lightweight shader mode, and the static
 /// terrain defaults to the flat shader there too — so the march rarely runs on
 /// web, while the inline (main-thread) cache bake would hitch during a
 /// day-cycle animation. Native keeps the cache on: the static `regolith`
@@ -956,6 +956,7 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
              `RenderLayers` preview or removed.",
             sun.iter().count()
         );
+        return None;
     }
     Some(first).map(|(gt, light, ang, csm)| {
         let csm_far = if light.shadow_maps_enabled {

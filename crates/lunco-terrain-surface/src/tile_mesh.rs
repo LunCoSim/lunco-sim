@@ -2,8 +2,8 @@
 //!
 //! Each quadtree node bakes a real grid mesh from the DEM. Every vertex carries
 //! two positions: its **own** LOD position (`POSITION`, `y = DEM height`) and a
-//! **`MORPH_TARGET`** — the same vertex snapped to the parent node's coarser
-//! (even) lattice with `y` re-sampled there. The CDLOD vertex shader lerps
+//! **`MORPH_TARGET`** — the same vertex evaluated on the parent node's coarser
+//! lattice by bilinear interpolation. The CDLOD vertex shader lerps
 //! `pos = mix(POSITION, MORPH_TARGET, morph)` by a camera-distance morph factor,
 //! so a tile geomorphs smoothly into its parent with no popping and no
 //! texture fetch. The same baked grid also yields the avian collider heights
@@ -18,8 +18,8 @@ use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
 use crate::quadtree::Square;
 
-/// CPU vertex data for one CDLOD tile. `morph_targets[i]` is the parent-lattice
-/// position vertex `i` collapses to as the camera recedes. Positions are in
+/// CPU vertex data for one CDLOD tile. `morph_targets[i]` is the position on
+/// the parent-lattice surface at vertex `i` as the camera recedes. Positions are in
 /// **world** XZ (S2 static; S3 rebases to a per-tile `CellCoord` local frame).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileMesh {
@@ -30,6 +30,9 @@ pub struct TileMesh {
     /// see `ATTRIBUTE_MORPH_NORMAL`.
     pub morph_normals: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    /// Perimeter membership in `[top, bottom, left, right]` order.  The
+    /// streamer uses this to stitch only edges whose neighbour is coarser.
+    pub edge_masks: Vec<[f32; 4]>,
     pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
@@ -37,10 +40,10 @@ pub struct TileMesh {
 /// Bake a `res × res`-vertex CDLOD mesh covering `region`, sampling heights from
 /// the composed height `src` (the terrain's `SurfaceOracle`: DEM base + analytic
 /// crater/edit modifiers — so rims resolve at *this tile's* vertex density, not the
-/// DEM grid's). `res` is clamped ≥ 2. `MORPH_TARGET` snaps each vertex index down
-/// to the parent's even lattice (`idx & !1`) and re-samples the source there — so
-/// even vertices don't move and odd vertices collapse onto their even neighbour,
-/// the standard CDLOD vertex morph. UVs are DEM-global (`(world + H)/(2H)`) so
+/// DEM grid's). `res` is clamped ≥ 2. `MORPH_TARGET` evaluates the parent
+/// lattice at each vertex's exact X/Z position — so even vertices coincide and
+/// odd vertices use the parent's linear interpolation rather than a stepped
+/// duplicate. UVs are DEM-global (`(world + H)/(2H)`) so
 /// layer maps align across tiles. `dem_half_extent` is the DEM's `half_extent`.
 ///
 /// `origin_xz` is subtracted from vertex X/Z so positions are **relative to that
@@ -182,6 +185,7 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
     let mut morph_targets = Vec::with_capacity(res * res);
     let mut morph_normals = Vec::with_capacity(res * res);
     let mut normals = Vec::with_capacity(res * res);
+    let mut edge_masks = Vec::with_capacity(res * res);
     let mut uvs = Vec::with_capacity(res * res);
     for iz in 0..res {
         for ix in 0..res {
@@ -189,18 +193,60 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             let y = (h_at(ix as isize, iz as isize) - origin_y) as f32;
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
-            // Snap to the parent's even lattice, with the PARENT-gated height —
-            // NOT this tile's own finer height at that spot. Even/even vertices
-            // morph in place vertically onto the parent's value too, so the fully
-            // morphed tile IS the parent surface (pop-free swap, no aliasing).
-            let (sx, sz) = world(ix & !1, iz & !1);
-            let k = (iz / 2) * even + (ix / 2);
-            let sy = parent_y[k];
-            morph_targets.push([(sx - ox) as f32, sy, (sz - oz) as f32]);
-            // The normal at that same snapped point, so shading follows the
-            // geometry through the whole morph instead of lagging on the fine
-            // surface the tile is morphing AWAY from.
-            morph_normals.push(parent_n[k]);
+            // Evaluate the PARENT-gated surface at this vertex's exact position.
+            // The parent tile is a regular grid whose triangles linearly
+            // interpolate between its lattice samples. Repeating the lower even
+            // sample for an odd child vertex (the old implementation) created a
+            // stepped edge and therefore a T-junction even when explicitly
+            // stitched.
+            let ex = ix / 2;
+            let ez = iz / 2;
+            let ex1 = (ex + 1).min(even - 1);
+            let ez1 = (ez + 1).min(even - 1);
+            let tx = if ex1 == ex {
+                0.0
+            } else {
+                (ix & 1) as f32 * 0.5
+            };
+            let tz = if ez1 == ez {
+                0.0
+            } else {
+                (iz & 1) as f32 * 0.5
+            };
+            let sy = {
+                let a = parent_y[ez * even + ex];
+                let b = parent_y[ez * even + ex1];
+                let c = parent_y[ez1 * even + ex];
+                let d = parent_y[ez1 * even + ex1];
+                let ab = a + (b - a) * tx;
+                let cd = c + (d - c) * tx;
+                ab + (cd - ab) * tz
+            };
+            let pn = {
+                let a = parent_n[ez * even + ex];
+                let b = parent_n[ez * even + ex1];
+                let c = parent_n[ez1 * even + ex];
+                let d = parent_n[ez1 * even + ex1];
+                let ab = [
+                    a[0] + (b[0] - a[0]) * tx,
+                    a[1] + (b[1] - a[1]) * tx,
+                    a[2] + (b[2] - a[2]) * tx,
+                ];
+                let cd = [
+                    c[0] + (d[0] - c[0]) * tx,
+                    c[1] + (d[1] - c[1]) * tx,
+                    c[2] + (d[2] - c[2]) * tx,
+                ];
+                let p = [
+                    ab[0] + (cd[0] - ab[0]) * tz,
+                    ab[1] + (cd[1] - ab[1]) * tz,
+                    ab[2] + (cd[2] - ab[2]) * tz,
+                ];
+                let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                [p[0] / len, p[1] / len, p[2] / len]
+            };
+            morph_targets.push([(wx - ox) as f32, sy, (wz - oz) as f32]);
+            morph_normals.push(pn);
 
             let edge = wx.abs() >= dem_half_extent - 1.0e-9 || wz.abs() >= dem_half_extent - 1.0e-9;
             normals.push(if edge {
@@ -213,6 +259,12 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
             } else {
                 fine_normal(ix as isize, iz as isize)
             });
+            edge_masks.push([
+                (iz == 0) as u8 as f32,
+                (iz == res - 1) as u8 as f32,
+                (ix == 0) as u8 as f32,
+                (ix == res - 1) as u8 as f32,
+            ]);
             uvs.push([
                 ((wx + dem_half_extent) * inv_uv) as f32,
                 ((wz + dem_half_extent) * inv_uv) as f32,
@@ -220,143 +272,20 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
         }
     }
 
-    let mut indices = grid_indices(res);
-
-    // --- Skirts: close only the measured T-junction gap between neighbouring
-    // LODs. The morph target is the surface the coarser neighbour renders, so
-    // the largest edge difference is the exact vertical gap the seam can expose.
-    // A fixed fraction of tile width would invent metre- to kilometre-scale walls
-    // on coarse tiles and is not terrain geometry.
-    // Skirts close cracks between two neighboring LOD tiles. At the outer DEM
-    // boundary there is no neighboring terrain, so emitting a wall there would
-    // invent geometry outside the authored DEM. Keep seam skirts only where a
-    // neighboring tile can actually exist.
-    let edge_epsilon = (dem_half_extent * 1.0e-9).max(1.0e-6);
-    let outer_edges = [
-        region.center[1] - region.half <= -dem_half_extent + edge_epsilon,
-        region.center[1] + region.half >= dem_half_extent - edge_epsilon,
-        region.center[0] - region.half <= -dem_half_extent + edge_epsilon,
-        region.center[0] + region.half >= dem_half_extent - edge_epsilon,
-    ];
-    let edge_gaps = [
-        (0..res)
-            .map(|i| (positions[i][1] - morph_targets[i][1]).abs())
-            .fold(0.0f32, f32::max),
-        (0..res)
-            .map(|i| {
-                let index = (res - 1) * res + i;
-                (positions[index][1] - morph_targets[index][1]).abs()
-            })
-            .fold(0.0f32, f32::max),
-        (0..res)
-            .map(|i| {
-                let index = i * res;
-                (positions[index][1] - morph_targets[index][1]).abs()
-            })
-            .fold(0.0f32, f32::max),
-        (0..res)
-            .map(|i| {
-                let index = i * res + (res - 1);
-                (positions[index][1] - morph_targets[index][1]).abs()
-            })
-            .fold(0.0f32, f32::max),
-    ]
-    .map(|edge_gap| {
-        if edge_gap > 0.0 {
-            // Only a numerical closure margin, scaled to the f32 terrain coordinate.
-            edge_gap + (region.side() as f32 * 4.0 * f32::EPSILON).max(1.0e-4)
-        } else {
-            0.0
-        }
-    });
-    append_skirts(
-        res,
-        edge_gaps,
-        outer_edges,
-        &mut positions,
-        &mut morph_targets,
-        &mut morph_normals,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-    );
+    // The grid is deliberately closed by edge stitching in the vertex stage.
+    // The shared parent lattice is the exact seam surface. The renderer applies
+    // edge stitching only where the draw partition has a coarser neighbour, so
+    // this mesh stays a regular grid with no fabricated skirt geometry.
+    let indices = grid_indices(res);
 
     TileMesh {
         positions,
         morph_targets,
         morph_normals,
         normals,
+        edge_masks,
         uvs,
         indices,
-    }
-}
-
-/// Append a downward skirt wall around the tile perimeter. For each of the four
-/// edges, every edge vertex gets a duplicate dropped by `skirt_depth`, and each
-/// segment becomes a double-sided wall quad (both windings → never culled, so the
-/// crack is covered from any angle). Skirt verts carry the edge vertex's morph
-/// target (also dropped) so the wall follows the surface as it geomorphs.
-#[allow(clippy::too_many_arguments)]
-fn append_skirts(
-    res: usize,
-    skirt_depths: [f32; 4],
-    outer_edges: [bool; 4],
-    positions: &mut Vec<[f32; 3]>,
-    morph_targets: &mut Vec<[f32; 3]>,
-    morph_normals: &mut Vec<[f32; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    indices: &mut Vec<u32>,
-) {
-    // The four perimeter runs as ordered grid-vertex indices.
-    let top: Vec<usize> = (0..res).collect();
-    let bottom: Vec<usize> = (0..res).map(|ix| (res - 1) * res + ix).collect();
-    let left: Vec<usize> = (0..res).map(|iz| iz * res).collect();
-    let right: Vec<usize> = (0..res).map(|iz| iz * res + (res - 1)).collect();
-
-    for (edge_index, (edge, is_outer)) in [top, bottom, left, right]
-        .into_iter()
-        .zip(outer_edges)
-        .enumerate()
-    {
-        let skirt_depth = skirt_depths[edge_index];
-        if is_outer || skirt_depth <= 0.0 {
-            continue;
-        }
-        // Skirt vertices are a vertical seam wall, not another copy of the
-        // surface. Give that wall its geometric outward normal. Reusing the
-        // sloped terrain normal made the wall's lighting depend on the DEM
-        // gradient and produced black bands when the wall was viewed from its
-        // reverse winding.
-        let wall_normal = match edge_index {
-            0 => [0.0, 0.0, -1.0], // z = -half
-            1 => [0.0, 0.0, 1.0],  // z = +half
-            2 => [-1.0, 0.0, 0.0], // x = -half
-            3 => [1.0, 0.0, 0.0],  // x = +half
-            _ => unreachable!(),
-        };
-        // Drop a skirt vertex below each edge vertex, recording its new index.
-        let mut skirt: Vec<u32> = Vec::with_capacity(edge.len());
-        for &gi in &edge {
-            let p = positions[gi];
-            let mt = morph_targets[gi];
-            let uv = uvs[gi];
-            skirt.push(positions.len() as u32);
-            positions.push([p[0], p[1] - skirt_depth, p[2]]);
-            morph_targets.push([mt[0], mt[1] - skirt_depth, mt[2]]);
-            morph_normals.push(wall_normal);
-            normals.push(wall_normal);
-            uvs.push(uv);
-        }
-        // Wall quads per segment, emitted with BOTH windings (double-sided).
-        for k in 0..edge.len() - 1 {
-            let (a, b) = (edge[k] as u32, edge[k + 1] as u32);
-            let (sa, sb) = (skirt[k], skirt[k + 1]);
-            // front winding
-            indices.extend_from_slice(&[a, sa, b, b, sa, sb]);
-            // back winding
-            indices.extend_from_slice(&[a, b, sa, b, sb, sa]);
-        }
     }
 }
 
@@ -417,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn outer_dem_edges_have_no_artificial_skirt_walls() {
+    fn edge_masks_describe_only_the_grid_perimeter() {
         let dem = ramp_dem();
         let res = 5;
 
@@ -433,11 +362,17 @@ mod tests {
             [0.0, 0.0],
             0.0,
         );
-        assert_eq!(
-            interior.positions.len(),
-            res * res + 2 * res,
-            "interior tiles retain only edges with a measured morph gap"
-        );
+        assert_eq!(interior.positions.len(), res * res);
+        assert!(interior.edge_masks.iter().enumerate().all(|(i, mask)| {
+            let ix = i % res;
+            let iz = i / res;
+            mask == &[
+                (iz == 0) as u8 as f32,
+                (iz == res - 1) as u8 as f32,
+                (ix == 0) as u8 as f32,
+                (ix == res - 1) as u8 as f32,
+            ]
+        }));
 
         let corner = bake_tile_mesh(
             &dem,
@@ -451,15 +386,11 @@ mod tests {
             [0.0, 0.0],
             0.0,
         );
-        assert_eq!(
-            corner.positions.len(),
-            res * res + res,
-            "outer DEM edges must not grow fabricated vertical walls"
-        );
+        assert_eq!(corner.positions.len(), res * res);
     }
 
     #[test]
-    fn interior_seam_skirts_follow_measured_edge_relief() {
+    fn tile_has_no_fabricated_seam_geometry() {
         let dem = ramp_dem();
         let res = 5;
         let mesh = bake_tile_mesh(
@@ -475,26 +406,11 @@ mod tests {
             0.0,
         );
 
-        // The first appended run is an interior seam. Its wall must retain the
-        // edge's relief rather than replacing the run with one cap height.
-        let top = &mesh.positions[..res];
-        let top_skirt = &mesh.positions[res * res..res * res + res];
-        assert!((top[0][1] - top[res - 1][1]).abs() > 100.0);
-        assert!((top_skirt[0][1] - top_skirt[res - 1][1]).abs() > 100.0);
-        assert!((top[0][1] - top_skirt[0][1]).abs() > 0.5);
+        assert_eq!(mesh.positions.len(), res * res);
+        assert_eq!(mesh.indices.len(), (res - 1) * (res - 1) * 6);
     }
 
-    /// DIAGNOSTIC for "newly appeared LODs are black / wrongly lit".
-    ///
-    /// A tile spawns at `reveal = 0`, which the vertex shader turns into `m = 1`:
-    /// every vertex is drawn AT ITS MORPH TARGET, i.e. the surface on screen is the
-    /// coarse parent lattice. But the mesh carries only ONE normal set, sampled at
-    /// the tile's own FINE position, and the shader never morphs it. So for the
-    /// whole reveal the geometry is the parent surface while the shading is the
-    /// child surface.
-    ///
-    /// Quantifies the disagreement and — with a grazing lunar sun — how many
-    /// vertices have `N·L` of the WRONG SIGN, which is what reads as black.
+    /// Regression fixture for the normal carried by a geomorphed tile.
     #[test]
     fn morphed_geometry_is_shaded_with_unmorphed_normals() {
         // Bumpy DEM: fine relief the parent lattice cannot represent.
@@ -629,20 +545,17 @@ mod tests {
              {flipped_fixed}/{quads} quads flip"
         );
 
-        // THE CONTRACT. A fully-morphed child must look like its PARENT — the tile
-        // that would be drawn instead of it. The parent shades from a central
-        // difference on ITS OWN lattice (see `fine_normal` in the bake), so
-        // `morph_normals` must be exactly that: the 2×-spaced central difference
-        // of `morph_src` at the SNAPPED position. (Not the morph grid's faceted
-        // triangle normals, which are a piecewise-constant approximation of it
-        // and differ for both the old and new attribute alike.)
+        // THE CONTRACT. At every parent-lattice vertex a fully-morphed child
+        // must shade exactly like its PARENT — the tile that would be drawn
+        // instead. Interior child vertices interpolate those parent vertex
+        // normals, just as the parent mesh's rasterizer does across its grid.
         let step = region.side() / (res as f64 - 1.0);
         let pstep = 2.0 * step;
         let x0 = region.center[0] - region.half;
         let z0 = region.center[1] - region.half;
         let mut worst_contract = 0.0f32;
-        for iz in 0..res {
-            for ix in 0..res {
+        for iz in (0..res).step_by(2) {
+            for ix in (0..res).step_by(2) {
                 let sx = x0 + (ix & !1) as f64 * step;
                 let sz = z0 + (iz & !1) as f64 * step;
                 // What a parent tile computes for this vertex, verbatim.
@@ -683,17 +596,8 @@ mod tests {
         );
     }
 
-    /// DIAGNOSTIC for "terrain still flashes black while moving".
-    ///
-    /// Bevy derives a mesh's `Aabb` from `ATTRIBUTE_POSITION` alone. The geomorph
-    /// vertex shader DISPLACES every vertex toward its morph target, and a tile
-    /// spawns fully morphed (`reveal = 0`), so the geometry actually rasterised can
-    /// sit outside the box culling is tested against. When it does, a tile whose
-    /// box has left the frustum is culled while its drawn surface is still on
-    /// screen — a hole, which renders as the clear colour: a black flash at the
-    /// screen edge while the camera moves.
-    ///
-    /// Measures how far outside the position-derived box the morph targets reach.
+    /// The morph target remains inside the position-derived bounds, so Bevy's
+    /// automatic AABB remains valid while the vertex stage applies the morph.
     #[test]
     fn morph_targets_escape_the_position_derived_bounds() {
         let res_dem = 33;
@@ -744,8 +648,7 @@ mod tests {
              (bounds y: {:.2}..{:.2})",
             lo[1], hi[1]
         );
-        // Measured at 0 m: the skirts extend the box well below the surface and the
-        // parent is a SMOOTHED version of the child, so the displaced geometry stays
+        // The parent is a smoothed version of the child, so the displaced geometry stays
         // inside the box culling tests. Pinned because if it ever stops holding,
         // tiles get culled while still visible and the holes read as black.
         assert!(
@@ -757,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn even_vertices_do_not_move_odd_collapse_to_even() {
+    fn parent_surface_preserves_edge_coordinates() {
         let dem = ramp_dem();
         let region = Square {
             center: [0.0, 0.0],
@@ -770,22 +673,14 @@ mod tests {
         for iz in 0..res {
             for ix in 0..res {
                 let i = iz * res + ix;
-                if ix % 2 == 0 {
-                    // Even vertex: morph target X == own X (no lateral move).
-                    assert!(
-                        (m.morph_targets[i][0] - m.positions[i][0]).abs() < 1e-3,
-                        "even vtx moved"
-                    );
-                } else {
-                    // Odd vertex: collapses to the lower even neighbour's X.
-                    let snapped_x = (x0 + (ix & !1) as f64 * step) as f32;
-                    assert!((m.morph_targets[i][0] - snapped_x).abs() < 1e-3);
-                    // On an X-ramp, morphed height = snapped world X.
-                    assert!(
-                        (m.morph_targets[i][1] - snapped_x).abs() < 1e-2,
-                        "morph height wrong"
-                    );
-                }
+                // The parent surface has the same X/Z coordinates as the child;
+                // only its height is coarsened. This is what makes a stitched
+                // fine edge coincide with the coarse neighbour.
+                assert!((m.morph_targets[i][0] - m.positions[i][0]).abs() < 1e-3);
+                assert!((m.morph_targets[i][2] - m.positions[i][2]).abs() < 1e-3);
+                // The ramp is linear, so bilinear parent interpolation is still
+                // exactly height == world X at every child coordinate.
+                assert!((m.morph_targets[i][1] - (x0 + ix as f64 * step) as f32).abs() < 1e-2);
             }
         }
     }
@@ -806,7 +701,7 @@ mod tests {
             [0.0, 0.0],
             0.0,
         );
-        // height == world x on this ramp (interior verts only; skirts hang below).
+        // height == world x on this ramp for every regular-grid vertex.
         for p in &m.positions[..res * res] {
             assert!(
                 (p[1] - p[0]).abs() < 1e-2,

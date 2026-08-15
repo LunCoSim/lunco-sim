@@ -83,6 +83,11 @@ impl GravityModel for PointMassGravity {
 pub struct LocalGravityField {
     /// The body we're gravitationally bound to.
     pub body_entity: Option<Entity>,
+    /// Avatar position relative to the bound body's centre, expressed in the
+    /// body's rotating frame.  This is the canonical position for surface
+    /// decisions: it is composed through the shared BigSpace grid branch and
+    /// never obtained by subtracting two root-frame `GlobalTransform`s.
+    pub body_relative_position: DVec3,
     /// "Up" direction in world space.
     pub up: DVec3,
     /// "Up" direction in body-local space.
@@ -95,6 +100,7 @@ impl Default for LocalGravityField {
     fn default() -> Self {
         Self {
             body_entity: None,
+            body_relative_position: DVec3::ZERO,
             up: DVec3::Y,
             local_up: DVec3::Y,
             surface_g: 0.0,
@@ -112,19 +118,22 @@ impl Default for LocalGravityField {
 
 /// Updates `LocalGravityField` based on avatar position.
 ///
-/// Uses the avatar's full grid position (CellCoord + Transform) to compute
-/// the direction from the body center via absolute coordinate arithmetic.
-/// This correctly handles nested grids and reparenting.
+/// Uses the avatar's body-relative position composed through the shared local
+/// BigSpace branch. This correctly handles nested grids, reparenting, and a
+/// rotating celestial frame without subtracting astronomical root positions.
 ///
 /// Runs in `PreUpdate` so camera systems see fresh data.
 pub fn update_local_gravity_field(
-    q_avatar: Query<(
-        Entity,
-        &Transform,
-        &CellCoord,
-        &ChildOf,
-        Option<&GravityBody>,
-    )>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Option<&GravityBody>,
+        ),
+        With<lunco_core::Avatar>,
+    >,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -140,35 +149,39 @@ pub fn update_local_gravity_field(
     if orbital_pin.active {
         return;
     }
-    let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else {
+    let Some((avatar_ent, _tf, _cell, _, gravity_body)) = q_avatar.iter().next() else {
+        *field = LocalGravityField::default();
         return;
     };
 
-    // Avatar absolute position in root frame.
-    let cam_abs = crate::coords::world_position_seeded(
-        avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
-    );
-
-    let (_body_local, body_up_local, body_up_world, surface_g) = if let Some(gb) = gravity_body {
-        gravity_at_body(
+    let derived = if let Some(gb) = gravity_body {
+        let Some(derived) = gravity_at_body(
             gb.body_entity,
-            cam_abs,
+            avatar_ent,
             &q_parents,
             &q_grids,
             &q_spatial,
             &q_bodies,
-        )
-    } else if let Some(body_ent) = field.body_entity {
-        // Hold the last body association while the avatar is between explicit
-        // surface commands.  The frame is still derived from that body's live
-        // Grid pose and gravity model, never from an arbitrary world axis.
-        gravity_at_body(
-            body_ent, cam_abs, &q_parents, &q_grids, &q_spatial, &q_bodies,
-        )
+        ) else {
+            error_once!(
+                    "cannot publish gravity for avatar {:?}: body {:?} is disconnected or has no gravity provider",
+                    avatar_ent,
+                    gb.body_entity
+                );
+            return;
+        };
+        derived
     } else {
-        (cam_abs.0, DVec3::Y, DVec3::Y, 0.0)
+        (DVec3::ZERO, DVec3::Y, DVec3::Y, 0.0)
     };
+    let (body_relative_position, body_up_local, body_up_world, surface_g) = derived;
 
+    // Publish the association and all values together only after the complete
+    // body-frame evaluation succeeded. A structural failure therefore cannot
+    // pair a new body id with stale vectors from the preceding frame.
+    field.body_entity = gravity_body.map(|gb| gb.body_entity);
+
+    field.body_relative_position = body_relative_position;
     field.surface_g = surface_g;
 
     field.local_up = body_up_local;
@@ -183,27 +196,23 @@ pub fn update_local_gravity_field(
 }
 
 /// Evaluate the active body's gravity in its own rotating frame and publish
-/// both sides of the frame boundary.  `GravityModel::acceleration` receives a
-/// body-fixed relative position; camera systems consume `up` in root/world
-/// axes and convert it into their parent Grid before building a Transform.
+/// both sides of the frame boundary. `GravityModel::acceleration` receives a
+/// body-fixed relative position. When camera and body share a local grid
+/// branch, that relative position is composed in the branch directly instead
+/// of subtracting two astronomical root-frame positions.
 fn gravity_at_body(
     body_entity: Entity,
-    camera_world: lunco_core::coords::GridPos,
+    camera_entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: &Query<&GravityProvider>,
-) -> (DVec3, DVec3, DVec3, f64) {
-    let Some((body_world, body_rotation)) =
-        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)
-    else {
-        return (camera_world.0, DVec3::Y, DVec3::Y, 0.0);
-    };
-    let relative_world = camera_world - body_world;
-    let relative_body = body_rotation.0.inverse() * relative_world;
-    let Some(provider) = q_bodies.get(body_entity).ok() else {
-        return (relative_body, DVec3::Y, body_rotation.0 * DVec3::Y, 0.0);
-    };
+) -> Option<(DVec3, DVec3, DVec3, f64)> {
+    let (_, body_rotation) =
+        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)?;
+    let relative_body =
+        local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)?;
+    let provider = q_bodies.get(body_entity).ok()?;
     let acceleration = provider.model.acceleration(relative_body);
     let magnitude = acceleration.length();
     let up_body = if magnitude > 1e-12 {
@@ -213,5 +222,113 @@ fn gravity_at_body(
         // undefined.  +Y is the canonical frame basis, not an approximation.
         DVec3::Y
     };
-    (relative_body, up_body, body_rotation.0 * up_body, magnitude)
+    Some((relative_body, up_body, body_rotation.0 * up_body, magnitude))
+}
+
+/// Express a camera position in the active body's body-fixed frame without
+/// traversing their shared astronomical ancestors. The two entities are
+/// siblings beneath the body frame: the camera is under a surface grid and
+/// the body is at the body-frame origin.
+fn local_body_relative_position(
+    body_entity: Entity,
+    camera_entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<DVec3> {
+    let body_frame = q_parents.get(body_entity).ok()?.parent();
+    let (camera_position, _) =
+        lunco_core::coords::pose_in_grid(camera_entity, body_frame, q_parents, q_grids, q_spatial)?;
+    let (body_position, body_rotation) = lunco_core::coords::grid_relative_pose(
+        body_entity,
+        body_frame,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    Some(body_rotation.inverse() * (camera_position - body_position))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use big_space::plugin::BigSpaceMinimalPlugins;
+    use big_space::prelude::BigSpaceRootBundle;
+
+    #[test]
+    fn local_gravity_is_owned_by_the_avatar_gravity_body() {
+        let mut app = App::new();
+        app.add_plugins(BigSpaceMinimalPlugins);
+        app.insert_resource(Gravity::surface());
+        app.init_resource::<LocalGravityField>();
+        app.init_resource::<crate::placement::OrbitalViewPin>();
+        app.add_systems(Update, update_local_gravity_field);
+
+        let grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(10_000.0, 1_000.0),
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        app.world_mut()
+            .spawn(BigSpaceRootBundle::default())
+            .add_child(grid);
+
+        let body = app
+            .world_mut()
+            .spawn((
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                GravityProvider {
+                    model: Box::new(PointMassGravity { gm: 100.0 }),
+                },
+            ))
+            .id();
+
+        // This entity deliberately satisfies the former broad spatial query.
+        // It must never be allowed to become the camera/UI gravity source.
+        let distractor = app
+            .world_mut()
+            .spawn((
+                CellCoord::default(),
+                Transform::from_xyz(0.0, 500.0, 0.0),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        let avatar = app
+            .world_mut()
+            .spawn((
+                lunco_core::Avatar,
+                CellCoord::default(),
+                Transform::from_xyz(10.0, 0.0, 0.0),
+                GlobalTransform::default(),
+                GravityBody { body_entity: body },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(grid)
+            .add_children(&[body, distractor, avatar]);
+
+        app.update();
+
+        let field = app.world().resource::<LocalGravityField>();
+        assert_eq!(field.body_entity, Some(body));
+        assert!(field
+            .body_relative_position
+            .abs_diff_eq(DVec3::X * 10.0, 1e-9));
+        assert!(field.local_up.abs_diff_eq(DVec3::X, 1e-9));
+
+        // Removing the authoritative association must clear it immediately;
+        // consumers must not silently keep using a former body's frame.
+        app.world_mut().entity_mut(avatar).remove::<GravityBody>();
+        app.update();
+        let field = app.world().resource::<LocalGravityField>();
+        assert_eq!(field.body_entity, None);
+        assert_eq!(field.body_relative_position, DVec3::ZERO);
+    }
 }

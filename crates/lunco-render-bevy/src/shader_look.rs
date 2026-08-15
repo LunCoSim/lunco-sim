@@ -31,14 +31,16 @@
 //! untouched.
 
 use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
-use crate::shader_material::{build_shader_material, ShaderMaterial};
+use crate::shader_material::{build_shader_material, wgsl_source, ShaderMaterial};
 use bevy::asset::AssetId;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
-use lunco_materials::{ShaderLook, ShaderLookBound, ShaderLookKey, TextureLayer};
+use lunco_materials::{
+    ParamSchema, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer,
+};
 use lunco_render::SurfaceAlpha;
 
 /// The small set of blend-state variants the fast custom-shader fallback needs.
@@ -139,7 +141,7 @@ fn bind_fast_shader_look(
     commands
         .entity(entity)
         .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-        .try_insert((MeshMaterial3d(handle), ShaderLookBound));
+        .try_insert((MeshMaterial3d(handle), ShaderLookBound, ShaderLookReady));
     apply_shadow_intent(&mut commands, entity, look);
 }
 
@@ -154,7 +156,7 @@ fn rebind_changed_fast_shader_look(
         commands
             .entity(entity)
             .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-            .try_insert((MeshMaterial3d(handle), ShaderLookBound));
+            .try_insert((MeshMaterial3d(handle), ShaderLookBound, ShaderLookReady));
         apply_shadow_intent(&mut commands, entity, look);
     }
 }
@@ -384,10 +386,13 @@ fn rebind_changed_shader_look(
         }
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
-        commands
-            .entity(e)
+        let mut entity = commands.entity(e);
+        entity
             .try_remove::<MeshMaterial3d<StandardMaterial>>()
             .try_insert((MeshMaterial3d(handle.clone()), ShaderLookBound));
+        if !same_material {
+            entity.try_remove::<ShaderLookReady>();
+        }
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
         // `live` params moved (they are outside the key). Write them into that
@@ -439,12 +444,136 @@ pub(crate) fn build(app: &mut App) {
         .add_observer(bind_shader_look)
         .add_systems(
             Update,
-            (rebind_changed_shader_look, sweep_look_cache::<ShaderLook>),
+            (
+                rebind_changed_shader_look,
+                invalidate_shader_look_ready,
+                mark_shader_look_ready.after(crate::reflect_shader_schemas),
+                sweep_look_cache::<ShaderLook>,
+            ),
         );
     // Shader parameters become connection targets in `lunco-usd-sim`'s
     // `shader_ports` — beside the pass that authors `ShaderLook::driven`, so a
     // shader wire lands in a headless build too. The writes arrive in
     // `ShaderLook::live`, which `rebind_changed_shader_look` above drains.
+}
+
+/// A shader hot reload invalidates the material layout that was previously
+/// proven ready. Keep the mesh hidden until reflection and material repacking
+/// have completed for the new source; otherwise a reload can expose a zeroed
+/// uniform block for exactly one frame and create a black terrain tile.
+fn invalidate_shader_look_ready(
+    mut shader_events: MessageReader<AssetEvent<Shader>>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    q: Query<(Entity, &MeshMaterial3d<ShaderMaterial>), With<ShaderLookReady>>,
+    materials: Res<Assets<ShaderMaterial>>,
+    mut commands: Commands,
+) {
+    let changed_shaders: HashSet<AssetId<Shader>> = shader_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
+            AssetEvent::Removed { .. }
+            | AssetEvent::Unused { .. }
+            | AssetEvent::LoadedWithDependencies { .. } => None,
+        })
+        .collect();
+    let changed_images: HashSet<AssetId<Image>> = image_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id } => Some(*id),
+            AssetEvent::LoadedWithDependencies { .. } => None,
+        })
+        .collect();
+    if changed_shaders.is_empty() && changed_images.is_empty() {
+        return;
+    }
+    for (entity, material) in &q {
+        let Some(material_asset) = materials.get(&material.0) else {
+            continue;
+        };
+        let shader_changed = changed_shaders.contains(&material_asset.shader.id());
+        let image_changed = changed_images.iter().any(|id| {
+            [
+                material_asset.height_map.as_ref(),
+                material_asset.albedo_map.as_ref(),
+                material_asset.mineral_map.as_ref(),
+                material_asset.surface_map.as_ref(),
+                material_asset.normal_map.as_ref(),
+                material_asset.shadow_cache.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|handle| handle.id() == *id)
+        });
+        if shader_changed || image_changed {
+            commands.entity(entity).try_remove::<ShaderLookReady>();
+        }
+    }
+}
+
+/// A material is render-ready only when every texture it declares has an image
+/// asset. Bevy can bind its fallback image for an absent optional handle, but
+/// that is not a valid state for a terrain material: it turns a late streamed
+/// map into a dark/black tile for one or more frames. The binder owns this
+/// dependency invariant for every custom material, so terrain does not need a
+/// second visibility workaround.
+fn material_texture_dependencies_ready(material: &ShaderMaterial, images: &Assets<Image>) -> bool {
+    [
+        material.height_map.as_ref(),
+        material.albedo_map.as_ref(),
+        material.mineral_map.as_ref(),
+        material.surface_map.as_ref(),
+        material.normal_map.as_ref(),
+        material.shadow_cache.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .all(|handle| images.get(handle).is_some())
+}
+
+/// Promote a custom look only after its shader source and reflected material
+/// layout are available. The binder must create the asset before asynchronous
+/// asset loading completes, but terrain visibility must not use that interval
+/// as a render state: an empty schema packs terrain uniforms as zero.
+fn mark_shader_look_ready(
+    mut commands: Commands,
+    q: Query<
+        (Entity, &MeshMaterial3d<ShaderMaterial>),
+        (With<ShaderLook>, Without<ShaderLookReady>),
+    >,
+    materials: Res<Assets<ShaderMaterial>>,
+    shaders: Res<Assets<Shader>>,
+    images: Res<Assets<Image>>,
+    schemas: Option<Res<crate::ShaderSchemas>>,
+) {
+    let Some(schemas) = schemas.as_deref() else {
+        return;
+    };
+    for (entity, material_handle) in &q {
+        let Some(material) = materials.get(&material_handle.0) else {
+            continue;
+        };
+        let Some(shader) = shaders.get(&material.shader) else {
+            continue;
+        };
+        let ready = if let Some(reflected) = schemas.get(material.shader.id()) {
+            std::sync::Arc::ptr_eq(reflected, &material.schema)
+        } else {
+            let Some(source) = wgsl_source(shader) else {
+                continue;
+            };
+            // A shader without a Material struct has no dynamic layout to
+            // await. A shader with one is inserted into ShaderSchemas by the
+            // reflection system ordered immediately before this system.
+            ParamSchema::parse(source).is_none()
+        };
+        if ready && material_texture_dependencies_ready(material, &images) {
+            commands.entity(entity).try_insert(ShaderLookReady);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -460,6 +589,34 @@ mod tests {
         app.init_asset::<Image>();
         build(&mut app);
         app
+    }
+
+    #[test]
+    fn shader_material_readiness_includes_declared_images() {
+        let mut app = App::new();
+        app.init_asset::<Image>();
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let mut material = ShaderMaterial::default();
+
+        assert!(material_texture_dependencies_ready(
+            &material,
+            app.world().resource::<Assets<Image>>()
+        ));
+
+        material.height_map = Some(image.clone());
+        assert!(material_texture_dependencies_ready(
+            &material,
+            app.world().resource::<Assets<Image>>()
+        ));
+
+        material.shadow_cache = Some(Handle::default());
+        assert!(!material_texture_dependencies_ready(
+            &material,
+            app.world().resource::<Assets<Image>>()
+        ));
     }
 
     fn material_of(app: &App, e: Entity) -> Handle<ShaderMaterial> {

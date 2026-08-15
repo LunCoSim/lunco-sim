@@ -2,9 +2,9 @@
 //! hand-rolled `ExtendedMaterial` in `blueprint.rs`).
 //!
 //! Two grid modes blended by `transition` (0 → 1):
-//!   * `transition < 0.5` — **spherical lat/long grid** over a body's UV
-//!     (`uv.x`=lon, `uv.y`=lat). Used by the celestial Earth/Moon tiles seen
-//!     from orbit. Needs `VERTEX_UVS_A`; with no UVs the mode contributes nothing.
+//!   * `transition < 0.5` — **spherical lat/long grid** derived per fragment from
+//!     the body's radial direction. Used by celestial Earth/Moon tiles seen from
+//!     orbit. Needs the `LUNCO_GLOBE_DIRECTION` vertex interface below.
 //!   * `transition >= 0.5` — **Cartesian XZ blueprint grid** over world position.
 //!     Used by the flat sandbox ground. Always available (no UVs needed).
 //!
@@ -18,8 +18,74 @@
 //! + the `//!@` annotations, so every knob is a free Inspector slider /
 //! `SetObjectProperty` target / USD `primvars:<field>`, and it hot-reloads on edit.
 
-#import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::{
+    mesh_functions,
+    view_transformations::position_world_to_clip,
+    forward_io::VertexOutput,
+}
 #import lunco::pbr_lit::lit
+
+#ifdef LUNCO_GLOBE_DIRECTION
+struct GlobeVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(11) globe_direction: vec3<f32>,
+};
+
+struct GlobeVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(5) globe_direction: vec3<f32>,
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    @location(6) @interpolate(flat) instance_index: u32,
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    @location(7) @interpolate(flat) visibility_range_dither: i32,
+#endif
+};
+
+@vertex
+fn vertex(vertex: GlobeVertex) -> GlobeVertexOutput {
+    var out: GlobeVertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    out.world_position = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(vertex.position, 1.0),
+    );
+    out.position = position_world_to_clip(out.world_position.xyz);
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+        vertex.normal,
+        vertex.instance_index,
+    );
+    out.globe_direction = vertex.globe_direction;
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+        vertex.instance_index,
+        world_from_local[3],
+    );
+#endif
+    return out;
+}
+
+fn globe_pbr_input(in: GlobeVertexOutput) -> VertexOutput {
+    var out: VertexOutput;
+    out.position = in.position;
+    out.world_position = in.world_position;
+    out.world_normal = in.world_normal;
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = in.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = in.visibility_range_dither;
+#endif
+    return out;
+}
+#endif
 
 //!@ui      surface_color    color "Surface colour"
 //!@default surface_color    0.2,0.2,0.2
@@ -71,33 +137,48 @@ var albedo_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3)
 var albedo_smp: sampler;
 
-@fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+#ifdef LUNCO_GLOBE_DIRECTION
+fn equirectangular_uv(d: vec3<f32>) -> vec2<f32> {
+    return vec2(
+        atan2(-d.z, d.x) / (2.0 * 3.141592653589793) + 0.5,
+        0.5 - asin(clamp(d.y, -1.0, 1.0)) / 3.141592653589793,
+    );
+}
+
+// Analytic derivative of the equirectangular projection. Differentiating the
+// body direction rather than the wrapped UV has two important properties:
+//   * longitude remains continuous for mip selection at the anti-meridian;
+//   * the pole singularity produces a large, physically correct footprint and
+//     therefore selects a coarse mip instead of requiring an arbitrary polar cap.
+// The guards apply only at the mathematical coordinate singularity.
+fn equirectangular_grad(d: vec3<f32>, delta: vec3<f32>) -> vec2<f32> {
+    let radial_sq = max(d.x * d.x + d.z * d.z, 1e-8);
+    let latitude_scale = sqrt(max(1.0 - d.y * d.y, 1e-8));
+    return vec2(
+        (d.z * delta.x - d.x * delta.z) / (2.0 * 3.141592653589793 * radial_sq),
+        -delta.y / (3.141592653589793 * latitude_scale),
+    );
+}
+#endif
+
+fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>) -> vec4<f32> {
     var base = mat.surface_color;
     var grid_mask = 0.0;
+#ifdef LUNCO_GLOBE_DIRECTION
+    let globe_direction_unit = normalize(globe_direction);
+    let globe_uv = equirectangular_uv(globe_direction_unit);
+    let globe_dx = equirectangular_grad(globe_direction_unit, dpdx(globe_direction_unit));
+    let globe_dy = equirectangular_grad(globe_direction_unit, dpdy(globe_direction_unit));
+#endif
 
     if (mat.transition < 0.5) {
-        // --- Lat/Long grid (spherical bodies) — needs UVs.
-#ifdef VERTEX_UVS_A
-        // Globe tiles deliberately unwrap a tile that crosses the equirectangular
-        // anti-meridian (its mesh UV can be just below 0 or just above 1). The
-        // imagery sampler uses repeat addressing, so keep that unwrapped value
-        // through interpolation and let the sampler perform the wrap. Applying
-        // `fract` here would reintroduce a discontinuity at x=1 inside a triangle,
-        // which is the diagonal imagery strip seen on Earth.
-        let globe_uv = in.uv;
-        // The longitude coordinate is singular at both poles. A cube-sphere
-        // triangle fan therefore interpolates several unrelated equirectangular
-        // columns into a visible radial wedge. Collapse only the polar caps to
-        // one longitude; below the cap the authored imagery remains untouched.
-        let img = textureSample(albedo_tex, albedo_smp, globe_uv).rgb;
-        let north_cap = 1.0 - smoothstep(0.0, 0.18, globe_uv.y);
-        let south_cap = smoothstep(0.82, 1.0, globe_uv.y);
-        let pole_img = textureSample(albedo_tex, albedo_smp, vec2(0.5, globe_uv.y)).rgb;
-        let cap_weight = max(north_cap, south_cap);
-        let stable_img = mix(img, pole_img, cap_weight);
-        base *= stable_img;
-        let ll_coords = in.uv * mat.subdivisions;
+        // --- Lat/Long grid (spherical bodies). Direction is interpolated in 3D
+        // and normalised BEFORE projection, so this mapping is independent of
+        // tile tessellation and quadtree level.
+#ifdef LUNCO_GLOBE_DIRECTION
+        let img = textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
+        base *= img;
+        let ll_coords = globe_uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
         let ll_line = min(ll_f.x, ll_f.y);
         let ll_fade = 1.0 - smoothstep(
@@ -111,8 +192,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 #endif
     } else {
         // --- Blueprint grid (Cartesian XZ, flat ground).
+#ifdef LUNCO_GLOBE_DIRECTION
+        base *= textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
+#else
 #ifdef VERTEX_UVS_A
         base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
+#endif
 #endif
         let pos = in.world_position.xz;
         let world_per_px = abs(fwidth(pos));
@@ -143,3 +228,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let albedo = mix(base, line_color, grid_mask);
     return lit(in, is_front, albedo, mat.roughness, 0.0, vec3(0.0));
 }
+
+#ifdef LUNCO_GLOBE_DIRECTION
+@fragment
+fn fragment(in: GlobeVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return shade(globe_pbr_input(in), is_front, in.globe_direction);
+}
+#else
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    return shade(in, is_front, vec3<f32>(0.0));
+}
+#endif

@@ -11,11 +11,12 @@
 //! cache. These tests pin the fix.
 
 use bevy::prelude::*;
+use lunco_celestial::ephemeris_id;
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_terrain_surface::{TerrainBodyCurvature, TerrainGeoref};
 
-const MOON: i32 = 301;
-const EARTH: i32 = 399;
+const MOON: i32 = ephemeris_id::MOON;
+const EARTH: i32 = ephemeris_id::EARTH;
 const MOON_R: f64 = 1_737_400.0;
 const EARTH_R: f64 = 6_371_000.0;
 

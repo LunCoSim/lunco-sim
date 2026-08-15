@@ -1,15 +1,15 @@
 //! Tests for the surface_camera_system rotation math.
 //!
-//! The surface camera builds rotation from scratch every frame using:
-//!   1. Pick a reference direction (world Y unless parallel to up)
-//!   2. east = up × ref_dir (normalized)
-//!   3. north = east × up
-//!   4. heading_q rotates north around up by heading angle
-//!   5. forward = heading_q(north)
-//!   6. right = forward × up
-//!   7. base_rot = mat3(right, up, -forward)
-//!   8. pitch_q rotates around right by pitch angle
-//!   9. final = pitch_q × base_rot
+//! The surface camera builds rotation from scratch every frame using the
+//! authored body-fixed ENU basis supplied by the camera frame boundary:
+//!   1. east/north/up are an orthonormal body-fixed tangent frame
+//!   2. heading rotates north around up
+//!   3. heading_q rotates north around up by heading angle
+//!   4. forward = heading_q(north)
+//!   5. right = forward × up
+//!   6. base_rot = mat3(right, up, -forward)
+//!   7. pitch_q rotates around right by pitch angle
+//!   8. final = pitch_q × base_rot
 
 use bevy::math::{DVec3, Quat, Vec3};
 
@@ -22,21 +22,17 @@ fn get_right(rot: Quat) -> Vec3 {
 }
 
 fn surface_rot(heading: f32, pitch: f32, up_v: Vec3) -> Quat {
-    let ref_dir = if up_v.dot(Vec3::Y).abs() < 0.9 {
-        Vec3::Y
-    } else {
-        Vec3::Z
-    };
-    let east = up_v.cross(ref_dir).normalize();
-    let north = east.cross(up_v).normalize();
-
-    let heading_q = Quat::from_axis_angle(up_v, heading);
-    let forward = heading_q.mul_vec3(north);
-    let right = forward.cross(up_v).normalize();
-
-    let base_rot = Quat::from_mat3(&bevy::prelude::Mat3::from_cols(right, up_v, -forward));
-    let pitch_q = Quat::from_axis_angle(right, pitch);
-    (pitch_q * base_rot).normalize()
+    // Test fixture: rotate the authored ENU frame (+X east, -Z north, +Y up)
+    // onto an arbitrary normal. Runtime code obtains these axes from
+    // LocalTangentFrame and BigSpace grid_relative_pose.
+    let frame = Quat::from_rotation_arc(Vec3::Y, up_v);
+    lunco_avatar::surface_camera_rotation(
+        frame * Vec3::X,
+        frame * Vec3::NEG_Z,
+        up_v,
+        heading,
+        pitch,
+    )
 }
 
 fn has_no_roll(rot: Quat, up_v: Vec3) -> bool {
@@ -55,6 +51,10 @@ fn test_surface_camera_zero_heading_zero_pitch() {
     assert!(
         (get_up(rot) - up_v).length() < 1e-5,
         "Up should match surface normal"
+    );
+    assert!(
+        (rot * Vec3::NEG_Z - Vec3::NEG_Z).length() < 1e-5,
+        "The authored zero-heading forward axis is -Z"
     );
 }
 
@@ -158,9 +158,28 @@ fn test_surface_camera_consistent_across_frames() {
 
 #[test]
 fn test_surface_camera_pole_fallback() {
-    // At the pole (up = Y), the ref_dir should be Z
+    // The test fixture's authored ENU frame remains well-defined at this
+    // normal; runtime pole handling comes from the body's geodetic frame.
     let up_v = Vec3::Y;
     let rot = surface_rot(0.0, 0.0, up_v);
     assert!(has_no_roll(rot, up_v), "Pole: zero roll");
     assert!((get_up(rot) - up_v).length() < 1e-5, "Pole: up matches");
+}
+
+#[test]
+fn test_surface_camera_angles_round_trip_in_authored_frame() {
+    let up_v = DVec3::new(0.6, 0.6, 0.4).normalize().as_vec3();
+    for &heading in &[-2.0, -0.5, 0.0, 0.75, 2.4] {
+        for &pitch in &[-0.6, -0.2, 0.0, 0.4] {
+            let rotation = surface_rot(heading, pitch, up_v);
+            let (decoded_heading, decoded_pitch) = lunco_avatar::surface_camera_angles(
+                Quat::from_rotation_arc(Vec3::Y, up_v) * Vec3::X,
+                Quat::from_rotation_arc(Vec3::Y, up_v) * Vec3::NEG_Z,
+                up_v,
+                rotation,
+            );
+            assert!((decoded_heading - heading).abs() < 1e-5);
+            assert!((decoded_pitch - pitch).abs() < 1e-5);
+        }
+    }
 }

@@ -195,10 +195,10 @@ lunco-assets = { path = "crates/lunco-assets" }
 # constructs `PhysicsDebugPlugin` or `PhysicsGizmos`; re-enable it here (and only
 # here) if collider debug-draw is ever wired up.
 avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
-# big_space bevy-0.19 support is not released yet; consume PR #73
-# (aevyrie/big_space#73, "update to bevy 0.19") pinned to its head commit.
+# big_space bevy-0.19 support is not released yet; consume the upstream
+# compatibility branch. Cargo.lock pins the exact reviewed revision.
 # TODO(deps): swap back to a crates.io release once one ships for bevy 0.19.
-big_space = { git = "https://github.com/m-edlund/big_space", rev = "79e04cc01a84f3b8d199a0f97aaeb8245f203b16" }
+big_space = { git = "https://github.com/aevyrie/big_space", branch = "bevy-0.19" }
 leafwing-input-manager = "0.21.0"
 # egui 0.35 row. bevy_egui 0.41 = egui 0.35. The whole egui ecosystem must
 # agree on the egui minor or it dual-links. The only in-tree crate without an

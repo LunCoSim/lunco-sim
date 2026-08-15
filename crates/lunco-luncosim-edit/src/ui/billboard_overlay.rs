@@ -14,9 +14,10 @@
 //! [`GlobalTransform`] values from the same render frame. Those are the exact
 //! camera-relative poses used by the mesh renderer, so a label cannot combine
 //! an interpolated render pose with an independently sampled grid pose. The
-//! absolute [`lunco_core::coords::world_position`] path is retained only for
-//! geodetic text (`{lat}`, `{lon}`, `{height}`), where authored coordinates are
-//! intentionally reported in the simulation frame rather than the render frame.
+//! Geodetic text (`{lat}`, `{lon}`, `{height}`) comes from
+//! [`lunco_celestial::SurfacePoseQuery`], which resolves the entity in the
+//! explicit body-fixed frame. Root-world coordinates are never interpreted as
+//! site ENU.
 //!
 //! **Depth.** egui paints over everything, so a label whose subject is behind a
 //! ridge would otherwise still be readable. Labels are drawn nearest-last, and
@@ -62,11 +63,7 @@ pub fn draw_billboard_overlay(
         &GlobalTransform,
     )>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    registry: Option<Res<lunco_celestial::registry::CelestialBodyRegistry>>,
+    surface_pose: lunco_celestial::SurfacePoseQuery,
     scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
@@ -92,24 +89,6 @@ pub fn draw_billboard_overlay(
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-
-    // Site anchor + body radius, resolved ONCE — every label on screen shares
-    // them, and they cannot change within a frame.
-    //
-    // The radius comes from the body REGISTRY, not from a spawned `CelestialBody`
-    // entity. Celestial content is opt-in per scene: a surface scene that anchors
-    // to the Moon and never asks for a globe (the Summer Space School twin) spawns
-    // no body entity at all, so the entity lookup found nothing and every
-    // `{lat}`/`{lon}`/`{height}` on screen rendered `—`. The registry is the same
-    // source `sync_terrain_body_curvature` reads to curve the DEM, so the label
-    // and the ground now agree on which sphere they are on.
-    let site = q_site.iter().next().copied();
-    let radius_m = site.zip(registry.as_ref()).and_then(|(a, reg)| {
-        reg.bodies
-            .iter()
-            .find(|b| b.ephemeris_id == a.body)
-            .map(|b| b.radius_m)
-    });
 
     // Use the root background paint list, not a second custom Background layer.
     // egui does not guarantee an order between ad-hoc layers that are absent
@@ -140,11 +119,6 @@ pub fn draw_billboard_overlay(
         // camera's already-propagated GlobalTransform mixes two pose phases
         // and makes a label jitter against the body it annotates.
         let anchor_render = render_anchor(gtf, bb.offset_y);
-        let Some(pos) =
-            lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-        else {
-            continue;
-        };
         let distance = (anchor_render - cam_gtf.translation()).length() as f64;
         if distance > bb.fade_end as f64 {
             continue;
@@ -160,14 +134,7 @@ pub fn draw_billboard_overlay(
 
         // The prim's leaf name — `Name` holds the full USD path.
         let leaf = name.as_str().rsplit('/').next().unwrap_or(name.as_str());
-        let geo = match (site, radius_m) {
-            (Some(a), Some(r)) => Some(lunco_celestial::geo::local_to_geodetic(
-                &a.geodetic,
-                r,
-                pos.0,
-            )),
-            _ => None,
-        };
+        let geo = surface_pose.get(entity).map(|pose| pose.geodetic);
         let text = render_billboard(
             &bb.template,
             &BillboardFacts {

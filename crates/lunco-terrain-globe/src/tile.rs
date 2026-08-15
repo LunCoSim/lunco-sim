@@ -4,6 +4,7 @@ use crate::quad_sphere::cube_to_sphere;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
+use lunco_materials::ATTRIBUTE_GLOBE_DIRECTION;
 use lunco_terrain_core::HeightSource;
 
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
@@ -47,7 +48,6 @@ pub fn create_quadsphere_tile_mesh(
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
-    let mut uvs = Vec::new();
     let mut directions = Vec::new();
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
@@ -64,25 +64,6 @@ pub fn create_quadsphere_tile_mesh(
             positions.push(position);
             normals.push(normal);
             directions.push(pos_sphere);
-
-            // Equirectangular UV mapping
-            let mut u_raw = (-pos_sphere.z).atan2(pos_sphere.x);
-            let center_u = start_u + step * 0.5;
-            let center_v = start_v + step * 0.5;
-            let tile_center_dir = cube_to_sphere(face, center_u, center_v);
-            let ref_lon = (-tile_center_dir.z).atan2(tile_center_dir.x);
-            if (u_raw - ref_lon) > std::f64::consts::PI {
-                u_raw -= 2.0 * std::f64::consts::PI;
-            } else if (u_raw - ref_lon) < -std::f64::consts::PI {
-                u_raw += 2.0 * std::f64::consts::PI;
-            }
-
-            let u_tex = (u_raw + std::f64::consts::PI) / (2.0 * std::f64::consts::PI);
-            // `pos_sphere` is normalised, but rounding can nudge `y` a hair past ±1
-            // → `asin` = NaN → NaN UVs at the face corners. Clamp to the valid domain.
-            let v_tex = (pos_sphere.y.clamp(-1.0, 1.0).asin() + (std::f64::consts::PI / 2.0))
-                / std::f64::consts::PI;
-            uvs.push(Vec2::new(u_tex as f32, 1.0 - v_tex as f32));
         }
     }
 
@@ -116,11 +97,10 @@ pub fn create_quadsphere_tile_mesh(
         patch.filter(|patch| dem_square_intersects_tile(&patch.handoff, &directions))
     {
         let original_indices = std::mem::take(&mut indices);
-        let original_directions = directions;
-        let original_uvs = uvs;
+        let original_directions = std::mem::take(&mut directions);
         let mut clipped_positions = Vec::new();
         let mut clipped_normals = Vec::new();
-        let mut clipped_uvs = Vec::new();
+        let mut clipped_directions = Vec::new();
         let mut clipped_indices = Vec::new();
         for tri in original_indices.chunks_exact(3) {
             let dirs = [
@@ -131,11 +111,6 @@ pub fn create_quadsphere_tile_mesh(
             if dirs.iter().all(|&d| patch.handoff.contains(d)) {
                 continue;
             }
-            let base_uv = [
-                original_uvs[tri[0] as usize],
-                original_uvs[tri[1] as usize],
-                original_uvs[tri[2] as usize],
-            ];
             // The outside of an axis-aligned square is four disjoint convex
             // regions: left, right, bottom-between-sides, and top-between-sides.
             // The back hemisphere is a fifth disjoint region because gnomonic
@@ -153,12 +128,11 @@ pub fn create_quadsphere_tile_mesh(
                     let first = clipped_positions.len() as u32;
                     for v in triangle {
                         let dir = interpolate_dir(&dirs, v.bary);
-                        let uv = interpolate_uv(&base_uv, v.bary);
                         let (position, normal) =
                             surface_vertex(dir, radius, tile_center, Some(&patch));
                         clipped_positions.push(position);
                         clipped_normals.push(normal);
-                        clipped_uvs.push(uv);
+                        clipped_directions.push(dir);
                     }
                     clipped_indices.extend_from_slice(&[first, first + 1, first + 2]);
                 }
@@ -166,7 +140,7 @@ pub fn create_quadsphere_tile_mesh(
         }
         positions = clipped_positions;
         normals = clipped_normals;
-        uvs = clipped_uvs;
+        directions = clipped_directions;
         indices = clipped_indices;
     }
 
@@ -176,7 +150,17 @@ pub fn create_quadsphere_tile_mesh(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    // Author the spherical parameter itself, not an approximation of its
+    // equirectangular projection. The fragment shader derives UV from this
+    // direction, so texture identity cannot change with quadtree level or the
+    // diagonal chosen to triangulate a coarse quad.
+    mesh.insert_attribute(
+        ATTRIBUTE_GLOBE_DIRECTION,
+        directions
+            .into_iter()
+            .map(|direction| direction.as_vec3().to_array())
+            .collect::<Vec<_>>(),
+    );
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
@@ -383,13 +367,6 @@ fn dem_square_intersects_tile(handoff: &GlobeHandoff, directions: &[DVec3]) -> b
         || min_z > handoff.half_extent)
 }
 
-fn interpolate_uv(uvs: &[Vec2; 3], bary: [f64; 3]) -> Vec2 {
-    Vec2::new(
-        (uvs[0].x as f64 * bary[0] + uvs[1].x as f64 * bary[1] + uvs[2].x as f64 * bary[2]) as f32,
-        (uvs[0].y as f64 * bary[0] + uvs[1].y as f64 * bary[1] + uvs[2].y as f64 * bary[2]) as f32,
-    )
-}
-
 fn clip_triangle_to_region(
     dirs: &[DVec3; 3],
     handoff: &GlobeHandoff,
@@ -532,6 +509,50 @@ mod tests {
         assert!(c.contains(DVec3::new(1.0, 0.05, 0.05).normalize()));
         assert!(!c.contains(DVec3::new(1.0, 0.2, 0.0).normalize()));
         assert!(!c.contains(DVec3::new(1.0, 0.0, -0.2).normalize()));
+    }
+
+    #[test]
+    fn globe_mesh_authors_body_fixed_direction_instead_of_projected_uv() {
+        let radius = 100.0;
+        let tile_center = cube_to_sphere(0, 0.0, 0.0) * radius;
+        let mesh = create_quadsphere_tile_mesh(
+            Entity::PLACEHOLDER,
+            0,
+            0,
+            0,
+            0,
+            radius,
+            4,
+            tile_center,
+            None,
+        );
+        let VertexAttributeValues::Float32x3(positions) = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .expect("globe positions")
+        else {
+            panic!("globe positions have an unexpected format");
+        };
+        let VertexAttributeValues::Float32x3(directions) = mesh
+            .attribute(ATTRIBUTE_GLOBE_DIRECTION)
+            .expect("body-fixed globe directions")
+        else {
+            panic!("globe directions have an unexpected format");
+        };
+        assert_eq!(positions.len(), directions.len());
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_none(),
+            "a globe must not retain the tessellation-dependent equirectangular UV path"
+        );
+        for (position, supplied) in positions.iter().zip(directions) {
+            let body_position = tile_center + DVec3::from_array(position.map(f64::from));
+            let expected = body_position.normalize();
+            let supplied = DVec3::from_array(supplied.map(f64::from));
+            assert!((supplied.length() - 1.0).abs() < 1.0e-6);
+            assert!(
+                supplied.distance(expected) < 1.0e-6,
+                "direction {supplied:?} does not parameterise body point {body_position:?}"
+            );
+        }
     }
 
     #[test]

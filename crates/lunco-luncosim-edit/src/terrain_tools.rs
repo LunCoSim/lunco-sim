@@ -182,7 +182,7 @@ pub fn update_terrain_brush_ghost(
             &mut Transform,
             &mut lunco_render::PbrLook,
         ),
-        With<TerrainBrushGhost>,
+        (With<TerrainBrushGhost>, Without<big_space::prelude::Grid>),
     >,
     raycaster: lunco_physics::GridSpatialQuery,
     surface: lunco_terrain_surface::GridSurfaceQuery,
@@ -227,22 +227,24 @@ pub fn update_terrain_brush_ghost(
     // The brush edits the terrain, so the oracle hit IS the target surface;
     // physics is only the fallback for scenes without a DEM terrain. Both are
     // asked in the GRID frame — the one conversion happens here, at the ray.
-    let Some(origin_grid) = surface.to_grid(lunco_core::coords::RenderPos(origin)) else {
+    let Some((origin_grid, dir_grid)) =
+        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), dir)
+    else {
         return;
     };
     let Some(point) = surface
-        .raycast(origin_grid, dir, 10_000.0)
+        .raycast(origin_grid, dir_grid, 10_000.0)
         .map(|hit| hit.point.0)
         .or_else(|| {
             raycaster
                 .cast_ray_grid(
                     origin_grid,
-                    dir,
+                    dir_grid,
                     10_000.0,
                     false,
                     &avian3d::prelude::SpatialQueryFilter::default(),
                 )
-                .map(|h| origin_grid.0 + dir.as_dvec3() * h.distance)
+                .map(|h| origin_grid.0 + dir_grid.as_dvec3() * h.distance)
         })
     else {
         return;

@@ -64,7 +64,8 @@ use std::sync::{Arc, OnceLock};
 
 use lunco_materials::dyn_params::{self, ParamSchema, ParamType, ParamValue};
 use lunco_materials::{
-    to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    to_snake_case, ShaderCatalog, ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE,
+    ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
@@ -113,8 +114,10 @@ pub struct ShaderMaterial {
     #[texture(6)]
     #[sampler(7)]
     pub surface_map: Option<Handle<Image>>,
-    /// Tangent/world-space normal layer — perturbs the procedural bump normal
-    /// (meso-scale relief the FBM can't carry). Typically DEM-derived (Sobel).
+    /// Object-local normal layer — perturbs the procedural bump normal after
+    /// the consuming shader transforms it through the mesh instance. Typically
+    /// DEM-local ENU and DEM-derived (Sobel). This slot does not imply a tangent
+    /// basis or a global/render-world coordinate frame.
     #[texture(8)]
     #[sampler(9)]
     pub normal_map: Option<Handle<Image>>,
@@ -138,8 +141,9 @@ pub struct ShaderMaterial {
     /// [`shader`](Self::shader) it drives pipeline specialization, not the bind
     /// group. When `Some`, [`specialize`](Self::specialize) swaps
     /// `descriptor.vertex.shader` and extends the vertex layout with
-    /// [`ATTRIBUTE_MORPH_TARGET`]. `None` (the common case) = Bevy's default mesh
-    /// vertex shader, so the fragment-only path is unchanged.
+    /// the custom geometry semantics required by that stage. `None` (the common
+    /// case) = Bevy's default mesh vertex shader, so the fragment-only path is
+    /// unchanged.
     pub vertex_shader: Option<Handle<Shader>>,
     /// Reflected parameter layout for [`shader`](Self::shader). Starts with the
     /// built-in layout and is replaced when the shader source is available.
@@ -389,8 +393,28 @@ impl Material for ShaderMaterial {
                         Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
                         ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
                         ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
+                        ATTRIBUTE_MORPH_EDGE.at_shader_location(10),
                     ])?;
                     descriptor.vertex.buffers = vec![vertex_layout];
+                } else if layout.0.contains(ATTRIBUTE_GLOBE_DIRECTION) {
+                    let vertex_layout = layout.0.get_layout(&[
+                        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+                        ATTRIBUTE_GLOBE_DIRECTION.at_shader_location(11),
+                    ])?;
+                    descriptor.vertex.buffers = vec![vertex_layout];
+
+                    // The globe material owns a dedicated body-direction
+                    // inter-stage field. Define the same interface variant for
+                    // both linked stages; the mesh input is the explicit
+                    // location-11 semantic above.
+                    descriptor
+                        .vertex
+                        .shader_defs
+                        .push("LUNCO_GLOBE_DIRECTION".into());
+                    if let Some(fragment) = descriptor.fragment.as_mut() {
+                        fragment.shader_defs.push("LUNCO_GLOBE_DIRECTION".into());
+                    }
                 }
             }
         }
@@ -602,8 +626,18 @@ pub struct ShaderSchemas {
     map: std::collections::HashMap<AssetId<Shader>, Arc<ParamSchema>>,
 }
 
+impl ShaderSchemas {
+    /// Return the cached layout for a loaded shader. The shader-look binder
+    /// uses this identity to publish a tile only after the material has the
+    /// exact layout used by the shader; it must not re-parse WGSL once per
+    /// waiting tile.
+    pub(crate) fn get(&self, shader: AssetId<Shader>) -> Option<&Arc<ParamSchema>> {
+        self.map.get(&shader)
+    }
+}
+
 /// The WGSL source of a loaded shader, if it is WGSL.
-fn wgsl_source(shader: &Shader) -> Option<&str> {
+pub(crate) fn wgsl_source(shader: &Shader) -> Option<&str> {
     match &shader.source {
         ShaderSource::Wgsl(c) => Some(c.as_ref()),
         _ => None,

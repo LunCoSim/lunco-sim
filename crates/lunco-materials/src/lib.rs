@@ -16,10 +16,9 @@
 //! - [`look`] — [`ShaderLook`], the appearance **intent**: a shader *path*, an open
 //!   `BTreeMap` of named params, and named [`TextureLayer`]s. Insert it next to
 //!   `Mesh3d`; `lunco-render-bevy` binds it.
-//! - [`vertex`] — [`ATTRIBUTE_MORPH_TARGET`], the CDLOD geomorph vertex attribute.
-//!   A `MeshVertexAttribute` is `bevy_mesh`, hence render-free, so it lives with
-//!   its *author* (`lunco-terrain-surface`) rather than with the material that
-//!   consumes it.
+//! - [`vertex`] — custom render-free geometry semantics: CDLOD morph targets and
+//!   [`ATTRIBUTE_GLOBE_DIRECTION`]. A `MeshVertexAttribute` is `bevy_mesh`, hence
+//!   render-free, so the contract lives here between mesh authors and shaders.
 //! - [`catalog`] — the pickable-[`ShaderCatalog`] and the WGSL starting templates
 //!   (`CreateShader`). Plain strings + schema reflection.
 //! - [`naming`] — [`to_snake_case`], the camelCase-USD → snake_case-WGSL bridge
@@ -39,6 +38,8 @@ pub use catalog::{
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use engine_params::{engine_params, AttrRead, EngineParam, EngineParams, EngineSource};
-pub use look::{ShaderLook, ShaderLookBound, ShaderLookKey, TextureLayer};
+pub use look::{ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer};
 pub use naming::to_snake_case;
-pub use vertex::{ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET};
+pub use vertex::{
+    ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+};

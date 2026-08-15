@@ -112,8 +112,8 @@ impl Default for LibrationAnchor {
     /// Earth–Moon L1 — the pair this simulator is about.
     fn default() -> Self {
         Self {
-            primary: 399,
-            secondary: 301,
+            primary: crate::ephemeris_id::EARTH,
+            secondary: crate::ephemeris_id::MOON,
             point: LPoint::L1,
         }
     }
@@ -157,10 +157,10 @@ impl<'a> FrameTree<'a> {
     /// one"). A missing body is a `None` all the way up; callers skip.
     pub fn center_in_solar(&self, center: Center) -> Option<Pos<Solar>> {
         match center {
-            // The provider is heliocentric, so the Sun is the origin by construction. (The true
-            // SSB differs from the Sun's centre by roughly a solar radius — under a thousandth
-            // of an AU — and the provider does not model it; saying so beats pretending.)
-            Center::Ssb => Some(Pos::<Solar>::ZERO),
+            // This provider is heliocentric, not barycentric. The true SSB is
+            // not the Sun's centre, so an SSB request is unsupported rather
+            // than silently approximated as ZERO.
+            Center::Ssb => None,
             Center::Body(id) => self
                 .ephemeris
                 .global_position(id, self.jd)
@@ -170,14 +170,10 @@ impl<'a> FrameTree<'a> {
                 secondary,
                 point,
             } => self.libration_in_solar(primary, secondary, point),
-            // A site's position needs its geodetic anchor, which lives in the scene, not here.
-            // Returning the body centre is honest (the site is *on* that body) and wrong by at
-            // most a body radius — but a caller that needs site precision must go through
-            // `geo::solar_position_of_geodetic`, which has the anchor.
-            Center::Site { body, .. } => self
-                .ephemeris
-                .global_position(body, self.jd)
-                .map(ecliptic_to_bevy),
+            // A site's geodetic anchor lives in the scene and is not part of
+            // this context. Returning the body centre would be a valid-looking
+            // answer wrong by one body radius, so site resolution fails closed.
+            Center::Site { .. } => None,
         }
     }
 
@@ -260,14 +256,7 @@ impl<'a> FrameTree<'a> {
             - later.center_in_solar(Center::Body(primary))?)
         .raw();
         let n = r0.cross(r1);
-        Some(if n.length_squared() > 0.0 {
-            n.normalize()
-        } else {
-            // Degenerate (the two coincide, or the ephemeris is a stub) — fall back to ecliptic
-            // north rather than producing a NaN that would silently poison every downstream
-            // rotation.
-            DVec3::Y
-        })
+        (n.length_squared() > 0.0).then(|| n.normalize())
     }
 
     // ── Into the hub ────────────────────────────────────────────────────────────────────────
@@ -277,7 +266,6 @@ impl<'a> FrameTree<'a> {
         let Center::Body(id) = p.center() else {
             // A body-fixed frame centred on something that is not a body is a contradiction;
             // saying so beats silently rotating by identity.
-            debug_assert!(false, "body-fixed frame centred on {:?}", p.center());
             return None;
         };
         let desc = self.registry.get(id)?;
@@ -285,18 +273,36 @@ impl<'a> FrameTree<'a> {
         Some(self.center_in_solar(Center::Body(id))? + Pos::<Solar>::new(rot * p.raw()))
     }
 
+    /// Solar → body-fixed (rotating with the body). This is the exact inverse
+    /// of [`body_fixed_to_solar`](Self::body_fixed_to_solar) at the same epoch.
+    pub fn solar_to_body_fixed(&self, p: Pos<Solar>, body: BodyId) -> Option<Pos<BodyFixed>> {
+        let desc = self.registry.get(body)?;
+        let local = p - self.center_in_solar(Center::Body(body))?;
+        let rot = geo::body_rotation(desc, self.jd).inverse();
+        Some(Pos::<BodyFixed>::at_body(body, rot * local.raw()))
+    }
+
     /// Body-centred inertial (NOT rotating — the frame Kepler elements live in) → Solar.
     /// `None` if the body is unknown.
     pub fn body_inertial_to_solar(&self, p: Pos<BodyInertial>) -> Option<Pos<Solar>> {
         let Center::Body(id) = p.center() else {
-            debug_assert!(false, "body-inertial frame centred on {:?}", p.center());
             return None;
         };
         let desc = self.registry.get(id)?;
-        // The equatorial lift. Skipping it is a live bug in `pose.rs` — it costs up to the
-        // body's axial tilt (±23.4° of ground track on Earth), silently.
+        // The equatorial lift. Skipping it costs up to the body's axial tilt
+        // (±23.4° of ground track on Earth), silently; all consumers enter the
+        // solar hub through this conversion.
         let rot = geo::equatorial_frame(desc, self.jd);
         Some(self.center_in_solar(Center::Body(id))? + Pos::<Solar>::new(rot * p.raw()))
+    }
+
+    /// Solar → body-centred inertial. This is the exact inverse of
+    /// [`body_inertial_to_solar`](Self::body_inertial_to_solar) at the same epoch.
+    pub fn solar_to_body_inertial(&self, p: Pos<Solar>, body: BodyId) -> Option<Pos<BodyInertial>> {
+        let desc = self.registry.get(body)?;
+        let local = p - self.center_in_solar(Center::Body(body))?;
+        let rot = geo::equatorial_frame(desc, self.jd).inverse();
+        Some(Pos::<BodyInertial>::at_body(body, rot * local.raw()))
     }
 
     /// Synodic / co-rotating (the CR3BP frame; L1–L5 are stationary here) → Solar.
@@ -323,7 +329,7 @@ impl<'a> FrameTree<'a> {
         let s = self.center_in_solar(Center::Body(secondary))?;
         let x = (s - p).raw();
         if x.length_squared() <= 0.0 {
-            return Some(DQuat::IDENTITY);
+            return None;
         }
         let x = x.normalize();
         let n = self.pair_orbit_normal(primary, secondary)?;
@@ -370,11 +376,13 @@ mod tests {
     /// geometry without pulling in VSOP.
     struct Stub;
     impl EphemerisProvider for Stub {
-        fn position(&self, body_id: i32, _jd: f64) -> Option<Pos<Ecliptic>> {
+        fn position(&self, body_id: i32, jd: f64) -> Option<Pos<Ecliptic>> {
+            let angle = (jd - 2_451_545.0) * std::f64::consts::TAU / 365.25;
+            let radial = DVec3::new(angle.cos(), angle.sin(), 0.0);
             match body_id {
-                10 => Some(Pos::<Ecliptic>::ZERO), // Sun
-                399 => Some(Pos::<Ecliptic>::new(DVec3::new(1.0, 0.0, 0.0))),
-                301 => Some(Pos::<Ecliptic>::new(DVec3::new(1.00257, 0.0, 0.0))), // ~384 400 km out
+                crate::ephemeris_id::SUN => Some(Pos::<Ecliptic>::ZERO),
+                crate::ephemeris_id::EARTH => Some(Pos::<Ecliptic>::new(radial)),
+                crate::ephemeris_id::MOON => Some(Pos::<Ecliptic>::new(radial * 1.00257)),
                 _ => None, // and an unknown body is NOT at the origin
             }
         }
@@ -399,11 +407,15 @@ mod tests {
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
 
         let moon_solar = tree
-            .center_in_solar(Center::Body(301))
+            .center_in_solar(Center::Body(crate::ephemeris_id::MOON))
             .expect("stub has the Moon");
 
-        let heliocentric = tree.relative_to(moon_solar, Center::Body(10)).unwrap();
-        let geocentric = tree.relative_to(moon_solar, Center::Body(399)).unwrap();
+        let heliocentric = tree
+            .relative_to(moon_solar, Center::Body(crate::ephemeris_id::SUN))
+            .unwrap();
+        let geocentric = tree
+            .relative_to(moon_solar, Center::Body(crate::ephemeris_id::EARTH))
+            .unwrap();
 
         let au = crate::coords::AU_TO_M;
         assert!(
@@ -424,11 +436,19 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
         let l4 = tree
-            .libration_in_solar(10, 399, LPoint::L4)
+            .libration_in_solar(
+                crate::ephemeris_id::SUN,
+                crate::ephemeris_id::EARTH,
+                LPoint::L4,
+            )
             .expect("Sun+Earth are known");
 
-        let sun = tree.center_in_solar(Center::Body(10)).unwrap();
-        let earth = tree.center_in_solar(Center::Body(399)).unwrap();
+        let sun = tree
+            .center_in_solar(Center::Body(crate::ephemeris_id::SUN))
+            .unwrap();
+        let earth = tree
+            .center_in_solar(Center::Body(crate::ephemeris_id::EARTH))
+            .unwrap();
         let d_sun = (l4 - sun).length();
         let d_earth = (l4 - earth).length();
         let d_pair = (earth - sun).length();
@@ -450,8 +470,8 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
         let pair = Pair {
-            primary: 10,
-            secondary: 399,
+            primary: crate::ephemeris_id::SUN,
+            secondary: crate::ephemeris_id::EARTH,
         };
 
         let original = Pos::<Solar>::new(DVec3::new(1.4e11, 3.0e9, -2.0e9));
@@ -465,6 +485,80 @@ mod tests {
             err < 1.0,
             "round-trip error {err} m — the basis is not orthonormal"
         );
+    }
+
+    #[test]
+    fn body_fixed_and_inertial_frames_round_trip_through_the_solar_hub() {
+        let reg = registry();
+        let tree = FrameTree::new(2_451_545.25, &reg, &Stub);
+        let local = DVec3::new(1_234.5, -6_789.0, 42.25);
+
+        let fixed = Pos::<BodyFixed>::at_body(crate::ephemeris_id::MOON, local);
+        let fixed_back = tree
+            .solar_to_body_fixed(
+                tree.body_fixed_to_solar(fixed).unwrap(),
+                crate::ephemeris_id::MOON,
+            )
+            .unwrap();
+        let fixed_error = (fixed_back.raw() - local).length();
+        assert!(
+            fixed_error < 1.0e-3,
+            "body-fixed round-trip error {fixed_error:e} m exceeds the f64 cancellation budget at 1 AU"
+        );
+
+        let inertial = Pos::<BodyInertial>::at_body(crate::ephemeris_id::EARTH, local);
+        let inertial_back = tree
+            .solar_to_body_inertial(
+                tree.body_inertial_to_solar(inertial).unwrap(),
+                crate::ephemeris_id::EARTH,
+            )
+            .unwrap();
+        let inertial_error = (inertial_back.raw() - local).length();
+        assert!(
+            inertial_error < 1.0e-3,
+            "body-inertial round-trip error {inertial_error:e} m exceeds the f64 cancellation budget at 1 AU"
+        );
+    }
+
+    #[test]
+    fn unresolved_centres_fail_closed_instead_of_returning_a_plausible_wrong_point() {
+        let reg = registry();
+        let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
+        assert!(tree.center_in_solar(Center::Ssb).is_none());
+        assert!(tree
+            .center_in_solar(Center::Site {
+                body: crate::ephemeris_id::MOON,
+                id: 7,
+            })
+            .is_none());
+    }
+
+    #[test]
+    fn a_degenerate_body_pair_has_no_synodic_frame() {
+        struct Coincident;
+        impl EphemerisProvider for Coincident {
+            fn position(&self, body_id: i32, _jd: f64) -> Option<Pos<Ecliptic>> {
+                match body_id {
+                    crate::ephemeris_id::EARTH | crate::ephemeris_id::MOON => {
+                        Some(Pos::<Ecliptic>::new(DVec3::X))
+                    }
+                    crate::ephemeris_id::SUN => Some(Pos::<Ecliptic>::ZERO),
+                    _ => None,
+                }
+            }
+
+            fn global_position(&self, body_id: i32, jd: f64) -> Option<Pos<Ecliptic>> {
+                self.position(body_id, jd)
+            }
+        }
+
+        let reg = registry();
+        let tree = FrameTree::new(2_451_545.0, &reg, &Coincident);
+        let pair = Pair {
+            primary: crate::ephemeris_id::EARTH,
+            secondary: crate::ephemeris_id::MOON,
+        };
+        assert!(tree.solar_to_synodic(Pos::<Solar>::ZERO, pair).is_none());
     }
 
     /// An unknown body yields `None`, never a position.
@@ -482,8 +576,12 @@ mod tests {
             "Mars is not in the stub"
         );
         // …and an L-point needs BOTH bodies: half a pair is not a point.
-        assert!(tree.libration_in_solar(399, 499, LPoint::L1).is_none());
-        assert!(tree.libration_in_solar(499, 301, LPoint::L2).is_none());
+        assert!(tree
+            .libration_in_solar(crate::ephemeris_id::EARTH, 499, LPoint::L1)
+            .is_none());
+        assert!(tree
+            .libration_in_solar(499, crate::ephemeris_id::MOON, LPoint::L2)
+            .is_none());
     }
 
     /// **Earth–Moon L1 sits between the two, ~61,300 km from the Moon.**
@@ -497,10 +595,26 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
 
-        let earth = tree.center_in_solar(Center::Body(399)).unwrap();
-        let moon = tree.center_in_solar(Center::Body(301)).unwrap();
-        let l1 = tree.libration_in_solar(399, 301, LPoint::L1).unwrap();
-        let l2 = tree.libration_in_solar(399, 301, LPoint::L2).unwrap();
+        let earth = tree
+            .center_in_solar(Center::Body(crate::ephemeris_id::EARTH))
+            .unwrap();
+        let moon = tree
+            .center_in_solar(Center::Body(crate::ephemeris_id::MOON))
+            .unwrap();
+        let l1 = tree
+            .libration_in_solar(
+                crate::ephemeris_id::EARTH,
+                crate::ephemeris_id::MOON,
+                LPoint::L1,
+            )
+            .unwrap();
+        let l2 = tree
+            .libration_in_solar(
+                crate::ephemeris_id::EARTH,
+                crate::ephemeris_id::MOON,
+                LPoint::L2,
+            )
+            .unwrap();
 
         let d_pair = (moon - earth).length();
         let l1_from_moon = (l1 - moon).length();

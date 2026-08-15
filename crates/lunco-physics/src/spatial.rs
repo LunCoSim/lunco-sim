@@ -5,9 +5,9 @@
 //!
 //! With `big_space`, an entity's `GlobalTransform` is expressed in the
 //! floating-origin **render** frame, while avian keeps every collider's
-//! `Position` in the canonical world-grid **absolute** physics frame. The two
-//! frames are related by the world grid's computed floating-origin affine
-//! transform, including nested-grid rotation.
+//! `Position` in the one [`lunco_core::ActivePhysicsFrame`]. The source frame
+//! may be the render frame or any named BigSpace [`Grid`]; neither is silently
+//! assumed to be the Avian frame.
 //!
 //! So a raw `SpatialQuery::cast_ray(global_transform.translation(), …)` casts the
 //! ray from ~2 km away from where the colliders actually are, and misses
@@ -27,9 +27,10 @@
 //! Any code that casts against avian colliders with an origin taken from a
 //! `GlobalTransform` (or any render/world-space point) MUST go through
 //! [`GridSpatialQuery`] instead of raw [`SpatialQuery`]. It delegates to
-//! [`lunco_core::coords::WorldFrame`], the single owner of render↔world
-//! conversion, so the ray meets colliders in every scene, at any elevation and
-//! through nested/rotated grids with no per-call-site frame reasoning.
+//! the active frame's BigSpace transform, so the ray meets colliders in every
+//! scene, at any elevation and through nested/rotated grids with no per-call-site
+//! frame reasoning. Grid-local callers use [`GridSpatialQuery::cast_ray_in_grid`]
+//! and name the source grid explicitly.
 //!
 //! When your origin is ALREADY in the physics frame (e.g. an avian `Position`, as
 //! the wheel drive uses via `wheel_hub_pose`), use [`GridSpatialQuery::raw`] — the
@@ -38,7 +39,9 @@
 use avian3d::prelude::*;
 use bevy::ecs::system::SystemParam;
 use bevy::math::Dir3;
-use lunco_core::coords::{GridPos, RenderPos};
+use bevy::prelude::{ChildOf, Query, Res, Transform};
+use big_space::prelude::{CellCoord, Grid};
+use lunco_core::coords::{pose_in_grid, render_to_grid_absolute, GridPos, RenderPos};
 
 /// A [`SpatialQuery`] that accepts ray/shape origins in **render space** and casts
 /// them against avian colliders in the canonical **world-grid physics frame**,
@@ -48,7 +51,15 @@ use lunco_core::coords::{GridPos, RenderPos};
 #[derive(SystemParam)]
 pub struct GridSpatialQuery<'w, 's> {
     spatial: SpatialQuery<'w, 's>,
-    world_frame: lunco_core::coords::WorldFrame<'w, 's>,
+    physics_frame: Option<Res<'w, lunco_core::ActivePhysicsFrame>>,
+    grids: Query<'w, 's, &'static Grid>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    // `cast_ray_in_grid` composes GRID entities only. Restricting the query to
+    // that domain is both the semantic contract and what keeps this reusable
+    // SystemParam disjoint from callers mutating ordinary body/camera
+    // Transforms in the same system.
+    nodes:
+        Query<'w, 's, (Option<&'static CellCoord>, &'static Transform), bevy::prelude::With<Grid>>,
 }
 
 impl<'w, 's> GridSpatialQuery<'w, 's> {
@@ -57,7 +68,9 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// a valid nested scene silently raycast in the wrong place.
     #[inline]
     pub fn to_physics(&self, render_point: RenderPos) -> Option<GridPos> {
-        self.world_frame.render_to_world(render_point)
+        let frame = self.physics_frame.as_deref()?;
+        let grid = self.grids.get(frame.0).ok()?;
+        Some(render_to_grid_absolute(grid, render_point))
     }
 
     /// Cast a ray whose **origin is in render space**. The origin is converted
@@ -96,6 +109,14 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         if !origin.is_finite() {
             return None;
         }
+        let frame = self.physics_frame.as_deref()?;
+        let grid = self.grids.get(frame.0).ok()?;
+        let direction = grid
+            .local_floating_origin()
+            .grid_transform()
+            .inverse()
+            .transform_vector3(direction.as_dvec3());
+        let direction = Dir3::new(direction.as_vec3()).ok()?;
         self.spatial
             .cast_ray(origin, direction, max_distance, solid, filter)
     }
@@ -129,9 +150,55 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             .cast_ray(origin.0, direction, max_distance, solid, filter)
     }
 
+    /// Cast a ray expressed in a named BigSpace `source_grid`.
+    ///
+    /// This is the required entry point for systems that solve geometry in an
+    /// entity's immediate grid (camera rigs, body-local sensors, streamed scene
+    /// tools). Both the point and direction are rigidly composed into the one
+    /// [`lunco_core::ActivePhysicsFrame`] before Avian sees them. Supplying the
+    /// source grid makes the otherwise-untyped meaning of [`GridPos`] explicit
+    /// at the boundary and prevents a sibling/rotated grid from being accepted
+    /// merely because its numbers are finite.
+    pub fn cast_ray_in_grid(
+        &self,
+        source_grid: bevy::prelude::Entity,
+        origin: GridPos,
+        direction: Dir3,
+        max_distance: f64,
+        solid: bool,
+        filter: &SpatialQueryFilter,
+    ) -> Option<RayHitData> {
+        if !origin.0.is_finite()
+            || !direction.as_vec3().is_finite()
+            || !max_distance.is_finite()
+            || max_distance < 0.0
+        {
+            return None;
+        }
+        let frame = self.physics_frame.as_deref()?;
+        let (source_origin, source_rotation) = pose_in_grid(
+            source_grid,
+            frame.0,
+            &self.parents,
+            &self.grids,
+            &self.nodes,
+        )?;
+        let physics_origin = source_origin + source_rotation * origin.0;
+        let physics_direction = source_rotation * direction.as_dvec3();
+        let physics_direction = Dir3::new(physics_direction.as_vec3()).ok()?;
+        self.spatial.cast_ray(
+            physics_origin,
+            physics_direction,
+            max_distance,
+            solid,
+            filter,
+        )
+    }
+
     /// The wrapped [`SpatialQuery`], for shapecasts and query shapes the typed
-    /// wrappers don't cover. For plain rays use [`Self::cast_ray_grid`] /
-    /// [`Self::cast_ray_render`], which carry the frame in the type.
+    /// wrappers don't cover. For plain rays use [`Self::cast_ray_grid`],
+    /// [`Self::cast_ray_in_grid`], or [`Self::cast_ray_render`], which make the
+    /// source frame explicit.
     #[inline]
     pub fn raw(&self) -> &SpatialQuery<'w, 's> {
         &self.spatial

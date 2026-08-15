@@ -45,6 +45,31 @@ fn test_blueprint_shader_schema_reflects() {
     );
 }
 
+/// Globe imagery coordinates come from one tessellation-independent producer:
+/// the body-fixed direction authored by the globe mesh and carried by its vertex
+/// stage. Re-introducing vertex-projected equirectangular UV makes parent/child
+/// LODs sample different lunar locations and recreates square/diagonal patches.
+#[test]
+fn blueprint_globe_mapping_is_derived_per_fragment_from_body_direction() {
+    let shader_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders");
+    let fragment =
+        std::fs::read_to_string(shader_dir.join("blueprint.wgsl")).expect("blueprint shader");
+
+    assert!(fragment.contains("@location(11) globe_direction: vec3<f32>"));
+    assert!(fragment.contains("@location(5) globe_direction: vec3<f32>"));
+    assert!(fragment.contains("equirectangular_uv(globe_direction_unit)"));
+    assert!(fragment.contains("equirectangular_grad(globe_direction_unit"));
+    assert!(fragment.contains("textureSampleGrad(albedo_tex"));
+    assert!(
+        !fragment.contains("let globe_uv = in.uv"),
+        "projecting spherical UV at vertices makes imagery depend on LOD tessellation"
+    );
+    assert!(
+        !fragment.contains("north_cap") && !fragment.contains("south_cap"),
+        "a broad polar colour override is a view-dependent workaround, not projection math"
+    );
+}
+
 /// Verifies that `solar_panel.wgsl`'s `Material` struct correctly reflects the
 /// newly introduced `seamless_u` and `v_scale` parameters.
 #[test]

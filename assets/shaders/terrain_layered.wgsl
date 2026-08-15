@@ -36,7 +36,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
-#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -213,11 +213,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         roughness = clamp(mix(roughness, s.r, mat.weight_rough), 0.05, 1.0);
         albedo *= mix(1.0, s.g, mat.weight_ao);
     }
-    // Normal: perturb the procedural normal toward the map's baked normal.
-    // The baked map stores world-space normals (see derive.rs pack_normal_rgba8),
-    // so decode directly — no tangent basis involved.
+    // Normal: perturb the procedural WORLD normal toward the map's baked
+    // DEM-local ENU normal.  The mesh instance is the authoritative
+    // local->render transform (including the active BigSpace frame); treating
+    // the map bytes as world-space made a rotated terrain use a different light
+    // direction from its own geometry.
     if (mat.weight_normal > 0.0) {
-        let n_baked = normalize(textureSample(normal_tex, normal_smp, uv).xyz * 2.0 - 1.0);
+        let n_baked = dem_normal_to_world(
+            textureSample(normal_tex, normal_smp, uv).xyz, in.instance_index);
         n = normalize(mix(n, n_baked, mat.weight_normal));
     }
 #endif

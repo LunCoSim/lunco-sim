@@ -13,14 +13,15 @@
 //! Self-contained shading: the FBM/bump look needs no engine-filled uniforms, so
 //! per-tile materials render correctly without the `wire_terrain_materials`
 //! heightfield wiring (which only reaches the single static terrain entity). It
-//! therefore omits `regolith.wgsl`'s lunar-BRDF reshape and beyond-CSM horizon
-//! ray-march — both engine-fed refinements the static mesh keeps; the streamed
-//! tiles still get the full FBM regolith albedo/bump + Bevy PBR sun + CSM shadows.
+//! therefore omits `regolith.wgsl`'s live horizon ray-march. Streamed tiles use
+//! the pre-baked DEM horizon cache for terrain self-shadow at every distance and
+//! receive Bevy's CSM for shadows cast by dynamic objects.
 //!
 //! Driven by `ShaderMaterial` (NOT a bespoke material): `m.shader` and
 //! `m.vertex_shader` both point here; `m.vertex_shader = Some` makes
 //! `ShaderMaterial::specialize` swap the vertex stage and bind
-//! `ATTRIBUTE_MORPH_TARGET` at `@location(8)`. Params are reflected from
+//! `ATTRIBUTE_MORPH_TARGET` at `@location(8)`, `ATTRIBUTE_MORPH_NORMAL` at
+//! `@location(9)`, and `ATTRIBUTE_MORPH_EDGE` at `@location(10)`. Params are reflected from
 //! `struct Material` like any self-describing shader.
 
 #import bevy_pbr::{
@@ -30,7 +31,7 @@
     mesh_view_bindings::view,
 }
 #import lunco::pbr_lit::lit_n
-#import lunco::terrain::{aa_fade, bump_layer, layer_height, map_weights, ramp, surface_fbm}
+#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, layer_height, map_weights, ramp, surface_fbm}
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
@@ -76,9 +77,9 @@
 // static-mesh terrain shaders were already using from this very uniform.
 //!@engine  sun_dir_world
 //!@engine  shadow_cache_on
-//!@engine  csm_far
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
+//!@default stitch_edges 0,0,0,0
 //!@default overlay_mode      0
 //!@default overlay_opacity   0
 //!@default overlay_safe_rad  0
@@ -101,9 +102,9 @@ struct Material {
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun, the canonical scene sun
     shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
-    csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
+    stitch_edges:      vec4<f32>, // [top,bottom,left,right] coarser-neighbour mask
     overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard, 2 = LOD depth
     overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
     overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
@@ -133,7 +134,9 @@ var mineral_smp: sampler;
 // Baked derived maps (lunco-terrain-surface derived_layers; whole-DEM planar
 // UV). `None` binds Bevy's fallback white — every read is weight-gated so an
 // unbound map contributes nothing. surface: R=roughness G=AO B=rockDens
-// A=hazard; normal: RGB = world normal biased, A = albedo scalar (0.5 neutral).
+// A=hazard; normal: RGB = DEM-local ENU normal biased, A = albedo scalar
+// (0.5 neutral).  The fragment transforms it through the tile instance before
+// mixing it with world-space lighting normals.
 @group(#{MATERIAL_BIND_GROUP}) @binding(6)
 var surface_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7)
@@ -145,8 +148,10 @@ var normal_smp: sampler;
 
 // Pre-baked horizon shadow cache (R8Unorm 0..1 sun visibility, whole-DEM
 // planar UV — same texture the static regolith/layered shaders sample). One
-// fetch replaces the 48-step ray-march; gated by `shadow_cache_on` and blended
-// in only beyond the CSM range, so near tiles keep mesh-accurate cascades.
+// fetch replaces the 48-step ray-march; gated by `shadow_cache_on`. Streamed
+// terrain does not cast into the directional cascade, so this is the one
+// terrain-on-terrain self-shadow solution at every distance. Tiles still
+// receive the cascade, which carries rover/rock shadows independently.
 @group(#{MATERIAL_BIND_GROUP}) @binding(10)
 var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
@@ -194,6 +199,7 @@ struct GeoVertex {
     @location(2) uv: vec2<f32>,
     @location(8) morph_target: vec3<f32>,
     @location(9) morph_normal: vec3<f32>,
+    @location(10) edge_mask: vec4<f32>,
 };
 
 @vertex
@@ -215,7 +221,15 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     // `morph` alone — deliberately. A per-tile term here (the old `reveal` settle)
     // makes two neighbours at the same depth and distance disagree at their shared
     // edge, cracking the seam. Keep this a pure function of world position.
-    let m = morph;
+    // Restricted quadtree selection guarantees that a resident neighbour is
+    // either the same depth or one level coarser. On the latter boundary the
+    // fine edge uses its parent lattice immediately, the exact surface sampled
+    // by the coarser tile. Same-depth edges remain untouched.
+    let edge_stitch = max(max(vertex.edge_mask.x * mat.stitch_edges.x,
+                              vertex.edge_mask.y * mat.stitch_edges.y),
+                          max(vertex.edge_mask.z * mat.stitch_edges.z,
+                              vertex.edge_mask.w * mat.stitch_edges.w));
+    let m = max(morph, edge_stitch);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     // Shade the surface we actually DRAW: the position lerps toward the parent
     // lattice, so the normal must lerp with it. Leaving the fine normal here made
@@ -296,7 +310,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // texel pitch (far tiles), the map carries the crater rims/slopes the mesh
     // no longer has (0 on fine near tiles whose geometry out-resolves the map).
     if (weight_normal > 0.0) {
-        let n_baked = normalize(map_n.xyz * 2.0 - 1.0);
+        // The derived map is baked from the DEM oracle, whose coordinates are
+        // site-local ENU.  `n` is in Bevy's current render world.  Mixing the
+        // two directly only happened to work while the site grid was aligned
+        // with that world; after a Moon/Earth camera-frame change it made the
+        // coarse LODs (where this weight rises) shade from a different sun
+        // angle, often all the way to black.  The tile instance is the
+        // authoritative local->render transform, including BigSpace's current
+        // floating-origin frame.
+        let n_baked = dem_normal_to_world(map_n.xyz, in.instance_index);
         n = normalize(mix(n, n_baked, weight_normal));
     }
 
@@ -382,7 +404,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Lommel-Seeliger + opposition surge (retroreflective backscatter) from the
     // scene sun — read from the light bindings, so streamed tiles get it WITHOUT
     // the per-material sun wiring the static mesh needs. Pre-multiplies albedo;
-    // lit_n's Lambert + CSM shadows complete the response. This is what makes the
+    // lit_n's Lambert + the two-owner shadow pipeline complete the response. This is what makes the
     // surface read as the Moon (flat, then a bright surge toward opposition)
     // instead of generic grey PBR.
     // Same guard as the static-mesh path: before the wiring system has run the
@@ -399,7 +421,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     albedo = albedo * lunar_k;
 
     // Shadow fill: a whisper of hemispheric bounce (earthshine + regolith
-    // inter-reflection) rides the emissive slot so CSM shadows don't crush to
+    // inter-reflection) rides the emissive slot so hard shadows don't crush to
     // pure black — shadowed crater floors stay readable without washing out the
     // raking-light contrast that sells the surface. Hemispheric fill is a
     // half-sky integral — insensitive to micro-relief — so it reads the
@@ -414,20 +436,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * weight_ao), 0.05, 1.0);
     var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
 
-    // Far-field terrain self-shadow: beyond the Sun cascades, sample the
-    // pre-baked sun-visibility cache. This keeps distant crater relief from
-    // reading as flat unshaded mounds while native CSM handles the near field.
+    // Terrain self-shadow: sample the pre-baked sun-visibility cache at every
+    // distance. The directional cascade intentionally contains dynamic casters
+    // but not streamed terrain, so multiplying the two combines independent
+    // occluder sets instead of double-shadowing the ground.
 #ifdef VERTEX_UVS_A
     if (mat.shadow_cache_on > 0.5) {
-        let dist = distance(view.world_position, p);
-        var blend = 1.0;
-        if (mat.csm_far > 0.0) {
-            blend = smoothstep(mat.csm_far * 0.5, mat.csm_far * 0.9, dist);
-        }
-        if (blend > 0.0) {
-            let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
-            color = vec4(color.rgb * mix(1.0, vis, blend), color.a);
-        }
+        let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
+        color = vec4(color.rgb * vis, color.a);
     }
 #endif
     // --- Analysis overlay (Data→Transfer→Blend, in-material shading plane) -----
@@ -450,7 +466,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             var n_haz = n_geo;
 #ifdef VERTEX_UVS_A
             if (weight_normal > 0.0) {
-                n_haz = normalize(map_n.xyz * 2.0 - 1.0);
+                // `slope_of` is defined in the DEM's ENU frame (Y = local up),
+                // so analysis deliberately consumes the decoded LOCAL normal;
+                // lighting above consumes its transformed world-space twin.
+                n_haz = decode_dem_normal(map_n.xyz);
             }
 #endif
             tint = slope_hazard_color(

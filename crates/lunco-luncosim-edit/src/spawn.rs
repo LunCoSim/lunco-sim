@@ -427,15 +427,18 @@ pub fn update_spawn_ghost(
     };
     let trace_cursor = diagnostics.enabled && diagnostics.cursor_moved(cursor);
 
-    // ONE frame crossing, at the top.
-    let Some(origin_grid) = surface.to_grid(lunco_core::coords::RenderPos(origin)) else {
+    // ONE complete ray crossing, at the top. The site grid may be rotated, so
+    // origin and direction must cross the frame boundary together.
+    let Some((origin_grid, direction_grid)) =
+        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), direction)
+    else {
         if diagnostics.enabled {
-            info!(cursor = ?cursor, "[spawn-trace] ghost rejected: WorldGrid unavailable");
+            info!(cursor = ?cursor, "[spawn-trace] ghost rejected: active physics frame unavailable");
         }
         return;
     };
 
-    let hit = cursor_surface_hit(&surface, &raycaster, origin_grid, direction);
+    let hit = cursor_surface_hit(&surface, &raycaster, origin_grid, direction_grid);
     let terrain_trace = hit.and_then(|h| h.terrain);
     let phys = hit.and_then(|h| h.physics_distance);
     let phys_name = hit
@@ -480,7 +483,7 @@ pub fn update_spawn_ghost(
                 camera_render = ?cam_tf.translation(),
                 ray_origin_render = ?origin,
                 ray_origin_grid = ?origin_grid,
-                ray_direction = ?direction,
+                ray_direction = ?direction_grid,
                 terrain_hit = ?terrain_trace,
                 physics_distance = ?phys,
                 chosen_grid_hit = ?point,
@@ -532,7 +535,7 @@ pub fn update_spawn_ghost(
         info!(
             cursor = ?cursor,
             ray_origin_grid = ?origin_grid,
-            ray_direction = ?direction,
+            ray_direction = ?direction_grid,
             terrain_hit = ?terrain_trace,
             physics_distance = ?phys,
             physics_hit_name = ?phys_name,
@@ -640,18 +643,20 @@ pub fn on_scene_click_spawn(
     // The preview and the commit call the SAME resolver and the SAME footprint
     // fit, in the SAME frame, so an asset always lands where its ghost was shown.
     let origin = ray.origin.as_dvec3();
-    let Some(origin_grid) = surface.to_grid(lunco_core::coords::RenderPos(origin)) else {
+    let Some((origin_grid, direction_grid)) =
+        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), ray.direction)
+    else {
         if diagnostics.enabled {
-            info!("[spawn-trace] click rejected: canonical WorldGrid unavailable");
+            info!("[spawn-trace] click rejected: active physics frame unavailable");
         }
         return;
     };
-    let Some(hit) = cursor_surface_hit(&surface, &raycaster, origin_grid, ray.direction) else {
+    let Some(hit) = cursor_surface_hit(&surface, &raycaster, origin_grid, direction_grid) else {
         if diagnostics.enabled {
             info!(
                 pointer = ?click.pointer_location.position,
                 ray_origin_grid = ?origin_grid,
-                ray_direction = ?ray.direction,
+                ray_direction = ?direction_grid,
                 has_terrain = surface.has_terrain(),
                 "[spawn-trace] click rejected: no terrain or physics hit"
             );
@@ -756,6 +761,7 @@ mod tests {
         let origin = GridPos(DVec3::ZERO);
         let terrain = lunco_terrain_surface::SurfaceHit {
             point: GridPos(DVec3::new(0.0, -12.0, 0.0)),
+            frame: Entity::PLACEHOLDER,
             distance: 12.0,
             terrain: Entity::PLACEHOLDER,
         };
@@ -775,6 +781,7 @@ mod tests {
         let origin = GridPos(DVec3::new(-380.0, SITE + 60.0, -380.0));
         let terrain = lunco_terrain_surface::SurfaceHit {
             point: GridPos(DVec3::new(-380.0, SITE, -380.0)),
+            frame: Entity::PLACEHOLDER,
             distance: 60.0,
             terrain: Entity::PLACEHOLDER,
         };

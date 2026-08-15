@@ -2506,6 +2506,7 @@ pub fn apply_pending_focus(
             &ChildOf,
             &GlobalTransform,
             Option<&mut lunco_avatar::FreeFlightCamera>,
+            Has<lunco_avatar::OrbitViewReturn>,
         ),
         With<lunco_core::Avatar>,
     >,
@@ -2519,8 +2520,8 @@ pub fn apply_pending_focus(
     let Some(pending) = pending else { return };
     let (target, distance) = (pending.target, pending.distance);
     // Celestial bodies are ORBIT-scale targets: hand them to the avatar's
-    // `FocusTarget` flow (OrbitCamera flies to the body's grid — doc 47
-    // Phase 6 — with sunlit-side arrival). Local framing stays for
+    // `FocusTarget` flow (OrbitCamera flies in the body's explicit inertial
+    // view grid with sunlit-side arrival). Local framing stays for
     // metre-scale subjects (wheels, rovers, props).
     let mut is_celestial = q_celestial.get(target).is_ok() || q_celestial_decl.get(target).is_ok();
     let mut pending = vec![target];
@@ -2550,19 +2551,17 @@ pub fn apply_pending_focus(
         info!("FOCUS_ENTITY: celestial target {target:?} → orbit focus");
         return;
     }
-    // Local framing from an orbital view: deactivate the mode and let
-    // `orbital_exit_restore_system` migrate the camera back to the parked
-    // surface pose this frame. `PendingFocus` is deliberately NOT consumed —
-    // the framing re-runs next frame from the restored state, where the GT
-    // delta math below is surface-convention again (running it now would
-    // compute a pose in the CELESTIAL grid the camera is still parented to,
-    // which the restore would then clobber).
+    // A local target is authored in the pre-orbit scene frame. Restore the
+    // avatar's exact orbit-entry transaction first, then retry this retained
+    // focus next First frame. Applying a local delta while the camera is still
+    // in an inertial body grid mixes semantic frames.
+    if let Some((avatar, .., true)) = q_avatar.iter().next() {
+        commands.trigger(lunco_avatar::ReleaseVessel { target: avatar });
+        info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
+        return;
+    }
     if let Some(pin) = orbital_pin.as_mut() {
-        if pin.active {
-            pin.active = false;
-            info!("FOCUS_ENTITY: leaving orbital view first; focus retries next frame");
-            return;
-        }
+        pin.active = false;
     }
     commands.remove_resource::<PendingFocus>();
     let cmd = FocusEntityById {
@@ -2579,7 +2578,7 @@ pub fn apply_pending_focus(
     // fallback) — both surfaced as "no Avatar" and killed double-click focus.
     // Take the first avatar; the FreeFlightCamera is now optional.
     let avatar_count = q_avatar.iter().count();
-    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt)) =
+    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt, _)) =
         q_avatar.iter_mut().next()
     else {
         warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
@@ -2591,8 +2590,7 @@ pub fn apply_pending_focus(
     // (site-anchored scenes re-base every tick) cancels in the difference —
     // reading the target GT alone teleported the avatar 1e11 m into empty
     // space when the observer fired between propagation passes. The delta is
-    // applied to the avatar's LOCAL translation, which is valid because the
-    // avatar's parent grid (WorldGrid) is unrotated wrt render space.
+    // applied to the avatar's LOCAL translation in its restored scene grid.
     let delta = target_gt.translation() - avatar_gt.translation();
     let dist = if cmd.distance > 0.1 {
         cmd.distance
@@ -2638,7 +2636,6 @@ pub fn apply_pending_focus(
             commands
                 .entity(avatar_ent)
                 .remove::<lunco_avatar::OrbitCamera>()
-                .remove::<lunco_avatar::OrbitFrameSample>()
                 .remove::<lunco_avatar::SunlitArrival>()
                 .remove::<lunco_avatar::SpringArmCamera>()
                 .remove::<lunco_avatar::SurfaceCamera>()
@@ -2697,42 +2694,39 @@ pub fn on_set_camera_look_at(
         warn!("SET_CAMERA: no Avatar entity in the scene");
         return;
     };
-    // An explicit camera pose is a SURFACE-frame request: leave any orbital
-    // view first so `eye`/`target` mean scene coordinates again.
-    let was_orbital = orbital_pin.as_mut().is_some_and(|pin| {
-        let a = pin.active;
-        if a {
-            pin.active = false;
-        }
-        a
-    });
-    if was_orbital {
-        // The camera flew to the focused body's grid; bring it home in one
-        // atomic migration — raw cell/translation writes below would be
-        // interpreted in the CELESTIAL grid's frame. Removing the marker
-        // keeps `orbital_exit_restore_system` from overriding this pose.
-        commands
-            .entity(entity)
-            .remove::<lunco_avatar::OrbitalViewCamera>();
-        if let Some(root) = q_world_grid.iter().next() {
-            if let Ok(grid) = q_grids.get(root) {
-                let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
-                lunco_core::attach::migrate_to_grid(
-                    &mut commands,
-                    entity,
-                    root,
-                    new_cell,
-                    Transform::from_translation(new_translation).with_rotation(tf.rotation),
-                );
-            }
-        }
-    } else if let Ok(grid) = q_grids.get(child_of.parent()) {
-        let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
+    // Explicit camera coordinates are canonical WorldGrid coordinates. Every
+    // camera path uses that frame, so the command can apply immediately.
+    if let Some(pin) = orbital_pin.as_mut() {
+        pin.active = false;
+    }
+    let Some(root) = q_world_grid.iter().next() else {
+        warn!("SET_CAMERA: no canonical WorldGrid");
+        return;
+    };
+    let Ok(grid) = q_grids.get(root) else {
+        warn!("SET_CAMERA: canonical WorldGrid has no Grid component");
+        return;
+    };
+    let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
+    if child_of.parent() == root {
         *cell = new_cell;
         tf.translation = new_translation;
     } else {
-        tf.translation = cmd.eye;
+        lunco_core::attach::migrate_to_grid(
+            &mut commands,
+            entity,
+            root,
+            new_cell,
+            Transform::from_translation(new_translation).with_rotation(tf.rotation),
+        );
     }
+    // An explicit world-space camera command starts a new free-flight view; it
+    // does not retain a hidden return transaction or surface gravity binding.
+    commands
+        .entity(entity)
+        .remove::<lunco_avatar::OrbitViewReturn>()
+        .remove::<lunco_avatar::SurfaceRelativeMode>()
+        .remove::<lunco_environment::GravityBody>();
     let look = cmd.target - cmd.eye;
     let (yaw, pitch) = if look.length() > 1e-4 {
         let d = look.normalize();
@@ -2748,11 +2742,12 @@ pub fn on_set_camera_look_at(
         commands
             .entity(entity)
             .remove::<lunco_avatar::OrbitCamera>()
-            .remove::<lunco_avatar::OrbitFrameSample>()
+            .remove::<lunco_avatar::OrbitViewReturn>()
             .remove::<lunco_avatar::SunlitArrival>()
             .remove::<lunco_avatar::SpringArmCamera>()
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
+            .remove::<lunco_environment::GravityBody>()
             .remove::<lunco_avatar::FrameBlend>()
             .try_insert(lunco_avatar::FreeFlightCamera {
                 yaw,

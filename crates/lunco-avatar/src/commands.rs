@@ -45,6 +45,17 @@ pub struct ReleaseVessel {
     pub target: Entity,
 }
 
+/// Return the local camera from a celestial orbit view to the exact camera
+/// mode and BigSpace frame from which that view was entered.
+///
+/// Unlike [`ReleaseVessel`], this is a presentation transition: it does not
+/// release control authority or remove a `ControllerLink`.
+#[Command]
+pub struct ReturnFromOrbit {
+    /// The local avatar camera returning from orbit view.
+    pub target: Entity,
+}
+
 /// Focus on a target without taking control.
 ///
 /// Switches the avatar to `OrbitCamera` mode centered on the target.
@@ -58,6 +69,22 @@ pub struct FocusTarget {
     pub avatar: Option<Entity>,
     /// The entity to focus on.
     pub target: Entity,
+}
+
+/// Tune pointer-to-camera response while the application is running.
+///
+/// Omitted fields retain their current persisted value. The same typed
+/// [`crate::CameraInputSettings`] resource drives free, surface, chase, and
+/// body-orbit cameras; this command is the API/script boundary for changing it
+/// without introducing a second transient set of camera constants.
+#[Command(default)]
+pub struct SetCameraInput {
+    /// Camera radians per pointer-motion unit before behavior-specific scaling.
+    pub look_radians_per_pointer_unit: Option<f32>,
+    /// Lower bound for orbital rotation at the body's surface, in `[0, 1]`.
+    pub orbit_surface_min_scale: Option<f64>,
+    /// Positive exponent shaping the apparent-horizon distance response.
+    pub orbit_distance_curve_exponent: Option<f64>,
 }
 
 /// Follow a target with the chase camera, without taking control.

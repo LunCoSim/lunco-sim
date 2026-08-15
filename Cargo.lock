@@ -2457,7 +2457,7 @@ dependencies = [
 [[package]]
 name = "big_space"
 version = "0.13.0"
-source = "git+https://github.com/m-edlund/big_space?rev=79e04cc01a84f3b8d199a0f97aaeb8245f203b16#79e04cc01a84f3b8d199a0f97aaeb8245f203b16"
+source = "git+https://github.com/aevyrie/big_space?branch=bevy-0.19#5f255228e9b4ff30756347b80f92b19ebf7b5c56"
 dependencies = [
  "async-channel",
  "bevy_app",
@@ -7180,6 +7180,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
+ "lunco-physics",
  "lunco-render",
  "lunco-settings",
  "lunco-theme",
@@ -7682,6 +7683,7 @@ version = "0.1.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
  "lunco-readiness",
 ]
@@ -7888,6 +7890,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_mesh",
+ "lunco-materials",
  "lunco-terrain-core",
 ]
 
@@ -11444,7 +11447,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

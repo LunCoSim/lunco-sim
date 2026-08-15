@@ -2,13 +2,11 @@
 //!
 //! # Why this type exists
 //!
-//! The DEM oracle answers in the **grid-absolute** frame. That is not a
-//! convention this module invents; it is forced by how the surface is built:
-//! [`crate::stream_viz::spawn_tile`] places every LOD tile at
-//! `grid.translation_to_grid(DVec3::new(cx, oracle.height_at(cx, cz), cz))`, so
-//! the height the oracle returns IS a world-grid coordinate, and the terrain
-//! entity itself is a grid-direct child at `CellCoord::default()` with an
-//! identity transform ([`crate::terrain`]).
+//! The DEM oracle answers in the terrain owner's **local** frame. Streamed tiles
+//! apply that owner's complete pose into its nearest BigSpace grid. This query
+//! performs the same conversion into the one [`lunco_core::ActivePhysicsFrame`]
+//! before exposing a result. Screen tools therefore cannot accidentally use the
+//! persistent `WorldGrid` while a site scene lives in a rotating lunar branch.
 //!
 //! Three call sites had to know that, and each rediscovered it separately:
 //!
@@ -36,7 +34,7 @@
 //! spawn, waypoints, the scripting/HTTP query providers — goes through here.
 
 use bevy::ecs::system::SystemParam;
-use bevy::math::{DVec3, Dir3};
+use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
 use lunco_core::coords::{GridPos, RenderPos};
 use lunco_terrain_core::{normal_at_bounded, HeightSource};
@@ -46,8 +44,10 @@ use crate::stream_viz::DemHeightField;
 /// A terrain surface hit: the point ON the surface, in the grid frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceHit {
-    /// Grid-absolute point on the terrain surface.
+    /// Point on the terrain surface in [`Self::frame`].
     pub point: GridPos,
+    /// Concrete BigSpace frame in which [`Self::point`] is expressed.
+    pub frame: Entity,
     /// Distance from the ray origin to [`Self::point`]. Frame-independent, so it
     /// is directly comparable with a physics [`avian3d`] hit distance.
     pub distance: f64,
@@ -68,28 +68,121 @@ pub struct SurfaceFit {
     pub rotation: Quat,
 }
 
+/// Derived rigid pose of one DEM oracle in the active physics frame.
+///
+/// Published in `PreUpdate` by the terrain plugin. Keeping this frame boundary
+/// as data means [`GridSurfaceQuery`] does not need a read of every scene
+/// `Transform`; editor systems can therefore move their own preview entities
+/// while querying terrain without an ECS aliasing conflict.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct TerrainPoseInPhysicsFrame {
+    pub frame: Entity,
+    pub position: DVec3,
+    pub rotation: DQuat,
+}
+
+/// Project each terrain owner's full hierarchy into the one active physics
+/// frame. This is continuous spatial state: a terrain may live in a moving
+/// nested grid, so the derived pose is refreshed before input every frame and
+/// only written when its value actually changes.
+pub fn update_terrain_physics_frame_poses(
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    terrains: Query<(Entity, Option<&TerrainPoseInPhysicsFrame>), With<DemHeightField>>,
+    parents: Query<&ChildOf>,
+    grids: Query<&big_space::prelude::Grid>,
+    spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    mut commands: Commands,
+) {
+    let Some(frame) = active_frame.as_deref().map(|frame| frame.0) else {
+        for (terrain, current) in &terrains {
+            if current.is_some() {
+                commands
+                    .entity(terrain)
+                    .try_remove::<TerrainPoseInPhysicsFrame>();
+            }
+        }
+        return;
+    };
+
+    for (terrain, current) in &terrains {
+        let Some((position, rotation)) =
+            lunco_core::coords::pose_in_grid(terrain, frame, &parents, &grids, &spatial)
+        else {
+            if current.is_some() {
+                commands
+                    .entity(terrain)
+                    .try_remove::<TerrainPoseInPhysicsFrame>();
+            }
+            continue;
+        };
+        let next = TerrainPoseInPhysicsFrame {
+            frame,
+            position,
+            rotation,
+        };
+        if current != Some(&next) {
+            commands.entity(terrain).try_insert(next);
+        }
+    }
+}
+
 /// The analytic terrain surface, queried in the grid frame.
 ///
 /// See the module docs: this deliberately holds NO `GlobalTransform`.
 #[derive(SystemParam)]
 pub struct GridSurfaceQuery<'w, 's> {
-    terrains: Query<'w, 's, (Entity, &'static DemHeightField)>,
-    world_frame: lunco_core::coords::WorldFrame<'w, 's>,
+    all_terrains: Query<'w, 's, (), With<DemHeightField>>,
+    terrains: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static DemHeightField,
+            &'static TerrainPoseInPhysicsFrame,
+        ),
+    >,
+    active_frame: Option<Res<'w, lunco_core::ActivePhysicsFrame>>,
+    grids: Query<'w, 's, &'static big_space::prelude::Grid>,
 }
 
 impl GridSurfaceQuery<'_, '_> {
+    fn frame(&self) -> Option<(Entity, &big_space::prelude::Grid)> {
+        let entity = self.active_frame.as_deref()?.0;
+        Some((entity, self.grids.get(entity).ok()?))
+    }
+
     /// Is there any analytic terrain at all? A scene may legitimately have none
     /// (orbital, an empty stage, a pure-prop sandbox) — callers fall back to
     /// physics colliders, but must be able to tell "no terrain here" from "the
     /// terrain said no", which are different bugs.
     pub fn has_terrain(&self) -> bool {
-        !self.terrains.is_empty()
+        !self.all_terrains.is_empty()
     }
 
     /// Convert a render-space point into the grid frame — the boundary crossing
     /// every screen-space tool makes exactly once, at the top.
     pub fn to_grid(&self, render_point: RenderPos) -> Option<GridPos> {
-        self.world_frame.render_to_world(render_point)
+        let (_, grid) = self.frame()?;
+        Some(lunco_core::coords::render_to_grid_absolute(
+            grid,
+            render_point,
+        ))
+    }
+
+    /// Convert a complete render-space ray into the active physics frame.
+    ///
+    /// A point conversion alone is insufficient: a nested site grid may be
+    /// rotated relative to the render frame, so carrying the render direction
+    /// across unchanged makes terrain and Avian casts diverge. Screen tools use
+    /// this once and keep both values together for every downstream query.
+    pub fn ray_to_grid(&self, origin: RenderPos, direction: Dir3) -> Option<(GridPos, Dir3)> {
+        let (_, grid) = self.frame()?;
+        let origin = lunco_core::coords::render_to_grid_absolute(grid, origin);
+        let inverse = grid.local_floating_origin().grid_transform().inverse();
+        let direction = inverse
+            .transform_vector3(direction.as_dvec3())
+            .normalize_or_zero();
+        Some((origin, Dir3::new(direction.as_vec3()).ok()?))
     }
 
     /// Surface height (grid-absolute Y) under a grid-absolute point, from
@@ -107,10 +200,21 @@ impl GridSurfaceQuery<'_, '_> {
     /// authority as placement and route planning; render-overlay normals are
     /// view/LOD dependent and are not suitable for a measured grade.
     pub fn slope_at(&self, p: GridPos, eps: f64) -> Option<f64> {
-        self.terrains.iter().find_map(|(_, terrain)| {
-            height_in_footprint(&terrain.0, p).map(|_| {
+        let (frame, _) = self.frame()?;
+        self.terrains.iter().find_map(|(_entity, terrain, pose)| {
+            if pose.frame != frame {
+                return None;
+            }
+            let (position, rotation) = (pose.position, pose.rotation);
+            let local = rotation.inverse() * (p.0 - position);
+            height_in_footprint(&terrain.0, GridPos(local)).map(|_| {
                 let half = terrain.0.half_extent() as f64;
-                normal_at_bounded(terrain.0.as_ref(), p.0.x, p.0.z, eps.max(1.0e-6), half)[1]
+                let normal =
+                    normal_at_bounded(terrain.0.as_ref(), local.x, local.z, eps.max(1.0e-6), half);
+                let normal = rotation * DVec3::from_array(normal);
+                normal
+                    .normalize_or_zero()
+                    .dot(DVec3::Y)
                     .clamp(-1.0, 1.0)
                     .acos()
             })
@@ -119,9 +223,16 @@ impl GridSurfaceQuery<'_, '_> {
 
     /// [`Self::height_at`] plus which terrain answered.
     pub fn sample(&self, p: GridPos) -> Option<(Entity, f64)> {
-        for (entity, hf) in self.terrains.iter() {
-            if let Some(y) = height_in_footprint(&hf.0, p) {
-                return Some((entity, y));
+        let (frame, _) = self.frame()?;
+        for (entity, hf, pose) in self.terrains.iter() {
+            if pose.frame != frame {
+                continue;
+            }
+            let (position, rotation) = (pose.position, pose.rotation);
+            let local = rotation.inverse() * (p.0 - position);
+            if let Some(y) = height_in_footprint(&hf.0, GridPos(local)) {
+                let point = position + rotation * DVec3::new(local.x, y, local.z);
+                return Some((entity, point.y));
             }
         }
         None
@@ -143,17 +254,28 @@ impl GridSurfaceQuery<'_, '_> {
         if !origin.0.is_finite() {
             return None;
         }
-        let dir = direction.as_dvec3();
+        let (frame, _) = self.frame()?;
+        let frame_direction = direction.as_dvec3();
         let mut best: Option<SurfaceHit> = None;
-        for (entity, hf) in self.terrains.iter() {
-            let Some(point) = crate::oracle::raycast_surface(&hf.0, origin.0, dir, max_distance)
+        for (entity, hf, pose) in self.terrains.iter() {
+            if pose.frame != frame {
+                continue;
+            }
+            let (terrain_position, terrain_rotation) = (pose.position, pose.rotation);
+            let inverse = terrain_rotation.inverse();
+            let local_origin = inverse * (origin.0 - terrain_position);
+            let local_direction = inverse * frame_direction;
+            let Some(local_point) =
+                crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)
             else {
                 continue;
             };
+            let point = terrain_position + terrain_rotation * local_point;
             let distance = (point - origin.0).length();
             if best.is_none_or(|b| distance < b.distance) {
                 best = Some(SurfaceHit {
                     point: GridPos(point),
+                    frame,
                     distance,
                     terrain: entity,
                 });
@@ -171,14 +293,15 @@ impl GridSurfaceQuery<'_, '_> {
         direction: Dir3,
         max_distance: f64,
     ) -> Option<SurfaceHit> {
-        self.raycast(self.to_grid(render_origin)?, direction, max_distance)
+        let (origin, direction) = self.ray_to_grid(render_origin, direction)?;
+        self.raycast(origin, direction, max_distance)
     }
 
     /// Split a grid-absolute point into the world grid's `(entity, cell, local)`
     /// so it can be spawned as a grid-direct child. The counterpart of
     /// [`Self::to_grid`] for the write side.
     pub fn grid_local(&self, p: GridPos) -> Option<(Entity, big_space::prelude::CellCoord, Vec3)> {
-        let (entity, grid) = self.world_frame.grid()?;
+        let (entity, grid) = self.frame()?;
         let (cell, local) = grid.translation_to_grid(p.0);
         Some((entity, cell, local))
     }
@@ -283,30 +406,12 @@ pub fn fit_footprint(
     }
 }
 
-/// Report a terrain whose own transform can never reach its streamed surface.
+/// Report a transformed terrain that has no streamed representation.
 ///
-/// The frame contract is narrower than "the terrain entity is at the origin",
-/// which is what an earlier version of this check asserted — and which is FALSE
-/// for any site-anchored scene: the celestial site anchor legitimately places a
-/// terrain at a real lunar pose (the Apollo 15 twin lands at cell
-/// `(779, 381, -49)` with a surface-aligned rotation).
-///
-/// What is actually true is narrower and stranger: [`crate::stream_viz::spawn_tile`]
-/// spawns every LOD tile as `ChildOf(grid)` with its own `CellCoord`, derived
-/// from `oracle.height_at(...)`. The streamed surface therefore lives in the GRID
-/// frame and does NOT inherit the terrain entity's transform. So for a
-/// tile-streamed terrain the oracle frame is right by construction, whatever pose
-/// the entity has.
-///
-/// A terrain WITHOUT tile streaming is different: its static mesh is a child of
-/// the entity and does follow that transform, so a non-identity pose puts the
-/// drawn surface somewhere the oracle cannot describe — and every analytic query
-/// (placement, waypoints, sensors) then disagrees with what the user sees. That
-/// case, and only that case, is worth a word.
-///
-/// Reports; never panics. A wrong frame is a visible bug, not a reason to take
-/// the process down — the previous `debug_assert` here killed the app on a
-/// perfectly ordinary site-anchored twin.
+/// Streamed tiles and [`GridSurfaceQuery`] both compose the terrain owner's full
+/// pose into its nearest grid. A static legacy mesh is different: its analytic
+/// oracle has no independently authored transform contract, so a transformed
+/// owner would make placement disagree with that mesh. Reports; never panics.
 pub fn report_unreachable_dem_frame(
     added: Query<
         (
@@ -333,8 +438,8 @@ pub fn report_unreachable_dem_frame(
         warn!(
             "[terrain-frame] static-mesh DEM terrain '{name}' carries a transform \
              (translation {:?}, rotation {:?}) that its surface oracle does not: the \
-             oracle is GRID-ABSOLUTE (see `surface_query`), so placement, waypoints \
-             and sensors will disagree with the drawn mesh by exactly that offset. \
+             static oracle has no authored transform contract, so placement, \
+             waypoints and sensors can disagree with the drawn mesh. \
              Enable tile streaming (`lunco:layer:lodViz`) or author the pose into the DEM.",
             transform.translation, transform.rotation,
         );
@@ -367,10 +472,23 @@ mod tests {
 
     fn world_with_terrain(elevation: f64) -> (App, Entity) {
         let mut app = App::new();
+        let frame = app
+            .world_mut()
+            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let terrain = app
             .world_mut()
-            .spawn(DemHeightField(flat_dem_at(elevation, 500.0)))
+            .spawn((
+                DemHeightField(flat_dem_at(elevation, 500.0)),
+                Transform::IDENTITY,
+                ChildOf(frame),
+            ))
             .id();
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
         (app, terrain)
     }
 

@@ -42,6 +42,37 @@ pub struct GridPos(pub DVec3);
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct GridRot(pub DQuat);
 
+/// Rigid f64 transform from one concrete BigSpace grid into another.
+///
+/// Grid topology is a precision implementation detail. Systems that need to
+/// cross it resolve their semantic source/target frames first, obtain this
+/// transform once, then apply it consistently to positions, orientations and
+/// free vectors such as linear/angular velocity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridFrameTransform {
+    pub translation: DVec3,
+    pub rotation: DQuat,
+}
+
+impl GridFrameTransform {
+    pub const IDENTITY: Self = Self {
+        translation: DVec3::ZERO,
+        rotation: DQuat::IDENTITY,
+    };
+
+    pub fn transform_position(self, position: DVec3) -> DVec3 {
+        self.translation + self.rotation * position
+    }
+
+    pub fn transform_rotation(self, rotation: DQuat) -> DQuat {
+        (self.rotation * rotation).normalize()
+    }
+
+    pub fn transform_vector(self, vector: DVec3) -> DVec3 {
+        self.rotation * vector
+    }
+}
+
 /// A point in the FLOATING-ORIGIN render frame (camera-relative). f64 so the
 /// blessed conversions don't round-trip through f32; construct from render
 /// `Transform`/`GlobalTransform` data via [`RenderPos::from_render_f32`].
@@ -176,6 +207,104 @@ pub fn ancestor_grid<'a>(
     None
 }
 
+/// Find the nearest shared [`Grid`] ancestor of two entities.
+///
+/// The returned grid is a valid target for [`grid_relative_pose`] for both
+/// entities. Keeping this lookup beside the BigSpace pose helpers prevents
+/// callers from inventing a second hierarchy walk and then composing one
+/// branch through a floating-origin `GlobalTransform`.
+pub fn common_grid(
+    first: Entity,
+    second: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+) -> Option<Entity> {
+    let mut first_grids = Vec::with_capacity(16);
+    let mut current = first;
+    for _ in 0..32 {
+        if q_grids.get(current).is_ok() {
+            first_grids.push(current);
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            break;
+        };
+        current = child_of.parent();
+    }
+
+    let mut current = second;
+    for _ in 0..32 {
+        if q_grids.get(current).is_ok() && first_grids.contains(&current) {
+            return Some(current);
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            break;
+        };
+        current = child_of.parent();
+    }
+    None
+}
+
+/// Compose two entities into their nearest shared BigSpace Grid.
+///
+/// This is the frame-safe operation for siblings. Neither entity needs to be
+/// a descendant of the other; both only need to share a live Grid branch.
+/// Returned rotations map each entity's local axes into the returned Grid.
+pub fn common_grid_poses<F: QueryFilter>(
+    first: Entity,
+    second: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(Entity, DVec3, DQuat, DVec3, DQuat)> {
+    let grid = common_grid(first, second, q_parents, q_grids)?;
+    let (first_position, first_rotation) =
+        grid_relative_pose(first, grid, q_parents, q_grids, q_spatial)?;
+    let (second_position, second_rotation) =
+        grid_relative_pose(second, grid, q_parents, q_grids, q_spatial)?;
+    Some((
+        grid,
+        first_position,
+        first_rotation,
+        second_position,
+        second_rotation,
+    ))
+}
+
+#[cfg(test)]
+mod common_grid_tests {
+    use super::common_grid;
+    use bevy::ecs::system::SystemState;
+    use bevy::prelude::*;
+    use big_space::prelude::{CellCoord, Grid};
+
+    #[test]
+    fn chooses_the_nearest_shared_grid() {
+        let mut world = World::new();
+        let root = world
+            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO))
+            .id();
+        let first_grid = world
+            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO, ChildOf(root)))
+            .id();
+        let second_grid = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::ZERO,
+                ChildOf(first_grid),
+            ))
+            .id();
+        let first = world.spawn((ChildOf(second_grid),)).id();
+        let second = world.spawn((ChildOf(second_grid),)).id();
+
+        let mut state: SystemState<(Query<&ChildOf>, Query<&Grid>)> = SystemState::new(&mut world);
+        let (q_parents, q_grids) = state.get(&world).unwrap();
+        assert_eq!(
+            common_grid(first, second, &q_parents, &q_grids),
+            Some(second_grid)
+        );
+    }
+}
+
 /// Absolute world position of `entity` expressed in the BigSpace root
 /// frame, as a `DVec3`.
 ///
@@ -217,22 +346,14 @@ pub fn world_pose<F: QueryFilter>(
     let mut cur_cell = first_cell;
     let mut cur_tf = first_tf;
     for _ in 0..32 {
-        let edge = match q_parents.get(current) {
-            Ok(co) => q_grids
-                .get(co.parent())
-                .ok()
-                .map(|g| g.cell_edge_length() as f64),
-            Err(_) => None,
+        let local_position = match q_parents.get(current) {
+            Ok(child_of) => q_grids
+                .get(child_of.parent())
+                .map(|grid| grid.grid_position_double(&cur_cell, &cur_tf))
+                .unwrap_or_else(|_| cur_tf.translation.as_dvec3()),
+            Err(_) => cur_tf.translation.as_dvec3(),
         };
-        let cell_off = match edge {
-            Some(e) => DVec3::new(
-                cur_cell.x as f64 * e,
-                cur_cell.y as f64 * e,
-                cur_cell.z as f64 * e,
-            ),
-            None => DVec3::ZERO,
-        };
-        chain.push((cell_off + cur_tf.translation.as_dvec3(), cur_tf.rotation));
+        chain.push((local_position, cur_tf.rotation));
         let parent = match q_parents.get(current) {
             Ok(co) => co.parent(),
             Err(_) => break,
@@ -258,6 +379,216 @@ pub fn world_pose<F: QueryFilter>(
         rot *= local_rot.as_dquat();
     }
     Some((GridPos(pos), GridRot(rot)))
+}
+
+/// Compose `entity`'s pose in the coordinate frame of its ancestor `target_grid`.
+///
+/// This is deliberately different from [`world_pose`]. It stops at the target
+/// grid and never visits the solar/world ancestors above it. A surface camera,
+/// terrain owner, and streamed tile that share a body grid must be compared and
+/// placed in this common local frame; composing both through a distant root and
+/// subtracting the resulting large coordinates loses precision when that root is
+/// re-pinned or rotated.
+///
+/// The returned translation is the target grid's grid-absolute local translation
+/// (cell edge plus local offset), and the rotation maps entity-local axes into
+/// target-grid axes. The target grid's own `CellCoord` and `Transform` are not part
+/// of the result. Returns `None` when the target is not an ancestor or a spatial
+/// component in the path is unavailable.
+pub fn grid_relative_pose<F: QueryFilter>(
+    entity: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    if entity == target_grid {
+        return Some((DVec3::ZERO, DQuat::IDENTITY));
+    }
+
+    let (cell, transform) = q_spatial.get(entity).ok()?;
+    let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
+    let mut current = entity;
+    let mut current_cell = cell.copied().unwrap_or_default();
+    let mut current_transform = *transform;
+
+    for _ in 0..32 {
+        let parent = q_parents.get(current).ok()?.parent();
+        let local_position = q_grids
+            .get(parent)
+            .map(|grid| grid.grid_position_double(&current_cell, &current_transform))
+            .unwrap_or_else(|_| current_transform.translation.as_dvec3());
+        chain.push((local_position, current_transform.rotation));
+
+        if parent == target_grid {
+            let mut position = DVec3::ZERO;
+            let mut rotation = DQuat::IDENTITY;
+            for (offset, local_rotation) in chain.iter().rev() {
+                position += rotation * offset;
+                rotation *= local_rotation.as_dquat();
+            }
+            return Some((position, rotation));
+        }
+
+        current = parent;
+        let (next_cell, next_transform) = q_spatial.get(current).ok()?;
+        current_cell = next_cell.copied().unwrap_or_default();
+        current_transform = *next_transform;
+    }
+
+    None
+}
+
+/// Compose an entity's pose in an arbitrary target Grid's coordinates.
+///
+/// The target does not need to be an ancestor. BigSpace branches such as a
+/// Moon body and the active Moon surface grid are siblings below the same
+/// inertial grid; their pose must be compared in that shared grid, then
+/// expressed in the target grid. This is the canonical cross-branch
+/// conversion used by the single Avian physics frame.
+pub fn pose_in_grid<F: QueryFilter>(
+    entity: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    let common = common_grid(entity, target_grid, q_parents, q_grids)?;
+    let (entity_position, entity_rotation) =
+        grid_relative_pose(entity, common, q_parents, q_grids, q_spatial)?;
+    let (target_position, target_rotation) =
+        grid_relative_pose(target_grid, common, q_parents, q_grids, q_spatial)?;
+    let inverse = target_rotation.inverse();
+    Some((
+        inverse * (entity_position - target_position),
+        inverse * entity_rotation,
+    ))
+}
+
+/// Convert a complete f64 pose from one arbitrary BigSpace Grid to another.
+///
+/// This is the representation boundary used by networking, camera migration,
+/// and frame handover. Callers supply semantic source/target grid identities;
+/// this function owns the hierarchy composition, including every translated
+/// cell and rotated parent. No caller should reproduce the origin/axes formula.
+pub fn transform_pose_between_grids<F: QueryFilter>(
+    position: DVec3,
+    rotation: DQuat,
+    source_grid: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    let transform =
+        grid_transform_between_grids(source_grid, target_grid, q_parents, q_grids, q_spatial)?;
+    Some((
+        transform.transform_position(position),
+        transform.transform_rotation(rotation),
+    ))
+}
+
+/// Resolve the complete rigid transform between two concrete BigSpace grids.
+///
+/// This is the lower-level counterpart of [`transform_pose_between_grids`]
+/// used when one conversion must be applied to a complete dynamics state.
+pub fn grid_transform_between_grids<F: QueryFilter>(
+    source_grid: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<GridFrameTransform> {
+    if source_grid == target_grid {
+        return Some(GridFrameTransform::IDENTITY);
+    }
+    let (translation, rotation) =
+        pose_in_grid(source_grid, target_grid, q_parents, q_grids, q_spatial)?;
+    Some(GridFrameTransform {
+        translation,
+        rotation: rotation.normalize(),
+    })
+}
+
+/// Seeded counterpart of [`pose_in_grid`] for a mutably borrowed entity.
+pub fn pose_in_grid_seeded<F: QueryFilter>(
+    entity: Entity,
+    target_grid: Entity,
+    initial_cell: &CellCoord,
+    initial_transform: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    let common = common_grid(entity, target_grid, q_parents, q_grids)?;
+    let (entity_position, entity_rotation) = grid_relative_pose_seeded(
+        entity,
+        common,
+        initial_cell,
+        initial_transform,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let (target_position, target_rotation) =
+        grid_relative_pose(target_grid, common, q_parents, q_grids, q_spatial)?;
+    let inverse = target_rotation.inverse();
+    Some((
+        inverse * (entity_position - target_position),
+        inverse * entity_rotation,
+    ))
+}
+
+/// Seeded counterpart of [`grid_relative_pose`] for a target entity that is
+/// borrowed mutably by the caller (for example Avian's `Position` bridge).
+///
+/// The conversion is still performed by each owning BigSpace [`Grid`].  This
+/// is the only variant that accepts the caller's current `(CellCoord,
+/// Transform)` instead of reading a second, disjoint spatial query, so the
+/// frame rule remains identical for bodies and ordinary scene entities.
+pub fn grid_relative_pose_seeded<F: QueryFilter>(
+    entity: Entity,
+    target_grid: Entity,
+    initial_cell: &CellCoord,
+    initial_transform: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    if entity == target_grid {
+        return Some((DVec3::ZERO, DQuat::IDENTITY));
+    }
+
+    let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
+    let mut current = entity;
+    let mut current_cell = *initial_cell;
+    let mut current_transform = *initial_transform;
+
+    for _ in 0..32 {
+        let parent = q_parents.get(current).ok()?.parent();
+        let local_position = q_grids
+            .get(parent)
+            .map(|grid| grid.grid_position_double(&current_cell, &current_transform))
+            .unwrap_or_else(|_| current_transform.translation.as_dvec3());
+        chain.push((local_position, current_transform.rotation));
+
+        if parent == target_grid {
+            let mut position = DVec3::ZERO;
+            let mut rotation = DQuat::IDENTITY;
+            for (offset, local_rotation) in chain.iter().rev() {
+                position += rotation * offset;
+                rotation *= local_rotation.as_dquat();
+            }
+            return Some((position, rotation));
+        }
+
+        current = parent;
+        let (next_cell, next_transform) = q_spatial.get(current).ok()?;
+        current_cell = next_cell.copied().unwrap_or_default();
+        current_transform = *next_transform;
+    }
+
+    None
 }
 
 /// Position of `entity` in its parent Grid's frame: `cell × edge + local`.
@@ -301,17 +632,39 @@ pub fn grid_absolute_seeded(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
 ) -> GridPos {
-    let Some(edge) = parent_grid(entity, q_parents, q_grids).map(|g| g.cell_edge_length() as f64)
-    else {
-        return GridPos(tf.translation.as_dvec3());
-    };
-    GridPos(
-        DVec3::new(
-            cell.x as f64 * edge,
-            cell.y as f64 * edge,
-            cell.z as f64 * edge,
-        ) + tf.translation.as_dvec3(),
-    )
+    parent_grid(entity, q_parents, q_grids)
+        .map(|grid| GridPos(grid.grid_position_double(cell, tf)))
+        .unwrap_or_else(|| GridPos(tf.translation.as_dvec3()))
+}
+
+/// Reassemble BigSpace's stored cell/local split in the parent grid frame.
+///
+/// `edge == None` means the entity is not grid-direct, so its Transform is an
+/// ordinary parent-local point and the optional cell has no spatial meaning.
+pub fn compose_cell_local(
+    cell: Option<&CellCoord>,
+    edge: Option<f64>,
+    local_translation: Vec3,
+) -> GridPos {
+    let local = local_translation.as_dvec3();
+    match (cell, edge) {
+        (Some(cell), Some(edge)) => GridPos(
+            DVec3::new(
+                cell.x as f64 * edge,
+                cell.y as f64 * edge,
+                cell.z as f64 * edge,
+            ) + local,
+        ),
+        _ => GridPos(local),
+    }
+}
+
+/// Inverse of [`compose_cell_local`] for an already-selected BigSpace cell.
+///
+/// This does not choose or mutate a cell; BigSpace owns re-splitting. It only
+/// returns the f64 remainder that the terminal render `Transform` stores.
+pub fn cell_local_remainder(point: GridPos, cell: Option<&CellCoord>, edge: Option<f64>) -> DVec3 {
+    point - compose_cell_local(cell, edge, Vec3::ZERO)
 }
 
 /// Split a grid-absolute position back into the `(CellCoord, Transform)` pair
@@ -333,6 +686,21 @@ pub fn grid_local_from_absolute(
         }
         None => (None, abs.0.as_vec3()),
     }
+}
+
+/// Return the cell-local remainder of `abs` while retaining an entity's
+/// existing cell.  BigSpace owns when the cell changes; bridge writeback uses
+/// this inverse without inventing a second rebranch policy.
+pub fn grid_local_remainder(
+    entity: Entity,
+    abs: GridPos,
+    cell: &CellCoord,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+) -> DVec3 {
+    parent_grid(entity, q_parents, q_grids)
+        .map(|grid| abs.0 - grid.grid_position_double(cell, &Transform::default()))
+        .unwrap_or(abs.0)
 }
 
 /// The `Grid` this entity is a direct child of, if any.
@@ -366,40 +734,6 @@ pub fn world_to_grid_local(
     target_grid: &Grid,
 ) -> (CellCoord, Vec3) {
     target_grid.translation_to_grid(world_pos - target_grid_world)
-}
-
-/// Express a root-frame pose in a possibly nested, rotated live grid.
-///
-/// [`world_to_grid_local`] is intentionally the lightweight spelling for a
-/// grid whose parent-frame pose is already known to be translation-only. For a
-/// live hierarchy, this is the one conversion boundary: it undoes both the
-/// grid's accumulated translation and rotation before decomposing the local
-/// point into `CellCoord + Transform`.
-pub fn world_pose_to_live_grid_local<F: QueryFilter>(
-    world_pos: GridPos,
-    world_rotation: GridRot,
-    target_grid_entity: Entity,
-    target_grid: &Grid,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<(CellCoord, Transform)> {
-    let (grid_cell, grid_transform) = q_spatial.get(target_grid_entity).ok()?;
-    let (grid_world, grid_rotation) = world_pose_seeded(
-        target_grid_entity,
-        &grid_cell.copied().unwrap_or_default(),
-        grid_transform,
-        q_parents,
-        q_grids,
-        q_spatial,
-    );
-    let grid_local = grid_rotation.0.inverse() * (world_pos - grid_world);
-    let (cell, translation) = target_grid.translation_to_grid(grid_local);
-    Some((
-        cell,
-        Transform::from_translation(translation)
-            .with_rotation((grid_rotation.0.inverse() * world_rotation.0).as_quat()),
-    ))
 }
 
 /// Convert a `GlobalTransform`-space point (the floating-origin-relative
@@ -777,14 +1111,38 @@ mod tests {
     }
 
     #[test]
-    fn world_pose_to_live_grid_local_undoes_grid_rotation() {
+    fn grid_relative_pose_ignores_distant_root_motion() {
         let mut world = World::new();
+        let root = world
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::from_translation(Vec3::new(1.0e6, 0.0, -2.0e6)),
+                GlobalTransform::default(),
+            ))
+            .id();
         let target_grid = world
             .spawn((
                 grid(),
                 CellCoord::ZERO,
-                Transform::from_rotation(Quat::from_rotation_y(core::f32::consts::FRAC_PI_2)),
+                Transform::from_rotation(Quat::from_rotation_y(0.3)),
                 GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let scene = world
+            .spawn((
+                Transform::from_xyz(10.0, 0.0, 20.0)
+                    .with_rotation(Quat::from_rotation_y(core::f32::consts::FRAC_PI_2)),
+                GlobalTransform::default(),
+                ChildOf(target_grid),
+            ))
+            .id();
+        let camera = world
+            .spawn((
+                Transform::from_xyz(3.0, 2.0, 4.0),
+                GlobalTransform::default(),
+                ChildOf(scene),
             ))
             .id();
 
@@ -793,30 +1151,26 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state
-            .get(&world)
-            .expect("read-only queries always validate");
-        let grid_ref = q_grids.get(target_grid).unwrap();
+        let first = {
+            let (q_parents, q_grids, q_spatial) = state
+                .get(&world)
+                .expect("read-only queries always validate");
+            grid_relative_pose(camera, target_grid, &q_parents, &q_grids, &q_spatial)
+                .expect("camera is under target grid")
+        };
 
-        // The point is local +X under a grid rotated +90° around Y, so its
-        // root-frame position is -Z. Possession must recover +X before storing
-        // the avatar under that grid.
-        let (cell, local) = world_pose_to_live_grid_local(
-            GridPos(DVec3::new(0.0, 0.0, -100.0)),
-            GridRot(DQuat::IDENTITY),
-            target_grid,
-            grid_ref,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .expect("target grid has a world pose");
+        world
+            .entity_mut(root)
+            .insert(Transform::from_translation(Vec3::new(-9.0e11, 0.0, 7.0e11)));
+        let second = {
+            let (q_parents, q_grids, q_spatial) = state
+                .get(&world)
+                .expect("read-only queries always validate");
+            grid_relative_pose(camera, target_grid, &q_parents, &q_grids, &q_spatial)
+                .expect("camera is under target grid")
+        };
 
-        assert_eq!(cell, CellCoord::ZERO);
-        assert!((local.translation - Vec3::new(100.0, 0.0, 0.0)).length() < 1e-4);
-        assert_eq!(
-            local.rotation,
-            Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2)
-        );
+        assert!((first.0 - second.0).length() < 1e-9);
+        assert!(first.1.abs_diff_eq(second.1, 1e-9));
     }
 }

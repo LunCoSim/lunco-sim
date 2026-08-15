@@ -30,6 +30,8 @@
 
 #define_import_path lunco::terrain
 
+#import bevy_pbr::mesh_functions
+
 #ifdef LUNCO_NOISE_2D
 #import lunco::noise::fbm2d
 #else
@@ -109,6 +111,22 @@ fn map_weights(r: f32) -> vec3<f32> {
     let w_ao = clamp(0.35 + (r - 0.5) * 0.4, 0.35, 1.0);
     let w_tone = clamp(0.5 + (r - 0.5) * 0.35, 0.5, 1.0);
     return vec3(w_normal, w_ao, w_tone);
+}
+
+/// Decode the normal-map convention shared by the DEM baker and terrain
+/// shaders.  The result is in the DEM's local ENU frame, not in whichever
+/// floating render frame is active for the current camera.
+fn decode_dem_normal(encoded: vec3<f32>) -> vec3<f32> {
+    return normalize(encoded * 2.0 - 1.0);
+}
+
+/// Convert a baked DEM-local ENU normal into the current render world through
+/// the mesh instance.  This is the one coordinate boundary for derived terrain
+/// normals: static meshes and streamed BigSpace tiles must both use it before
+/// combining a map normal with `VertexOutput.world_normal` or scene lighting.
+fn dem_normal_to_world(encoded: vec3<f32>, instance_index: u32) -> vec3<f32> {
+    return mesh_functions::mesh_normal_local_to_world(
+        decode_dem_normal(encoded), instance_index);
 }
 
 /// Raw FBM at a world position, platform-correct. Use this for the un-ramped

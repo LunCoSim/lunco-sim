@@ -12,7 +12,7 @@
 //! resolution work.
 
 use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Rotation};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::Autopilot;
@@ -117,11 +117,9 @@ impl ThermalInfo {
 struct DrivenVessel {
     entity: Entity,
     label: String,
-    /// Metres, root frame (site-ENU in a site-anchored scene).
-    pos: DVec3,
-    /// Geographic position resolved from the authored site anchor, when the
-    /// scene has a geodetic frame. Plain sandboxes retain their ENU readout.
-    geo: Option<lunco_celestial::Geodetic>,
+    /// Explicit coordinate mode. A site scene never falls back to root-world
+    /// coordinates when its frame is missing or ambiguous.
+    pose: DrivenVesselPose,
     /// Degrees from local up. The tip-over-relevant number.
     tilt_deg: f32,
     roll_deg: f32,
@@ -147,14 +145,52 @@ struct DrivenVessel {
     limits_derived: bool,
 }
 
+/// Coordinate ownership for one driven vessel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DrivenVesselPose {
+    /// Canonical site/body-fixed coordinates in a site-anchored scene.
+    Surface(lunco_celestial::SurfacePose),
+    /// Explicit non-celestial sandbox coordinates.
+    World {
+        position: lunco_core::coords::GridPos,
+        rotation: lunco_core::coords::GridRot,
+    },
+}
+
+impl DrivenVesselPose {
+    fn display_position(self) -> DVec3 {
+        match self {
+            Self::Surface(pose) => pose.site_position.0,
+            Self::World { position, .. } => position.0,
+        }
+    }
+
+    fn display_rotation(self) -> DQuat {
+        match self {
+            Self::Surface(pose) => pose.site_rotation,
+            Self::World { rotation, .. } => rotation.0,
+        }
+    }
+
+    fn geodetic(self) -> Option<lunco_celestial::Geodetic> {
+        match self {
+            Self::Surface(pose) => Some(pose.geodetic),
+            Self::World { .. } => None,
+        }
+    }
+
+    fn altitude(self) -> f64 {
+        self.geodetic()
+            .map_or_else(|| self.display_position().y, |geo| geo.height_m)
+    }
+}
+
 /// The optional geographic datum is one system parameter so the HUD remains
 /// below Bevy's flat system-parameter limit while retaining the authored site
 /// coordinate readout.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GeodeticHud<'w, 's> {
-    site:
-        Query<'w, 's, &'static lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    bodies: Option<Res<'w, lunco_celestial::CelestialBodyRegistry>>,
+    surface_pose: lunco_celestial::SurfacePoseQuery<'w, 's>,
     /// Kept inside this aggregate system parameter so the HUD stays under
     /// Bevy's flat system-parameter limit.
     autopilots: Query<'w, 's, &'static Autopilot>,
@@ -429,13 +465,19 @@ fn resolve_driven(
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
-    site: Option<&lunco_celestial::GeodeticAnchor>,
-    bodies: Option<&lunco_celestial::CelestialBodyRegistry>,
+    surface_pose: &lunco_celestial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
-    let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
-    let pos = pos.0;
-    let rot = rot.0.as_quat();
+    let pose = match surface_pose.site_count() {
+        0 => {
+            let (position, rotation) =
+                lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
+            DrivenVesselPose::World { position, rotation }
+        }
+        1 => DrivenVesselPose::Surface(surface_pose.get(vessel)?),
+        _ => return None,
+    };
+    let rot = pose.display_rotation().as_quat();
 
     // Local up = world up. Over a 1 km site the body's curvature contributes
     // d²/2R ≈ 0.3 m of sag, i.e. ~0.03° of tilt — far below the gauge's
@@ -520,8 +562,7 @@ fn resolve_driven(
     Some(DrivenVessel {
         entity: vessel,
         label,
-        pos,
-        geo: site.and_then(|site| hud_geodetic(site, bodies?, pos)),
+        pose,
         tilt_deg,
         roll_deg,
         pitch_deg,
@@ -534,24 +575,6 @@ fn resolve_driven(
         danger_deg,
         limits_derived,
     })
-}
-
-/// Convert the vessel's site-ENU position into the body's standard geodetic
-/// coordinates. The site anchor names the datum; the body registry owns radius.
-fn hud_geodetic(
-    site: &lunco_celestial::GeodeticAnchor,
-    bodies: &lunco_celestial::CelestialBodyRegistry,
-    pos: DVec3,
-) -> Option<lunco_celestial::Geodetic> {
-    let body = bodies
-        .bodies
-        .iter()
-        .find(|body| body.ephemeris_id == site.body)?;
-    Some(lunco_celestial::geo::local_to_geodetic(
-        &site.geodetic,
-        body.radius_m,
-        pos,
-    ))
 }
 
 #[cfg(test)]
@@ -833,8 +856,7 @@ pub(crate) fn publish_exposure(
         &queries.wheels,
         &queries.com,
         &queries.sim,
-        geo.site.iter().next(),
-        geo.bodies.as_deref(),
+        &geo.surface_pose,
     ) else {
         if let (Some(label), Some(soc_pct)) = (seminar.last_label.as_deref(), seminar.last_soc_pct)
         {
@@ -855,7 +877,6 @@ pub(crate) fn publish_exposure(
         );
         publish_control_exposures(
             &mut runtime.exposures,
-            &runtime.selected,
             &queries.name,
             &queries.callsign,
             &queries.sim,
@@ -921,7 +942,10 @@ pub(crate) fn publish_exposure(
 
     if let Some(slope_deg) = trace_inputs
         .surface
-        .slope_at(lunco_core::coords::GridPos(vessel.pos), 1.0)
+        .slope_at(
+            lunco_core::coords::GridPos(vessel.pose.display_position()),
+            1.0,
+        )
         .map(|slope| slope.to_degrees() as f32)
     {
         let new_max = seminar
@@ -969,7 +993,6 @@ pub(crate) fn publish_exposure(
     );
     publish_control_exposures(
         &mut runtime.exposures,
-        &runtime.selected,
         &queries.name,
         &queries.callsign,
         &queries.sim,
@@ -1177,13 +1200,13 @@ fn publish_lunica_schema_exposure(
     true
 }
 
-/// Publish the selected simulation's control response for authored runtime
-/// surfaces. Selection is the scope; the values are the model's real public
-/// outputs and the actuator network's real valve outputs. Nothing here knows a
-/// film, a lander path, or a widget implementation.
+/// Publish control responses for explicitly authored runtime surfaces.
+///
+/// A selected entity is not enough to opt into the compact lander card: the
+/// surface is a scene-authored presentation contract. This keeps a rover
+/// selection from accidentally publishing a lander-specific HUD.
 fn publish_control_exposures(
     exposures: &mut EngineExposures,
-    selected: &SelectedEntities,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
@@ -1197,9 +1220,6 @@ fn publish_control_exposures(
     canonical: &CanonicalStages,
 ) {
     let mut roots = authored_control_roots(q_paths, canonical);
-    if roots.is_empty() {
-        roots.push((selected.primary(), 0));
-    }
     roots.sort_by_key(|(_, column)| *column);
 
     publish_selected_control_exposure(
@@ -1925,12 +1945,12 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
         v.speed
             .map_or_else(|| "—".into(), |speed| format!("{speed:.1}")),
     );
-    ui.property("altitude", format!("{:.1}", v.pos.y));
+    ui.property("altitude", format!("{:.1}", v.pose.altitude()));
     ui.property("roll", format!("{:+.0}°", v.roll_deg));
     ui.property("pitch", format!("{:+.0}°", v.pitch_deg));
     ui.property("heading", format!("{:.0}°", v.heading_deg));
 
-    if let Some(geo) = v.geo {
+    if let Some(geo) = v.pose.geodetic() {
         ui.property("geo_display", "flex");
         ui.property("local_display", "none");
         let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
@@ -1948,7 +1968,11 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
         ui.property("local_display", "flex");
         ui.property(
             "local_position",
-            format!("E {:+.0}  ·  N {:+.0}", v.pos.x, -v.pos.z),
+            format!(
+                "E {:+.0}  ·  N {:+.0}",
+                v.pose.display_position().x,
+                -v.pose.display_position().z
+            ),
         );
     }
 

@@ -11,7 +11,8 @@
 //!    new nodes ([`bake_tile_mesh`], real DEM-sampled geometry), despawn the gone,
 //! 4. draw each tile with the `terrain_geomorph` shader: a CDLOD **vertex morph**
 //!    (`POSITION → MORPH_TARGET` by camera distance, so no LOD pop) + the
-//!    procedural **regolith** fragment (FBM bump + PBR sun + CSM shadows).
+//!    procedural **regolith** fragment (FBM bump + PBR sun + DEM self-shadow +
+//!    dynamic-object CSM shadows).
 //!
 //! # Appearance is INTENT here, not a material
 //!
@@ -24,9 +25,11 @@
 //! bucket)` that `MatKey` encoded is simply the look's own content now.
 //!
 //! Keep the key COARSE. It is what lets tiles batch, so any per-tile parameter
-//! added here mints a material per tile and costs draw calls — removing the old
-//! per-tile reveal step from this key roughly halved frame time on moonbase
-//! (33.8 -> 79.2 FPS). See `docs/architecture/render-decoupling.md`.
+//! added here mints a material per tile and costs draw calls. The topology
+//! stitch mask is the deliberate exception: it is per-tile material identity,
+//! because neighbouring tiles can require different masks in one draw cover.
+//! It is changed only when the authoritative draw topology changes, so stable
+//! covers still reuse the content-keyed material cache.
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
@@ -41,8 +44,8 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{
-    ParamValue, ShaderLook, ShaderLookBound, TextureLayer, ATTRIBUTE_MORPH_NORMAL,
-    ATTRIBUTE_MORPH_TARGET,
+    ParamValue, ShaderLook, ShaderLookReady, TextureLayer, ATTRIBUTE_MORPH_EDGE,
+    ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
@@ -111,6 +114,10 @@ pub struct TerrainVisualFocus {
 
 #[derive(Clone, Copy)]
 struct VisualDemand {
+    entity: Entity,
+    /// The live grid shared by this focus, when it has one. A matching terrain
+    /// uses the direct common-frame path below instead of a root-space round trip.
+    grid: Option<Entity>,
     position: DVec3,
     forward: DVec3,
     /// Physical height of the camera's rendered viewport, in pixels.
@@ -245,6 +252,9 @@ pub(crate) fn collect_terrain_detail_demands(
                 let (position, rotation) =
                     lunco_core::coords::world_pose(entity, &parents, &grids, &spatial)?;
                 Some(VisualDemand {
+                    entity,
+                    grid: lunco_core::coords::ancestor_grid(entity, &parents, &grids)
+                        .map(|(grid, _)| grid),
                     position: position.0,
                     forward: rotation.0 * DVec3::NEG_Z,
                     screen_height_px,
@@ -365,10 +375,17 @@ struct TileSlot {
     /// that should cover its area is not ready yet. Tracked so the `Visibility`
     /// command is issued on a flip, not every frame.
     drawn: bool,
-    /// A new entity stays hidden until the render binder has attached its concrete
-    /// material. This is a domain/render boundary contract, not an ECS-timing
-    /// guess: the binder inserts [`ShaderLookBound`] with the material itself.
+    /// A new entity stays hidden until the render binder has attached a concrete
+    /// material whose shader layout is ready. This is a domain/render boundary
+    /// contract, not an ECS-timing guess: [`ShaderLookReady`] is inserted only
+    /// after shader loading and parameter reflection have completed.
     ready: bool,
+    /// The edge-stitch topology currently bound to this tile's material. The
+    /// stitch mask is per-tile material identity, not a shared live uniform: two
+    /// neighbouring tiles can require different masks in the same frame. Keep it
+    /// here so a stable draw cover does not dirty every tile's `ShaderLook` on
+    /// every update.
+    stitch_edges: [f32; 4],
 }
 
 /// Render extraction can still reference an entity for the frame in which main
@@ -413,12 +430,21 @@ pub(crate) fn retire_terrain_tiles(
 /// flicker rather than as anything a type error would catch.
 ///
 /// `scratch` is caller-owned to keep this allocation-free on the hot path.
-/// The one always-resident fallback. It covers the complete terrain from the
-/// first drawable frame. The only extra retained tiles are direct parents of
-/// selected leaves, held hidden as local handoff cover rather than as a second
-/// rendered hierarchy.
+/// The one retained fallback. The quadtree root is a complete cover of the
+/// DEM, so it is the only permanent stand-in needed while selected detail is
+/// baked. Keeping a second hierarchy of coarse tiles creates extra render
+/// surfaces and lets an incomplete coarse level become visible as a tile-sized
+/// hole.
 fn fallback_coords() -> impl Iterator<Item = QuadCoord> {
     std::iter::once(QuadCoord::ROOT)
+}
+
+fn is_coarse_fallback(coord: QuadCoord) -> bool {
+    coord == QuadCoord::ROOT
+}
+
+fn coarse_fallback_tile_count() -> usize {
+    1
 }
 
 /// Keep the direct parents of the live cover resident as local, hidden fallback
@@ -914,8 +940,72 @@ fn build_draw_partition(
     }
 }
 
-/// Root depth. The root tile alone is the permanent no-hole fallback.
-const ROOT_FALLBACK_DEPTH: u8 = QuadCoord::ROOT.depth;
+/// Return the four CDLOD edge-stitch bits for a drawn tile.  `draw` is a
+/// disjoint cover, so looking at the same-depth coordinate across each edge is
+/// sufficient: an ancestor there means that this tile is the finer side of a
+/// 2:1 boundary; a same-depth tile or descendants mean no stitch.  This is
+/// topology, not a distance heuristic, and therefore cannot drift as the
+/// camera or terrain scale changes.
+fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
+    if coord.depth == 0 {
+        return [0.0; 4];
+    }
+    let side = 1_u32 << coord.depth;
+    let neighbours = [
+        if coord.z > 0 {
+            Some(QuadCoord {
+                depth: coord.depth,
+                x: coord.x,
+                z: coord.z - 1,
+            })
+        } else {
+            None
+        },
+        if coord.z + 1 < side {
+            Some(QuadCoord {
+                depth: coord.depth,
+                x: coord.x,
+                z: coord.z + 1,
+            })
+        } else {
+            None
+        },
+        if coord.x > 0 {
+            Some(QuadCoord {
+                depth: coord.depth,
+                x: coord.x - 1,
+                z: coord.z,
+            })
+        } else {
+            None
+        },
+        if coord.x + 1 < side {
+            Some(QuadCoord {
+                depth: coord.depth,
+                x: coord.x + 1,
+                z: coord.z,
+            })
+        } else {
+            None
+        },
+    ];
+    let mut result = [0.0; 4];
+    for (edge, neighbour) in neighbours.into_iter().enumerate() {
+        let Some(neighbour) = neighbour else { continue };
+        if draw.contains(&neighbour) {
+            continue;
+        }
+        let mut ancestor = neighbour.parent();
+        while let Some(candidate) = ancestor {
+            if draw.contains(&candidate) {
+                result[edge] = 1.0;
+                break;
+            }
+            ancestor = candidate.parent();
+        }
+    }
+    result
+}
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
 /// `mode` is the shader the live tiles were built with (a mode change swaps their
@@ -937,7 +1027,7 @@ pub struct LodTiles {
     /// `evolve_cover` instead of re-derived each frame, which is what removes the
     /// mass re-selection the old global budget fit caused.
     cover: HashSet<QuadCoord>,
-    /// Whether the always-resident root fallback is fully baked.
+    /// Whether the always-resident coarse fallback cover is fully render-ready.
     ///
     /// Load-bearing for correctness, not just speed: while this is false the idle
     /// fast path MUST NOT skip the frame body. The gate gives up when nothing is
@@ -1141,7 +1231,7 @@ impl Default for TerrainLodConfig {
         let bakes_per_frame = 1;
         #[cfg(not(target_arch = "wasm32"))]
         // Native bakes stay off-thread. Issue enough work to fill the guaranteed
-        // camera near field as one burst instead of revealing a few sibling
+        // camera near field as one burst instead of exposing a few sibling
         // groups per rendered frame (the visible startup "clickering").
         let bakes_per_frame = 24;
         TerrainLodConfig {
@@ -1366,42 +1456,22 @@ const MESH_CACHE_BYTE_CEILING: usize = 640 * 1024 * 1024;
 
 /// Cache-entry cap derived from what streaming terrains can actually keep
 /// RESIDENT — the selected cover (≤ `tile_budget`), one hidden direct-parent
-/// fallback per selected leaf (worst case as many again), the root carpet and
+/// fallback per selected leaf (worst case as many again), the coarse carpet and
 /// a small stand-in allowance — ×2 retention head-room for the trailing edge.
 /// The old flat `CACHE_CAP = 1024` sat BELOW the resident bound at the
 /// default 768 budget, so the trim evicted exactly the entries the cache
 /// exists for, every frame the camera traversed.
 fn mesh_cache_entry_cap(tile_budget: usize, terrain_count: usize) -> usize {
-    let resident_bound = 2 * tile_budget + 64;
+    let resident_bound = 2 * tile_budget + coarse_fallback_tile_count() + 64;
     2 * resident_bound * terrain_count
 }
 /// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
 /// thousands of tasks). New tasks wait for slots to free.
 const MAX_INFLIGHT_BAKES: usize = 64;
-// REMOVED: the per-tile reveal "settle" (`REVEAL_SECS` / `TileReveal` /
-// `animate_tile_reveal`). Tiles are now born fully revealed.
-//
-// It broke CDLOD's core invariant. The morph factor MUST be a pure function of
-// world position — that is precisely why the shader derives `dist` per vertex —
-// because it is what makes two independently-built neighbours compute identical
-// positions at their shared edge without communicating. Reveal added a per-tile,
-// TIME-varying term (`m = max(morph, 1.0 - reveal)`), so two adjacent tiles at the
-// same depth and distance that spawned a few frames apart disagreed at that edge:
-// a crack opened, the skirt behind it caught the light, and the seam shimmered as
-// the reveal animated. Movement staggers spawn times, so the artifact tracked
-// movement — which is exactly how it was reported.
-//
-// Reveal existed to hide BAKE LATENCY, from before there was a fallback: tiles
-// used to appear out of nothing, so they were eased in. The always-resident coarse
-// base solves that properly (a blurry parent instead of a hole — Cesium's
-// `ForbidHoles`, MSFS's "best currently available data"), which is why
-// `docs/architecture/terrain-precompute-plan.md` already lists this machinery under
-// "What this deletes". Two mechanisms were solving one problem and the older one
-// was geometrically wrong.
-//
-// Do not reintroduce a per-tile fade to smooth LOD changes. Anything that varies
-// per tile must not enter the vertex position, or neighbours crack. A legitimate
-// cross-fade would have to be a function of position only, or live in shading.
+// Tile insertion is immediate once the mesh and material are ready. The draw
+// partition selects the deepest ready ancestor, and edge stitching makes every
+// finer/coarser boundary conform to the same parent lattice. There is no
+// time-dependent visibility or fabricated seam geometry in this path.
 
 /// Result of an off-thread tile bake: the finished CPU `Mesh` (not yet uploaded)
 /// plus the spawn metadata the main thread needs.
@@ -1424,17 +1494,19 @@ struct BakedTile {
 #[derive(Component, Default)]
 pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
-/// Far-field sun-shadow wiring for a STREAMED terrain's tiles: the pre-baked
-/// R8 sun-visibility texture (lunco-environment's horizon shadow cache) plus
-/// the CSM far bound the shader blends in beyond. Written by the app glue
-/// (which can see both the environment's `HorizonShadowCache` and this crate);
-/// consumed by the tile materials. `on == 0` disables sampling (params written
-/// so a cache that goes stale can be switched off without touching handles).
+/// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
+/// sun-visibility texture from `lunco-environment`'s horizon solution. Streamed
+/// tiles do not cast into the directional cascade; that cascade remains free to
+/// carry dynamic-object shadows onto the terrain receiver, while this cache is
+/// the sole owner of terrain-on-terrain occlusion at every distance.
+///
+/// Written by the app glue (which can see both `HorizonShadowCache` and this
+/// crate); consumed by tile materials. `on == 0` disables sampling without
+/// changing the texture binding while a cache is stale.
 #[derive(Component, Clone)]
 pub struct TileShadowCache {
     pub image: Handle<Image>,
     pub on: f32,
-    pub csm_far: f32,
 }
 
 /// Write one named parameter into a look, reusing the existing slot when the key is
@@ -1453,7 +1525,6 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
     look.textures
         .insert(TextureLayer::ShadowCache, cache.image.clone());
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
-    set_param(look, "csm_far", ParamValue::F32(cache.csm_far));
 }
 
 /// Per-depth weights for the baked derived maps, from the ratio of the tile's
@@ -1531,7 +1602,10 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
                 ParamValue::F32(authored.weight_albedo),
             );
         }
-        None => set_param(look, "weight_albedo", ParamValue::F32(0.0)),
+        None => {
+            look.textures.remove(&TextureLayer::Albedo);
+            set_param(look, "weight_albedo", ParamValue::F32(0.0));
+        }
     }
     match &authored.mineral {
         Some(h) => {
@@ -1542,7 +1616,10 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
                 ParamValue::F32(authored.weight_mineral),
             );
         }
-        None => set_param(look, "weight_mineral", ParamValue::F32(0.0)),
+        None => {
+            look.textures.remove(&TextureLayer::Mineral);
+            set_param(look, "weight_mineral", ParamValue::F32(0.0));
+        }
     }
 }
 
@@ -1573,6 +1650,11 @@ fn tile_look(
     let mut look = ShaderLook::new(path).with_vertex_shader(path);
     set_param(&mut look, "morph_start", ParamValue::F32(morph_start));
     set_param(&mut look, "morph_end", ParamValue::F32(morph_end));
+    set_param(
+        &mut look,
+        "stitch_edges",
+        ParamValue::Vec4([0.0, 0.0, 0.0, 0.0]),
+    );
     match mode {
         TerrainShaderMode::DebugLod => {
             set_param(&mut look, "base_color", ParamValue::Vec3(lod_rgb(depth)))
@@ -1626,24 +1708,21 @@ fn spawn_tile(
     // keeps the tile in the SAME big_space cell as the content standing on it, and its
     // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
     origin_y: f64,
-    // Absolute pose of the grid receiving the tile.
-    grid_world: DVec3,
-    grid_rotation: DQuat,
-    // Absolute pose of the DEM owner's local frame. The baked mesh is expressed
-    // in this frame, not necessarily in the receiving body's frame.
-    terrain_world: DVec3,
-    terrain_rotation: DQuat,
+    // Pose of the DEM owner's local frame directly in the receiving grid. Keeping
+    // this conversion local avoids subtracting two large root-frame positions
+    // when a celestial surface grid is rotating or being re-pinned.
+    terrain_grid_position: DVec3,
+    terrain_grid_rotation: DQuat,
 ) -> Entity {
     let terrain_local = DVec3::new(center[0], origin_y, center[1]);
-    let world_center = terrain_world + terrain_rotation * terrain_local;
-    let grid_local = grid_rotation.inverse() * (world_center - grid_world);
+    let grid_local = terrain_grid_position + terrain_grid_rotation * terrain_local;
     let (cell, local) = grid.translation_to_grid(grid_local);
-    let local_rotation = (grid_rotation.inverse() * terrain_rotation).as_quat();
+    let local_rotation = terrain_grid_rotation.as_quat();
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
-    let tile = commands.spawn((
+    let mut tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(
             mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
@@ -1660,13 +1739,21 @@ fn spawn_tile(
         // list unless the user opts in.
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
-        // Streamed terrain owns its terrain-to-terrain self-shadow through the
-        // heightfield shader/cache, so it must not add the whole tile set to the
-        // directional caster atlas. It remains a receiver: rover and other
-        // dynamic-object shadows still need to land on the surface.
-        bevy::light::NotShadowCaster,
     ));
+    enforce_streamed_shadow_ownership(&mut tile);
     tile.id()
+}
+
+/// Establish the one shadow ownership split for a streamed terrain tile.
+///
+/// Terrain self-shadow is sampled from the DEM horizon cache, so the mesh must
+/// not cast a duplicate into the directional cascade. The mesh remains a CSM
+/// receiver so independent dynamic casters (rover, rocks, equipment) can cast
+/// onto it. Keeping both operations here prevents initial spawn and late cache
+/// binding from drifting into different contracts again.
+fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>) {
+    tile.try_insert(bevy::light::NotShadowCaster);
+    tile.try_remove::<bevy::light::NotShadowReceiver>();
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -1863,7 +1950,7 @@ pub struct StreamScratch {
     /// The DRAW partition: exactly one tile per covered area — a ready wanted node,
     /// or the deepest ready ancestor standing in for one that is not.
     draw: HashSet<QuadCoord>,
-    /// The always-resident root fallback, as a bake target.
+    /// The always-resident coarse fallback, as a bake target.
     coarse: Vec<Selected>,
     /// Scratch for the disjointness pass over `draw`.
     drop_covered: Vec<QuadCoord>,
@@ -1926,7 +2013,8 @@ pub fn update_lod_tiles(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
-    material_bound: Query<(), With<ShaderLookBound>>,
+    material_bound: Query<(), With<ShaderLookReady>>,
+    mut looks: Query<&mut ShaderLook>,
     mut scratch: Local<StreamScratch>,
 ) {
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
@@ -1997,13 +2085,14 @@ pub fn update_lod_tiles(
         else {
             continue;
         };
-        let Some((terrain_world, terrain_rotation)) =
-            lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
-        else {
-            continue;
-        };
-        let Some((grid_world, grid_rotation)) =
-            lunco_core::coords::world_pose(grid_entity, &parents, &grids, &spatial)
+        let Some((terrain_grid_position, terrain_grid_rotation)) =
+            lunco_core::coords::grid_relative_pose(
+                terrain,
+                grid_entity,
+                &parents,
+                &grids,
+                &spatial,
+            )
         else {
             continue;
         };
@@ -2043,6 +2132,19 @@ pub fn update_lod_tiles(
         } else {
             viz.tile_res
         };
+        // A live max-depth reduction invalidates the persistent cover: it may
+        // still contain leaves deeper than the new tree and those leaves would
+        // otherwise remain drawable forever. The cover is authoritative state,
+        // so reset it to the root and let the normal selector rebuild it under
+        // the new bound. Increasing the bound keeps the existing cover and
+        // refines from that valid fixed point.
+        if tiles.cover.iter().any(|coord| coord.depth > cfg.max_depth) {
+            tiles.cover.clear();
+            tiles.bootstrap_ready = false;
+            tiles.settled_sig = None;
+            tiles.last_sig = None;
+            tiles.budget_refused = 0;
+        }
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;
@@ -2078,8 +2180,36 @@ pub fn update_lod_tiles(
         let h = oracle.half_extent() as f64;
         visual_foci.clear();
         for demand in demands.visual.iter() {
-            let terrain_local = terrain_rotation.0.inverse() * (demand.position - terrain_world.0);
-            let local_forward = terrain_rotation.0.inverse() * demand.forward;
+            let (camera_position, camera_rotation) = if demand.grid == Some(grid_entity) {
+                lunco_core::coords::grid_relative_pose(
+                    demand.entity,
+                    grid_entity,
+                    &parents,
+                    &grids,
+                    &spatial,
+                )
+                .unwrap_or((demand.position, DQuat::IDENTITY))
+            } else {
+                (demand.position, DQuat::IDENTITY)
+            };
+            let terrain_local = if demand.grid == Some(grid_entity) {
+                terrain_grid_rotation.inverse() * (camera_position - terrain_grid_position)
+            } else {
+                // Different grids have no common local frame. Keep the existing
+                // absolute conversion for that intentional cross-body case.
+                let (terrain_world, terrain_rotation) =
+                    lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+                        .expect("terrain pose exists after grid-relative pose");
+                terrain_rotation.0.inverse() * (demand.position - terrain_world.0)
+            };
+            let local_forward = if demand.grid == Some(grid_entity) {
+                terrain_grid_rotation.inverse() * (camera_rotation * DVec3::NEG_Z)
+            } else {
+                let (_, terrain_rotation) =
+                    lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
+                        .expect("terrain pose exists after grid-relative pose");
+                terrain_rotation.0.inverse() * demand.forward
+            };
             let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
             let heading = (heading.length() > 1e-3).then(|| heading.normalize());
             let here = [terrain_local.x, terrain_local.z];
@@ -2121,14 +2251,7 @@ pub fn update_lod_tiles(
             continue;
         };
         let quadtree_for = |px: f64| {
-            Quadtree::from_screen_metric(
-                h,
-                cfg.max_depth.max(1),
-                h,
-                screen_height_px,
-                fov_y_rad,
-                px,
-            )
+            Quadtree::from_screen_metric(h, cfg.max_depth, h, screen_height_px, fov_y_rad, px)
         };
         let base_px = cfg.pixel_error.clamp(0.5, 32.0);
         let pixel_error = base_px;
@@ -2393,28 +2516,14 @@ pub fn update_lod_tiles(
 
         // Selection is authoritative. Drop superseded generations and camera
         // requests no longer selected before they can occupy every worker slot.
-        // While an exact camera-underfoot tile is missing, background coarse-base
-        // preload (except the root safety carpet) must yield its worker slots.
-        // Otherwise a camera arriving during startup can wait behind an entire
-        // breadth-first preload even though its selected tile is first in the new
-        // queue.
-        let urgent_missing = sel.iter().any(|selected| {
-            visual_foci.iter().any(|demand| {
-                demand.required
-                    && selected.region.distance_to(demand.focus) <= f64::EPSILON
-                    && !tiles
-                        .tiles
-                        .get(&selected.coord)
-                        .is_some_and(|slot| slot.gen == cur_gen && slot.ready)
-            })
-        });
+        // The retained coarse base is always kept pending until its generation is
+        // complete; fine requests are admitted only after that cover is ready.
         let pending_before = pending.0.len();
         pending.0.retain(|coord, (gen, _)| {
             *gen == cur_gen
                 && (wanted.contains(coord)
                     || parent_fallbacks.contains(coord)
-                    || *coord == QuadCoord::ROOT
-                    || (!urgent_missing && coord.depth == ROOT_FALLBACK_DEPTH))
+                    || is_coarse_fallback(*coord))
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
         // Intelligent baking, two phases:
@@ -2537,10 +2646,13 @@ pub fn update_lod_tiles(
             let handle = meshes.add(baked.mesh);
             let oy = baked.origin_y;
             mesh_cache.insert((terrain, coord, baked.res), handle.clone(), oy);
-            // No longer selected while it baked → keep the cached mesh, skip spawning.
-            // Direct parent fallbacks are also live residents: they stay hidden until
-            // a child needs a local no-hole handoff.
-            if !wanted.contains(&coord) && !parent_fallbacks.contains(&coord) {
+            // Coarse-base tiles are live residents even though they are not selected
+            // leaves. Direct parent fallbacks are also live residents. Other completed
+            // work that is no longer wanted stays in the content cache.
+            if !wanted.contains(&coord)
+                && !parent_fallbacks.contains(&coord)
+                && !is_coarse_fallback(coord)
+            {
                 continue;
             }
             let depth = baked.depth;
@@ -2564,10 +2676,8 @@ pub fn update_lod_tiles(
                 shadow,
                 overlay,
                 oy,
-                grid_world.0,
-                grid_rotation.0,
-                terrain_world.0,
-                terrain_rotation.0,
+                terrain_grid_position,
+                terrain_grid_rotation,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -2578,6 +2688,7 @@ pub fn update_lod_tiles(
                     morph_end: baked.morph_end,
                     drawn: false,
                     ready: false,
+                    stitch_edges: [0.0; 4],
                 },
             ) {
                 retire_tile(&mut commands, old.entity);
@@ -2590,9 +2701,8 @@ pub fn update_lod_tiles(
         // to their OWN big_space `CellCoord` (vertices baked relative to the tile
         // centre) so far-from-origin tiles keep f32 precision.
         let pool = AsyncComputeTaskPool::get();
-        // The one root fallback is queued before the selection. It is a complete
-        // visual floor; every other job is selected detail, never a redundant
-        // coarse hierarchy that could later replace visible detail.
+        // The retained coarse cover is queued before the selection. It is a
+        // complete DEM-derived floor; finer work never creates an uncovered area.
         coarse.clear();
         if !frozen && !tiles.coarse_ready {
             for c in fallback_coords() {
@@ -2607,23 +2717,12 @@ pub fn update_lod_tiles(
                 });
             }
         }
-        // The root fallback is a correctness prerequisite, not just the first item
-        // in a priority queue. Starting fine bakes beside it can saturate the worker
-        // pool on a cold cache, leaving the only complete visual floor pending while
-        // detail work runs. Until the root is actually drawable, admit *only* that
-        // bake. Once it is visible, the normal near-camera-first queue resumes.
-        let root_ready = tiles
-            .tiles
-            .get(&QuadCoord::ROOT)
-            .is_some_and(|slot| slot.ready);
-        // The root fallback precedes urgent work after that gate.
-        for s in coarse
-            .iter()
-            .take(1)
-            .chain(sel.iter())
-            .chain(coarse.iter().skip(1))
-        {
-            if !root_ready && s.coord != QuadCoord::ROOT {
+        // The complete coarse cover is a correctness prerequisite, not just a
+        // priority hint. Starting fine bakes beside it can saturate the worker
+        // pool on a cold cache and leave an area without a ready ancestor. Admit
+        // only coarse work until the complete cover exists; then refine nearest-first.
+        for s in coarse.iter().chain(sel.iter()) {
+            if !tiles.coarse_ready && !is_coarse_fallback(s.coord) {
                 continue;
             }
             // Skip coords already satisfied at the current generation (resident tile
@@ -2660,10 +2759,8 @@ pub fn update_lod_tiles(
                     shadow,
                     overlay,
                     oy,
-                    grid_world.0,
-                    grid_rotation.0,
-                    terrain_world.0,
-                    terrain_rotation.0,
+                    terrain_grid_position,
+                    terrain_grid_rotation,
                 );
                 if let Some(old) = tiles.tiles.insert(
                     s.coord,
@@ -2673,6 +2770,7 @@ pub fn update_lod_tiles(
                         morph_end,
                         drawn: false,
                         ready: false,
+                        stitch_edges: [0.0; 4],
                     },
                 ) {
                     retire_tile(&mut commands, old.entity);
@@ -2728,6 +2826,7 @@ pub fn update_lod_tiles(
                 );
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
                 mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tm.morph_normals);
+                mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, tm.edge_masks);
                 // The SAME anchor `bake_tile_mesh_cached` rebased the mesh Y by (full
                 // oracle at the tile centre). Carried on `BakedTile` so the main thread
                 // places the tile at exactly the height its mesh was baked for.
@@ -2748,7 +2847,12 @@ pub fn update_lod_tiles(
         // generation. Latching it stops the per-frame enumeration AND re-arms the idle
         // fast path (which is held off until then — see `LodTiles::coarse_ready`).
         if !tiles.coarse_ready && !coarse.is_empty() {
-            tiles.coarse_ready = coarse.iter().all(|s| fresh_tile(&tiles, &s.coord));
+            tiles.coarse_ready = coarse.iter().all(|s| {
+                tiles
+                    .tiles
+                    .get(&s.coord)
+                    .is_some_and(|slot| slot.gen == cur_gen && slot.ready)
+            });
         }
 
         // ── Unrefinement: draw the best READY data, never a hole ─────────────
@@ -2772,11 +2876,27 @@ pub fn update_lod_tiles(
             drop_covered,
         );
 
-        // Retain + visibility. The root is never despawned; everything else lives
-        // while it is wanted, is a direct hidden fallback for a wanted child, or
-        // actively draws as a stand-in.
+        // The draw cover is the authoritative topology for this frame. The
+        // edge mask is per-tile material identity (not a shared live uniform),
+        // so change it only when the cover actually changes at that tile. This
+        // keeps the existing content-keyed material cache stable while still
+        // making every fine/coarse boundary conform to the parent lattice.
+        for (coord, slot) in &mut tiles.tiles {
+            let edges = stitch_edges(*coord, draw);
+            if edges == slot.stitch_edges {
+                continue;
+            }
+            if let Ok(mut look) = looks.get_mut(slot.entity) {
+                set_param(&mut look, "stitch_edges", ParamValue::Vec4(edges));
+                slot.stitch_edges = edges;
+            }
+        }
+
+        // Retain + visibility. The coarse cover is never despawned; everything
+        // else lives while wanted, is a direct hidden fallback for a wanted child,
+        // or actively draws as a stand-in.
         tiles.tiles.retain(|coord, slot| {
-            let keep = coord.depth == ROOT_FALLBACK_DEPTH
+            let keep = is_coarse_fallback(*coord)
                 || wanted.contains(coord)
                 || parent_fallbacks.contains(coord)
                 || draw.contains(coord);
@@ -2868,7 +2988,7 @@ pub fn update_lod_tiles(
         // trailing edge every frame (every revisited tile re-baked + re-uploaded).
         // Eviction is LRU (oldest touch first) under both the entry cap and a
         // byte ceiling; the entries THIS frame's cover needs — the wanted set,
-        // its hidden parent fallbacks and the root carpet — are never evicted.
+        // its hidden parent fallbacks and the coarse cover — are never evicted.
         // (An idle terrain's residents keep their `Handle<Mesh>` alive on the
         // tile entities themselves, so LRU-evicting its cache entries can only
         // cost a re-bake on a much later re-selection, never a visible hole.)
@@ -2879,7 +2999,7 @@ pub fn update_lod_tiles(
                 *e == terrain
                     && (wanted.contains(c)
                         || parent_fallbacks.contains(c)
-                        || c.depth == ROOT_FALLBACK_DEPTH)
+                        || is_coarse_fallback(*c))
             },
         );
     }
@@ -3000,10 +3120,10 @@ pub(crate) fn bind_shadow_cache_to_tiles(
         }
         for entity in tiles.tile_entities() {
             let mut tile = commands.entity(entity);
-            // Keep already-resident tiles on the same caster contract as newly
-            // spawned tiles. The receiver side stays enabled so dynamic-object
-            // shadows remain visible on the ground.
-            tile.try_insert(bevy::light::NotShadowCaster);
+            // Keep already-resident tiles on the same terrain self-shadow
+            // ownership contract as newly spawned tiles. They remain ordinary
+            // CSM receivers for dynamic-object shadows.
+            enforce_streamed_shadow_ownership(&mut tile);
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
             }
@@ -3020,8 +3140,75 @@ mod draw_partition_tests {
     }
 
     #[test]
+    fn late_shadow_cache_keeps_dynamic_shadow_receiving_and_removes_legacy_exclusion() {
+        let mut app = App::new();
+        app.add_systems(Update, bind_shadow_cache_to_tiles);
+
+        let tile = app
+            .world_mut()
+            .spawn((
+                ShaderLook::new("shaders/terrain_geomorph.wgsl"),
+                // Regression setup: this was the former workaround. The
+                // authoritative binder must remove it, including on a live
+                // shader/cache reload where the entity predates the cutover.
+                bevy::light::NotShadowReceiver,
+            ))
+            .id();
+        let mut tiles = LodTiles::default();
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        let shadow_image = Handle::<Image>::default();
+        app.world_mut().spawn((
+            TerrainLodViz::default(),
+            tiles,
+            TileShadowCache {
+                image: shadow_image.clone(),
+                on: 1.0,
+            },
+        ));
+
+        app.update();
+
+        let tile_ref = app.world().entity(tile);
+        assert!(tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
+        let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
+        assert_eq!(
+            look.textures.get(&TextureLayer::ShadowCache),
+            Some(&shadow_image)
+        );
+        assert_eq!(
+            look.values.get("shadow_cache_on"),
+            Some(&ParamValue::F32(1.0))
+        );
+    }
+
+    #[test]
     fn fallback_is_exactly_one_root_tile() {
         assert_eq!(fallback_coords().collect::<Vec<_>>(), vec![QuadCoord::ROOT]);
+        assert_eq!(coarse_fallback_tile_count(), 1);
+        assert!(is_coarse_fallback(QuadCoord::ROOT));
+        assert!(!is_coarse_fallback(c(1, 0, 0)));
+    }
+
+    #[test]
+    fn edge_stitching_is_topological_and_safe_at_dem_boundaries() {
+        let draw = HashSet::from([QuadCoord::ROOT]);
+        // This leaf touches the root's north and west DEM boundaries. Those
+        // edges have no neighbour and must never be treated as seams; only the
+        // two interior edges face the coarser root stand-in.
+        assert_eq!(stitch_edges(c(1, 0, 0), &draw), [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(stitch_edges(c(1, 1, 1), &draw), [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(stitch_edges(QuadCoord::ROOT, &draw), [0.0; 4]);
     }
 
     #[test]
@@ -3868,11 +4055,11 @@ mod draw_partition_tests {
     #[test]
     fn mesh_cache_entry_cap_covers_the_resident_bound() {
         // T2: the cap must exceed one terrain's worst-case residents (cover +
-        // parent fallbacks + root/stand-ins) or the trim evicts the trailing
+        // parent fallbacks + coarse stand-ins) or the trim evicts the trailing
         // edge every frame — the exact failure the flat 1024 cap had at the
         // default 768 budget.
         let budget = 768;
-        assert!(mesh_cache_entry_cap(budget, 1) > 2 * budget);
+        assert!(mesh_cache_entry_cap(budget, 1) > 2 * budget + coarse_fallback_tile_count());
         assert!(
             mesh_cache_entry_cap(budget, 1) > 1024,
             "must exceed the old flat cap"

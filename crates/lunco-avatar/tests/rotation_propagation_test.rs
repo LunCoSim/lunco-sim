@@ -3,14 +3,10 @@
 //! Key insight: terrain tiles have `CellCoord` and are parented to the Grid.
 //! big_space's `propagate_high_precision` computes their GlobalTransform from
 //!
-// One-time test scene construction — the `set_parent_in_place` exemption
-// `clippy.toml` already grants to bootstrap code that runs before any observer is
-// registered. Cargo has no path-scoped lint config, so it must be stated here.
-#![allow(clippy::disallowed_methods)]
 //! CellCoord + Transform.translation, **ignoring Transform.rotation**.
 //!
-//! The solution: `tile_rotation_sync_system` runs AFTER big_space propagation
-//! and manually applies Body rotation to tile GlobalTransforms.
+//! The solution: the tile shares the body's `ReferenceFrame::BodyFixed` Grid;
+//! BigSpace propagates the grid rotation to every child.
 //!
 //! Run with: cargo test -p lunco-avatar --test rotation_propagation_test -- --nocapture
 
@@ -18,7 +14,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use lunco_celestial::{CelestialBody, CelestialReferenceFrame};
+use lunco_celestial::{CelestialBody, ReferenceFrame};
 
 const MOON_RADIUS: f64 = 1737.0e3;
 const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
@@ -54,47 +50,55 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     );
 
     app.add_systems(Startup, move |mut commands: Commands| {
-        let root = commands.spawn(BigSpace::default()).id();
+        let root = commands
+            .spawn((
+                BigSpace::default(),
+                Grid::new(2_000.0, 100.0),
+                GlobalTransform::default(),
+            ))
+            .id();
 
         let solar_grid = commands
             .spawn((
-                CelestialReferenceFrame { ephemeris_id: 10 },
+                ReferenceFrame::EclipticJ2000 {
+                    center: lunco_celestial::ephemeris_id::SUN,
+                },
                 Grid::new(2_000.0, 100.0),
                 CellCoord::default(),
                 Transform::default(),
                 GlobalTransform::default(),
+                ChildOf(root),
             ))
             .id();
-        commands.entity(solar_grid).set_parent_in_place(root);
 
         let moon_grid = commands
             .spawn((
-                CelestialReferenceFrame { ephemeris_id: 301 },
+                ReferenceFrame::BodyFixed {
+                    body: lunco_celestial::ephemeris_id::MOON,
+                },
                 Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
                 CellCoord::default(),
                 Transform::default(),
                 GlobalTransform::default(),
+                ChildOf(solar_grid),
             ))
             .id();
-        commands.entity(moon_grid).set_parent_in_place(solar_grid);
 
         // Moon Body at Grid origin, initially identity rotation
         // Note: Body does NOT have Grid component, only CellCoord.
         // Tiles must be parented to the Grid (not Body) for big_space to compute
         // their GlobalTransform from CellCoord. Rotation is synced manually.
-        let moon_body = commands
-            .spawn((
-                CelestialBody {
-                    name: "Moon".to_string(),
-                    ephemeris_id: 301,
-                    radius_m: moon_radius,
-                },
-                CellCoord::default(),
-                Transform::default(),
-                GlobalTransform::default(),
-            ))
-            .id();
-        commands.entity(moon_body).set_parent_in_place(moon_grid);
+        commands.spawn((
+            CelestialBody {
+                name: "Moon".to_string(),
+                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                radius_m: moon_radius,
+            },
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(moon_grid),
+        ));
 
         // Terrain tile as child of the GRID (not Body), with CellCoord.
         // big_space's propagate_high_precision will compute GlobalTransform from
@@ -105,9 +109,10 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
                 Transform::from_translation(tile_local_tf),
                 GlobalTransform::default(),
                 Name::new("Test Tile"),
+                ChildOf(moon_grid),
             ))
             .id();
-        commands.entity(moon_grid).add_child(tile);
+        let _ = tile;
     });
 
     // Run frames to let big_space propagate initial transforms
@@ -121,7 +126,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
         let mut q_bodies = world.query::<(Entity, &CelestialBody)>();
         let moon_body = q_bodies
             .iter(world)
-            .find(|(_, b)| b.ephemeris_id == 301)
+            .find(|(_, b)| b.ephemeris_id == lunco_celestial::ephemeris_id::MOON)
             .map(|(e, _)| e)
             .unwrap();
 

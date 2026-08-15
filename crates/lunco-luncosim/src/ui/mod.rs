@@ -425,16 +425,24 @@ fn on_runtime_ui_action(
                 .or_else(|| q_avatar.iter().next())
                 .map(|(entity, _)| entity);
             if let Some(target) = avatar {
-                commands.trigger(lunco_avatar::ReleaseVessel { target });
+                commands.trigger(lunco_avatar::ReturnFromOrbit { target });
             }
         }
         runtime_exposure::RuntimeUiActionKind::ViewBodyMoon => {
-            if !runtime_focus_body(301, &q_bodies, &mut commands) {
+            if !runtime_focus_body(
+                lunco_celestial::ephemeris_id::MOON,
+                &q_bodies,
+                &mut commands,
+            ) {
                 report_runtime_ui_failure(&mut commands, "Moon is not present in the loaded scene");
             }
         }
         runtime_exposure::RuntimeUiActionKind::ViewBodyEarth => {
-            if !runtime_focus_body(399, &q_bodies, &mut commands) {
+            if !runtime_focus_body(
+                lunco_celestial::ephemeris_id::EARTH,
+                &q_bodies,
+                &mut commands,
+            ) {
                 report_runtime_ui_failure(
                     &mut commands,
                     "Earth is not present in the loaded scene",

@@ -2,11 +2,10 @@
 
 > Status: Active · Audience: anyone touching `big_space`, grids, or world-scale precision
 >
-> A decision record. Companion to doc 44; supersedes
-its "interim hardening" framing with a precise diagnosis: the jitter/flicker family
-is not bad luck or missing workarounds — LunCo violated three load-bearing contracts
-of `big_space` 0.12, and every symptom followed from them. Citations are to the
-crate source (`big_space-0.12.0`).
+> A decision record. Companion to doc 44. The implementation uses upstream
+> `big_space` 0.13 from its Bevy 0.19 branch, pinned by `Cargo.lock`. The
+> historical diagnosis below was established against 0.12; the same root,
+> cell-splitting, nested-grid, and floating-origin contracts remain in 0.13.
 
 > ## Current state of the three violations
 >
@@ -28,6 +27,46 @@ crate source (`big_space-0.12.0`).
 >
 > The diagnosis below is kept because it is what a future change would have to
 > re-derive to justify raising either knob again. **Do not raise them.**
+
+## Current coordinate contract
+
+- `big_space` is the precision representation, not the semantic reference-frame
+  model. Semantic positions remain typed `f64` values (`Solar`,
+  `BodyInertial`, `BodyFixed`, `Synodic`, `SiteEnu`) and convert through the
+  epoch-dependent `FrameTree` hub. Undefined transforms return `None`; they do
+  not substitute a body centre, the Sun, or identity axes.
+- There is one canonical `BigSpace + Grid` world root and exactly one
+  `FloatingOrigin`. The active camera carries that origin and may migrate
+  atomically between explicit body-fixed and inertial nested grids.
+- Every astronomical absolute position is computed in `f64`, then split with
+  `Grid::translation_to_grid` into `(CellCoord, cell-local Transform)`. The
+  `f32` transform is render-local currency, never authoritative ephemeris or
+  physics state.
+- Body-fixed and body-centred inertial frames are distinct sibling Grid
+  entities. Surface terrain, vehicles, and surface cameras inherit the
+  body-fixed grid; orbit cameras, inertial spacecraft, and inertial trajectories
+  inherit the non-spinning sibling.
+- Each semantic Grid has exactly one `ReferenceFrame` identity (`World`,
+  body-centred Ecliptic J2000, or body-fixed). Precision sub-grids inherit that
+  identity and never duplicate it. `ReferenceFrameIndex` resolves only unique
+  declarations; missing or duplicate frames fail closed instead of selecting an
+  archetype-order parent.
+- User-facing models author physical facts — `GeodeticAnchor`, `KeplerOrbit`,
+  `LibrationAnchor`, and trajectory frame intent. They never author a Grid,
+  `CellCoord`, or reparent operation. Placement, SOI handover, camera transfer,
+  networking, and the Avian bridge resolve and convert frames automatically.
+- Avian is compiled in `f64` and integrates in the explicitly selected
+  `ActivePhysicsFrame`, normally the loaded site's body-fixed surface grid.
+  Celestial translation/rotation above that frame cannot be mistaken for a
+  body teleport. The bridge owns the `f64 Position/Rotation` to BigSpace split;
+  Avian and rendering never share `GlobalTransform` as simulation truth.
+- A frame migration is one atomic `(ChildOf, CellCoord, Transform)` write via
+  `lunco_core::attach::migrate_to_grid`. There is no pose-preserving reparent,
+  raw-f32 placement fallback, or next-frame repair path.
+- Network physics snapshots and perspective/AOI messages carry f64 state plus
+  a semantic `ReferenceFrame`. Capture converts from the sender's private
+  `ActivePhysicsFrame`; apply converts into the receiver's private active frame.
+  A private cell/local split never becomes wire or user state.
 
 ## 1. The crate's model (what we signed up for)
 
@@ -248,13 +287,11 @@ chain:
   FIRST bridge dirtying every static's `Position` every tick — whole-world
   contact churn corrupted avian's island bookkeeping. The shadow gate is
   the fix: statics at rest are never touched.
-- `Position` is now the **BigSpace root frame** (absolute), not the
-  collapsed plain-propagation frame: cell offsets are honoured (a body >1
-  cell from the site no longer collapses onto it) and physics is
-  magnitude-proof (integration-tested settling at 2e8 m with cell-local
-  `Transform`s). Consumers that compared avian `Position` against render
-  `GlobalTransform` coincide only near the floating origin — same caveat
-  as before, now stated.
+- `Position` is in the explicit **`ActivePhysicsFrame`**, not the BigSpace root
+  and not the observer-relative render frame. Cell offsets are honoured and
+  sibling branches are transformed into that frame in `f64`. For a lunar
+  surface scene, the active frame is the body-fixed surface grid; rotating the
+  celestial ancestors therefore does not change local Avian pose or velocity.
 - With writer 2 gone, render GTs are big_space-owned exclusively; the
   strobe writer no longer exists. `touch_celestial_transforms` stays until
   its removal is re-measured under the bridge (`LUNCO_JUMP_PROBE=1`) — do
@@ -284,13 +321,10 @@ chain:
   Pinned by `bridge_physics.rs::
   scaled_child_collider_ground_settles_without_root_transform` and the
   structural ABSENCE assert in `world_shell_origin_tracking.rs`.
-  Consequence: any app that spawns the world shell AND avian physics must
-  register `BigSpacePhysicsBridgePlugin` (the luncosim does; `luncosim` has
-  no physics content).
-- **Trajectory views only carry `CellCoord` under Grid parents**
-  (`trajectory_alignment_system`): views spawn cell-less; the alignment
-  system inserts the cell when parenting to a grid and removes it when
-  falling back to a plain body entity (the last known class-2 violation —
-  "Artemis 2 Moon-Relative"). A cell-entity under a non-grid parent is
-  invalid; a plain `Transform` child there is the correct, compat-propagated
-  form. This part LANDED.
+  Consequence: any app that spawns the world shell AND Avian physics must
+  register `BigSpacePhysicsBridgePlugin` (the production `luncosim` does;
+  presentation/workbench apps without physics do not need it).
+- **Trajectory views only carry `CellCoord` under their declared Grid frame.**
+  Body-fixed paths mount under `ReferenceFrame::BodyFixed`; inertial paths mount
+  under `ReferenceFrame::EclipticJ2000`. Missing frames leave the view unresolved;
+  there is no plain-body or unparented fallback.

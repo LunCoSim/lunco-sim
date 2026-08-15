@@ -21,7 +21,6 @@
 //! later, exactly as `GravityProvider` carries the gravity model — the
 //! [`LocalSolar`] cache already gives each entity its own slot for that.
 
-use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use lunco_cosim::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONNECTOR};
@@ -59,10 +58,7 @@ pub fn compute_local_solar(
     // Structural, not a brightness guess: the scene's sun is the top-level
     // `DistantLight`; a body's reflected fill hangs under that body's prim and
     // carries `Earthshine`. See `lunco_environment::horizon::SunQuery`.
-    q_sun: Query<
-        (&GlobalTransform, &DirectionalLight),
-        (Without<RenderLayers>, Without<crate::Earthshine>),
-    >,
+    q_sun: crate::horizon::SunQuery,
     q_targets: Query<
         (Entity, Option<&LocalSolar>, Option<&GlobalTransform>),
         With<crate::EnvironmentProbe>,
@@ -71,7 +67,7 @@ pub fn compute_local_solar(
     if q_targets.is_empty() {
         return;
     }
-    let Some((sun_gt, _)) = q_sun.iter().next() else {
+    let Some((sun_gt, _, _)) = crate::horizon::pick_sun(&q_sun) else {
         return;
     };
 
