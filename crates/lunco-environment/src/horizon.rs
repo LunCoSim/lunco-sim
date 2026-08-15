@@ -336,7 +336,7 @@ pub struct HorizonBakeTask(Task<BakeResult>);
 /// live in the Inspector.
 ///
 /// Defaults **off on wasm**: the streamed LOD tiles (the common web path) bypass
-/// the march entirely (`Plain` mode + `NotShadowReceiver`), and the static
+/// the march entirely in the lightweight shader mode, and the static
 /// terrain defaults to the flat shader there too — so the march rarely runs on
 /// web, while the inline (main-thread) cache bake would hitch during a
 /// day-cycle animation. Native keeps the cache on: the static `regolith`

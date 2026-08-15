@@ -138,6 +138,35 @@ impl SettingsSection for CameraInputSettings {
     const KEY: &'static str = "camera_input";
 }
 
+#[on_command(SetCameraInput)]
+fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraInputSettings>) {
+    apply_camera_input(trigger.event(), &mut settings);
+}
+
+fn apply_camera_input(command: &SetCameraInput, settings: &mut CameraInputSettings) {
+    if let Some(value) = command.look_radians_per_pointer_unit {
+        if value.is_finite() && value >= 0.0 {
+            settings.look_radians_per_pointer_unit = value;
+        } else {
+            warn!("SetCameraInput rejected non-finite/negative look sensitivity: {value}");
+        }
+    }
+    if let Some(value) = command.orbit_surface_min_scale {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            settings.orbit_surface_min_scale = value;
+        } else {
+            warn!("SetCameraInput rejected surface scale outside [0, 1]: {value}");
+        }
+    }
+    if let Some(value) = command.orbit_distance_curve_exponent {
+        if value.is_finite() && value > 0.0 {
+            settings.orbit_distance_curve_exponent = value;
+        } else {
+            warn!("SetCameraInput rejected non-positive distance exponent: {value}");
+        }
+    }
+}
+
 /// Scale an orbit gesture from the target body's apparent geometry.
 ///
 /// `sqrt(1 - (r/d)^2)` is the cosine of the body's apparent angular radius:
@@ -186,6 +215,35 @@ mod camera_input_settings_tests {
             ..default()
         };
         assert_eq!(body_orbit_look_scale(10.0, 10.0, &settings), 0.125);
+    }
+
+    #[test]
+    fn runtime_camera_input_update_is_partial_and_rejects_invalid_values() {
+        let mut settings = CameraInputSettings::default();
+        let original_floor = settings.orbit_surface_min_scale;
+        apply_camera_input(
+            &SetCameraInput {
+                look_radians_per_pointer_unit: Some(0.0005),
+                orbit_surface_min_scale: None,
+                orbit_distance_curve_exponent: Some(1.25),
+            },
+            &mut settings,
+        );
+        assert_eq!(settings.look_radians_per_pointer_unit, 0.0005);
+        assert_eq!(settings.orbit_surface_min_scale, original_floor);
+        assert_eq!(settings.orbit_distance_curve_exponent, 1.25);
+
+        apply_camera_input(
+            &SetCameraInput {
+                look_radians_per_pointer_unit: Some(-1.0),
+                orbit_surface_min_scale: Some(2.0),
+                orbit_distance_curve_exponent: Some(0.0),
+            },
+            &mut settings,
+        );
+        assert_eq!(settings.look_radians_per_pointer_unit, 0.0005);
+        assert_eq!(settings.orbit_surface_min_scale, original_floor);
+        assert_eq!(settings.orbit_distance_curve_exponent, 1.25);
     }
 }
 
@@ -5636,6 +5694,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
 // See the `screenshot` note at the top of this file.)
 register_commands!(
     on_show_notification,
+    on_set_camera_input,
     on_surface_teleport_command,
     on_leave_surface_command,
     on_possess_command,

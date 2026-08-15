@@ -71,6 +71,22 @@ pub struct FocusTarget {
     pub target: Entity,
 }
 
+/// Tune pointer-to-camera response while the application is running.
+///
+/// Omitted fields retain their current persisted value. The same typed
+/// [`crate::CameraInputSettings`] resource drives free, surface, chase, and
+/// body-orbit cameras; this command is the API/script boundary for changing it
+/// without introducing a second transient set of camera constants.
+#[Command(default)]
+pub struct SetCameraInput {
+    /// Camera radians per pointer-motion unit before behavior-specific scaling.
+    pub look_radians_per_pointer_unit: Option<f32>,
+    /// Lower bound for orbital rotation at the body's surface, in `[0, 1]`.
+    pub orbit_surface_min_scale: Option<f64>,
+    /// Positive exponent shaping the apparent-horizon distance response.
+    pub orbit_distance_curve_exponent: Option<f64>,
+}
+
 /// Follow a target with the chase camera, without taking control.
 ///
 /// Inserts `SpringArmCamera` so the camera tracks the target's heading,

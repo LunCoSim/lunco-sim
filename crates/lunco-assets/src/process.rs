@@ -1233,13 +1233,14 @@ fn process_map(
     Ok(())
 }
 
-/// `kind = "normalmap"` pipeline — derive a world-space normal map from the
+/// `kind = "normalmap"` pipeline — derive a DEM-local ENU normal map from the
 /// DEM crop and write it as RGB8 PNG (`n * 0.5 + 0.5`).
 ///
 /// Convention matches `lunco-terrain-core::derive::normal_map` and the decode
 /// in `terrain_layered.wgsl`: `n = normalize(-dh/dx, 1, -dh/dz)` with `+x` =
 /// increasing column (east) and `+z` = increasing row (south, since PDS
-/// rasters are north-up) — world-space, no tangent basis.
+/// rasters are north-up) — source/object space, no tangent basis. Consumers
+/// transform it through the terrain mesh instance before world-space lighting.
 #[cfg(not(target_arch = "wasm32"))]
 fn process_normalmap(
     source: &Path,

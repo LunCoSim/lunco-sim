@@ -17,8 +17,8 @@
 //! - [`mark_streamed_horizon_stale`]: a live edit swaps the oracle → drop the
 //!   map + cache and re-bake after a quiescence debounce.
 //! - [`wire_tile_shadow_cache`]: mirror the environment's per-terrain
-//!   `HorizonShadowCache` (+ the sun's CSM far bound) into the terrain-surface
-//!   `TileShadowCache` component, which the tile materials consume.
+//!   `HorizonShadowCache` into the terrain-surface `TileShadowCache` component,
+//!   which owns terrain self-shadow at every streamed-tile distance.
 
 use std::sync::Arc;
 
@@ -66,7 +66,7 @@ pub(crate) fn start_streamed_horizon_bakes(
         ),
         // NOT `Without<HorizonMap>`: an edit made WHILE a bake was in flight lands its
         // (pre-edit) map and re-arms `StreamedHorizonStale` — "map present + stale
-        // armed" must therefore re-bake, or the far-field sun-visibility cache stays
+        // armed" must therefore re-bake, or the sun-visibility cache stays
         // wrong for the rest of the session (see `mark_streamed_horizon_stale`).
         (
             With<TerrainLodViz>,
@@ -158,9 +158,9 @@ pub(crate) fn finish_streamed_horizon_bakes(
 
 /// A live edit swapped the surface oracle: the horizon map (and the visibility
 /// cache derived from it) now shadow terrain that no longer exists. Drop both
-/// and arm the re-bake debounce; [`wire_tile_shadow_cache`] switches the tile
-/// sampling off until the fresh cache lands (far pixels briefly revert to
-/// CSM-only — subtle at those ranges).
+/// and arm the re-bake debounce; [`wire_tile_shadow_cache`] switches terrain
+/// self-shadow sampling off until the fresh cache lands. Dynamic-object CSM
+/// shadows remain independent and continue to render.
 #[allow(clippy::type_complexity)]
 pub(crate) fn mark_streamed_horizon_stale(
     mut commands: Commands,
@@ -194,7 +194,7 @@ pub(crate) fn mark_streamed_horizon_stale(
         // when it starts, so while the task runs an edited terrain has no map AND no
         // marker — this used to `continue`, the bake then installed a map from the
         // PRE-EDIT oracle snapshot, and nothing ever re-armed. Brush a crater ~0.8 s
-        // into a multi-second bake and the far-field sun-visibility cache stayed wrong
+        // into a multi-second bake and the sun-visibility cache stayed wrong
         // for the whole session.
         if !has_map && !is_stale && !is_baking {
             continue;
@@ -202,7 +202,8 @@ pub(crate) fn mark_streamed_horizon_stale(
         let mut e = commands.entity(entity);
         if has_map {
             // The live map now shadows terrain that no longer exists — drop it and
-            // the cache so tile sampling reverts to CSM until the re-bake lands.
+            // the cache so stale terrain self-shadow is never displayed while
+            // the re-bake runs.
             e.try_remove::<(HorizonMap, HorizonShadowCache)>();
         }
         // (Re)arm the debounce on EVERY edit so a continuous drag keeps pushing the
@@ -212,10 +213,9 @@ pub(crate) fn mark_streamed_horizon_stale(
 }
 
 /// Mirror each streamed terrain's `HorizonShadowCache` into the
-/// terrain-surface `TileShadowCache` the tile materials consume, tagging on
-/// the sun's CSM far bound (the shader blends the cache in beyond it). Writes
-/// only on actual change — an unconditional insert would trip the tile
-/// late-bind system every frame.
+/// terrain-surface `TileShadowCache` the tile materials consume. Writes only on
+/// actual change — an unconditional insert would trip the tile late-bind
+/// system every frame.
 #[allow(clippy::type_complexity)]
 pub(crate) fn wire_tile_shadow_cache(
     mut commands: Commands,
@@ -235,12 +235,12 @@ pub(crate) fn wire_tile_shadow_cache(
     // STRUCTURAL basis: a body's reflected fill is authored under that body's
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
     // is left is the scene's sun, so there is nothing to rank.
-    let sun = pick_sun(&sun).map(|(sun_gt, _, csm_far)| (sun_gt, csm_far));
+    let sun = pick_sun(&sun).map(|(sun_gt, _, _)| sun_gt);
 
     for (entity, terrain_gt, cache, wired) in &terrains {
         let (image, on) = match cache {
             Some(c) => {
-                let on = sun.is_some_and(|(sun_gt, _)| {
+                let on = sun.is_some_and(|sun_gt| {
                     let to_sun_world: Vec3 = sun_gt.back().into();
                     let sun_local = terrain_gt
                         .affine()
@@ -254,17 +254,14 @@ pub(crate) fn wire_tile_shadow_cache(
             None => (wired.map(|w| w.image.clone()), 0.0),
         };
         let Some(image) = image else { continue }; // never had a cache → nothing to wire
-        let csm_far = sun.map_or(0.0, |(_, csm_far)| csm_far);
         let dirty = match wired {
             None => true,
-            Some(w) => {
-                w.image != image || (w.on - on).abs() > 1e-3 || (w.csm_far - csm_far).abs() > 0.5
-            }
+            Some(w) => w.image != image || (w.on - on).abs() > 1e-3,
         };
         if dirty {
             commands
                 .entity(entity)
-                .try_insert(TileShadowCache { image, on, csm_far });
+                .try_insert(TileShadowCache { image, on });
         }
     }
 }

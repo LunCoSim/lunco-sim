@@ -6,7 +6,7 @@
 //! bake — **off the main thread** — two mipped RGBA8 textures:
 //!
 //! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=unused, and
-//! - `normal_map`  (binding 8/9): the DEM-derived meso normal, with the
+//! - `normal_map`  (binding 8/9): the DEM-local ENU meso normal, with the
 //!   relief-correlated **albedo scalar in alpha**,
 //!
 //! and publish them as a [`TerrainDerivedMaps`] component. Consumers:
@@ -86,7 +86,7 @@ pub struct DerivedLayersBuilt;
 
 /// The published derived maps for a terrain — GPU handles every terrain render
 /// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=unused;
-/// `normal` packs the meso normal in RGB and the albedo scalar in A. Removed
+/// `normal` packs the DEM-local ENU meso normal in RGB and the albedo scalar in A. Removed
 /// (and re-baked) when the surface changes.
 #[derive(Component, Clone)]
 pub struct TerrainDerivedMaps {

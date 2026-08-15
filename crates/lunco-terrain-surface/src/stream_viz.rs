@@ -11,7 +11,8 @@
 //!    new nodes ([`bake_tile_mesh`], real DEM-sampled geometry), despawn the gone,
 //! 4. draw each tile with the `terrain_geomorph` shader: a CDLOD **vertex morph**
 //!    (`POSITION → MORPH_TARGET` by camera distance, so no LOD pop) + the
-//!    procedural **regolith** fragment (FBM bump + PBR sun + CSM shadows).
+//!    procedural **regolith** fragment (FBM bump + PBR sun + DEM self-shadow +
+//!    dynamic-object CSM shadows).
 //!
 //! # Appearance is INTENT here, not a material
 //!
@@ -1493,17 +1494,19 @@ struct BakedTile {
 #[derive(Component, Default)]
 pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
-/// Far-field sun-shadow wiring for a STREAMED terrain's tiles: the pre-baked
-/// R8 sun-visibility texture (lunco-environment's horizon shadow cache) plus
-/// the CSM far bound the shader blends in beyond. Written by the app glue
-/// (which can see both the environment's `HorizonShadowCache` and this crate);
-/// consumed by the tile materials. `on == 0` disables sampling (params written
-/// so a cache that goes stale can be switched off without touching handles).
+/// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
+/// sun-visibility texture from `lunco-environment`'s horizon solution. Streamed
+/// tiles do not cast into the directional cascade; that cascade remains free to
+/// carry dynamic-object shadows onto the terrain receiver, while this cache is
+/// the sole owner of terrain-on-terrain occlusion at every distance.
+///
+/// Written by the app glue (which can see both `HorizonShadowCache` and this
+/// crate); consumed by tile materials. `on == 0` disables sampling without
+/// changing the texture binding while a cache is stale.
 #[derive(Component, Clone)]
 pub struct TileShadowCache {
     pub image: Handle<Image>,
     pub on: f32,
-    pub csm_far: f32,
 }
 
 /// Write one named parameter into a look, reusing the existing slot when the key is
@@ -1522,7 +1525,6 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
     look.textures
         .insert(TextureLayer::ShadowCache, cache.image.clone());
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
-    set_param(look, "csm_far", ParamValue::F32(cache.csm_far));
 }
 
 /// Per-depth weights for the baked derived maps, from the ratio of the tile's
@@ -1720,7 +1722,7 @@ fn spawn_tile(
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
-    let tile = commands.spawn((
+    let mut tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(
             mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
@@ -1737,16 +1739,21 @@ fn spawn_tile(
         // list unless the user opts in.
         lunco_core::SystemManaged,
         ChildOf(grid_entity),
-        // Streamed terrain owns its terrain-to-terrain self-shadow through the
-        // heightfield shader/cache. A tiled DEM is not a valid receiver for the
-        // scene-wide directional cascade: the cascade is projected over the
-        // whole streamed grid and its quantisation turns tile boundaries into
-        // large false shadow fields. Dynamic objects keep their ordinary CSM
-        // shadows on their own materials; terrain self-shadow has one owner.
-        bevy::light::NotShadowReceiver,
-        bevy::light::NotShadowCaster,
     ));
+    enforce_streamed_shadow_ownership(&mut tile);
     tile.id()
+}
+
+/// Establish the one shadow ownership split for a streamed terrain tile.
+///
+/// Terrain self-shadow is sampled from the DEM horizon cache, so the mesh must
+/// not cast a duplicate into the directional cascade. The mesh remains a CSM
+/// receiver so independent dynamic casters (rover, rocks, equipment) can cast
+/// onto it. Keeping both operations here prevents initial spawn and late cache
+/// binding from drifting into different contracts again.
+fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>) {
+    tile.try_insert(bevy::light::NotShadowCaster);
+    tile.try_remove::<bevy::light::NotShadowReceiver>();
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -3113,11 +3120,10 @@ pub(crate) fn bind_shadow_cache_to_tiles(
         }
         for entity in tiles.tile_entities() {
             let mut tile = commands.entity(entity);
-            // Keep already-resident tiles on the same terrain shadow contract
-            // as newly spawned tiles. Without this, a tile resident before the
-            // cache late-bind would re-enter the coarse directional cascade.
-            tile.try_insert(bevy::light::NotShadowReceiver);
-            tile.try_insert(bevy::light::NotShadowCaster);
+            // Keep already-resident tiles on the same terrain self-shadow
+            // ownership contract as newly spawned tiles. They remain ordinary
+            // CSM receivers for dynamic-object shadows.
+            enforce_streamed_shadow_ownership(&mut tile);
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
             }
@@ -3131,6 +3137,59 @@ mod draw_partition_tests {
 
     fn c(depth: u8, x: u32, z: u32) -> QuadCoord {
         QuadCoord { depth, x, z }
+    }
+
+    #[test]
+    fn late_shadow_cache_keeps_dynamic_shadow_receiving_and_removes_legacy_exclusion() {
+        let mut app = App::new();
+        app.add_systems(Update, bind_shadow_cache_to_tiles);
+
+        let tile = app
+            .world_mut()
+            .spawn((
+                ShaderLook::new("shaders/terrain_geomorph.wgsl"),
+                // Regression setup: this was the former workaround. The
+                // authoritative binder must remove it, including on a live
+                // shader/cache reload where the entity predates the cutover.
+                bevy::light::NotShadowReceiver,
+            ))
+            .id();
+        let mut tiles = LodTiles::default();
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        let shadow_image = Handle::<Image>::default();
+        app.world_mut().spawn((
+            TerrainLodViz::default(),
+            tiles,
+            TileShadowCache {
+                image: shadow_image.clone(),
+                on: 1.0,
+            },
+        ));
+
+        app.update();
+
+        let tile_ref = app.world().entity(tile);
+        assert!(tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
+        let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
+        assert_eq!(
+            look.textures.get(&TextureLayer::ShadowCache),
+            Some(&shadow_image)
+        );
+        assert_eq!(
+            look.values.get("shadow_cache_on"),
+            Some(&ParamValue::F32(1.0))
+        );
     }
 
     #[test]

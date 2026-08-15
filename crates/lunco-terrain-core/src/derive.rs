@@ -482,7 +482,7 @@ pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32]) -> Vec<u8
     out
 }
 
-/// Encode world-space normals into the standard `[0,1]`-biased RGBA8 normal-map
+/// Encode source-frame normals into the standard `[0,1]`-biased RGBA8 normal-map
 /// layout (`rgb = n*0.5 + 0.5`) the `normal_map` slot decodes, with the
 /// relief-correlated **albedo scalar riding the alpha channel** (0.5 = neutral;
 /// see [`albedo_map`]). `albedo` may be empty (→ 255, the opaque-alpha default).

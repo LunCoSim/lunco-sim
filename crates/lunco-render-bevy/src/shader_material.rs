@@ -114,8 +114,10 @@ pub struct ShaderMaterial {
     #[texture(6)]
     #[sampler(7)]
     pub surface_map: Option<Handle<Image>>,
-    /// Tangent/world-space normal layer — perturbs the procedural bump normal
-    /// (meso-scale relief the FBM can't carry). Typically DEM-derived (Sobel).
+    /// Object-local normal layer — perturbs the procedural bump normal after
+    /// the consuming shader transforms it through the mesh instance. Typically
+    /// DEM-local ENU and DEM-derived (Sobel). This slot does not imply a tangent
+    /// basis or a global/render-world coordinate frame.
     #[texture(8)]
     #[sampler(9)]
     pub normal_map: Option<Handle<Image>>,

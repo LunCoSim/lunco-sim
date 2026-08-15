@@ -14,6 +14,7 @@
 //! | full-arity `regolith_factor` | the opposition surge was dead code with zero call sites |
 //! | every `lunco::` import has a keep-alive | terrain drew with NO material at all — flat grey, reported as "the ground went transparent" |
 //! | photometry defaults agree | the same site would read differently depending on whether its terrain streamed |
+//! | DEM normals cross one local-to-world boundary | coarse LODs became dark/black when a body-fixed site rotated relative to the render frame |
 //!
 //! Source-level on purpose: this crate deliberately carries no `wgpu`/`naga` (see
 //! its Cargo.toml), and every defect above is visible in the text. A GPU-side
@@ -289,6 +290,34 @@ fn photometry_defaults_agree_across_every_terrain_path() {
                 ),
             }
         }
+    }
+}
+
+/// Derived terrain maps are baked in the DEM's local ENU coordinates. Both
+/// render paths consume those same bytes while their mesh may be attached to a
+/// rotating BigSpace frame, so neither path may decode the bytes directly into
+/// a world-space lighting normal. The shared terrain kernel owns that one frame
+/// crossing; this test prevents either material from quietly reintroducing a
+/// second interpretation.
+#[test]
+fn every_derived_terrain_normal_uses_the_instance_frame_boundary() {
+    let kernel = code_only(&read("terrain_surface.wgsl"));
+    assert!(
+        kernel.contains("fn dem_normal_to_world")
+            && kernel.contains("mesh_functions::mesh_normal_local_to_world"),
+        "the shared terrain kernel must transform DEM-local normals through the mesh instance"
+    );
+
+    for file in ["terrain_geomorph.wgsl", "terrain_layered.wgsl"] {
+        let code = code_only(&read(file));
+        assert!(
+            code.contains("dem_normal_to_world("),
+            "{file} must cross the shared DEM-local -> render-world normal boundary"
+        );
+        assert!(
+            !code.contains("let n_baked = normalize("),
+            "{file} decodes a derived normal directly as a lighting normal"
+        );
     }
 }
 
