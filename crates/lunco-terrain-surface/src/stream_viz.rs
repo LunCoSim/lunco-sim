@@ -1144,18 +1144,14 @@ fn selected_cover_status(tiles: &LodTiles, current_generation: u32) -> SelectedC
     let resident = tiles
         .cover
         .iter()
-        .filter(|coord| {
-            tiles
-                .tiles
-                .get(coord)
-                .is_some_and(|slot| slot.ready)
-        })
+        .filter(|coord| tiles.tiles.get(coord).is_some_and(|slot| slot.ready))
         .count();
     let complete = wanted > 0
         && tiles.cover.iter().all(|coord| {
-            tiles.tiles.get(coord).is_some_and(|slot| {
-                slot.gen == current_generation && slot.ready && slot.drawn
-            })
+            tiles
+                .tiles
+                .get(coord)
+                .is_some_and(|slot| slot.gen == current_generation && slot.ready && slot.drawn)
         });
     SelectedCoverStatus {
         wanted,
@@ -3501,7 +3497,10 @@ mod draw_partition_tests {
 
     #[test]
     fn selected_cover_status_requires_current_render_ready_leaves() {
-        let cover = QuadCoord::ROOT.children().into_iter().collect::<HashSet<_>>();
+        let cover = QuadCoord::ROOT
+            .children()
+            .into_iter()
+            .collect::<HashSet<_>>();
         let mut tiles = LodTiles::default();
         tiles.cover = cover.clone();
         for coord in &cover {

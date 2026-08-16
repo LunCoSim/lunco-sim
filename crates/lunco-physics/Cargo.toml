@@ -73,6 +73,10 @@ big_space = { workspace = true }
 lunco-readiness = { workspace = true }
 # Canonical WorldGrid and render/world conversion for physics queries.
 lunco-core = { path = "../lunco-core" }
+# Transport-free API registry only: physics owns active-frame proximity query
+# semantics and registers providers without pulling HTTP or networking.
+lunco-api = { path = "../lunco-api", default-features = false }
+serde_json.workspace = true
 
 # This was the ONE crate of 65 without this section, so the workspace
 # `disallowed_methods` ban list — std::fs, std::thread::spawn, Instant::now,

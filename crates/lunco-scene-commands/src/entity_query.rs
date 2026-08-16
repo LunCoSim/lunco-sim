@@ -58,7 +58,7 @@ impl ApiQueryProvider for QueryEntityProvider {
                 Option<&lunco_core::CelestialBody>,
                 Option<&Transform>,
             )>,
-            lunco_core::coords::ActiveFramePoseQuery,
+            lunco_physics::SimulationPoseQuery,
         )> = SystemState::new(world);
         let Ok((q_meta, poses)) = state.get(world) else {
             return ApiResponse::error(
@@ -82,9 +82,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         let Some((pos, rot)) = poses.pose(entity) else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
-                format!(
-                    "QueryEntity: entity {raw} is not connected to the active physics frame"
-                ),
+                format!("QueryEntity: entity {raw} is not connected to the active physics frame"),
             );
         };
         let pos = pos.0;
@@ -300,7 +298,10 @@ mod tests {
         ));
         let after = read(&mut app);
 
-        assert_eq!(before, after, "surface coordinates must be body-motion invariant");
+        assert_eq!(
+            before, after,
+            "surface coordinates must be body-motion invariant"
+        );
         assert_eq!(after, vec![12.5, 98.0, -4.0]);
     }
 

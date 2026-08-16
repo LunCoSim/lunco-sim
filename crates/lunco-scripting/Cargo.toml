@@ -22,6 +22,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
 lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
 # For the readiness policy hook id registered in `register_builtin_policies`.
 lunco-readiness = { workspace = true }
 # `fnv1a64` — content-address a scenario's source to a cache key for the

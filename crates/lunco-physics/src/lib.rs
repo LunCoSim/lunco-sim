@@ -40,10 +40,12 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 pub mod escape;
+pub mod pose;
 pub mod readiness;
 pub mod spatial;
 pub mod support;
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
+pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
 pub use support::{PhysicsSupportContact, PhysicsSupportFootprint};
@@ -360,6 +362,7 @@ pub struct PhysicsGatePlugin;
 
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
+        pose::register_spatial_query_providers(app);
         app.register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()
             .init_resource::<PhysicsHolds>()

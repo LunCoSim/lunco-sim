@@ -621,16 +621,14 @@ pub fn on_move_entity_command(
             );
             return;
         };
-        let Some((new_cell, new_local)) =
-            lunco_core::coords::position_in_grid_to_parent_local(
-                target,
-                target_abs,
-                active_frame.0,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            )
-        else {
+        let Some((new_cell, new_local)) = lunco_core::coords::position_in_grid_to_parent_local(
+            target,
+            target_abs,
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
             warn!(
                 ?target,
                 active_frame = ?active_frame.0,
@@ -965,8 +963,7 @@ pub fn persist_rotation_to_runtime_layer(
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    let Some((doc, path)) =
-        authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
+    let Some((doc, path)) = authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
     else {
         return;
     };
@@ -3584,7 +3581,10 @@ mod tests {
 
         let grid = app
             .world_mut()
-            .spawn((big_space::prelude::Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .spawn((
+                big_space::prelude::Grid::new(2_000.0, 0.0),
+                GlobalTransform::default(),
+            ))
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
@@ -3629,7 +3629,10 @@ mod tests {
 
         let grid = app
             .world_mut()
-            .spawn((big_space::prelude::Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .spawn((
+                big_space::prelude::Grid::new(2_000.0, 0.0),
+                GlobalTransform::default(),
+            ))
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
@@ -3678,10 +3681,7 @@ mod tests {
         let parent_rotation = Quat::from_rotation_y(0.7);
         let parent = app
             .world_mut()
-            .spawn((
-                Transform::from_rotation(parent_rotation),
-                ChildOf(active),
-            ))
+            .spawn((Transform::from_rotation(parent_rotation), ChildOf(active)))
             .id();
         let body = app
             .world_mut()
@@ -3708,14 +3708,9 @@ mod tests {
             Query<(Option<&CellCoord>, &Transform)>,
         )> = bevy::ecs::system::SystemState::new(app.world_mut());
         let (parents, grids, spatial) = state.get(app.world()).unwrap();
-        let (_, round_trip) = lunco_core::coords::pose_in_grid(
-            body,
-            active,
-            &parents,
-            &grids,
-            &spatial,
-        )
-        .expect("body remains connected to active frame");
+        let (_, round_trip) =
+            lunco_core::coords::pose_in_grid(body, active, &parents, &grids, &spatial)
+                .expect("body remains connected to active frame");
         assert!(round_trip.as_quat().dot(desired.as_quat()).abs() > 1.0 - 1.0e-6);
     }
 

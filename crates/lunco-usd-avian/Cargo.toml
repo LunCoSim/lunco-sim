@@ -10,6 +10,7 @@ avian3d.workspace = true
 big_space.workspace = true
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-readiness = { path = "../lunco-readiness" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

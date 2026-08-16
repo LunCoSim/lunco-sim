@@ -1669,7 +1669,10 @@ pub fn settle_grounded_assemblies(
             let mut entity = commands.entity(m);
             entity.try_remove::<lunco_core::NeedsGroundSettle>();
             if lift > 0.0 {
-                entity.try_insert(lunco_core::PhysicsPoseAuthoritative);
+                entity.try_insert((
+                    lunco_core::PhysicsPoseAuthoritative,
+                    lunco_physics::PhysicsPoseSeeded,
+                ));
             }
         }
         if lift <= 0.0 {

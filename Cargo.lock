@@ -7684,8 +7684,10 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-api",
  "lunco-core",
  "lunco-readiness",
+ "serde_json",
 ]
 
 [[package]]
@@ -7795,6 +7797,7 @@ dependencies = [
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
+ "lunco-physics",
  "lunco-readiness",
  "lunco-storage",
  "lunco-time",
@@ -8081,6 +8084,7 @@ dependencies = [
  "lunco-environment",
  "lunco-hooks",
  "lunco-lint",
+ "lunco-physics",
  "lunco-readiness",
  "lunco-terrain-globe",
  "lunco-usd-bevy",

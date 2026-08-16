@@ -532,6 +532,9 @@ fn pose_to_position(
         pos.0 = p.0;
         rot.0 = r.0;
         shadow.capture(cell, tf, active_frame);
+        commands
+            .entity(e)
+            .try_insert(lunco_physics::PhysicsPoseSeeded);
         // avian's `wake_on_changed` only sees Position writes made OUTSIDE
         // the physics schedule (it compares against `LastPhysicsTick`), so an
         // external Transform teleport applied here would leave a sleeping

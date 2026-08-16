@@ -235,7 +235,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
 
         if let Some((entity, _)) = spawned {
             use bevy::ecs::system::SystemState;
-            let mut state: SystemState<lunco_core::coords::ActiveFramePoseQuery> =
+            let mut state: SystemState<lunco_physics::SimulationPoseQuery> =
                 SystemState::new(world);
             let Ok(poses) = state.get(world) else {
                 return ApiResponse::error(
@@ -251,8 +251,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     ),
                 );
             };
-            out["world_position"] =
-                serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
+            out["world_position"] = serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
             out["position_frame"] = serde_json::json!("active_physics");
         }
 

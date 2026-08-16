@@ -46,8 +46,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SessionId,
-    Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SessionId, Severity,
+    SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -699,7 +699,7 @@ pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
 pub fn world_pos(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         state
             .get(world)
             .expect("active-frame query always validates")
@@ -748,7 +748,7 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
 pub fn world_forward(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         let rotation = state
             .get(world)
             .expect("active-frame query always validates")
@@ -768,7 +768,7 @@ pub fn world_forward(gid: u64) -> Option<DVec3> {
 pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         let q = state
             .get(world)
             .expect("active-frame query always validates")
@@ -1040,7 +1040,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
         // One SystemState carries every per-entity read so the loop never
         // re-borrows the World.
         let mut state: SystemState<(
-            coords::ActiveFramePoseQuery,
+            lunco_physics::SimulationPoseQuery,
             Query<(
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,

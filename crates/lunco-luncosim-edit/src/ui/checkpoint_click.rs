@@ -915,7 +915,7 @@ pub fn draw_waypoint_context_menu(
 fn get_waypoint_positions(
     xml: &str,
     bindings: &TargetBindings,
-    poses: &lunco_core::coords::ActiveFramePoseQuery,
+    poses: &lunco_physics::SimulationPoseQuery,
 ) -> Vec<(String, DVec3)> {
     let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(xml) else {
         return Vec::new();
@@ -1094,9 +1094,9 @@ fn collect_targets(v: &Value, out: &mut Vec<String>) {
 /// Single egui overlay that draws both waypoint labels (numbers) and route
 /// lines in screen space.
 ///
-/// Uses [`lunco_core::coords::ActiveFramePoseQuery`] for high-precision,
-/// body-fixed positions. Celestial translation/rotation above the active site
-/// cannot leak into a stationary route.
+/// Uses [`lunco_physics::SimulationPoseQuery`] for authoritative body-fixed
+/// positions: f64 Avian poses for physical targets and composed BigSpace poses
+/// for non-physical markers.
 pub fn draw_waypoint_overlay(
     q_vessels: Query<
         (
@@ -1117,7 +1117,7 @@ pub fn draw_waypoint_overlay(
         Option<&lunco_autopilot::AutopilotExecutionState>,
     )>,
     q_parents: Query<&ChildOf>,
-    poses: lunco_core::coords::ActiveFramePoseQuery,
+    poses: lunco_physics::SimulationPoseQuery,
     q_link: Query<&ControllerLink>,
     scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     panel_rects: Option<Res<lunco_workbench::PanelRects>>,
@@ -1189,11 +1189,7 @@ pub fn draw_waypoint_overlay(
         let authored_route = xml.is_some() && !targets.is_empty();
         let looping = route_loops(xml, spec);
         let wp_positions = if authored_route {
-            get_waypoint_positions(
-                &xml.expect("authored route has XML").0,
-                bindings,
-                &poses,
-            )
+            get_waypoint_positions(&xml.expect("authored route has XML").0, bindings, &poses)
         } else {
             spec.map(get_runtime_waypoint_positions)
                 .unwrap_or_default()
