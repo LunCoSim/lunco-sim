@@ -82,8 +82,8 @@ pub(crate) async fn fetch_layer_closure(
                 // USD semantics: an unresolvable arc posts an error and
                 // composition continues with what did resolve. Aborting the
                 // whole closure instead meant one missing environment layer
-                // cost a tester the entire session — no scene, no cameras, and
-                // 2 s later a fallback free-flight camera in an empty world.
+                // cost a tester the entire session — no scene and no authored
+                // camera, with the viewport correctly remaining inactive.
                 // A rover with no ground under it is a far more useful bug
                 // report than a blank window.
                 //

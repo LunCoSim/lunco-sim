@@ -21,12 +21,10 @@ fn soc() {
 }
 
 fn intro_notice(me) {
-    set_camera("WideTrack");
     notify_kind("Lunar Co-Simulation: Solar-Powered Rover System", "info");
 }
 
 fn deploy_notice(me) {
-    set_camera("RoverCam");
     emit("rover_deployed");
     cmd("EngageAutopilot", #{ vessel: find("/SolarRoverTest/SolarRover") });
     notify_kind("Autopilot engaged. Battery begins draining under load...", "info");

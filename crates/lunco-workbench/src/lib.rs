@@ -730,10 +730,13 @@ impl Plugin for WorkbenchPlugin {
         app.add_plugins(screenshot::ScreenshotPlugin);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin {
-                // Runtime-authored HUI surfaces may be anchored to an egui-dock
-                // tab. They must paint above that tab to be a real replacement /
-                // customization surface rather than an invisible underlay.
-                ui_render_order: bevy_egui::UiRenderOrder::BevyUiAboveEgui,
+                // egui owns the workbench chrome and its transient surfaces:
+                // menus, status history, dialogs, and tooltips. Runtime-authored
+                // HUI is the scene HUD and must remain underneath those surfaces;
+                // otherwise a HUD can paint over an egui popup even when the
+                // popup is in egui's Foreground layer. The scene viewport remains
+                // below both UI systems, so this changes only UI-vs-UI ordering.
+                ui_render_order: bevy_egui::UiRenderOrder::EguiAboveBevyUi,
                 ..Default::default()
             });
         }
@@ -2063,6 +2066,7 @@ impl WorkbenchLayout {
             out.insert(
                 id.as_str().to_string(),
                 PerspectiveDockSnapshot {
+                    layout_revision: self.perspective_layout_revision(*id),
                     dock,
                     side_browser: slot.side_browser.clone(),
                     side_browser_bottom: slot.side_browser_bottom.clone(),
@@ -2080,6 +2084,7 @@ impl WorkbenchLayout {
                     out.insert(
                         id.as_str().to_string(),
                         PerspectiveDockSnapshot {
+                            layout_revision: self.perspective_layout_revision(id),
                             dock,
                             side_browser: self.side_browser.clone(),
                             side_browser_bottom: self.side_browser_bottom.clone(),
@@ -2115,7 +2120,9 @@ impl WorkbenchLayout {
 
         // Active perspective: reconcile into the LIVE dock + heal chrome.
         if let Some(active) = active_str.as_deref() {
-            if let Some(snap) = docks.get(active) {
+            if let Some(snap) = docks.get(active).filter(|snap| {
+                snap.layout_revision == self.perspective_layout_revision_by_str(active)
+            }) {
                 if self.set_dock_from_json(snap.dock.clone(), id_map) {
                     self.ensure_chrome_present();
                 }
@@ -2137,6 +2144,9 @@ impl WorkbenchLayout {
             else {
                 continue; // not registered in this app — skip
             };
+            if snap.layout_revision != self.perspective_layout_revision(pid) {
+                continue;
+            }
             let Some(slot) = self.reconcile_dock_slot(snap, id_map) else {
                 continue;
             };
@@ -2145,6 +2155,22 @@ impl WorkbenchLayout {
         for (pid, slot) in seeded {
             self.dock_cache.insert(pid, slot);
         }
+    }
+
+    /// Return the registered preset revision for a perspective.
+    fn perspective_layout_revision(&self, id: PerspectiveId) -> u32 {
+        self.perspectives
+            .iter()
+            .find(|perspective| perspective.id() == id)
+            .map_or(0, |perspective| perspective.layout_revision())
+    }
+
+    /// String-keyed companion used while restoring persisted state.
+    fn perspective_layout_revision_by_str(&self, id: &str) -> u32 {
+        self.perspectives
+            .iter()
+            .find(|perspective| perspective.id().as_str() == id)
+            .map_or(0, |perspective| perspective.layout_revision())
     }
 
     /// Reconcile a [`PerspectiveDockSnapshot`] into a live

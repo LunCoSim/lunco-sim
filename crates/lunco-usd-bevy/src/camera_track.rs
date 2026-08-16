@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, WorldTime};
 
-use crate::camera_switch::ActivateCamera;
+use crate::camera_switch::{ActivateCamera, CameraSelectionOwner, ViewportCameraSelection};
 use crate::{
     attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, CanonicalStages,
     SdfPath, UsdPrimPath, UsdStageAsset,
@@ -74,6 +74,10 @@ pub struct CameraTrackPlan {
     pub time_codes_per_second: f64,
     /// The camera name last activated by this track (cut de-dup cursor).
     pub last: Option<String>,
+    /// The director revision for which `last` was emitted. An explicit Resume
+    /// command increments the shared revision so the held cut is re-applied
+    /// after an operator override, even if its name is unchanged.
+    pub last_director_revision: u64,
 }
 
 /// The held camera name at time code `t`: the value of the greatest key ≤ `t`,
@@ -121,6 +125,7 @@ pub fn plan_camera_tracks(
             time_codes_per_second: stage_time_codes_per_second(reader),
             keys,
             last: None,
+            last_director_revision: 0,
         });
     }
 }
@@ -181,11 +186,15 @@ pub fn bind_camera_tracks_to_preview(
 pub fn sample_camera_tracks(
     world: Res<WorldTime>,
     resolved: Res<ResolvedDomains>,
+    selection: Res<ViewportCameraSelection>,
     mut q: Query<(&mut CameraTrackPlan, Option<&TimeBinding>)>,
     q_cams: Query<(Entity, &Name), With<SceneCamera>>,
     mut commands: Commands,
 ) {
     for (mut plan, binding) in &mut q {
+        if selection.owner() == CameraSelectionOwner::User {
+            continue;
+        }
         if plan.keys.is_empty() {
             continue;
         }
@@ -194,7 +203,8 @@ pub fn sample_camera_tracks(
         let Some(want) = held_camera(&plan.keys, t) else {
             continue;
         };
-        if plan.last.as_deref() == Some(want) {
+        let needs_resume = plan.last_director_revision < selection.director_revision();
+        if plan.last.as_deref() == Some(want) && !needs_resume {
             continue;
         }
         // Resolve the camera name (full USD path or leaf) → entity, same match
@@ -205,8 +215,9 @@ pub fn sample_camera_tracks(
         });
         match hit {
             Some((e, _)) => {
-                commands.trigger(ActivateCamera(e));
+                commands.trigger(ActivateCamera::director(e));
                 plan.last = Some(want.to_string());
+                plan.last_director_revision = selection.director_revision();
             }
             None => {
                 // Camera not spawned yet — retry next frame (don't set `last`).

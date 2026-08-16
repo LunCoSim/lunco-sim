@@ -211,6 +211,11 @@ impl AppDocumentSessionExt for App {
 /// reproduces the saved layout.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct PerspectiveDockSnapshot {
+    /// Revision of the perspective preset that produced this snapshot.
+    /// Snapshots from an older preset are ignored so a shipped layout change
+    /// can replace stale persisted slot assignments once.
+    #[serde(default)]
+    pub layout_revision: u32,
     /// Serialized `egui_dock::DockState<TabId>` — split sizes, tab
     /// arrangement, active leaf. Parsed + reconciled on restore.
     #[serde(default)]
@@ -932,6 +937,7 @@ mod tests {
                 (
                     "design".to_string(),
                     PerspectiveDockSnapshot {
+                        layout_revision: 0,
                         dock: serde_json::json!({"surfaces": []}),
                         side_browser: vec![PanelId("browser")],
                         side_browser_bottom: vec![],

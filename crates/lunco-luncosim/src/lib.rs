@@ -12,7 +12,7 @@
 //!   - [`SandboxCorePlugin`] — sim / physics / cosim / USD / networking / API.
 //!     Headless-safe, added unconditionally.
 //!   - [`ui::SandboxUiPlugin`] (`ui` feature) — egui workbench, picking, the
-//!     in-scene editor, materials, panels, fallback camera. Added only when
+//!     in-scene editor, materials, panels, and explicit camera controls. Added only when
 //!     running windowed.
 //!   - [`SandboxHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
 //!     cores a server needs in the UI plugin's place. Added only when headless.
@@ -3732,10 +3732,35 @@ fn retarget_cameras_to_offscreen(
 /// which this mode skips along with the rest of the workbench. Every camera a
 /// scene brings spawns `is_active: false` by design (see the camera-ambiguity
 /// fix), so without this nothing renders and the recording is black frames.
-/// When NO camera is active, activate the first authored [`lunco_render::SceneCamera`]
-/// — the scene's own framing intent (e.g. the luncosim `WideShot`), and the same
-/// camera its cinematic paths drive. Scenes without an authored camera get a
-/// loud once-per-run warning rather than a silent black take.
+/// Offscreen recording has the same explicit camera contract as the windowed
+/// viewport. A path-driven camera, or an already active authored camera, may
+/// own the take. If neither is authored/active, all image cameras stay off and
+/// the once-per-run diagnostic explains the black recording; the recorder does
+/// not invent a primary camera by entity order.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn unique_offscreen_camera(
+    candidates: Vec<Entity>,
+    role: &str,
+    warned: &mut bool,
+    ambiguous: &mut bool,
+) -> Option<Entity> {
+    match candidates.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        _ => {
+            *ambiguous = true;
+            if !*warned {
+                *warned = true;
+                warn!(
+                    "[offscreen] {role} is ambiguous ({} authored image cameras); recording stays black until exactly one is selected",
+                    candidates.len()
+                );
+            }
+            None
+        }
+    }
+}
+
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn activate_offscreen_camera(
     mut cameras: Query<(
@@ -3750,11 +3775,9 @@ fn activate_offscreen_camera(
     mut commands: Commands,
     mut warned: Local<bool>,
 ) {
-    // The capture target has one owner.  In particular, do not preserve an
-    // arbitrary active Camera3d: the provisional avatar camera is deliberately
-    // active while the USD scene is loading, but the authored SceneCamera is the
-    // camera that the recording path drives.  Preserving the provisional camera
-    // here makes the path update one camera while the recorder renders another.
+    // The capture target has one owner. Do not preserve an arbitrary active
+    // Camera3d: the authored presentation camera must be the camera the
+    // recording path drives.
     // That is the source of the sky-only first frame and the apparent sky/ground
     // flicker in the marketing take.
     //
@@ -3763,52 +3786,59 @@ fn activate_offscreen_camera(
     // USD scene was loading: the path writer and capture owner must be the same
     // entity or the take contains alternating views. This uses the existing
     // camera-role component, not an episode-specific camera name.
-    let active_path = cameras
-        .iter()
-        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
-            c.is_active
-                && *has_pipeline
-                && *has_scene
-                && *has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    let path_driven = cameras
-        .iter()
-        .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
-            *has_pipeline
-                && *has_scene
-                && *has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    // If no cinematic path owns the presentation, preserve an explicit active
-    // authored camera before falling back to the lowest authored candidate.
-    let active_authored = cameras
-        .iter()
-        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
-            c.is_active
-                && *has_pipeline
-                && *has_scene
-                && !*has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    let selected = active_path.or(path_driven).or(active_authored).or_else(|| {
+    let mut ambiguous = false;
+    let active_path = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+                c.is_active
+                    && *has_pipeline
+                    && *has_scene
+                    && *has_path
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "active cinematic camera",
+        &mut warned,
+        &mut ambiguous,
+    );
+    let path_driven = unique_offscreen_camera(
         cameras
             .iter()
             .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
                 *has_pipeline
                     && *has_scene
+                    && *has_path
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "cinematic camera path",
+        &mut warned,
+        &mut ambiguous,
+    );
+    // If no cinematic path owns the presentation, preserve an explicit active
+    // authored camera. There is no entity-order fallback.
+    let active_authored = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+                c.is_active
+                    && *has_pipeline
+                    && *has_scene
                     && !*has_path
                     && matches!(target, bevy::camera::RenderTarget::Image(_))
             })
             .map(|(entity, ..)| entity)
-            .min()
-    });
+            .collect(),
+        "active authored camera",
+        &mut warned,
+        &mut ambiguous,
+    );
+    let selected = (!ambiguous)
+        .then(|| active_path.or(path_driven).or(active_authored))
+        .flatten();
 
     let mut has_image_camera = false;
     for (entity, mut camera, target, has_pipeline, has_scene, _has_path, has_lod_origin) in
@@ -3821,9 +3851,9 @@ fn activate_offscreen_camera(
         }
         has_image_camera = true;
 
-        // A non-SceneCamera image target is never a capture owner.  It is
+        // A non-SceneCamera image target is never a capture owner. It is
         // explicitly deactivated even when no authored camera exists yet, so
-        // a provisional camera cannot take over again on the next frame.
+        // an unrelated render camera cannot take over on the next frame.
         let keep = has_scene && Some(entity) == selected;
         if camera.is_active != keep {
             camera.is_active = keep;

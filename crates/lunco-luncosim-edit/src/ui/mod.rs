@@ -710,6 +710,9 @@ impl Perspective for BuildPerspective {
     fn title(&self) -> String {
         "⚒ Build".into()
     }
+    fn layout_revision(&self) -> u32 {
+        1
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_stacked(

@@ -64,9 +64,7 @@ pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageA
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
 use leafwing_input_manager::prelude::ActionState;
-use lunco_avatar::{
-    AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, ProvisionalAvatarCamera, SpringArmCamera,
-};
+use lunco_avatar::{AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, SpringArmCamera};
 use lunco_controller::get_avatar_input_map;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
@@ -772,7 +770,6 @@ fn process_usd_sim_prims(
     grid_components: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
-    q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -894,7 +891,6 @@ fn process_usd_sim_prims(
             &grid_components,
             &q_spatial,
             &q_existing_floating_origins,
-            &q_provisional_cameras,
             active_sun.as_deref(),
             &mut commands,
         );
@@ -1115,7 +1111,6 @@ fn process_usd_sim_prim_read(
     grid_components: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
-    q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     active_sun: Option<&lunco_environment::LunarSun>,
     commands: &mut Commands,
 ) {
@@ -1327,28 +1322,18 @@ fn process_usd_sim_prim_read(
                 commands.entity(prior).remove::<FloatingOrigin>();
             }
         }
-        // Complete the takeover: retire any PROVISIONAL stand-in camera
-        // (spawned by the sandbox while the scene was still loading) in THIS
-        // same command flush, so it never coexists with the authored camera
-        // as a second order-0 window `Camera3d` — which would otherwise
-        // produce camera-order ambiguity (double scene render) and a
-        // duplicate `GizmoCamera`. The marker is a separate entity from this
-        // avatar prim, so `entity` is never among them; the guard is belt-
-        // and-braces. See `ProvisionalAvatarCamera`.
-        for prov in q_provisional_cameras.iter() {
-            if prov != entity {
-                commands.entity(prov).try_despawn();
-            }
-        }
         // PRIOR AVATARS are not this code's problem. `LocalAvatar` is singular
         // by construction (`lunco_core`'s component hook): inserting it below
         // demotes whatever held it, and `lunco_avatar::demote_former_avatar`
         // strips that entity's camera/control roles and deactivates its camera.
         // This used to be a loop right here, which is precisely why the OTHER
-        // ways an avatar appears (the app's fallback camera, a recomposed prim)
+        // ways an avatar appears (an explicit host camera, a recomposed prim)
         // could leave a second live one.
         // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which
         // matches `Value::String` alone and reads every token as `None`.
+        // `LunCoAvatarAPI` declares `freeflight` as the USD schema fallback.
+        // That is an authored semantic default, not a Rust recovery path: a
+        // malformed token must remain an explicit scene error below.
         let camera_mode = reader
             .text(&sdf_path, "lunco:cameraMode")
             .unwrap_or_else(|| "freeflight".to_string());
@@ -1420,7 +1405,7 @@ fn process_usd_sim_prim_read(
         // Shared render-look for the avatar camera: SMAA post-process AA,
         // MSAA off (can't touch shader-internal regolith speckle), and
         // physical lunar exposure (ev100 15 ≈ SUNLIGHT) to pair with the
-        // ~128k lx sun. Same look as the sandbox fallback camera; without it
+        // ~128k lx sun. Same look as the standard scene camera; without it
         // a USD-authored Avatar camera renders at Blender-default ev9.7 and
         // the lunar terrain blows out. Tune live via SetEnvironmentLight.
         // Render-look for the avatar camera: physical exposure read from the
@@ -1528,27 +1513,12 @@ fn process_usd_sim_prim_read(
                 ));
             }
             _ => {
-                warn!(
-                    "Unknown camera mode '{}' for avatar at {}, using freeflight",
+                error!(
+                    "Unknown camera mode '{}' for avatar at {}; refusing to create an avatar controller (allowed: freeflight, orbit, springarm)",
                     camera_mode, prim_path.path
                 );
-                commands.entity(entity).try_insert((
-                    camera_look(),
-                    FreeFlightCamera {
-                        yaw,
-                        pitch,
-                        damping: None,
-                    },
-                    AdaptiveNearPlane,
-                    avatar_tf,
-                    FloatingOrigin,
-                    avatar_cell,
-                    Avatar,
-                    LocalAvatar,
-                    IntentAnalogState::default(),
-                    ActionState::<lunco_core::UserIntent>::default(),
-                    get_avatar_input_map(),
-                ));
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
             }
         }
         // This applies to both `def Camera` and `def Xform` avatar prims. The

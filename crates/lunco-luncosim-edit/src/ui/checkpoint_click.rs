@@ -1050,10 +1050,28 @@ fn route_visual_state(
             (index < targets.len()).then_some(index)
         }
     });
+    // The compiled USD route may strip reached legs before rebuilding the
+    // behaviour tree.  Its cursor is therefore relative to the remaining
+    // legs, while `targets` is still the complete authored route used by the
+    // editor.  Translate through the unvisited indices before choosing the
+    // visual blue leg; otherwise cursor 0 points back at W0 after W0 was
+    // reached and a newly appended/current waypoint never receives the cue.
+    let unvisited_indices: Vec<usize> = visited
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &is_visited)| (!is_visited).then_some(index))
+        .collect();
     let active_index = if completed {
         None
     } else {
-        cursor_index.or_else(|| visited.iter().position(|visited| !visited))
+        cursor_index
+            .and_then(|cursor| unvisited_indices.get(cursor).copied())
+            .or_else(|| visited.iter().position(|visited| !visited))
+            // A looping route can have completed a full authored lap while
+            // its runtime cursor has already wrapped. In that state there is
+            // no unvisited index to translate, so the cursor is the next
+            // authored target again.
+            .or_else(|| looping.then_some(cursor_index).flatten())
     };
 
     RouteVisualState {
@@ -2573,6 +2591,29 @@ mod tests {
         let state = route_visual_state(&targets, None, Some(1), false, false);
         assert_eq!(state.visited, vec![false, false]);
         assert_eq!(state.active_index, Some(1));
+    }
+
+    #[test]
+    fn route_progress_maps_stripped_cursor_to_the_full_authored_route() {
+        let targets = vec![
+            "/Route/W0".to_string(),
+            "/Route/W1".to_string(),
+            "/Route/W2".to_string(),
+        ];
+        let reached = std::collections::HashSet::from(["/Route/W0".to_string()]);
+        let state = route_visual_state(
+            &targets,
+            Some(&ReachedWaypoints(reached)),
+            Some(0),
+            false,
+            false,
+        );
+        assert_eq!(state.visited, vec![true, false, false]);
+        assert_eq!(
+            state.active_index,
+            Some(1),
+            "runtime cursor 0 is the first remaining leg, W1, not authored W0"
+        );
     }
 
     #[test]

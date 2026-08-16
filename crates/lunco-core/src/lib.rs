@@ -240,10 +240,10 @@ pub struct Avatar;
 ///
 /// It used to be a convention, repaired after the fact by whichever spawner
 /// noticed: `lunco-usd-sim` stripped the role off prior holders when a scene
-/// authored a new `Avatar` prim. That covered ONE of the ways an avatar comes
-/// into being — a USD scene's prim, the app's fallback free-flight camera, a
-/// scene reload that re-composes the prim — so the others produced two live
-/// avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
+/// authored a new `Avatar` prim. That covered only one of the ways an avatar
+/// comes into being — a USD scene's prim, an explicit host-created observation
+/// camera, or a scene reload that re-composes the prim — so the others produced
+/// two live avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
 /// visibly flickers between them) and split the input path: a click binds the
 /// chase camera on one while the window renders the other, keyboard drives every
 /// avatar's linked vessel at once, and release fires twice.
@@ -343,7 +343,7 @@ fn remote_avatar_claimed(
 /// bespoke "view" concept.
 ///
 /// Contributors write DATA here and NEVER touch `Camera::is_active` themselves:
-/// - the camera switch (`set_camera(name)` / `KeyC`) rebinds [`active_camera`];
+/// - an explicit camera presentation request rebinds [`active_camera`];
 /// - the workbench sets [`visible`] + [`rect`] from its layout perspective.
 ///
 /// [`active_camera`]: SceneViewport::active_camera
@@ -352,8 +352,8 @@ fn remote_avatar_claimed(
 #[derive(Resource, Debug, Clone)]
 pub struct SceneViewport {
     /// The bound (active) camera — which window `Camera3d` renders. Revalidated
-    /// each frame by the reconciler; falls back to the local avatar camera
-    /// (else any window camera) when unset or stale.
+    /// each frame by the reconciler. `None` is an intentional no-camera state;
+    /// it is never replaced by an implicit avatar or first-camera choice.
     pub active_camera: Option<Entity>,
     /// Whether the 3D scene renders at all (the workbench Design perspective
     /// sets this `false`). Defaults `true` so tooling/headless binaries with no
@@ -363,6 +363,13 @@ pub struct SceneViewport {
     /// window, or `None` for the full window (the current default).
     pub rect: Option<(UVec2, UVec2)>,
 }
+
+/// Presentation intent emitted by avatar workflows that explicitly return the
+/// operator to the local avatar. The camera subsystem owns resolution and
+/// activation; this event keeps avatar mechanics independent of USD camera
+/// projection details.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct RequestLocalAvatarView;
 
 impl Default for SceneViewport {
     fn default() -> Self {

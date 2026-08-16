@@ -24,7 +24,7 @@ The substrate is largely built. This design mostly *composes* it.
 | Data-driven cuts (`token lunco:activeCamera.timeSamples`) | `lunco-usd-bevy/src/camera_track.rs` | Real (doc 35 step 1) |
 | Transport (`ControlAnimation`, `Playback`, `AnimationPreview` domain) | `lunco-time/src/domain.rs:86,584,608` | Real |
 | Transport UI (play/pause/scrub/rate) | `lunco-luncosim-edit/src/ui/inspector.rs:820` | Real, ~45 lines |
-| `SetActiveCamera { name }` + `reconcile_scene_viewport` | `lunco-usd-bevy/src/camera_switch.rs` | Real, sole viewport authority |
+| explicit camera selection + `reconcile_scene_viewport` | `lunco-usd-bevy/src/camera_switch.rs` | Real, sole viewport authority |
 | Ground pick (DEM oracle + collider, render→world) | `lunco-luncosim-edit/src/ui/checkpoint_click.rs:216` (`pick_ground_world`) | Real, directly reusable |
 | `catmull_rom_path` (shared by autopilot + ribbon) | `lunco-autopilot` | Real, has `closed` flag |
 | Cursor-mode gating, `CancelIntent` → `#[Command]` | `lunco-core/src/lib.rs:~440-512` | Real |
@@ -252,16 +252,18 @@ against the `AnimationPreview` domain. The inspector's existing transport plays/
 
 Activation, pick one:
 
-- `SetActiveCamera { name: "CraterOrbit" }` — command, API, rhai `set_camera("CraterOrbit")`, or `KeyC` cycle.
+- `SetActiveCamera { name: "CraterOrbit" }` — director command, API, or Rhai `set_camera("CraterOrbit")`.
+- `SetUserCamera`, `ObserveAvatar`, and `KeyC` are explicit operator controls;
+  `ResumeCameraDirector` returns to the authored director.
 - `token lunco:activeCamera.timeSamples` on a `def Scope "CameraTrack"` — cuts as data, scrubbing with the transport.
 
-**Giving the view back.** A scenario that cuts to a scene camera leaves the
-viewport bound there — the avatar camera still takes WASD but renders nothing,
-which reads as a hard lock-up. `ReleaseVessel` (Backspace) therefore clears
-`SceneViewport.active_camera`; `reconcile_scene_viewport` revalidates every
-frame and falls back to the `LocalAvatar` camera, so Cancel always means "return
-me to my own eye". A cinematic never has to remember to cut back, and a scenario
-that ends mid-shot cannot strand the player.
+**Giving the view back.** A cinematic scene authors named cameras and, when an
+operator needs to drive, an explicit local-avatar camera. The Camera menu lists
+the authored cameras, provides **Observe avatar**, and provides **Resume
+authored director** when a `CameraTrack` exists. User selection holds against
+director cuts until resumed. If no explicit camera is available, the viewport
+stays inactive and reports the missing camera; there is no avatar/first-camera
+fallback and no silent camera creation.
 
 This is why the answer is **animation, not a behaviour tree**, and the codebase already agrees:
 a BT is a *decision* structure re-evaluated against world state at tick rate — it re-plans, it

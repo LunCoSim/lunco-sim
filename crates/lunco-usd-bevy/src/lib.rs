@@ -190,6 +190,7 @@ impl Plugin for UsdBevyPlugin {
             // still has it. Idempotent — a no-op if core already registered it.
             .init_resource::<lunco_core::SceneViewport>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
+            .init_resource::<camera_switch::CameraSelectionStatus>()
             // Ph0′: the live canonical stages, built main-thread from each
             // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
             // `NonSend` — holds `!Send` openusd `Stage`s.
@@ -211,12 +212,12 @@ impl Plugin for UsdBevyPlugin {
             // relocates the big_space FloatingOrigin. Works in a static,
             // input-less world (the command path needs neither).
             .add_observer(camera_switch::on_activate_camera)
-            .add_observer(camera_switch::bind_avatar_camera_on_add)
+            .add_observer(camera_switch::on_request_local_avatar_view)
             // The viewport-camera reconciler: the SINGLE authority over
             // window-camera `is_active` + `viewport`. Reads `SceneViewport`
             // (bound camera + visibility + rect, written by the switch and the
-            // workbench) and actuates it. Runs every frame so async spawns and
-            // provisional→avatar takeover stay coherent.
+            // workbench) and actuates it. Runs every frame so an explicitly
+            // requested authored camera can be fulfilled after async projection.
             .add_systems(
                 Update,
                 (
@@ -225,7 +226,13 @@ impl Plugin for UsdBevyPlugin {
                         .after(camera_switch::cycle_active_camera),
                     camera_switch::enforce_one_window_camera
                         .after(camera_switch::reconcile_scene_viewport),
+                    camera_switch::update_camera_selection_status
+                        .after(camera_switch::enforce_one_window_camera),
                 ),
+            )
+            .add_systems(
+                scene_lifecycle::SceneTeardown,
+                camera_switch::reset_camera_selection,
             )
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
             // as a grid-direct follower (so it can host the FloatingOrigin at
@@ -389,6 +396,9 @@ impl Plugin for UsdBevyPlugin {
 // listed command handlers). Called from `UsdBevyPlugin::build`.
 lunco_core::register_commands!(
     camera_switch::on_set_active_camera,
+    camera_switch::on_set_user_camera,
+    camera_switch::on_observe_avatar,
+    camera_switch::on_resume_camera_director,
     camera_path::camera_path_transport,
 );
 

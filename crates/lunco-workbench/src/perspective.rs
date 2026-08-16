@@ -50,6 +50,16 @@ pub trait Perspective: Send + Sync + 'static {
     fn restores_cached_layout(&self) -> bool {
         true
     }
+
+    /// Revision of the authored default layout.
+    ///
+    /// Increment this when a perspective's canonical slot arrangement changes.
+    /// Persisted snapshots from an older revision are ignored once, allowing
+    /// the new default to take effect without disabling user layout persistence
+    /// after that first rebuild.
+    fn layout_revision(&self) -> u32 {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

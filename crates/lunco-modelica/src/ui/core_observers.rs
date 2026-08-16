@@ -135,6 +135,7 @@ pub fn drain_sim_samples_to_viz(
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
     doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+    wholesale_sources: Query<(), With<lunco_signal::WholesaleSignalSource>>,
 ) {
     if stream.batches.is_empty() {
         return;
@@ -145,6 +146,20 @@ pub fn drain_sim_samples_to_viz(
         return;
     };
     for batch in &batches {
+        // A generated co-simulation entity owns its complete output surface
+        // through `lunco-cosim::publish_cosim_variables`, which preserves the
+        // composed USD signal metadata and retention policy. The worker stream
+        // is still consumed, but must not append a second history under the
+        // same `(entity, path)` key at solver cadence: that interleaves two
+        // producers and renders as repeated horizontal bands in a graph.
+        if wholesale_sources.get(batch.entity).is_ok() {
+            if batch.is_new_model {
+                for (name, _) in &batch.samples {
+                    sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
+                }
+            }
+            continue;
+        }
         if batch.is_new_model {
             for (name, _) in &batch.samples {
                 sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
@@ -221,6 +236,112 @@ pub fn drain_notices_to_console(
                 bus.push("Modelica", StatusLevel::Error, n.text.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wholesale_cosim_entities_have_one_authoritative_history_producer() {
+        let mut app = App::new();
+        app.init_resource::<crate::SimSampleStream>()
+            .init_resource::<SignalRegistry>()
+            .add_systems(Update, drain_sim_samples_to_viz);
+
+        let entity = app
+            .world_mut()
+            .spawn(lunco_signal::WholesaleSignalSource)
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::SimSampleStream>()
+            .batches
+            .push(crate::SimSampleBatch {
+                entity,
+                document: lunco_doc::DocumentId::default(),
+                time: 1.0,
+                samples: vec![("solar_power".to_string(), 307.0)],
+                is_new_model: false,
+                is_parameter_update: false,
+            });
+
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<SignalRegistry>()
+            .scalar_history(&SignalRef::new(entity, "solar_power"))
+            .is_none());
+    }
+
+    #[test]
+    fn standalone_modelica_entities_still_project_live_samples() {
+        let mut app = App::new();
+        app.init_resource::<crate::SimSampleStream>()
+            .init_resource::<SignalRegistry>()
+            .add_systems(Update, drain_sim_samples_to_viz);
+
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<crate::SimSampleStream>()
+            .batches
+            .push(crate::SimSampleBatch {
+                entity,
+                document: lunco_doc::DocumentId::default(),
+                time: 1.0,
+                samples: vec![("solar_power".to_string(), 307.0)],
+                is_new_model: false,
+                is_parameter_update: false,
+            });
+
+        app.update();
+
+        let history = app
+            .world()
+            .resource::<SignalRegistry>()
+            .scalar_history(&SignalRef::new(entity, "solar_power"))
+            .expect("standalone Modelica output should still reach viz");
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn wholesale_modelica_recompile_clears_the_previous_history() {
+        let mut app = App::new();
+        app.init_resource::<crate::SimSampleStream>()
+            .init_resource::<SignalRegistry>()
+            .add_systems(Update, drain_sim_samples_to_viz);
+
+        let entity = app
+            .world_mut()
+            .spawn(lunco_signal::WholesaleSignalSource)
+            .id();
+        let signal = SignalRef::new(entity, "solar_power");
+        app.world_mut()
+            .resource_mut::<SignalRegistry>()
+            .push_scalar(signal.clone(), 1.0, 307.0);
+        app.world_mut()
+            .resource_mut::<crate::SimSampleStream>()
+            .batches
+            .push(crate::SimSampleBatch {
+                entity,
+                document: lunco_doc::DocumentId::default(),
+                time: 0.0,
+                samples: vec![("solar_power".to_string(), 301.0)],
+                is_new_model: true,
+                is_parameter_update: false,
+            });
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .map(|history| history.len()),
+            Some(0),
+            "co-sim owns the new history, but the worker must not re-publish its compile sample"
+        );
     }
 }
 

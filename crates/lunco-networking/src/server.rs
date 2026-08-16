@@ -1447,7 +1447,7 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((manifest, cid_paths)) => {
+        Some((mut manifest, cid_paths)) => {
             info!(
                 "[net] scenario manifest built: {} assets",
                 manifest.assets.len()

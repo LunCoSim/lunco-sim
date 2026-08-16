@@ -3034,8 +3034,9 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
 /// so two accidental ECS projections of the same prim collapse to one row in
 /// `ListEntities`. This query instead enumerates the live ECS candidates by their
 /// transient entity id and reports the roles that can make a duplicate visible.
-/// It intentionally includes every Bevy camera, because a camera spawned outside
-/// the avatar path must be visible to this audit too.
+/// It intentionally includes every `SceneCamera` intent, whether or not the
+/// render host has attached Bevy's `Camera` component; unrelated render-only
+/// cameras are not viewport candidates and are excluded.
 pub struct SceneCameraAuditProvider;
 
 impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
@@ -3048,27 +3049,16 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             Entity,
             Option<&Name>,
             Option<&UsdPrimPath>,
-            &bevy::camera::Camera,
+            Option<&bevy::camera::Camera>,
             Has<SceneCamera>,
             Has<lunco_usd_bevy::camera_mount::MountedCamera>,
             Has<Avatar>,
             Has<LocalAvatar>,
-            Has<lunco_avatar::ProvisionalAvatarCamera>,
-        ), ()>();
+        ), With<SceneCamera>>();
         let mut candidates: Vec<_> = query
             .iter(world)
             .map(
-                |(
-                    entity,
-                    name,
-                    prim,
-                    camera,
-                    scene_camera,
-                    mounted,
-                    avatar,
-                    local,
-                    provisional,
-                )| {
+                |(entity, name, prim, camera, scene_camera, mounted, avatar, local)| {
                     serde_json::json!({
                         "entity": entity.to_bits(),
                         "name": name.map(|n| n.as_str()).unwrap_or_default(),
@@ -3078,8 +3068,14 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                         "mounted_camera": mounted,
                         "avatar": avatar,
                         "local_avatar": local,
-                        "provisional_avatar": provisional,
-                        "camera_active": camera.is_active,
+                        // Headless production runs intentionally omit Bevy's
+                        // render `Camera` component, but the render-free
+                        // `SceneCamera` intent is still the authoritative
+                        // viewport candidate. Keep the audit useful in both
+                        // worlds instead of making headless diagnostics report
+                        // an empty candidate set.
+                        "render_camera": camera.is_some(),
+                        "camera_active": camera.is_some_and(|camera| camera.is_active),
                     })
                 },
             )
@@ -3277,11 +3273,6 @@ pub struct SceneEntities<'w, 's> {
     scene_roots: Query<'w, 's, &'static UsdPrimPath, With<UsdSceneRoot>>,
     prims: Query<'w, 's, (Entity, &'static UsdPrimPath)>,
     wires: Query<'w, 's, Entity, With<SimConnection>>,
-    /// The sandbox's code-spawned safety camera is deliberately outside the
-    /// USD subtree, so it needs explicit scene-lifecycle ownership.  Leaving it
-    /// alive while a replacement USD Avatar claims the viewport is the only
-    /// route to two local cameras after a full reload.
-    provisional_avatars: Query<'w, 's, Entity, With<lunco_avatar::ProvisionalAvatarCamera>>,
     /// Physics-created joint entities and world-anchor bodies have no USD prim
     /// path, so their explicit scene-ownership marker is the authoritative
     /// reclamation key.
@@ -3295,13 +3286,12 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // `lunco_usd_bevy::scene_lifecycle`.
     commands.queue(lunco_usd_bevy::scene_lifecycle::run_scene_teardown);
 
-    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_provisional_avatars, q_physics_owned) = (
+    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_physics_owned) = (
         &scene.grid,
         &scene.origin,
         &scene.scene_roots,
         &scene.prims,
         &scene.wires,
-        &scene.provisional_avatars,
         &scene.physics_owned,
     );
     let mut despawned = 0usize;
@@ -3354,14 +3344,6 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         despawned += 1;
     }
 
-    // A provisional avatar belongs to the loaded scene, even though it is
-    // spawned by the UI rather than from a USD prim.  Remove it in the same
-    // deferred batch as the old stage so it cannot render alongside the next
-    // scene's authored avatar during a reload.
-    for e in q_provisional_avatars.iter() {
-        commands.entity(e).try_despawn();
-        despawned += 1;
-    }
     for e in q_physics_owned.iter() {
         commands.entity(e).try_despawn();
         despawned += 1;

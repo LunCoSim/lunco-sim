@@ -221,10 +221,12 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     assert!((panel.width - 1.2).abs() < 1e-4, "width {}", panel.width);
     assert!((panel.height - 0.6).abs() < 1e-4, "height {}", panel.height);
     // `RectLight::intensity` is luminous POWER in lumens (unlike Point/Spot,
-    // which are candela) — the authored 8000 is taken as lumens, unscaled
-    // because `inputs:exposure` is unauthored (2^0 = 1).
+    // which are candela). With the schema-default `normalize = false`, the
+    // authored power scales by the authored emitting area relative to the
+    // schema's 1 m² fallback: 8000 × 1.2 × 0.6 = 5760 lumens. Exposure is
+    // unauthored here, so it contributes its neutral 2^0 factor.
     assert!(
-        (panel.intensity - 8000.0).abs() < 1e-2,
+        (panel.intensity - 5760.0).abs() < 1e-2,
         "intensity {}",
         panel.intensity
     );

@@ -53,7 +53,7 @@ the timeline as data.
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd/src/document.rs:229,251`) — each the other's inverse, test-covered (`:1244`) | no UI callers yet |
 | Journaled/undoable apply | `ApplyUsdOp { doc, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair (`lunco-usd/src/commands.rs:539,553`) | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-bevy/src/author.rs:186`) | UI only supplies a string |
-| Camera switch (single target) | `SetActiveCamera{name}` → `ActivateCamera(Entity)` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | imperative only |
+| Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | one viewport authority |
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |
 | Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
 | Declarative timeline data | JSON steps (`{wait}`,`{emit}`,`{cmd,params}`,`{move_to}`) persisted `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
@@ -103,9 +103,12 @@ schema, and either layer can be authored/edited independently.
 
 ## Decision 2 — Camera cuts become a data-driven track (slice #1)
 
-Today the active camera is chosen imperatively (`SetActiveCamera` from rhai, a
-hotkey, or avatar-add). Add a **keyframed camera channel** + a **sampler** so the
-same selection is data on a timeline.
+Camera selection has explicit ownership. `SetActiveCamera` and a camera track
+are director requests; `SetUserCamera`, `ObserveAvatar`, and `KeyC` are explicit
+operator requests. The operator selection holds until
+`ResumeCameraDirector`. Add a **keyframed camera channel** + a **sampler** so
+director selection is data on a timeline without taking control back from an
+operator silently.
 
 **Schema (on the scene's cinematic layer, an OTIO-shaped USD prim):**
 
@@ -132,11 +135,13 @@ def Scope "CameraTrack" (
 
 **Sampler** (`lunco-usd-bevy`, sibling to `sample_usd_animation`): a change-gated
 system that, when the resolved domain time crosses a key boundary of an
-`activeCamera` channel, fires the existing `ActivateCamera(Entity)` event (resolve
-name→entity once, cache). Reuses the single-authority `reconcile_scene_viewport`
-path — no new camera plumbing. Step ("held") interpolation only; a cut is
-instantaneous. Backward seek re-evaluates which key is current, so scrubbing
-shows the correct camera.
+`activeCamera` channel, fires `ActivateCamera::director` (resolve name→entity
+once, cache). Reuses the single-authority `reconcile_scene_viewport` path — no
+new camera plumbing. Step ("held") interpolation only; a cut is instantaneous.
+While an operator owns the viewport the sampler is held. `ResumeCameraDirector`
+increments the director revision and re-emits the held cut, including when its
+camera name did not change. Backward seek re-evaluates which key is current, so
+scrubbing shows the correct camera.
 
 This slice is the highest-value first step: smallest surface, immediately
 visible in the 3D view even before any timeline UI exists, and it converts the

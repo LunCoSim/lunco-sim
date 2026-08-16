@@ -12,12 +12,12 @@
 //! (`SandboxEditUiPlugin`, `UsdUiPlugin`, `ModelicaUiPlugin`, …) — the app crate
 //! is now structurally identical to them.
 
-use bevy::{math::DVec3, prelude::*};
-use big_space::prelude::*;
+use bevy::prelude::*;
 
-use lunco_avatar::{FreeFlightCamera, ProvisionalAvatarCamera};
 use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
-use lunco_render::SceneCamera;
+use lunco_usd_bevy::camera_switch::{
+    CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
+};
 use lunco_workbench::{CurrentSceneName, CurrentScenePath, MenuCtx};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
@@ -45,7 +45,7 @@ struct DismissTerrainOverlay;
 
 /// The luncosim's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
-/// the fallback free-flight camera.
+/// explicit camera presentation controls.
 ///
 /// Added by the app shell only for a windowed run. A headless server runs the
 /// sim, physics, scene, cosim, and networking host (all in `SandboxCorePlugin`)
@@ -318,14 +318,6 @@ impl Plugin for SandboxUiPlugin {
                     }
                 },
             )
-            // Confine window-targeting cameras to the ViewportPanel rect (prevents
-            // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
-            // Fallback free-flight camera when the scene authors none — interactive
-            // only; a headless server has no user to control.
-            .add_systems(
-                PostUpdate,
-                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback),
-            )
             // The sky clock remains native egui because the deliberately minimal
             // HUI contract has no equivalent text-input semantics for its UTC seek
             // field. Its state still flows through the typed SetClock command.
@@ -409,7 +401,7 @@ fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) ->
 
 fn on_runtime_ui_action(
     trigger: On<runtime_exposure::RuntimeUiAction>,
-    q_avatar: Query<(Entity, Option<&Camera>), With<lunco_core::Avatar>>,
+    q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut commands: Commands,
@@ -419,12 +411,7 @@ fn on_runtime_ui_action(
             if !orbital_pin.is_some_and(|pin| pin.active) {
                 return;
             }
-            let avatar = q_avatar
-                .iter()
-                .find(|(_, camera)| camera.is_some_and(|camera| camera.is_active))
-                .or_else(|| q_avatar.iter().next())
-                .map(|(entity, _)| entity);
-            if let Some(target) = avatar {
+            if let Ok(target) = q_avatar.single() {
                 commands.trigger(lunco_avatar::ReturnFromOrbit { target });
             }
         }
@@ -488,6 +475,48 @@ fn register_camera_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Camera", |ui, ctx| {
+        let state = ctx.resource::<CameraSelectionStatus>().cloned();
+        ui.label("Presentation");
+        if let Some(state) = &state {
+            let active = state.active_name.as_deref().unwrap_or("none");
+            let owner = match state.owner {
+                CameraSelectionOwner::None => "none",
+                CameraSelectionOwner::Director => "director",
+                CameraSelectionOwner::User => "operator",
+            };
+            ui.label(format!("Active: {active}  ·  Owner: {owner}"));
+            if let Some(error) = &state.last_error {
+                ui.colored_label(bevy_egui::egui::Color32::from_rgb(235, 130, 130), error);
+            }
+            if state.avatar_available && ui.button("Observe avatar").clicked() {
+                ctx.trigger(ObserveAvatar {});
+                ui.close();
+            }
+            if state.director_available && ui.button("Resume authored director").clicked() {
+                ctx.trigger(ResumeCameraDirector {});
+                ui.close();
+            }
+            ui.separator();
+            if state.cameras.is_empty() {
+                ui.label("No authored window camera is available.");
+                ui.label("The viewport stays inactive until one is authored.");
+            } else {
+                ui.label("Operator camera");
+                for name in &state.cameras {
+                    let label = if state.active_name.as_deref() == Some(name.as_str()) {
+                        format!("✓ {name}")
+                    } else {
+                        name.clone()
+                    };
+                    if ui.button(label).clicked() {
+                        ctx.trigger(SetUserCamera { name: name.clone() });
+                        ui.close();
+                    }
+                }
+            }
+        } else {
+            ui.label("Camera state is not ready.");
+        }
         let actions = [
             (
                 "Surface view",
@@ -517,70 +546,6 @@ fn on_dismiss_terrain_overlay(
 ) {
     status.user_dismissed = true;
     status.active = false;
-}
-
-/// Grace period before [`spawn_fallback_avatar`] steps in (USD load is async).
-const FALLBACK_AVATAR_GRACE_SECS: f32 = 2.0;
-
-/// Spawns a provisional avatar only for a loaded scene with no viewport camera.
-///
-/// USD loading is asynchronous, so the guard waits for a scene camera rather
-/// than inspecting generic render cameras on the first frame. The tracked
-/// entity is scene-owned and is removed by the normal scene teardown.
-fn spawn_fallback_avatar(
-    time: Res<Time>,
-    q_cameras: Query<Entity, With<SceneCamera>>,
-    q_grids: Query<Entity, With<Grid>>,
-    q_origins: Query<Entity, With<FloatingOrigin>>,
-    active_sun: Res<lunco_environment::LunarSun>,
-    mut commands: Commands,
-    mut fallback: Local<Option<Entity>>,
-) {
-    if let Some(entity) = *fallback {
-        if q_cameras.get(entity).is_ok() {
-            return;
-        }
-        // The shared scene teardown (or an authored Avatar takeover) removed
-        // the previous fallback. A future camera-less scene may need one.
-        *fallback = None;
-    }
-    // A USD-spawned camera ends the wait immediately.
-    if q_cameras.iter().next().is_some() {
-        return;
-    }
-    // Otherwise let USD have its grace window before we step in.
-    if time.elapsed_secs() < FALLBACK_AVATAR_GRACE_SECS {
-        return;
-    }
-    let Some(grid) = q_grids.iter().next() else {
-        return;
-    };
-
-    info!(
-        "No USD viewport camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning provisional avatar"
-    );
-    let camera =
-        lunco_avatar::spawn_avatar_camera(&mut commands, grid, DVec3::new(-30.0, 15.0, -20.0));
-    // The shared constructor owns the avatar contract; this caller adds only
-    // provisional lifecycle and initial-view state.
-    commands.entity(camera).try_insert((
-        ProvisionalAvatarCamera,
-        FreeFlightCamera {
-            yaw: -2.245559,
-            pitch: -0.303039,
-            damping: None,
-        },
-        bevy::camera::Exposure {
-            ev100: active_sun.exposure_ev100,
-        },
-    ));
-
-    // The constructor owns the sole origin; clear the prior scene holder.
-    for prior in q_origins.iter() {
-        commands.entity(prior).remove::<FloatingOrigin>();
-    }
-
-    *fallback = Some(camera);
 }
 
 // ── wasm URL-driven boot ──────────────────────────────────────────────────────
