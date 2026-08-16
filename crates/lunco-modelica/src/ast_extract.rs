@@ -34,13 +34,15 @@ fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
     // reference package imports or use recoverable Modelica constructs; that
     // made the input-default strip warn and silently demote every bound input
     // in those files even though Rumoca could compile them successfully.
-    rumoca_phase_parse::parse_to_syntax(source, file_label)
+    let source = crate::source_asset::normalize_modelica_source(source);
+    rumoca_phase_parse::parse_to_syntax(&source, file_label)
         .best_effort()
         .clone()
 }
 
 fn parse(source: &str) -> Option<StoredDefinition> {
-    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+    let source = crate::source_asset::normalize_modelica_source(source);
+    let syntax = rumoca_phase_parse::parse_to_syntax(&source, "model.mo");
     (!syntax.has_errors()).then(|| syntax.best_effort().clone())
 }
 
@@ -599,6 +601,12 @@ pub fn strip_input_defaults_with_report(
     let mut ranges: Vec<InputBindingRange> = Vec::new();
     collect_input_binding_ranges(&ast.classes, source, &mut ranges);
     let mut bytes = source.as_bytes().to_vec();
+    // The parser saw a BOM-free, same-length view above. Keep that invariant
+    // in the source sent to Rumoca as well, including files with no input
+    // bindings to strip.
+    if source.starts_with('\u{feff}') {
+        bytes[..3].copy_from_slice(b"   ");
+    }
     for range in ranges {
         let (start, end) = (range.blank_start, range.expr_end);
         // Only blank ASCII ranges so we never split a multi-byte UTF-8
@@ -1273,6 +1281,23 @@ mod tests {
             parse(&modified).is_some(),
             "blanked source must still parse"
         );
+    }
+
+    #[test]
+    fn strip_input_defaults_accepts_windows_bom_and_crlf() {
+        let source = "\u{feff}model M\r\n  input Real g = 9.81;\r\nend M;\r\n";
+        let (modified, defaults, issues) = strip_input_defaults_with_report(source);
+
+        assert_eq!(modified.len(), source.len(), "strip must preserve offsets");
+        assert_eq!(&modified.as_bytes()[..3], b"   ");
+        assert_eq!(
+            modified.matches("\r\n").count(),
+            source.matches("\r\n").count()
+        );
+        assert_eq!(defaults.get("g"), Some(&9.81));
+        assert!(issues.is_empty(), "BOM/CRLF must not be a parse failure");
+        assert!(!modified.contains("= 9.81"));
+        assert!(parse(&modified).is_some(), "normalized source must parse");
     }
 
     #[test]

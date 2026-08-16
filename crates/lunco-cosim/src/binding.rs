@@ -109,6 +109,14 @@ pub fn request_binding(mut revision: ResMut<BindingRevision>) {
 /// allowed to bind before their first sample; normal propagation will deliver
 /// the first value when the producer publishes it.
 fn seed_bound_connection(world: &mut World, registry: &PortRegistry, spec: &SimConnection) -> bool {
+    // The initial handoff is a write just like the fixed-step propagation. Use
+    // the same per-target ownership classifier so a client never seeds a
+    // replicated snapshot proxy before the live propagation gate gets a say.
+    // The next propagation tick will seed it if this entity later becomes
+    // locally simulated (for example, after possession is granted).
+    if !crate::systems::propagate::peer_simulates(world, spec.end_element) {
+        return false;
+    }
     let source = if spec.start_is_input {
         registry.read_input_port(world, spec.start_element, &spec.start_connector)
     } else {
