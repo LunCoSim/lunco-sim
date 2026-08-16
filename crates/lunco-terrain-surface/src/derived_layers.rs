@@ -60,14 +60,9 @@ use crate::stream_viz::DemHeightField;
 /// Texels per side of each baked data layer. 1024² over the moonbase ±4 km
 /// window ≈ 8 m/texel.
 ///
-/// Raising this cannot close a mid-depth detail hole: the map only blends in
-/// where it is FINER than the tile mesh (`tile_map_ratio` / `map_weights` need
-/// `r = LAYER_RES / (2^depth · 48) > 0.75`, depth ≤ 4.8 at 1024), while over-zoom
-/// craterlets fade out going COARSER — any gap between the two is closed from the
-/// MESH side (the scene's `lunco:layer:maxFeature`), not by resolution the far
-/// field never samples. Do NOT close it by giving `w_normal` a floor either: the
-/// map stores the FULL surface normal, not a residual, so blending it where the
-/// mesh already resolves that relief double-shades it.
+/// The renderer compares the physical texel size published with the maps to the
+/// fragment's screen-space footprint. The result is continuous across mesh LOD
+/// boundaries: mesh depth is deliberately not part of terrain appearance.
 const LAYER_RES: usize = 1024;
 /// AO ray budget per texel (directions × march steps).
 const AO_DIRS: usize = 8;
@@ -77,6 +72,19 @@ const AO_RADIUS_FRAC: f64 = 0.15;
 /// Slope (radians) at which roughness saturates.
 const ROUGH_BASE: f32 = 0.6;
 const ROUGH_STEEP_RAD: f32 = 0.6; // ~34°
+
+/// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
+/// square. This is the one definition used by both the baker's filters and the
+/// renderer metadata, so their frequency boundary cannot drift.
+fn raster_texel_size_m(half_extent: f64, res: usize) -> f64 {
+    assert!(res > 0, "derived terrain map cannot have zero resolution");
+    let texel_size_m = 2.0 * half_extent / res as f64;
+    assert!(
+        texel_size_m.is_finite() && texel_size_m > 0.0,
+        "derived terrain map requires a finite positive physical texel size"
+    );
+    texel_size_m
+}
 
 /// One-shot marker: this terrain's derived layers are bound onto its own
 /// static-mesh `ShaderMaterial`. Stops re-scanning. Streamed tiles don't use
@@ -92,8 +100,12 @@ pub struct DerivedLayersBuilt;
 pub struct TerrainDerivedMaps {
     pub surface: Handle<Image>,
     pub normal: Handle<Image>,
-    /// Texels per side — lets consumers reason about map vs geometry frequency.
+    /// Texels per side, retained for diagnostics and static-material reporting.
     pub res: usize,
+    /// Physical spacing between adjacent level-zero texel centres in terrain
+    /// local metres. This is the authoritative material-detail scale; consumers
+    /// must not reconstruct it from mesh LOD depth.
+    pub texel_size_m: f32,
 }
 
 /// The **authored** layer maps for a terrain, read off its bound UsdShade
@@ -394,6 +406,9 @@ fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
     let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+    if res == 0 {
+        return None;
+    }
     let len = res.checked_mul(res)?.checked_mul(4)?;
     let body = bytes.get(4..)?;
     if body.len() != len.checked_mul(2)? {
@@ -416,7 +431,7 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
         half,
     };
     let res = LAYER_RES;
-    let texel = 2.0 * half / res as f64;
+    let texel = raster_texel_size_m(half, res);
     // Gate over-zoom synthesis at the map's texel size via the shared filter
     // policy (the map is far coarser than the synthetic detail — skip it, don't
     // alias it).
@@ -434,7 +449,7 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
     let ao_res = (res / 2).max(1);
-    let ao_texel = 2.0 * half / ao_res as f64;
+    let ao_texel = raster_texel_size_m(half, ao_res);
     // The AO march walks horizon rays out to `half·AO_RADIUS_FRAC` from each
     // texel, so the scope must grow by that reach — a ray leaving the box would
     // otherwise sample a view the region prune never promised.
@@ -525,6 +540,9 @@ fn finish_derived_bakes(
             continue;
         }
         let res = maps.res;
+        // Derived rasters are texel-centred cells over the full terrain square:
+        // adjacent centres are exactly `width / res` apart (derive::texel_world).
+        let texel_size_m = raster_texel_size_m(hf.0.half_extent() as f64, res) as f32;
         let surface = images.add(data_texture(maps.res, maps.surface));
         let normal = images.add(data_texture(maps.res, maps.normal));
         // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
@@ -539,6 +557,7 @@ fn finish_derived_bakes(
                 surface,
                 normal,
                 res,
+                texel_size_m,
             });
     }
 }
@@ -657,6 +676,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn baker_and_renderer_share_exact_texel_spacing() {
+        assert_eq!(raster_texel_size_m(4_096.0, 1_024), 8.0);
+    }
+
+    #[test]
     fn derived_blob_round_trips() {
         let maps = DerivedMaps {
             res: 2,
@@ -680,5 +704,10 @@ mod tests {
         let blob = encode_derived_blob(&maps);
         assert!(decode_derived_blob(&blob[..blob.len() - 1]).is_none());
         assert!(decode_derived_blob(&blob[..3]).is_none());
+    }
+
+    #[test]
+    fn derived_blob_rejects_zero_resolution() {
+        assert!(decode_derived_blob(&0_u32.to_le_bytes()).is_none());
     }
 }

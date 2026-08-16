@@ -49,10 +49,10 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6  "Albedo mottle"
 //!@default mottle            0.22
-// weight_normal / weight_ao / weight_tone are NO LONGER uniforms: they are
-// derived per fragment from `map_ratio` and the CDLOD morph, so they cannot step
-// at an LOD boundary. See `map_weights` in `lunco::terrain`.
-//!@default map_ratio        1.0
+// weight_normal / weight_ao / weight_tone are derived per fragment from the
+// screen-space surface footprint and the map's physical texel size. Mesh LOD is
+// deliberately absent, so replacing a tile by its parent cannot change colour.
+//!@default map_texel_size_m 1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
 //!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
@@ -94,7 +94,7 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
-    map_ratio:         f32,  // engine-filled: tile vertex pitch / map texel pitch at THIS depth
+    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing in terrain metres
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
     weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
@@ -285,30 +285,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // of parallax is imperceptible) + lunar photometry + broad albedo variation.
     var n = normalize(in.world_normal);
 
-    // Baked-map weights, evaluated HERE rather than uploaded per tile.
-    //
-    // `map_ratio` is this tile's vertex-pitch / map-texel-pitch at its own depth.
-    // Re-deriving the SAME morph factor the vertex stage used (same formula, same
-    // uniforms, distance instead of the pre-morph position — a difference far below
-    // one texel) lets the ratio slide toward the parent's exactly as the geometry
-    // does: `r_parent = 2 * r_self`, because the parent has half the vertices.
-    //
-    // This is what removes the straight brightness seam along quadtree edges. The
-    // weights used to be CPU-computed from the INTEGER depth, so they stepped at
-    // every LOD boundary while the mesh morphed through it continuously.
-    let dist_f = distance(view.world_position, p);
-    var morph_f = 0.0;
-    if (mat.morph_end > mat.morph_start) {
-        morph_f = smoothstep(mat.morph_start, mat.morph_end, dist_f);
-    }
-    let w = map_weights(mat.map_ratio * (1.0 + morph_f));
+    // Physical material detail is a property of the map and the projected
+    // surface, not of whichever quadtree mesh currently represents it. `pw` is
+    // continuous across a CDLOD edge, while an integer tile depth is not.
+    let map_footprint = pw / mat.map_texel_size_m;
+    let w = map_weights(map_footprint);
     let weight_normal = w.x;
     let weight_ao = w.y;
     let weight_tone = w.z;
 
-    // Baked meso normal: where tile geometry has LOD'd coarser than the map's
-    // texel pitch (far tiles), the map carries the crater rims/slopes the mesh
-    // no longer has (0 on fine near tiles whose geometry out-resolves the map).
+    // Baked meso normal: once a screen pixel covers roughly a map texel, the map
+    // carries stable filtered crater slopes. Below that physical scale the mesh
+    // and procedural close-detail layers remain sharper, so the map fades out.
     if (weight_normal > 0.0) {
         // The derived map is baked from the DEM oracle, whose coordinates are
         // site-local ENU.  `n` is in Bevy's current render world.  Mixing the

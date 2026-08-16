@@ -84,33 +84,26 @@ fn oct(full: i32) -> i32 {
 #endif
 }
 
-/// Baked-map blend weights as a function of `r` — the ratio of the tile's VERTEX
-/// pitch to the derived map's TEXEL pitch (`r = map_res / (2^depth · quads)`,
-/// window-size independent). Returns `(weight_normal, weight_ao, weight_tone)`.
+/// Baked-map blend weights as a function of `r` — the ratio of one fragment's
+/// screen-space WORLD footprint to the derived map's physical TEXEL spacing.
+/// Returns `(weight_normal, weight_ao, weight_tone)`.
 ///
-///   * normal fades IN where the tile geometry is COARSER than the map (far tiles,
-///     where the map still carries crater rims the mesh LOD'd away) and OFF where
-///     fine near geometry out-resolves the map — blending the coarser map there
-///     would only blur real relief.
-///   * ao / tone stay partly on everywhere (bowls genuinely receive less sky light
-///     at any range) and saturate on coarse tiles.
+///   * normal fades IN when a pixel covers at least one map texel and OFF when the
+///     view resolves below the map — blending a coarser normal there would only
+///     blur the geometry and close-range procedural detail.
+///   * AO and tone are physical surface data, so their weights are exactly one at
+///     every distance. Texture mips filter their frequency; the camera must not
+///     change their energy.
 ///
-/// LIVES IN THE SHADER, evaluated PER FRAGMENT, because `r` must be continuous.
-/// These weights used to be computed on the CPU from the tile's INTEGER LOD depth
-/// and uploaded as three per-tile uniforms. `r` doubles per depth level, so every
-/// LOD boundary was a step in `weight_normal`/`weight_ao`/`weight_tone` — and
-/// therefore a step in albedo, AO and normal blending — along the tile edge.
-///
-/// The CDLOD vertex stage morphs POSITION and NORMAL smoothly across exactly that
-/// boundary, so the mesh was continuous while its shading was not: a straight,
-/// hard-edged brightness seam following the quadtree. Feeding `r` through the same
-/// morph factor the geometry uses makes the two agree — a fine tile at full morph
-/// evaluates its parent's `r`, which is what its coarse neighbour is evaluating.
+/// LIVES IN THE SHADER and is evaluated PER FRAGMENT because appearance must be
+/// continuous when CDLOD substitutes one mesh depth for another. CPU-derived
+/// per-tile weights and the later depth-plus-morph ratio both encoded topology in
+/// the material, producing square changes in AO, tone and normal blending. The
+/// fragment footprint is the renderer-standard detail signal and has no tile
+/// identity to leak into the result.
 fn map_weights(r: f32) -> vec3<f32> {
     let w_normal = clamp((r - 0.75) / 1.5, 0.0, 1.0);
-    let w_ao = clamp(0.35 + (r - 0.5) * 0.4, 0.35, 1.0);
-    let w_tone = clamp(0.5 + (r - 0.5) * 0.35, 0.5, 1.0);
-    return vec3(w_normal, w_ao, w_tone);
+    return vec3(w_normal, 1.0, 1.0);
 }
 
 /// Decode the normal-map convention shared by the DEM baker and terrain

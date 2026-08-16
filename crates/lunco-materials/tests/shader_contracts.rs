@@ -321,6 +321,30 @@ fn every_derived_terrain_normal_uses_the_instance_frame_boundary() {
     }
 }
 
+/// Physical terrain appearance must not encode CDLOD topology. Parent/child
+/// substitution changes mesh depth, so feeding depth or the morph band into map
+/// weights creates square AO/tone/normal changes even when geometry is seamless.
+#[test]
+fn streamed_terrain_map_weights_use_only_fragment_footprint() {
+    let code = code_only(&read("terrain_geomorph.wgsl"));
+    let kernel = code_only(&read("terrain_surface.wgsl"));
+    assert!(
+        code.contains("let map_footprint = pw / mat.map_texel_size_m;")
+            && code.contains("let w = map_weights(map_footprint);"),
+        "streamed terrain must derive map detail from screen footprint and physical texel size"
+    );
+    assert!(
+        !code.contains("map_weights(mat.lod_depth")
+            && !code.contains("map_weights(mat.morph_")
+            && !code.contains("map_weights(mat.map_ratio"),
+        "mesh depth or morph state leaked back into physical material appearance"
+    );
+    assert!(
+        kernel.contains("return vec3(w_normal, 1.0, 1.0);"),
+        "physical AO and tone must not change with camera distance"
+    );
+}
+
 /// The published lunar fits these defaults came from (Chrono/UW-Madison,
 /// arxiv 2410.04371 Table 1). Pinned so a future "tweak" is a deliberate,
 /// reviewable edit rather than drift — the amplitude in particular was 0.8 for a

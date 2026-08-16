@@ -17,7 +17,7 @@
 //! # Appearance is INTENT here, not a material
 //!
 //! A tile carries a [`ShaderLook`] — the shader path, its named parameters (morph
-//! band, overlay uniforms, per-depth map weights) and its texture layers — and
+//! band, overlay uniforms, physical map scale) and its texture layers — and
 //! **nothing in this crate names a material**. `lunco-render-bevy` binds it,
 //! caching by `ShaderLook::key()`, so every tile in the same mode and LOD band
 //! shares ONE material and ONE bind group. That cache *is* the old hand-rolled
@@ -115,9 +115,6 @@ pub struct TerrainVisualFocus {
 #[derive(Clone, Copy)]
 struct VisualDemand {
     entity: Entity,
-    /// The live grid shared by this focus, when it has one. A matching terrain
-    /// uses the direct common-frame path below instead of a root-space round trip.
-    grid: Option<Entity>,
     position: DVec3,
     forward: DVec3,
     /// Physical height of the camera's rendered viewport, in pixels.
@@ -148,10 +145,10 @@ pub struct TerrainDetailDemands {
 }
 
 impl TerrainDetailDemands {
-    /// Snapshot the fully composed, grid-absolute camera demands that drive the
-    /// visual terrain cover. This is deliberately a read-only diagnostic seam:
-    /// it lets API/UI tooling inspect the same inputs the selector consumes,
-    /// without manufacturing a second camera-coordinate calculation.
+    /// Snapshot active camera poses in their composed BigSpace root coordinates
+    /// for API diagnostics. Selection does not consume these root values: it
+    /// projects each camera entity into each terrain through
+    /// [`camera_pose_in_terrain`], preserving the nearest shared precision frame.
     pub(crate) fn visual_focus_snapshot(&self) -> Vec<([f64; 3], [f64; 3], f64, f64)> {
         self.visual
             .iter()
@@ -244,17 +241,14 @@ pub(crate) fn collect_terrain_detail_demands(
                     Projection::Orthographic(_) | Projection::Custom(_) => return None,
                 };
                 // A scene camera is often below a rover/avatar/mount hierarchy.
-                // Its local Transform is then only an offset in that rig, not a
-                // terrain-space pose. CDLOD's focus and bake-priority heading
-                // both need the same fully composed BigSpace pose the renderer
-                // sees; `grid_absolute` is deliberately only for grid-direct
-                // authoring values and would pin detail at the local offset.
+                // Its local Transform is then only a rig offset. Keep a composed
+                // root pose for diagnostics; the selector retains `entity` and
+                // later resolves the precision-safe camera-to-terrain transform
+                // through their nearest shared Grid.
                 let (position, rotation) =
                     lunco_core::coords::world_pose(entity, &parents, &grids, &spatial)?;
                 Some(VisualDemand {
                     entity,
-                    grid: lunco_core::coords::ancestor_grid(entity, &parents, &grids)
-                        .map(|(grid, _)| grid),
                     position: position.0,
                     forward: rotation.0 * DVec3::NEG_Z,
                     screen_height_px,
@@ -277,6 +271,29 @@ pub(crate) fn collect_terrain_detail_demands(
             .then(a.position.y.total_cmp(&b.position.y))
             .then(a.position.z.total_cmp(&b.position.z))
     });
+}
+
+/// Resolve one camera into one terrain's local DEM frame through their nearest
+/// shared BigSpace grid.
+///
+/// This is the sole coordinate boundary used by visual LOD selection. A camera
+/// and terrain may live in different nested grids, but they must be connected by
+/// real grid ancestry. A disconnected hierarchy produces no demand; substituting
+/// root-space or local coordinates would silently refine the wrong location.
+fn camera_pose_in_terrain(
+    camera: Entity,
+    terrain: Entity,
+    parents: &Query<&ChildOf>,
+    grids: &Query<&Grid>,
+    spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<(DVec3, DVec3)> {
+    let (_, camera_position, camera_rotation, terrain_position, terrain_rotation) =
+        lunco_core::coords::common_grid_poses(camera, terrain, parents, grids, spatial)?;
+    let grid_to_terrain = terrain_rotation.inverse();
+    Some((
+        grid_to_terrain * (camera_position - terrain_position),
+        grid_to_terrain * (camera_rotation * DVec3::NEG_Z),
+    ))
 }
 
 /// The composed surface oracle retained on a terrain entity — the ONE height
@@ -1069,12 +1086,6 @@ impl LodTiles {
         self.tiles.values().map(|s| s.entity)
     }
 
-    /// Every resident tile as `(quadtree depth, entity)` — the depth drives the
-    /// derived-map blend ratio (`tile_map_ratio`; weights derived in-shader).
-    pub(crate) fn tiles_with_depth(&self) -> impl Iterator<Item = (u32, Entity)> + '_ {
-        self.tiles.iter().map(|(c, s)| (c.depth as u32, s.entity))
-    }
-
     /// Bump the generation: every live tile becomes stale and re-bakes from the new
     /// heights, near-camera-first, while still covering the surface until replaced.
     /// Called by the live re-bake instead of despawning the whole tile set.
@@ -1561,57 +1572,18 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
     set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
 }
 
-/// Per-depth weights for the baked derived maps, from the ratio of the tile's
-/// vertex pitch to the map's texel pitch (`r = map_res / (2^depth · quads)`,
-/// window-size independent):
-///
-/// - `weight_normal` fades IN where the tile geometry is COARSER than the map
-///   (far tiles — the map carries the crater rims the mesh LOD'd away) and OFF
-///   where fine near geometry out-resolves the map (blending the coarser map
-///   there would only blur real relief).
-/// - `weight_ao` / `weight_tone` stay partially on everywhere (bowls genuinely
-///   receive less sky light at any range) and saturate on coarse tiles.
-///   The weights THEMSELVES are no longer computed here — `map_weights` in
-///   `lunco::terrain` derives them from this ratio per fragment, so they can follow
-///   the CDLOD morph instead of stepping at the tile edge.
-fn tile_map_ratio(depth: u32, map_res: usize, tile_res: usize) -> f32 {
-    map_res as f32 / (((1u32 << depth.min(24)) * (tile_res as u32 - 1)) as f32)
-}
-
-/// Bind a terrain's baked derived maps + per-depth weights onto one tile
+/// Bind a terrain's baked derived maps and physical texel scale onto one tile
 /// look (Lit mode only — the flat/debug shader declares no map bindings).
 ///
 /// The map handles are part of `ShaderLook::key()`, so two terrains with different
-/// baked maps correctly get different materials, and every tile of ONE terrain at
-/// one depth still shares a single one.
-pub(crate) fn apply_maps_to_look(
-    look: &mut ShaderLook,
-    maps: &TerrainDerivedMaps,
-    depth: u32,
-    tile_res: usize,
-) {
-    // Depth for the LOD-depth analysis overlay. Keyed, not live: it is genuinely
-    // per-tile, but it costs no extra material splits because the map weights
-    // below already key on `depth` too — `lod_depth` varies with nothing the key
-    // did not already vary with. (`maps.res`/`tile_res` are per-TERRAIN, constant
-    // across the tiles of one terrain at one depth, so they add no split either.)
-    set_param(look, "lod_depth", ParamValue::F32(depth as f32));
+/// baked maps correctly get different materials, while every physical-appearance
+/// parameter is identical across the LODs of one terrain.
+pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps) {
     look.textures
         .insert(TextureLayer::Surface, maps.surface.clone());
     look.textures
         .insert(TextureLayer::Normal, maps.normal.clone());
-    // Send the RATIO, not the weights. The shader turns it into
-    // `weight_normal`/`weight_ao`/`weight_tone` per fragment (`map_weights` in
-    // `lunco::terrain`), sliding it toward the parent's value across the CDLOD
-    // morph band. Computing the weights here instead meant they were constant per
-    // tile and therefore STEPPED at every LOD boundary — a hard brightness seam
-    // along the quadtree, on a mesh that morphs through that same boundary
-    // smoothly. A ratio is the only form of this number that can be interpolated.
-    set_param(
-        look,
-        "map_ratio",
-        ParamValue::F32(tile_map_ratio(depth, maps.res, tile_res)),
-    );
+    set_param(look, "map_texel_size_m", ParamValue::F32(maps.texel_size_m));
 }
 
 /// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)
@@ -1672,7 +1644,6 @@ pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &Terr
 fn tile_look(
     mode: TerrainShaderMode,
     depth: u32,
-    tile_res: usize,
     morph_start: f32,
     morph_end: f32,
     maps: Option<&TerrainDerivedMaps>,
@@ -1699,8 +1670,11 @@ fn tile_look(
             ParamValue::Vec3([0.35, 0.34, 0.32]),
         ),
         TerrainShaderMode::Lit => {
+            // Explicit analysis data, intentionally separate from physical
+            // appearance. The shader reads this only when the LOD overlay is on.
+            set_param(&mut look, "lod_depth", ParamValue::F32(depth as f32));
             if let Some(maps) = maps {
-                apply_maps_to_look(&mut look, maps, depth, tile_res);
+                apply_maps_to_look(&mut look, maps);
             }
             // AFTER the derived maps: both write `weight_*`, and the author's
             // opinion is the one that should survive.
@@ -1730,7 +1704,6 @@ fn spawn_tile(
     mesh: Handle<Mesh>,
     center: [f64; 2],
     depth: u32,
-    tile_res: usize,
     morph_end: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
@@ -1758,9 +1731,7 @@ fn spawn_tile(
     let (ms, me, _bucket) = snap_band(morph_end);
     let mut tile = commands.spawn((
         Mesh3d(mesh),
-        tile_look(
-            mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
-        ),
+        tile_look(mode, depth, ms, me, maps, authored, shadow, overlay),
         cell,
         Transform::from_translation(local).with_rotation(local_rotation),
         // The render binder reacts to `ShaderLook` after this deferred spawn.
@@ -2198,9 +2169,7 @@ pub fn update_lod_tiles(
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
                 let (ms, me, _) = snap_band(morph_end);
-                let look = tile_look(
-                    mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
-                );
+                let look = tile_look(mode, depth, ms, me, maps, authored, shadow, overlay);
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
@@ -2214,35 +2183,10 @@ pub fn update_lod_tiles(
         let h = oracle.half_extent() as f64;
         visual_foci.clear();
         for demand in demands.visual.iter() {
-            let (camera_position, camera_rotation) = if demand.grid == Some(grid_entity) {
-                lunco_core::coords::grid_relative_pose(
-                    demand.entity,
-                    grid_entity,
-                    &parents,
-                    &grids,
-                    &spatial,
-                )
-                .unwrap_or((demand.position, DQuat::IDENTITY))
-            } else {
-                (demand.position, DQuat::IDENTITY)
-            };
-            let terrain_local = if demand.grid == Some(grid_entity) {
-                terrain_grid_rotation.inverse() * (camera_position - terrain_grid_position)
-            } else {
-                // Different grids have no common local frame. Keep the existing
-                // absolute conversion for that intentional cross-body case.
-                let (terrain_world, terrain_rotation) =
-                    lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
-                        .expect("terrain pose exists after grid-relative pose");
-                terrain_rotation.0.inverse() * (demand.position - terrain_world.0)
-            };
-            let local_forward = if demand.grid == Some(grid_entity) {
-                terrain_grid_rotation.inverse() * (camera_rotation * DVec3::NEG_Z)
-            } else {
-                let (_, terrain_rotation) =
-                    lunco_core::coords::world_pose(terrain, &parents, &grids, &spatial)
-                        .expect("terrain pose exists after grid-relative pose");
-                terrain_rotation.0.inverse() * demand.forward
+            let Some((terrain_local, local_forward)) =
+                camera_pose_in_terrain(demand.entity, terrain, &parents, &grids, &spatial)
+            else {
+                continue;
             };
             let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
             let heading = (heading.length() > 1e-3).then(|| heading.normalize());
@@ -2704,7 +2648,6 @@ pub fn update_lod_tiles(
                 handle,
                 baked.center,
                 depth,
-                baked.res,
                 baked.morph_end,
                 mode,
                 maps,
@@ -2787,7 +2730,6 @@ pub fn update_lod_tiles(
                     cached,
                     s.region.center,
                     depth,
-                    tile_res,
                     morph_end,
                     mode,
                     maps,
@@ -3081,36 +3023,22 @@ pub fn despawn_orphaned_lod_tiles(
 
 /// When a terrain's derived maps finish baking AFTER its tiles exist (the
 /// common case — the AO march takes seconds while the first tiles stream in),
-/// restate the maps + per-depth weights on every resident Lit tile's look — no tile
-/// churn, no re-bake, and the binder collapses them back onto one material per
-/// depth. `Changed` also covers the re-bake that follows a live edit.
+/// restate the maps on every resident Lit tile's look — no tile churn or re-bake.
+/// `Changed` also covers the re-bake that follows a live edit.
 ///
 /// D8: **Lit tiles only.** The flat/debug shader declares no map bindings, so
 /// writing them there would only mint pointless material variants.
 pub(crate) fn bind_derived_maps_to_tiles(
-    changed: Query<
-        (
-            &TerrainDerivedMaps,
-            &LodTiles,
-            &TerrainLodViz,
-            Has<LodFrozen>,
-        ),
-        Changed<TerrainDerivedMaps>,
-    >,
+    changed: Query<(&TerrainDerivedMaps, &LodTiles), Changed<TerrainDerivedMaps>>,
     mut looks: Query<&mut ShaderLook>,
 ) {
-    for (maps, tiles, viz, frozen) in &changed {
+    for (maps, tiles) in &changed {
         if tiles.mode != TerrainShaderMode::Lit {
             continue;
         }
-        let tile_res = if frozen {
-            CINEMATIC_TILE_RES
-        } else {
-            viz.tile_res
-        };
-        for (depth, entity) in tiles.tiles_with_depth() {
+        for entity in tiles.tile_entities() {
             if let Ok(mut look) = looks.get_mut(entity) {
-                apply_maps_to_look(&mut look, maps, depth, tile_res);
+                apply_maps_to_look(&mut look, maps);
             }
         }
     }
@@ -3134,7 +3062,7 @@ pub(crate) fn bind_authored_maps_to_tiles(
         if tiles.mode != TerrainShaderMode::Lit {
             continue;
         }
-        for (_depth, entity) in tiles.tiles_with_depth() {
+        for entity in tiles.tile_entities() {
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_authored_maps_to_look(&mut look, authored);
             }
@@ -3170,6 +3098,147 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 #[cfg(test)]
 mod draw_partition_tests {
     use super::*;
+
+    #[test]
+    fn derived_map_appearance_is_identical_across_mesh_depths() {
+        let maps = TerrainDerivedMaps {
+            surface: Handle::default(),
+            normal: Handle::default(),
+            res: 1024,
+            texel_size_m: 7.820_137,
+        };
+        let near = tile_look(
+            TerrainShaderMode::Lit,
+            2,
+            100.0,
+            200.0,
+            Some(&maps),
+            None,
+            None,
+            crate::overlay::OverlayUniforms::OFF,
+        );
+        let far = tile_look(
+            TerrainShaderMode::Lit,
+            7,
+            100.0,
+            200.0,
+            Some(&maps),
+            None,
+            None,
+            crate::overlay::OverlayUniforms::OFF,
+        );
+
+        assert_eq!(near.textures, far.textures);
+        assert_eq!(
+            near.values.get("map_texel_size_m"),
+            Some(&ParamValue::F32(maps.texel_size_m))
+        );
+        assert!(!near.values.contains_key("map_ratio"));
+
+        let mut near_values = near.values;
+        let mut far_values = far.values;
+        assert_ne!(
+            near_values.remove("lod_depth"),
+            far_values.remove("lod_depth")
+        );
+        assert_eq!(
+            near_values, far_values,
+            "physical appearance must not encode quadtree depth"
+        );
+    }
+
+    #[test]
+    fn camera_projection_uses_the_nearest_shared_grid_for_sibling_branches() {
+        let mut world = World::new();
+        let root = world.spawn(Grid::new(2_000.0, 100.0)).id();
+
+        let camera_grid_cell = CellCoord::new(2, 0, -1);
+        let camera_grid_transform =
+            Transform::from_xyz(10.0, 20.0, 30.0).with_rotation(Quat::from_rotation_y(0.4));
+        let camera_grid = world
+            .spawn((
+                Grid::new(800.0, 40.0),
+                camera_grid_cell,
+                camera_grid_transform,
+                ChildOf(root),
+            ))
+            .id();
+        let camera_cell = CellCoord::new(1, 0, 2);
+        let camera_transform =
+            Transform::from_xyz(3.0, 5.0, -7.0).with_rotation(Quat::from_rotation_x(-0.2));
+        let camera = world
+            .spawn((camera_cell, camera_transform, ChildOf(camera_grid)))
+            .id();
+
+        let terrain_grid_cell = CellCoord::new(-3, 1, 4);
+        let terrain_grid_transform =
+            Transform::from_xyz(-12.0, 8.0, 6.0).with_rotation(Quat::from_rotation_y(-0.7));
+        let terrain_grid = world
+            .spawn((
+                Grid::new(1_200.0, 60.0),
+                terrain_grid_cell,
+                terrain_grid_transform,
+                ChildOf(root),
+            ))
+            .id();
+        let terrain_transform =
+            Transform::from_xyz(-4.0, 2.0, 9.0).with_rotation(Quat::from_rotation_z(0.3));
+        let terrain = world.spawn((terrain_transform, ChildOf(terrain_grid))).id();
+
+        let mut state: bevy::ecs::system::SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = bevy::ecs::system::SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let (actual_position, actual_forward) =
+            camera_pose_in_terrain(camera, terrain, &parents, &grids, &spatial)
+                .expect("sibling grids share the root grid");
+
+        let root_grid = grids.get(root).unwrap();
+        let camera_branch = grids.get(camera_grid).unwrap();
+        let terrain_branch = grids.get(terrain_grid).unwrap();
+        let camera_grid_position =
+            root_grid.grid_position_double(&camera_grid_cell, &camera_grid_transform);
+        let camera_position = camera_grid_position
+            + camera_grid_transform.rotation.as_dquat()
+                * camera_branch.grid_position_double(&camera_cell, &camera_transform);
+        let camera_rotation =
+            camera_grid_transform.rotation.as_dquat() * camera_transform.rotation.as_dquat();
+        let terrain_grid_position =
+            root_grid.grid_position_double(&terrain_grid_cell, &terrain_grid_transform);
+        let terrain_position = terrain_grid_position
+            + terrain_grid_transform.rotation.as_dquat()
+                * terrain_branch.grid_position_double(&CellCoord::ZERO, &terrain_transform);
+        let terrain_rotation =
+            terrain_grid_transform.rotation.as_dquat() * terrain_transform.rotation.as_dquat();
+        let expected_position = terrain_rotation.inverse() * (camera_position - terrain_position);
+        let expected_forward = terrain_rotation.inverse() * (camera_rotation * DVec3::NEG_Z);
+
+        assert!((actual_position - expected_position).length() < 1.0e-9);
+        assert!((actual_forward - expected_forward).length() < 1.0e-9);
+    }
+
+    #[test]
+    fn disconnected_big_spaces_do_not_manufacture_a_lod_demand() {
+        let mut world = World::new();
+        let camera_grid = world.spawn(Grid::new(1_000.0, 100.0)).id();
+        let terrain_grid = world.spawn(Grid::new(1_000.0, 100.0)).id();
+        let camera = world
+            .spawn((Transform::default(), ChildOf(camera_grid)))
+            .id();
+        let terrain = world
+            .spawn((Transform::default(), ChildOf(terrain_grid)))
+            .id();
+
+        let mut state: bevy::ecs::system::SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = bevy::ecs::system::SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        assert!(camera_pose_in_terrain(camera, terrain, &parents, &grids, &spatial).is_none());
+    }
 
     fn c(depth: u8, x: u32, z: u32) -> QuadCoord {
         QuadCoord { depth, x, z }
