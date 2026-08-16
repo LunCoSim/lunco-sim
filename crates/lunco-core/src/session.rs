@@ -30,6 +30,7 @@
 //! `lunco-networking/src/session.rs` — new net-only state belongs there, not here.
 
 use crate::commands::{Reject, SessionId};
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
@@ -514,8 +515,8 @@ pub struct NetExcluded;
 #[derive(Component, Clone, Debug)]
 pub struct NetSpawn {
     pub entry_id: String,
-    pub position: Vec3,
-    pub rotation: Quat,
+    pub position: DVec3,
+    pub rotation: DQuat,
 }
 
 /// One replicated spawn the host told us to instantiate locally, pinned to the
@@ -526,8 +527,8 @@ pub struct NetSpawn {
 pub struct ReplicatedSpawn {
     pub gid: u64,
     pub entry_id: String,
-    pub position: Vec3,
-    pub rotation: Quat,
+    pub position: DVec3,
+    pub rotation: DQuat,
 }
 
 /// Queue of [`ReplicatedSpawn`]s awaiting local instantiation on a client.

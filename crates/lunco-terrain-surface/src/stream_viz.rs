@@ -1126,6 +1126,44 @@ impl LodTiles {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SelectedCoverStatus {
+    wanted: usize,
+    resident: usize,
+    complete: bool,
+}
+
+/// Report whether the authoritative selected cover is fully current and drawn.
+///
+/// A resident stale-generation tile still covers the ground while a live edit
+/// re-bakes, so it contributes to `resident`. It cannot make the cover complete:
+/// the idle gate may stop only after every selected leaf is current-generation,
+/// material-bound, and selected by the exact draw partition.
+fn selected_cover_status(tiles: &LodTiles, current_generation: u32) -> SelectedCoverStatus {
+    let wanted = tiles.cover.len();
+    let resident = tiles
+        .cover
+        .iter()
+        .filter(|coord| {
+            tiles
+                .tiles
+                .get(coord)
+                .is_some_and(|slot| slot.ready)
+        })
+        .count();
+    let complete = wanted > 0
+        && tiles.cover.iter().all(|coord| {
+            tiles.tiles.get(coord).is_some_and(|slot| {
+                slot.gen == current_generation && slot.ready && slot.drawn
+            })
+        });
+    SelectedCoverStatus {
+        wanted,
+        resident,
+        complete,
+    }
+}
+
 /// Whether the world square of quadtree node `coord` (derived from the DEM
 /// `root_half_extent`, origin-centred — matching [`lunco_terrain_core::Quadtree::region`])
 /// overlaps the axis-aligned `[min_x, min_z, max_x, max_z]` box. The shared
@@ -2304,15 +2342,17 @@ pub fn update_lod_tiles(
             sig.finish()
         };
         {
+            let cover_status = selected_cover_status(&tiles, cur_gen);
             if !promoted_tiles
                 && pending.0.is_empty()
                 && tiles.last_sig == Some(sig)
                 && tiles.coarse_ready
+                && cover_status.complete
             {
                 // Idle: resident tiles already match. Contribute this terrain's
                 // resident count so the status bar still reads "done", not "0/0".
-                stream_status.wanted += tiles.tiles.len();
-                stream_status.resident += tiles.tiles.len();
+                stream_status.wanted += cover_status.wanted;
+                stream_status.resident += cover_status.resident;
                 stream_status.budget_refused += tiles.budget_refused;
                 add_focus_readiness(
                     &mut stream_status,
@@ -3457,6 +3497,44 @@ mod draw_partition_tests {
             bootstrap_cover_is_ready(&selected, &[demand], |_| true),
             "the cover may adapt once every near-camera tile is prepared"
         );
+    }
+
+    #[test]
+    fn selected_cover_status_requires_current_render_ready_leaves() {
+        let cover = QuadCoord::ROOT.children().into_iter().collect::<HashSet<_>>();
+        let mut tiles = LodTiles::default();
+        tiles.cover = cover.clone();
+        for coord in &cover {
+            tiles.tiles.insert(
+                *coord,
+                TileSlot {
+                    entity: Entity::PLACEHOLDER,
+                    gen: 7,
+                    morph_end: 0.0,
+                    drawn: true,
+                    ready: true,
+                    stitch_edges: [0.0; 4],
+                },
+            );
+        }
+        let not_bound = *cover.iter().next().expect("cover has four leaves");
+        tiles.tiles.get_mut(&not_bound).unwrap().ready = false;
+        let stale = *cover.iter().nth(1).expect("cover has four leaves");
+        tiles.tiles.get_mut(&stale).unwrap().gen = 6;
+
+        let status = selected_cover_status(&tiles, 7);
+        assert_eq!(status.wanted, 4);
+        assert_eq!(status.resident, 3, "the stale leaf still covers the ground");
+        assert!(
+            !status.complete,
+            "an unbound cache hit and a stale-generation leaf must keep the streamer active"
+        );
+
+        tiles.tiles.get_mut(&not_bound).unwrap().ready = true;
+        tiles.tiles.get_mut(&stale).unwrap().gen = 7;
+        let status = selected_cover_status(&tiles, 7);
+        assert_eq!(status.resident, status.wanted);
+        assert!(status.complete);
     }
 
     #[test]

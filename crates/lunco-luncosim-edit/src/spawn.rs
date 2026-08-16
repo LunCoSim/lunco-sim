@@ -97,13 +97,17 @@ pub struct FootprintCache {
 struct CachedFootprint {
     handle: Handle<UsdStageAsset>,
     root_prim: String,
-    /// Collision-geometry AABB in the asset's own frame — `Some` once the stage is
-    /// composed AND the asset has collision geometry. `None` for a pure-visual prop
-    /// (which then falls back to the authored `lunco:spawnLift`).
-    footprint: Option<lunco_usd_bevy::ObjectAabb>,
+    /// Explicit load state: an asset that has not composed yet is not equivalent
+    /// to a composed pure-visual asset with no collision geometry.
+    footprint: FootprintState,
     /// Authored `lunco:spawnLift` — the rest-height fallback used only when no
     /// collision geometry is found (pure-visual / mesh-only asset).
     spawn_lift: f32,
+}
+
+enum FootprintState {
+    Pending,
+    Ready(Option<lunco_usd_bevy::ObjectAabb>),
 }
 
 /// Placement data after resolving derived-vs-authored: the footprint half-
@@ -115,41 +119,40 @@ struct ResolvedFootprint {
     lift: f64,
 }
 
-impl Default for ResolvedFootprint {
-    fn default() -> Self {
-        // Sensible fallback used only before the stage has loaded (a frame or
-        // two during selection); replaced by the real value once composed.
-        Self {
-            half_w: 0.75,
-            half_l: 1.0,
-            lift: 0.5,
-        }
-    }
+fn placement_root_pose(
+    fit: lunco_terrain_surface::SurfaceFit,
+    footprint: ResolvedFootprint,
+) -> (GridPos, Quat) {
+    (
+        GridPos(fit.point.0 + fit.normal * footprint.lift),
+        fit.rotation,
+    )
 }
 
 impl FootprintCache {
     /// Resolve `entry_id`'s placement data: the collision-AABB footprint + rest
     /// depth for any asset with colliders, the authored `lunco:spawnLift` as a
-    /// fallback for pure-visual assets, or a default if not yet loaded.
-    fn resolve(&self, entry_id: &str) -> ResolvedFootprint {
-        let Some(c) = self.map.get(entry_id) else {
-            return ResolvedFootprint::default();
-        };
+    /// fallback for a composed pure-visual asset. Returns `None` until the
+    /// canonical stage is ready, because previewing or committing an invented
+    /// footprint would make the two poses diverge when the real data arrives.
+    fn resolve(&self, entry_id: &str) -> Option<ResolvedFootprint> {
+        let c = self.map.get(entry_id)?;
         match c.footprint {
             // Rest on the lowest collision point (+ a small skin gap), with the
             // footprint box from the collider extents — general across landers,
             // rovers and props, no wheel-specific path.
-            Some(aabb) => ResolvedFootprint {
+            FootprintState::Ready(Some(aabb)) => Some(ResolvedFootprint {
                 half_w: aabb.half_w().max(0.1),
                 half_l: aabb.half_l().max(0.1),
                 lift: aabb.rest_depth() + SPAWN_GROUND_CLEARANCE,
-            },
+            }),
             // No collision geometry (pure-visual / mesh-only): authored lift.
-            None => ResolvedFootprint {
+            FootprintState::Ready(None) => Some(ResolvedFootprint {
                 half_w: 0.75,
                 half_l: 1.0,
                 lift: c.spawn_lift as f64,
-            },
+            }),
+            FootprintState::Pending => None,
         }
     }
 }
@@ -167,7 +170,7 @@ fn ensure_footprint(
     stages: &Assets<UsdStageAsset>,
     canonical: &mut lunco_usd_bevy::CanonicalStages,
     entry_id: &str,
-) -> ResolvedFootprint {
+) -> Option<ResolvedFootprint> {
     let Some(entry) = catalog.get(entry_id) else {
         return cache.resolve(entry_id);
     };
@@ -179,10 +182,10 @@ fn ensure_footprint(
             .or_insert_with(|| CachedFootprint {
                 handle: asset_server.load(path.clone()),
                 root_prim: prim_path_from_entry_id(entry_id),
-                footprint: None,
+                footprint: FootprintState::Pending,
                 spawn_lift: entry.spawn_lift,
             });
-        if cached.footprint.is_none() {
+        if matches!(cached.footprint, FootprintState::Pending) {
             // Ph0′ canonical-only: derive the footprint off the LIVE canonical
             // stage (the source of truth), built on demand from the asset's
             // recipe.
@@ -192,17 +195,18 @@ fn ensure_footprint(
                     canonical.get_or_build(id, &recipe);
                 }
             }
-            cached.footprint = canonical
-                .get(id)
-                .and_then(|cs| lunco_usd_bevy::collision_aabb(&cs.view(), &cached.root_prim));
-            if let Some(aabb) = cached.footprint {
-                info!(
-                    "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
-                    entry_id,
-                    aabb.half_w(),
-                    aabb.half_l(),
-                    aabb.rest_depth()
-                );
+            if let Some(stage) = canonical.get(id) {
+                let footprint = lunco_usd_bevy::collision_aabb(&stage.view(), &cached.root_prim);
+                if let Some(aabb) = footprint {
+                    info!(
+                        "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
+                        entry_id,
+                        aabb.half_w(),
+                        aabb.half_l(),
+                        aabb.rest_depth()
+                    );
+                }
+                cached.footprint = FootprintState::Ready(footprint);
             }
         }
     }
@@ -375,17 +379,22 @@ pub fn update_spawn_ghost(
         }
         return;
     }
-    // Derive the wheel footprint from the live USD geometry (cached). Until the
-    // stage finishes loading the fallback default is used, then the ghost
-    // snaps to the real slope-fit once available.
-    let fp = ensure_footprint(
+    // Derive the footprint from the live composed USD geometry (cached). Until
+    // the stage is ready there is no authoritative footprint, so no ghost is
+    // shown and a click cannot commit a different pose.
+    let Some(fp) = ensure_footprint(
         footprint_cache.as_mut(),
         &catalog,
         &asset_server,
         &stages,
         &mut canonical,
         entry_id,
-    );
+    ) else {
+        for (ghost, _) in q_ghost.iter() {
+            commands.entity(ghost).try_despawn();
+        }
+        return;
+    };
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.
@@ -460,12 +469,10 @@ pub fn update_spawn_ghost(
             fp.half_l,
             |corner| corner_height(&surface, &raycaster, terrain_primary, corner),
         );
-        let rotation = fit.rotation;
-
-        // Ghost is a sphere — only its position matters, so it sits at the
-        // terrain contact; the real root-height lift (fp.lift) is applied at
-        // spawn-click time, not in the preview.
-        let ghost_grid = GridPos(fit.point.0 + fit.normal * 0.05);
+        // The preview marks the exact asset-root pose that commit will use. A
+        // terrain-contact marker was a different location for every asset whose
+        // root is above its wheels/pads, which made correct spawns look displaced.
+        let (ghost_grid, rotation) = placement_root_pose(fit, fp);
 
         // Place the ghost CELL-GRID AWARE: split the grid-absolute point into
         // the world grid's own (cell, local) pair. A cell-less ghost
@@ -498,6 +505,7 @@ pub fn update_spawn_ghost(
         }
         if let Some((ghost, _)) = q_ghost.iter().next() {
             commands.entity(ghost).try_insert((
+                ChildOf(grid_ent),
                 ghost_cell,
                 Transform {
                     translation: ghost_local,
@@ -679,7 +687,15 @@ pub fn on_scene_click_spawn(
     // camera pointing elsewhere → rover spawned facing a random direction).
     // Rotation is frame-free — big_space translates the render frame, never
     // rotates it — so the camera's render-frame forward is usable as-is.
-    let fp = footprint_cache.resolve(&entry_id);
+    let Some(fp) = footprint_cache.resolve(&entry_id) else {
+        if diagnostics.enabled {
+            info!(
+                entry_id,
+                "[spawn-trace] click rejected: canonical footprint still loading"
+            );
+        }
+        return;
+    };
     let fit = lunco_terrain_surface::fit_footprint(
         hit.point,
         cam_gtf.forward().as_dvec3(),
@@ -688,21 +704,14 @@ pub fn on_scene_click_spawn(
         |corner| corner_height(&surface, &raycaster, hit.terrain_primary, corner),
     );
 
-    // Place wheels IN CONTACT with the terrain, not gapped. `fp.lift` is the
-    // exact root→lowest-collider rest height, so lifting by it alone puts the
-    // wheels exactly on the ground. The 1 cm *embed* (negative margin)
-    // guarantees contact even under float error / non-planar terrain: for a
-    // rigid-jointed rover (no suspension — e.g. rocker-bogie) a gap would
-    // free-fall→slam→joint-echo and explode the constraint graph on activation;
-    // a slight embed is the stable init. Raycast drivetrains absorb this via
-    // suspension, so it is safe for both.
-    let spawn_world = GridPos(fit.point.0 + fit.normal * (fp.lift - 0.01));
+    // This is exactly the pose shown by the ghost. Clearance is part of the
+    // canonical USD-derived footprint; no second embed/lift policy is applied.
+    let (spawn_world, spawn_rotation) = placement_root_pose(fit, fp);
 
     commands.trigger(lunco_core::SpawnEntity {
-        target: grid,
         entry_id: entry_id.clone(),
-        position: spawn_world.0.as_vec3(),
-        rotation: Some(fit.rotation),
+        position: spawn_world.0.to_array(),
+        rotation: Some(spawn_rotation.as_dquat().to_array()),
     });
     info!(
         entry_id,
@@ -743,6 +752,25 @@ mod tests {
 
         state = SpawnState::Idle;
         assert!(matches!(state, SpawnState::Idle));
+    }
+
+    #[test]
+    fn preview_and_commit_share_the_exact_asset_root_pose() {
+        let fit = lunco_terrain_surface::SurfaceFit {
+            point: GridPos(DVec3::new(12.0, -3.0, 45.0)),
+            normal: DVec3::new(0.2, 0.95, -0.1).normalize(),
+            rotation: Quat::from_rotation_y(0.4),
+        };
+        let footprint = ResolvedFootprint {
+            half_w: 1.0,
+            half_l: 2.0,
+            lift: 0.89,
+        };
+
+        let preview = placement_root_pose(fit, footprint);
+        let commit = placement_root_pose(fit, footprint);
+        assert_eq!(preview, commit);
+        assert!((preview.0 .0 - (fit.point.0 + fit.normal * footprint.lift)).length() < 1e-12);
     }
 
     #[test]

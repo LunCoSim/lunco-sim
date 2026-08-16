@@ -3056,21 +3056,72 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
+
+    #[test]
+    fn activation_does_not_wait_for_a_terrain_service_that_is_not_present() {
+        let mut app = App::new();
+        app.init_resource::<lunco_usd_sim::GroundActivationInFlight>()
+            .init_resource::<lunco_physics::PhysicsHolds>()
+            .add_systems(Update, release_ground_activation_hold);
+        app.world_mut()
+            .resource_mut::<lunco_usd_sim::GroundActivationInFlight>()
+            .0 = 1;
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
+        let body = app.world_mut().spawn(lunco_core::NeedsGroundSettle).id();
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<lunco_usd_sim::GroundActivationInFlight>()
+                .0,
+            0
+        );
+        assert!(!app
+            .world()
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::GROUND_ACTIVATION));
+        assert!(
+            app.world()
+                .get::<lunco_core::NeedsGroundSettle>(body)
+                .is_none(),
+            "an unclaimed terrain-placement request must be retired"
+        );
+    }
 }
 
-/// Close the activation bridge only after the one-time terrain placement has
-/// consumed every `NeedsGroundSettle` marker. The marker is the authoritative
-/// boundary: terrain readiness may take any number of frames, and physics must
-/// not resume in the gap between collider readiness and placement.
+/// Close the activation bridge after the one-time terrain placement has consumed
+/// every `NeedsGroundSettle` marker. A DEM terrain provider makes those markers
+/// the authoritative boundary; without one, they are unclaimed and retired.
+/// This keeps physics held across an actual terrain placement without turning an
+/// optional service into a permanent prerequisite for authored-collision scenes.
 fn release_ground_activation_hold(
     mut activation: ResMut<lunco_usd_sim::GroundActivationInFlight>,
     mut holds: ResMut<lunco_physics::PhysicsHolds>,
-    needs_ground_settle: Query<(), With<lunco_core::NeedsGroundSettle>>,
+    terrain_providers: Query<(), With<lunco_terrain_surface::TerrainColliderRing>>,
+    needs_ground_settle: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    mut commands: Commands,
 ) {
     match activation.0 {
         2 => {
             activation.0 = 1;
             holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
+        }
+        // `NeedsGroundSettle` is a request to the DEM terrain service. A scene
+        // with only authored/static collision has no such service and therefore
+        // no placement transaction to wait for; its authored pose is the
+        // physical initial condition. Retire the unclaimed requests at this
+        // assembly boundary instead of leaking an impossible world hold.
+        1 if terrain_providers.is_empty() => {
+            for entity in &needs_ground_settle {
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_core::NeedsGroundSettle>();
+            }
+            activation.0 = 0;
+            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, false);
         }
         1 if needs_ground_settle.is_empty() => {
             activation.0 = 0;

@@ -98,10 +98,10 @@ fn modelica_file_label(uri: &str) -> String {
 }
 
 fn format_ready_files(files: &[String]) -> String {
-    if files.is_empty() {
-        "ready — no compiled Modelica files".to_string()
-    } else {
-        format!("ready — {}", files.join(", "))
+    match files {
+        [] => "ready — no compiled Modelica files".to_string(),
+        [file] => format!("ready — {file}"),
+        files => format!("ready — {} Modelica files", files.len()),
     }
 }
 
@@ -122,10 +122,14 @@ mod tests {
     }
 
     #[test]
-    fn ready_status_lists_files_and_handles_empty_registry() {
+    fn ready_status_is_bounded_when_many_files_are_open() {
         assert_eq!(
             format_ready_files(&["lander.mo".into(), "controller.mo".into()]),
-            "ready — lander.mo, controller.mo"
+            "ready — 2 Modelica files"
+        );
+        assert_eq!(
+            format_ready_files(&["lander.mo".into()]),
+            "ready — lander.mo"
         );
         assert_eq!(
             format_ready_files(&[]),

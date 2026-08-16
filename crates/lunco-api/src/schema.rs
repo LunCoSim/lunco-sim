@@ -47,7 +47,7 @@ pub enum ApiRequest {
     // coordinate frame it is in, and that belongs to the crate that owns the
     // scene verbs, not to the transport: it now lives beside `MoveEntity` in
     // `lunco-scene-commands` as an `ApiQueryProvider`, reporting the same
-    // grid-absolute frame that command accepts. As a built-in it read
+    // semantic active physics frame that command accepts. As a built-in it read
     // `GlobalTransform` — the render frame — and reported a position that shifted
     // with the floating origin and could not be fed back. Pose/state reads are
     // ExecuteCommand calls whose provider owns the coordinate-frame semantics.

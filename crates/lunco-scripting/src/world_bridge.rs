@@ -643,7 +643,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // not the prelude's job.
     crate::rhai_math::register(&mut engine);
 
-    // world_pos(id) -> [x, y, z] absolute world space, or () on miss.
+    // world_pos(id) -> [x, y, z] in the active simulation frame, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
         match bridge_core::world_pos(id as u64) {
             Some(v) => RhaiBuilder.array(vec![
@@ -677,9 +677,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         }
     });
 
-    // world_forward(id) -> [x, y, z] unit heading in world space, or ().
-    // The ONE read rhai can't derive itself (world orientation needs the ECS
-    // float-origin hierarchy). All steering MATH stays in rhai (the prelude);
+    // world_forward(id) -> [x, y, z] unit heading in the active frame, or ().
+    // The ONE read rhai can't derive itself (orientation needs the ECS
+    // BigSpace hierarchy). All steering MATH stays in rhai (the prelude);
     // this just exposes the heading vector, like world_pos exposes position.
     engine.register_fn("world_forward", |id: i64| -> Dynamic {
         match bridge_core::world_forward(id as u64) {
@@ -692,11 +692,11 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         }
     });
 
-    // world_rotation(id) -> [x, y, z, w] world orientation quaternion, or ().
+    // world_rotation(id) -> [x, y, z, w] active-frame orientation, or ().
     // The general orientation accessor: up/forward/right are `quat * axis`,
     // derived in the rhai prelude (see `world_up`/`world_right` helpers), so this
     // one host fn covers every axis and feeds tilt/tip-over checks — no per-axis
-    // Rust. Same GlobalTransform source as world_forward.
+    // Rust. Same typed active-frame pose source as world_forward.
     engine.register_fn("world_rotation", |id: i64| -> Dynamic {
         match bridge_core::world_rotation(id as u64) {
             Some(q) => RhaiBuilder.array(vec![

@@ -557,12 +557,16 @@ fn parking_brake_force(
         return DVec3::ZERO;
     }
     let tangent_gravity = gravity - normal * gravity.dot(normal);
-    let gravity_len = gravity.length();
     let tangent_len = tangent_gravity.length();
-    if gravity_len <= f64::EPSILON || tangent_len <= f64::EPSILON {
+    // At static equilibrium N = m * |g_normal|, therefore this contact's
+    // supported mass share is N / |g_normal|. Using |g| here underestimates the
+    // required hold force by cos(slope), guaranteeing slow downhill creep on
+    // every non-flat surface even with the parking brake fully engaged.
+    let normal_accel = -gravity.dot(normal);
+    if normal_accel <= f64::EPSILON || tangent_len <= f64::EPSILON {
         return DVec3::ZERO;
     }
-    let requested = normal_force * tangent_len / gravity_len;
+    let requested = normal_force * tangent_len / normal_accel;
     let available = friction_mu.max(0.0) * normal_force;
     -tangent_gravity / tangent_len * requested.min(available)
 }
@@ -652,10 +656,17 @@ mod tire_patch_tests {
 
     #[test]
     fn parking_brake_cancels_gravity_on_a_holdable_slope() {
-        let force = parking_brake_force(DVec3::new(0.0, -1.62, -0.8), DVec3::Y, 400.0, 1.5);
+        let gravity = DVec3::new(0.0, -1.62, -0.8);
+        let normal_force = 400.0;
+        let force = parking_brake_force(gravity, DVec3::Y, normal_force, 1.5);
         assert!(force.z > 0.0);
         assert!((force.y).abs() < 1.0e-12);
-        assert!(force.length() <= 1.5 * 400.0 + 1.0e-9);
+        assert!(force.length() <= 1.5 * normal_force + 1.0e-9);
+        let supported_mass = normal_force / 1.62;
+        assert!(
+            (force.z + supported_mass * gravity.z).abs() < 1.0e-9,
+            "parking force must exactly balance this contact's tangential gravity share"
+        );
     }
 }
 

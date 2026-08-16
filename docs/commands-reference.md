@@ -314,15 +314,17 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `MoveEntity`
 
- Move an existing entity to an absolute world-space position.
+ Move an existing entity to a position in the active physics frame.
 
  Programmatic equivalent of grabbing the entity with the gizmo and
  dragging it. The handler:
  1. Switches the body to `RigidBody::Kinematic` (if it has a
     `RigidBody`) so Avian treats the new pose as authoritative
     rather than fighting back via integration.
- 2. Writes `Transform.translation` for renderer + scene-graph.
- 3. Writes Avian's `Position` for the joint/contact solver.
+ 2. Converts the target once into the entity's actual parent and BigSpace
+    cell/local storage.
+ 3. Lets the BigSpace physics bridge derive Avian's pose from that one
+    authoritative storage write.
  4. Sets a one-tick `LinearVelocity` consistent with the move so
     any joint coupled to a dynamic body propagates the motion.
 
@@ -335,7 +337,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID (the `api_id` from `ListEntities`),  resolved to a Bevy `Entity` in the observer via `ApiEntityRegistry`.   Deliberately `u64`, not `Entity` — this is "**Pattern B**". The  type-driven id codec (`crates/lunco-networking/PH2_ID_CODEC.md`)  auto-converts only `Entity`-typed fields, so a `u64` field opts out and  is resolved here instead. NOT migrated to `Entity` because this command  is `#[Command(default)]`, which derives `Default`, and `Entity` has no  `Default`. Leaving it `u64` is a cleanliness leftover, not a  names/correctness issue — the codec no longer keys off field names at  all, so this `u64` is simply ignored by it. (An earlier comment here  blamed the resolver "dropping the generation"; that was stale — the  codec preserves index+generation via `Entity::to_bits()`.) |
-| `translation` | `[f64; 3]` | Target translation, **grid-absolute** — the frame USD authors `xformOp:translate` in, not the entity's raw `Transform.translation`. The f64 wire form preserves precision across big-space cells. |
+| `translation` | `[f64; 3]` | Target translation in the semantic active physics frame. The runtime converts it once into the entity's actual parent and BigSpace cell/local storage. The f64 wire form preserves precision across API and network round trips. |
 
 #### `ReloadShader`
 

@@ -46,6 +46,7 @@
 //!     .register(ListBundledProvider);
 //! ```
 
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -120,15 +121,16 @@ impl Plugin for ApiQueryRegistryPlugin {
 
 // ─── Built-in spatial entity queries (transform-only; no physics dep) ──
 //
-// These answer "what's near point P" using only `GlobalTransform` + the
-// entity registry — no avian. Physics-backed queries (Raycast, GroundHeight)
-// live in the physics-owning crate and register the same way. Scripts reach
-// all of them generically via the rhai `query(name, #{params})` verb.
+// These answer "what's near point P" using the canonical f64
+// `ActivePhysicsFrame` pose query + the entity registry — no avian and no
+// camera-relative `GlobalTransform`. Physics-backed queries (Raycast,
+// GroundHeight) live in the physics-owning crate and register the same way.
+// Scripts reach all of them generically via `query(name, #{params})`.
 
 use crate::registry::ApiEntityRegistry;
 use crate::schema::ApiErrorCode;
 
-/// Parse a `[x, y, z]` JSON array under `key` into a world point.
+/// Parse a `[x, y, z]` JSON array under `key` into an active-frame point.
 fn parse_point(params: &serde_json::Value, key: &str) -> Option<bevy::math::DVec3> {
     let a = params.get(key)?.as_array()?;
     if a.len() < 3 {
@@ -141,7 +143,7 @@ fn parse_point(params: &serde_json::Value, key: &str) -> Option<bevy::math::DVec
     ))
 }
 
-/// `Nearest` — closest registered entity to a world point.
+/// `Nearest` — closest registered entity to an active-frame point.
 /// params: `{ point:[x,y,z], max?:f64, exclude?:u64 }` ·
 /// returns: `{ id, distance, point:[x,y,z] }`, or `{ id: null }` if none.
 pub struct NearestProvider;
@@ -160,15 +162,20 @@ impl ApiQueryProvider for NearestProvider {
         let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
 
         let entities = world.resource::<ApiEntityRegistry>().entities();
+        let mut state: SystemState<lunco_core::coords::ActiveFramePoseQuery> =
+            SystemState::new(world);
+        let poses = state
+            .get(world)
+            .expect("active-frame query always validates");
         let mut best: Option<(u64, f64, bevy::math::DVec3)> = None;
         for (gid, e) in entities {
             if exclude == Some(gid.get()) {
                 continue;
             }
-            let Some(gt) = world.get::<GlobalTransform>(e) else {
+            let Some(position) = poses.position(e) else {
                 continue;
             };
-            let p = gt.translation().as_dvec3();
+            let p = position.0;
             let d = p.distance(point);
             if max.is_some_and(|m| d > m) {
                 continue;
@@ -186,7 +193,8 @@ impl ApiQueryProvider for NearestProvider {
     }
 }
 
-/// `EntitiesInRadius` — every registered entity within `radius` of a point.
+/// `EntitiesInRadius` — every registered entity within `radius` of an
+/// active-frame point.
 /// params: `{ point:[x,y,z], radius:f64, exclude?:u64 }` ·
 /// returns: `{ ids:[..], count }`.
 pub struct EntitiesInRadiusProvider;
@@ -208,15 +216,20 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
         let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
 
         let entities = world.resource::<ApiEntityRegistry>().entities();
+        let mut state: SystemState<lunco_core::coords::ActiveFramePoseQuery> =
+            SystemState::new(world);
+        let poses = state
+            .get(world)
+            .expect("active-frame query always validates");
         let mut ids: Vec<u64> = Vec::new();
         for (gid, e) in entities {
             if exclude == Some(gid.get()) {
                 continue;
             }
-            let Some(gt) = world.get::<GlobalTransform>(e) else {
+            let Some(position) = poses.position(e) else {
                 continue;
             };
-            if gt.translation().as_dvec3().distance(point) <= radius {
+            if position.0.distance(point) <= radius {
                 ids.push(gid.get());
             }
         }
@@ -225,7 +238,7 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
     }
 }
 
-/// Register the built-in transform-only spatial providers (`Nearest`,
+/// Register the built-in active-frame spatial providers (`Nearest`,
 /// `EntitiesInRadius`). Called by [`crate::LunCoApiPlugin`].
 /// `ReadPorts` — every exposed port on an entity (model I/O, physics velocity,
 /// sensors, joints), by `api_id`. A one-shot read of the same `PortRegistry`
@@ -509,6 +522,45 @@ impl Plugin for ApiVisibilityPlugin {
 mod tests {
     use super::*;
     use lunco_core::exposure::EngineExposures;
+
+    #[test]
+    fn proximity_queries_use_active_frame_poses_without_global_transforms() {
+        let mut world = World::new();
+        lunco_core::ensure_world_root(&mut world);
+        world.init_resource::<ApiEntityRegistry>();
+        let frame = world.resource::<lunco_core::ActivePhysicsFrame>().0;
+        let entity = world
+            .spawn((Transform::from_xyz(12.0, -1_900.0, -4.0), ChildOf(frame)))
+            .id();
+        world
+            .resource_mut::<ApiEntityRegistry>()
+            .assign(entity, lunco_core::GlobalEntityId::from_raw(42));
+
+        let response = NearestProvider.execute(
+            &mut world,
+            &serde_json::json!({"point": [12.25, -1900.0, -4.0], "max": 1.0}),
+        );
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("Nearest did not return data");
+        };
+        assert_eq!(data["id"], 42);
+        assert_eq!(data["point"], serde_json::json!([12.0, -1900.0, -4.0]));
+
+        let response = EntitiesInRadiusProvider.execute(
+            &mut world,
+            &serde_json::json!({"point": [12.0, -1900.0, -4.0], "radius": 0.01}),
+        );
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("EntitiesInRadius did not return data");
+        };
+        assert_eq!(data["ids"], serde_json::json!([42]));
+    }
 
     #[test]
     fn read_exposures_returns_revision_and_typed_properties() {

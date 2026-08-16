@@ -207,8 +207,8 @@ fn snapshot_sample_in_active_frame(
 pub struct SpawnReplicationMsg {
     pub gid: u64,
     pub entry_id: String,
-    pub position: [f32; 3],
-    pub rotation: [f32; 4],
+    pub position: [f64; 3],
+    pub rotation: [f64; 4],
 }
 
 /// Host → clients: the networked entity with this id was removed on the host;
@@ -1185,8 +1185,8 @@ pub fn drain_sync_inbox(
                 pending_spawns.0.push(ReplicatedSpawn {
                     gid: spawn.gid,
                     entry_id: spawn.entry_id,
-                    position: Vec3::from_array(spawn.position),
-                    rotation: Quat::from_array(spawn.rotation).normalize(),
+                    position: DVec3::from_array(spawn.position),
+                    rotation: DQuat::from_array(spawn.rotation).normalize(),
                 });
             }
             SyncEnvelope::Despawn(d) => {

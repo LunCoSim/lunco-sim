@@ -27,9 +27,10 @@
 //! ## Frames
 //!
 //! `attrs` are the **authored** values in the prim's own space — that is the
-//! point; an invariant check wants what the file says. `world_position` is
-//! grid-absolute, matching [`QueryEntity`](crate::entity_query) and what
-//! `MoveEntity` accepts, and is present only when the prim spawned an entity.
+//! point; an invariant check wants what the file says. `world_position` is in
+//! the semantic active physics frame, matching [`QueryEntity`](crate::entity_query)
+//! and what `MoveEntity` accepts, and is present only when the prim spawned an
+//! entity.
 //!
 //! ## Request
 //!
@@ -223,7 +224,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             );
         };
 
-        // Pose, only for prims that spawned. Grid-absolute, same contract as
+        // Pose, only for prims that spawned. Active-physics, same contract as
         // `QueryEntity` — see this module's frame note.
         let mut out = serde_json::json!({
             "path": path,
@@ -234,20 +235,25 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
 
         if let Some((entity, _)) = spawned {
             use bevy::ecs::system::SystemState;
-            use big_space::prelude::{CellCoord, Grid};
-            let mut state: SystemState<(
-                Query<&ChildOf>,
-                Query<&Grid>,
-                Query<(Option<&CellCoord>, &Transform)>,
-            )> = SystemState::new(world);
-            if let Ok((q_parents, q_grids, q_spatial)) = state.get(world) {
-                let pos =
-                    lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-                        .map(|p| p.0)
-                        .unwrap_or(bevy::math::DVec3::ZERO);
-                out["world_position"] = serde_json::json!([pos.x, pos.y, pos.z]);
-                out["position_frame"] = serde_json::json!("grid_absolute");
-            }
+            let mut state: SystemState<lunco_core::coords::ActiveFramePoseQuery> =
+                SystemState::new(world);
+            let Ok(poses) = state.get(world) else {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    "QueryUsdPrim: active physics frame is unavailable".to_string(),
+                );
+            };
+            let Some(pos) = poses.position(entity) else {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    format!(
+                        "QueryUsdPrim: spawned prim `{path}` is disconnected from the active physics frame"
+                    ),
+                );
+            };
+            out["world_position"] =
+                serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
+            out["position_frame"] = serde_json::json!("active_physics");
         }
 
         ApiResponse::ok(out)

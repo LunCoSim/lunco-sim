@@ -10,7 +10,7 @@
 
 use avian3d::physics_transform::Position;
 use avian3d::prelude::{LinearVelocity, RigidBody};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command, SpawnEntity};
@@ -18,19 +18,15 @@ use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
 // see `docs/architecture/render-decoupling.md`.
-use crate::catalog::{
-    prim_path_from_entry_id, spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource,
-};
+use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd_bevy::{
-    collision_aabb, CanonicalStages, UsdPrimPath, UsdStageAsset, SPAWN_GROUND_CLEARANCE,
-};
+use lunco_usd_bevy::UsdPrimPath;
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -253,132 +249,73 @@ pub fn persist_detach_to_runtime_layer(
     });
 }
 
-/// Observer that handles SpawnEntity commands.
-/// The asset's collision-AABB rest depth — root origin → lowest collider point,
-/// in the asset's own frame — read off the composed canonical stage (built on
-/// demand from the asset's recipe). `None` until the stage is composed, or if the
-/// asset has no collision geometry (a pure-visual / mesh-only prop). This is the
-/// general, wheel-free placement basis shared with the GUI ghost. See
-/// [`lunco_usd_bevy::collision_aabb`].
-fn spawn_rest_depth(
-    asset_server: &AssetServer,
-    stages: &Assets<UsdStageAsset>,
-    canonical: &mut CanonicalStages,
-    entry: &crate::catalog::SpawnableEntry,
-) -> RestDepth {
-    let SpawnSource::UsdFile(path) = &entry.source;
-    let handle = asset_server.load(path.clone());
-    let id = handle.id();
-    // Compose the canonical stage on first sight (idempotent — cached thereafter).
-    if canonical.get(id).is_none() {
-        let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) else {
-            return RestDepth::StagePending;
-        };
-        canonical.get_or_build(id, &recipe);
-    }
-    let root_prim = prim_path_from_entry_id(&entry.id);
-    match canonical
-        .get(id)
-        .and_then(|cs| collision_aabb(&cs.view(), &root_prim))
-    {
-        Some(a) => RestDepth::Ready(a.rest_depth()),
-        None => RestDepth::NoCollision,
-    }
+fn pose_relative_to_scene_root(
+    position: DVec3,
+    rotation: DQuat,
+    root_position: DVec3,
+    root_rotation: DQuat,
+) -> (DVec3, DQuat) {
+    let inverse_root = root_rotation.inverse();
+    (
+        inverse_root * (position - root_position),
+        (inverse_root * rotation).normalize(),
+    )
 }
 
-/// Outcome of [`spawn_rest_depth`]. `StagePending` and `NoCollision` were once both
-/// `None`, which silently placed the asset with NO lift — that is how a lander whose
-/// pads sit 5 m below its root spawned embedded on its very first spawn (the stage
-/// composes asynchronously, so the FIRST spawn of any asset always lost its lift).
-/// They mean opposite things and must be handled differently: pending = wait,
-/// no-collision = there is genuinely nothing to rest on the ground.
-enum RestDepth {
-    /// Composed; `-min.y` of the collision AABB in the asset's own frame.
-    Ready(f64),
-    /// The canonical stage has not composed yet — the lift is UNKNOWN, not zero.
-    StagePending,
-    /// Composed, but the asset has no collision geometry (a pure-visual prop).
-    NoCollision,
-}
-
-/// Spawns held back until their USD stage composes, so placement is never computed
-/// against an unknown collider. Retried by [`drain_deferred_spawns`].
+/// Lower one document-backed spawn into the single USD mutation that owns its
+/// live entity, journal entry, reload behaviour, and network propagation.
 ///
-/// Each entry KEEPS its stage handle. `AssetServer::load` hands back a STRONG
-/// handle, so a caller that drops it — as the placement probe used to, every call —
-/// drops the asset with it and the load never lands. That is the whole reason the
-/// first spawn of an asset silently lost its lift: the probe cancelled its own load,
-/// and only a previously-spawned entity's retained handle made later spawns work.
-#[derive(Resource, Default)]
-pub struct DeferredSpawns(Vec<(SpawnEntity, Handle<UsdStageAsset>)>);
-
-/// Re-trigger a deferred spawn once its stage has loaded; drop it (loudly) if the
-/// asset failed, so a bad entry cannot spin the queue forever.
-pub fn drain_deferred_spawns(
-    mut deferred: ResMut<DeferredSpawns>,
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    stages: Res<Assets<UsdStageAsset>>,
-) {
-    if deferred.0.is_empty() {
-        return;
-    }
-    for (cmd, handle) in std::mem::take(&mut deferred.0) {
-        if stages.get(&handle).is_some() {
-            commands.trigger(cmd);
-        } else if asset_server
-            .get_load_state(&handle)
-            .is_some_and(|s| matches!(s, bevy::asset::LoadState::Failed(_)))
-        {
-            warn!(
-                "SPAWN_ENTITY: stage for '{}' failed to load; dropping spawn",
-                cmd.entry_id
-            );
-        } else {
-            // Still loading — keep BOTH the command and its handle alive.
-            deferred.0.push((cmd, handle));
-        }
-    }
-}
-
-/// Ground height (render-space Y) under a spawn point, or `None` if this (x,z) has
-/// no ground at all (an orbital/empty scene → honour the requested position).
-///
-/// The streamed DEM answers first when it covers the point: it is the authored
-/// surface and needs no baked collider, so it is right even mid-stream. Otherwise
-/// fall back to the physics world — a downward ray onto whatever collider is really
-/// there (the sandbox's flat slab, a static mesh, a baked tile). The cast starts
-/// well ABOVE the request so a point already below the surface still finds it;
-/// casting from `position` itself would miss upward and silently keep an embedded
-/// spawn.
-fn ground_height_under(
-    surface: &lunco_terrain_surface::GridSurfaceQuery,
-    raycaster: &lunco_physics::GridSpatialQuery,
-    position: Vec3,
-) -> Option<f64> {
-    let position = lunco_core::coords::GridPos(position.as_dvec3());
-    if let Some(y) = surface.height_at(position) {
-        return Some(y);
-    }
-    const PROBE_ABOVE: f64 = 1_000.0;
-    const PROBE_RANGE: f64 = 5_000.0;
-    let origin = position.0 + DVec3::Y * PROBE_ABOVE;
-    // `cast_ray_grid`, NOT `cast_ray_render`: a spawn position is already
-    // grid-absolute — the frame avian's colliders live in. Casting it through
-    // `cast_ray_render` would add the render→physics shift a second time, which
-    // tracks the floating origin and made the "ground" wander with the avatar
-    // (6.08 → 6.59) instead of sitting at 0. The typed wrapper states that in the
-    // signature; `raw()` used to state it in a comment.
-    // `solid: true` so a probe starting inside a collider still reports a hit.
-    // The spawned entity does not exist yet, so it cannot hit itself.
-    let hit = raycaster.cast_ray_grid(
-        lunco_core::coords::GridPos(origin),
-        Dir3::NEG_Y,
-        PROBE_RANGE,
-        true,
-        &avian3d::prelude::SpatialQueryFilter::default(),
-    )?;
-    Some(origin.y - hit.distance)
+/// The old path instantiated an ECS object first and then authored another prim
+/// into the live runtime layer. Twin projection correctly instantiated that
+/// authored prim too, producing two overlapping rovers in host mode. A mounted,
+/// doc-backed scene must instead have exactly one producer: its USD document.
+fn runtime_spawn_ops(
+    entry_id: &str,
+    asset_path: &str,
+    parent_path: &str,
+    position: DVec3,
+    rotation: DQuat,
+) -> (String, Vec<UsdOp>) {
+    let stem: String = entry_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    // OpIds are process-unique, JS-safe and already the identity source for
+    // document mutations. Unlike a Local<u32>, this cannot collide with a
+    // restored runtime-layer spawn after reload.
+    let name = format!("{stem}_{}", lunco_core::OpId::new());
+    let parent_path = parent_path.trim_end_matches('/');
+    let parent_path = if parent_path.is_empty() {
+        "/".to_string()
+    } else {
+        parent_path.to_string()
+    };
+    let prim_path = if parent_path == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent_path}/{name}")
+    };
+    let (rx, ry, rz) = rotation.to_euler(EulerRot::XYZ);
+    let ops = vec![
+        UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path,
+            name,
+            type_name: None,
+            reference: Some(asset_path.to_string()),
+        },
+        UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: prim_path.clone(),
+            value: position.to_array(),
+        },
+        UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path: prim_path.clone(),
+            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+        },
+    ];
+    (prim_path, ops)
 }
 
 #[on_command(SpawnEntity)]
@@ -387,28 +324,13 @@ pub fn on_spawn_entity_command(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    q_grids: Query<Entity, With<Grid>>,
-    // The scene anchor a runtime spawn parents under (plain child, DRY with
-    // scene-load — see `spawn_usd_entry`). Absent only before any scene loads.
-    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
-    // Present only while a scene load is still landing; tells a spawn that
-    // arrives mid-load that the anchor is COMING rather than absent.
-    scene_loading: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    q_scene_root: Query<(Entity, &UsdPrimPath), With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     role: Res<lunco_core::NetworkRole>,
-    // The analytic surface, in the grid frame. NOT a hand-rolled DEM query: the
-    // oracle is grid-absolute by contract and this param is the only thing that
-    // knows it (`lunco_terrain_surface::surface_query`).
-    surface: lunco_terrain_surface::GridSurfaceQuery,
-    // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
-    // Render-space origins → grid-absolute colliders, so this must be the grid-aware
-    // wrapper, never a raw `SpatialQuery`.
-    raycaster: lunco_physics::GridSpatialQuery,
-    mut deferred: ResMut<DeferredSpawns>,
-    stages: Res<Assets<UsdStageAsset>>,
-    // `CanonicalStages` is a NonSend resource (holds non-Send USD stage data), so
-    // this observer takes it as `NonSendMut` — same as the GUI ghost's footprint
-    // system. Keeps it main-thread; fine for a spawn observer.
-    mut canonical: NonSendMut<CanonicalStages>,
+    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
 ) {
     let cmd = trigger.event();
 
@@ -428,93 +350,93 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    // Prefer the requested grid; fall back to the first grid (a wire-applied
-    // spawn may carry a grid id that doesn't resolve on this peer). The selected
-    // grid is only needed to confirm a spawn target EXISTS here — the spawn
-    // itself parents to the scene root, not to a specific grid entity.
-    if q_grids.get(cmd.target).is_err() && q_grids.iter().next().is_none() {
-        warn!("SPAWN_ENTITY: no grid to spawn under");
+    if q_grids.get(active_frame.0).is_err() {
+        warn!(
+            active_frame = ?active_frame.0,
+            "SPAWN_ENTITY: active physics frame is not a BigSpace Grid"
+        );
         return;
     }
-
-    // Terrain-fit the drop height so ANY spawn (GUI, API, headless, rhai) rests ON
-    // the surface rather than embedded in it. The ground is whatever is actually
-    // under (x,z) — the streamed DEM, or, when none covers this scene, the physics
-    // collider itself (see `ground_height_under`). Gating this on a DEM was a bug:
-    // the flat sandbox has no DEM but DOES have a ground slab, so every spawn there
-    // skipped the lift and landed embedded — a 2000 kg lander with its pads ~5 m
-    // below its root gets wedged through a 0.2 m slab, and avian's penetration
-    // recovery ejects it upward at ~5 m/s while churning degenerate contacts (which
-    // is how we corrupted the island graph: "Tail contact has no island").
-    //
-    // The lift is the asset's OWN collision-AABB rest depth (`-min.y` of its
-    // collider box in its own frame, from the composed stage) plus a small skin
-    // gap, so the lowest collider point rests on the surface for any asset — the
-    // lander's origin sits ~5 m above its footpads, a rover's ~wheel-radius, a box
-    // at its base. This is the single authoritative placement: the GUI ghost uses
-    // the same `collision_aabb`, so preview and spawn agree. Falls back to the
-    // authored `lunco:spawnLift` only when the composed geometry isn't available
-    // yet or the asset is pure-visual.
-    let mut position = cmd.position;
-    // Reborrow the non-send resource as the plain mutable type the helper takes.
-    let rest_depth = match spawn_rest_depth(&asset_server, &stages, canonical.as_mut(), entry) {
-        RestDepth::Ready(d) => d + SPAWN_GROUND_CLEARANCE,
-        RestDepth::NoCollision => entry.spawn_lift as f64,
-        // Placing now would use a lift of ~0 and bury the asset in the ground.
-        // Wait for the stage instead — correctness beats a frame of latency.
-        RestDepth::StagePending => {
-            let SpawnSource::UsdFile(path) = &entry.source;
-            // Park the STRONG handle with the command so the load actually
-            // completes instead of being dropped and restarted every retry.
-            deferred
-                .0
-                .push((cmd.clone(), asset_server.load(path.clone())));
-            return;
-        }
+    let Ok((scene_root, scene_root_prim)) = q_scene_root.single() else {
+        warn!(
+            "SPAWN_ENTITY: expected one mounted scene root for '{}'",
+            cmd.entry_id
+        );
+        return;
     };
-    let ground_probe = ground_height_under(&surface, &raycaster, position);
-    debug!(
-        "SPAWN_FIT: '{}' requested_y={} ground_y={:?} rest_depth={}",
-        cmd.entry_id, position.y, ground_probe, rest_depth
+
+    // The public command is expressed in the semantic active physics frame.
+    // Convert once to the mounted scene root's local frame, which is the actual
+    // parent used by both authored and runtime top-level prims. This handles the
+    // ordinary world-grid scene root and the site root that is itself promoted
+    // to the rotating ENU Grid with the same formula.
+    let Some((root_position, root_rotation)) = lunco_core::coords::grid_relative_pose(
+        scene_root,
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        warn!(
+            ?scene_root,
+            active_frame = ?active_frame.0,
+            "SPAWN_ENTITY: scene root is not attached to the active physics frame"
+        );
+        return;
+    };
+    let requested_position = DVec3::from_array(cmd.position);
+    let requested_rotation = cmd
+        .rotation
+        .map(DQuat::from_array)
+        .unwrap_or(DQuat::IDENTITY)
+        .normalize();
+    let (position, rotation) = pose_relative_to_scene_root(
+        requested_position,
+        requested_rotation,
+        root_position,
+        root_rotation,
     );
-    if let Some(ground_y) = ground_probe {
-        // Never spawn EMBEDDED: the lowest collider point must clear the surface.
-        // Only lift — a requested altitude ABOVE the rest height is honoured (an
-        // intentional drop), so this stays a floor, not a snap.
-        let min_y = ground_y + rest_depth;
-        if (position.y as f64) < min_y {
-            position.y = min_y as f32;
-        }
+    if !position.is_finite() || !rotation.is_finite() {
+        warn!("SPAWN_ENTITY: non-finite pose for '{}'", cmd.entry_id);
+        return;
     }
 
-    info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
-
-    let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
-    // The scene root is the ONLY legal anchor (see `SpawnAnchor`). Mid-load it
-    // does not exist YET, so wait for it — same "correctness beats a frame of
-    // latency" rule as the stage-pending case above. With no load in flight
-    // there is no scene to place anything in, which is a caller error, not a
-    // cue to invent a second hierarchy.
-    let Some(scene_root) = q_scene_root.iter().next() else {
-        if scene_loading.is_some() {
-            let SpawnSource::UsdFile(path) = &entry.source;
-            deferred
-                .0
-                .push((cmd.clone(), asset_server.load(path.clone())));
-        } else {
-            warn!(
-                "SPAWN_ENTITY: no scene mounted — nothing to anchor '{}' under",
-                cmd.entry_id
-            );
-        }
+    // A document-backed running scene is projected from USD. Author the spawn
+    // there and let that ONE projection instantiate it. This is also the one
+    // journal/network/reload path. Raw-file/headless scenes have no document to
+    // author into and therefore use the direct ECS + NetSpawn path below.
+    if let Some(doc) = lunco_usd::twin_projection::scene_document_for(
+        &backed,
+        &asset_server,
+        scene_root_prim.stage_handle.id(),
+    ) {
+        let SpawnSource::UsdFile(asset_path) = &entry.source;
+        let (prim_path, ops) = runtime_spawn_ops(
+            &cmd.entry_id,
+            asset_path,
+            &scene_root_prim.path,
+            position,
+            rotation,
+        );
+        info!("SPAWN_ENTITY: authoring {} at {:?}", prim_path, position);
+        commands.trigger(ApplyUsdOps {
+            doc,
+            label: format!("Spawn {}", entry.display_name),
+            ops,
+        });
         return;
-    };
+    }
+
+    info!(
+        "SPAWN_ENTITY: directly instantiating {} at {:?}",
+        cmd.entry_id, position
+    );
     let result = spawn_usd_entry(
         &mut commands,
         &asset_server,
         entry,
-        position,
-        rotation,
+        position.as_vec3(),
+        rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
 
@@ -565,8 +487,8 @@ pub fn apply_replicated_spawns(
             &mut commands,
             &asset_server,
             entry,
-            pos,
-            job.rotation,
+            pos.as_vec3(),
+            job.rotation.as_quat(),
             SpawnAnchor::scene_root(scene_root),
         );
         // Pin the host id; mark runtime instance + replication target. Forced
@@ -579,15 +501,17 @@ pub fn apply_replicated_spawns(
     }
 }
 
-/// Move an existing entity to an absolute world-space position.
+/// Move an existing entity to a position in the active physics frame.
 ///
 /// Programmatic equivalent of grabbing the entity with the gizmo and
 /// dragging it. The handler:
 /// 1. Switches the body to `RigidBody::Kinematic` (if it has a
 ///    `RigidBody`) so Avian treats the new pose as authoritative
 ///    rather than fighting back via integration.
-/// 2. Writes `Transform.translation` for renderer + scene-graph.
-/// 3. Writes Avian's `Position` for the joint/contact solver.
+/// 2. Converts the active-frame target once into the entity's actual parent
+///    and BigSpace cell/local storage.
+/// 3. Lets the BigSpace physics bridge derive Avian's pose from that one
+///    authoritative storage write.
 /// 4. Sets a one-tick `LinearVelocity` consistent with the move so
 ///    any joint coupled to a dynamic body propagates the motion.
 ///
@@ -610,16 +534,11 @@ pub struct MoveEntity {
     /// blamed the resolver "dropping the generation"; that was stale — the
     /// codec preserves index+generation via `Entity::to_bits()`.)
     pub entity_id: u64,
-    /// Target translation, **grid-absolute** — the frame USD authors
-    /// `xformOp:translate` in, NOT the entity's raw `Transform.translation`.
-    ///
-    /// The two are the same thing only for an entity in cell 0, which is why
-    /// this went unnoticed in the sandbox: everything there sits in the origin
-    /// cell. At the moonbase (cells 2 km wide) a caller that passed
-    /// `Transform.translation` was short by `cell × edge`, and the move
-    /// teleported the object a whole cell — see `lunco_core::coords::grid_absolute`.
-    /// The wire representation is f64 so a grid-absolute pose keeps precision
-    /// across cells and network/API round trips.
+    /// Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].
+    /// The concrete BigSpace grid, the entity's actual parent, and the cell/local
+    /// split are internal storage details resolved by the observer. The wire
+    /// representation is f64 so positions retain precision across API/network
+    /// round trips.
     pub translation: [f64; 3],
 }
 
@@ -638,12 +557,15 @@ pub fn on_move_entity_command(
     trigger: On<MoveEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
-    mut q: Query<(
-        &mut Transform,
-        Option<&CellCoord>,
-        Option<&mut Position>,
-        Option<&mut LinearVelocity>,
+    mut spatial: ParamSet<(
+        Query<(Option<&CellCoord>, &Transform)>,
+        Query<(
+            &mut Transform,
+            Option<&mut Position>,
+            Option<&mut LinearVelocity>,
+        )>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -654,7 +576,7 @@ pub fn on_move_entity_command(
     let cmd = trigger.event();
     if cmd.translation.iter().any(|value| !value.is_finite()) {
         warn!(
-            "MOVE_ENTITY: rejecting non-finite grid-absolute target for api_id={}",
+            "MOVE_ENTITY: rejecting non-finite active-frame target for api_id={}",
             cmd.entity_id
         );
         return;
@@ -664,29 +586,61 @@ pub fn on_move_entity_command(
         warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;
     };
-    let Ok((mut tf, cell, pos_opt, lin_vel_opt)) = q.get_mut(target) else {
+    let target_abs = DVec3::from_array(cmd.translation);
+    if q_grids.get(active_frame.0).is_err() {
         warn!(
-            "MOVE_ENTITY: entity {:?} (api_id={}) has no Transform",
-            target, cmd.entity_id
+            active_frame = ?active_frame.0,
+            "MOVE_ENTITY: active physics frame is not a BigSpace Grid"
         );
         return;
+    }
+    // Read and invert the complete hierarchy before taking mutable component
+    // access. The command always speaks the active frame; storage may be a
+    // plain parent-local Transform or a BigSpace `(CellCoord, Transform)` pair.
+    // One canonical conversion owns both cases.
+    let (prev_abs, old_cell, new_cell, new_local) = {
+        let q_spatial = spatial.p0();
+        let Ok((old_cell, _)) = q_spatial.get(target) else {
+            warn!(
+                "MOVE_ENTITY: entity {:?} (api_id={}) has no Transform",
+                target, cmd.entity_id
+            );
+            return;
+        };
+        let Some((prev_abs, _)) = lunco_core::coords::pose_in_grid(
+            target,
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "MOVE_ENTITY: entity is not connected to the active physics frame"
+            );
+            return;
+        };
+        let Some((new_cell, new_local)) =
+            lunco_core::coords::position_in_grid_to_parent_local(
+                target,
+                target_abs,
+                active_frame.0,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+        else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "MOVE_ENTITY: cannot express target in the entity parent frame"
+            );
+            return;
+        };
+        (prev_abs, old_cell.copied(), new_cell, new_local)
     };
-
-    // The command speaks grid-absolute; `Transform` holds the cell REMAINDER.
-    // Split the target position back into the `(cell, local)` pair big_space
-    // stores, and write BOTH — writing only `Transform` would leave the stale
-    // cell in place and land the body `cell × edge` away from where it was asked
-    // to go. The cell goes through `Commands` so this system needs no `&mut
-    // CellCoord` (which would collide with big_space's own recentring access).
-    let prev_abs = lunco_core::coords::grid_absolute_seeded(
-        target,
-        &cell.copied().unwrap_or_default(),
-        &tf,
-        &q_parents,
-        &q_grids,
-    );
-    let target_abs = DVec3::from_array(cmd.translation);
-    let delta = target_abs - prev_abs.0;
+    let delta = target_abs - prev_abs;
     let physics_body = q_rb
         .get(target)
         .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
@@ -711,15 +665,19 @@ pub fn on_move_entity_command(
             return;
         }
     }
-    let (new_cell, new_local) = lunco_core::coords::grid_local_from_absolute(
-        target,
-        lunco_core::coords::GridPos(target_abs),
-        &q_parents,
-        &q_grids,
-    );
+    let mut writable = spatial.p1();
+    let Ok((mut tf, pos_opt, lin_vel_opt)) = writable.get_mut(target) else {
+        warn!(
+            "MOVE_ENTITY: entity {:?} (api_id={}) disappeared during move",
+            target, cmd.entity_id
+        );
+        return;
+    };
     tf.translation = new_local;
     if let Some(new_cell) = new_cell {
         commands.entity(target).try_insert(new_cell);
+    } else if old_cell.is_some() {
+        commands.entity(target).try_remove::<CellCoord>();
     }
 
     // Force the body to Kinematic for the duration of the move so
@@ -743,10 +701,9 @@ pub fn on_move_entity_command(
         commands.entity(target).try_insert(RigidBody::Kinematic);
     }
 
-    // NO `Position` write here. `Position` lives in the BigSpace ROOT frame,
-    // and this command's translation is grid-absolute — the two coincide only
-    // for a grid sitting at the origin, and the old `pos.0 = cmd.translation`
-    // silently assumed it. Seating the pose is already owned, in the one place
+    // NO `Position` write here. `Position` lives in the active Avian/BigSpace
+    // physics frame, while `Transform` is parent-local/cell-local storage.
+    // Seating the pose is already owned, in the one place
     // that knows the whole cell chain: `BigSpacePhysicsBridgePlugin`'s
     // `pose_to_position` fires on exactly the external `(cell, Transform)` write
     // we just made and recomputes `Position`/`Rotation` from it (and carries it
@@ -769,9 +726,8 @@ pub fn on_move_entity_command(
     // exactly one physics tick. Without that follow-up, the body
     // would keep drifting at this velocity each tick.
     let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-    // Grid-absolute delta: a displacement is frame-invariant across the cell
-    // split, so this is the same vector whether or not the move crossed a cell
-    // boundary — which `cmd.translation - tf.translation` was not.
+    // Active-frame delta: this remains precise and independent of the internal
+    // cell split and of any translating/rotating celestial ancestors.
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
@@ -793,10 +749,11 @@ pub fn on_move_entity_command(
 /// script can read an orientation, transform it, and write it back without ever
 /// converting representation.
 ///
-/// **Rotation is frame-invariant**, which is what makes this simpler than
-/// `MoveEntity`: there is no cell split, no grid-absolute-versus-remainder trap.
-/// A world orientation written into `Transform.rotation` IS the world
-/// orientation, at the site and at the origin alike.
+/// The public quaternion is expressed in [`lunco_core::ActivePhysicsFrame`], the
+/// same semantic frame as `MoveEntity`. Rotation is not frame-invariant: a
+/// rotating body Grid and a rotated assembly parent both change the local
+/// quaternion that must be stored on the entity. The observer performs that
+/// hierarchy conversion once.
 ///
 /// Written through `Transform`, never through avian's `Rotation`, for exactly
 /// the reason `MoveEntity` never hand-writes `Position`:
@@ -818,7 +775,7 @@ pub struct RotateEntity {
     /// perfectly usable. A degenerate (near-zero) quaternion IS refused: it
     /// names no orientation, and silently substituting identity would spin the
     /// body to an attitude the caller never asked for.
-    pub rotation: Vec4,
+    pub rotation: [f64; 4],
 }
 
 /// Observer for `RotateEntity`.
@@ -826,8 +783,14 @@ pub struct RotateEntity {
 pub fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
-    mut q: Query<&mut Transform>,
+    mut spatial: ParamSet<(
+        Query<(Option<&CellCoord>, &Transform)>,
+        Query<&mut Transform>,
+    )>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
 ) {
@@ -837,12 +800,7 @@ pub fn on_rotate_entity_command(
         warn!("ROTATE_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;
     };
-    let q_in = Quat::from_xyzw(
-        cmd.rotation.x,
-        cmd.rotation.y,
-        cmd.rotation.z,
-        cmd.rotation.w,
-    );
+    let q_in = DQuat::from_array(cmd.rotation);
     if !q_in.is_finite() || q_in.length_squared() < 1e-12 {
         warn!(
             "ROTATE_ENTITY: {:?} (api_id={}) given a degenerate quaternion {:?} — \
@@ -851,14 +809,34 @@ pub fn on_rotate_entity_command(
         );
         return;
     }
-    let Ok(mut tf) = q.get_mut(target) else {
+    let local_rotation = {
+        let q_spatial = spatial.p0();
+        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+            target,
+            q_in.normalize(),
+            active_frame.0,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn!(
+                ?target,
+                active_frame = ?active_frame.0,
+                "ROTATE_ENTITY: entity is not connected to the active physics frame"
+            );
+            return;
+        };
+        local_rotation
+    };
+    let mut writable = spatial.p1();
+    let Ok(mut tf) = writable.get_mut(target) else {
         warn!(
             "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
             target, cmd.entity_id
         );
         return;
     };
-    tf.rotation = q_in.normalize();
+    tf.rotation = local_rotation.as_quat();
 
     // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
     // otherwise just an initial condition the solver immediately argues with.
@@ -881,7 +859,7 @@ pub fn on_rotate_entity_command(
 
     info!(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
-        cmd.entity_id, cmd.rotation.x, cmd.rotation.y, cmd.rotation.z, cmd.rotation.w
+        cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
     );
 }
 
@@ -900,9 +878,13 @@ pub fn on_rotate_entity_command(
 pub fn persist_move_to_runtime_layer(
     trigger: On<MoveEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -915,18 +897,109 @@ pub fn persist_move_to_runtime_layer(
         return;
     };
 
-    let v = cmd.translation;
+    let Some((cell, local)) = lunco_core::coords::position_in_grid_to_parent_local(
+        target,
+        DVec3::from_array(cmd.translation),
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        warn!(
+            ?target,
+            active_frame = ?active_frame.0,
+            "MOVE_ENTITY: authored entity is disconnected from the active physics frame; not persisting an ambiguous transform"
+        );
+        return;
+    };
+    // USD xformOps are authored relative to the prim's parent. A direct Grid
+    // child is internally split by BigSpace, so reassemble that one parent-local
+    // f64 value before authoring; a plain parent already returned its local value.
+    let parent = q_parents
+        .get(target)
+        .expect("coordinate conversion proved that the parent exists")
+        .parent();
+    let authored = match (cell, q_grids.get(parent).ok()) {
+        (Some(cell), Some(grid)) => {
+            grid.grid_position_double(&cell, &Transform::from_translation(local))
+        }
+        (None, None) => local.as_dvec3(),
+        _ => {
+            error!(
+                ?target,
+                ?parent,
+                "MOVE_ENTITY: coordinate conversion returned inconsistent Grid storage"
+            );
+            return;
+        }
+    };
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
             path,
-            value: v,
+            value: authored.to_array(),
         },
     });
 }
 
 // ─────────────────────────────────────────────────────────────────────
+/// Persist an active-frame orientation using the same parent-local conversion
+/// as [`on_rotate_entity_command`]. USD owns the authored local xform; the
+/// active BigSpace grid is a runtime semantic frame and must never leak into
+/// that stored value.
+pub fn persist_rotation_to_runtime_layer(
+    trigger: On<RotateEntity>,
+    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = api_registry.resolve(&global_id) else {
+        return;
+    };
+    let Some((doc, path)) =
+        authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
+        return;
+    };
+    let requested = DQuat::from_array(cmd.rotation);
+    if !requested.is_finite() || requested.length_squared() < 1.0e-12 {
+        return;
+    }
+    let Some(local) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        target,
+        requested.normalize(),
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        warn!(
+            ?target,
+            active_frame = ?active_frame.0,
+            "ROTATE_ENTITY: authored entity is disconnected from the active physics frame; not persisting an ambiguous transform"
+        );
+        return;
+    };
+    let (rx, ry, rz) = local.to_euler(EulerRot::XYZ);
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path,
+            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+        },
+    });
+}
+
 // Document history — THE history
 //
 // The 3D editor has no private undo stack. Every editor mutation is
@@ -1754,100 +1827,6 @@ pub fn persist_environment_light_to_runtime_layer(
             },
         });
     }
-}
-
-/// Persist a runtime **spawn** into the active USD document's runtime layer
-/// (Phase C4b producer). Observes `SpawnEntity` alongside the ECS spawn handler
-/// [`on_spawn_entity_command`] but is fully decoupled from it — it touches no
-/// world/entity state.
-///
-/// A spawn is recorded as a runtime prim that **`references` the spawned asset**
-/// (`AddPrim{edit_target: runtime, reference}`) plus its drop position
-/// (`SetTranslate{edit_target: runtime}`). The reference + transform compose
-/// into the document's rendered/serialized view and ride the Twin journal, so
-/// the spawn survives in session history and the composed scene — while Save
-/// stays base-only (the runtime layer is never written to disk). Persisting is
-/// gated to when a USD document is active; palette spawns with no active doc
-/// (e.g. a headless server) are skipped.
-pub fn persist_spawn_to_runtime_layer(
-    trigger: On<SpawnEntity>,
-    catalog: Res<SpawnCatalog>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    role: Res<lunco_core::NetworkRole>,
-    // Monotonic per-session disambiguator for spawn prim names (the runtime
-    // layer isn't persisted, so session scope is enough).
-    mut spawn_seq: Local<u32>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    // Single-instantiation: `on_spawn_entity_command` ALWAYS directly instantiates
-    // the spawn as an ECS entity (non-client). If we ALSO author it into the doc's
-    // runtime layer here, the twin projection re-instantiates it as a SECOND entity
-    // — the "double-instantiation" (two overlapping rovers; id-reuse then clobbers
-    // one on doc reload). In a `Standalone` session there is no networked/web client
-    // that needs the journal-authored copy, so the direct ECS spawn is the sole,
-    // authoritative instance — skip persistence and let it be the only rover. (In a
-    // `Host` session the runtime-layer op is still the channel a web client learns
-    // the spawn from, so persistence stays; de-duplicating THAT double needs the
-    // networking-aware fix and is handled separately.)
-    if matches!(*role, lunco_core::NetworkRole::Standalone) {
-        return;
-    }
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else {
-        return;
-    };
-    let Some(host) = usd_registry.host(doc) else {
-        return;
-    };
-    let Some(entry) = catalog.get(&cmd.entry_id) else {
-        return;
-    };
-    // The asset this spawn references (the only `SpawnSource` variant today).
-    let SpawnSource::UsdFile(asset_path) = &entry.source;
-
-    // Parent under the document's default prim (scene root) when it has one,
-    // else at the stage root. `stage_default_prim` returns the bare prim name.
-    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
-
-    // Unique, valid USD identifier for the spawn prim.
-    *spawn_seq += 1;
-    let stem: String = cmd
-        .entry_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let name = format!("{stem}_{}", *spawn_seq);
-    let prim_path = if parent_path == "/" {
-        format!("/{name}")
-    } else {
-        format!("{parent_path}/{name}")
-    };
-
-    let v = cmd.position;
-    // 1) Author the referenced spawn prim into the runtime layer.
-    commands.trigger(ApplyUsdOp {
-        doc,
-        op: UsdOp::AddPrim {
-            edit_target: LayerId::runtime(),
-            parent_path,
-            name,
-            type_name: None,
-            reference: Some(asset_path.clone()),
-        },
-    });
-    // 2) Record its drop position (applied after the AddPrim above).
-    commands.trigger(ApplyUsdOp {
-        doc,
-        op: UsdOp::SetTranslate {
-            edit_target: LayerId::runtime(),
-            path: prim_path,
-            value: [v.x as f64, v.y as f64, v.z as f64],
-        },
-    });
 }
 
 /// Marker inserted on a kinematic body that just received a
@@ -3347,10 +3326,6 @@ impl Plugin for SpawnCommandPlugin {
         app.init_resource::<crate::SelectedEntities>();
         app.init_resource::<lunco_signal::TelemetryFocus>();
         app.add_systems(Update, crate::mirror_selection_to_telemetry_focus);
-        // A spawn whose USD stage hasn't composed yet is parked here, not placed
-        // blind — see `RestDepth::StagePending`.
-        app.init_resource::<DeferredSpawns>();
-        app.add_systems(Update, drain_deferred_spawns);
         // Dock release as an actuator on the intent→port machinery (replaces the
         // hardcoded G-to-detach): register the `release` port backend, attach a
         // ReleaseActuator to every control-bound vessel, and edge-detect → detach.
@@ -3362,8 +3337,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(persist_delete_to_runtime_layer);
         // C4b: persist authored-scene moves into the active doc's runtime layer.
         app.add_observer(persist_move_to_runtime_layer);
-        // C4b: persist palette/API spawns as referenced runtime-layer prims.
-        app.add_observer(persist_spawn_to_runtime_layer);
+        app.add_observer(persist_rotation_to_runtime_layer);
         // #4: persist scalar shader-param tunes into the active doc's runtime
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
@@ -3453,22 +3427,43 @@ mod tests {
     fn test_spawn_entity_struct_exists() {
         // Verify the struct can be constructed
         let cmd = super::SpawnEntity {
-            target: bevy::prelude::Entity::PLACEHOLDER,
             entry_id: "test".to_string(),
-            position: bevy::prelude::Vec3::ZERO,
+            position: [0.0; 3],
             rotation: None,
         };
         assert_eq!(cmd.entry_id, "test");
     }
 
+    #[test]
+    fn spawn_pose_is_converted_to_scene_root_axes_once() {
+        use super::*;
+
+        let root_position = DVec3::new(4.0e8, -2.0e8, 7.0e8);
+        let root_rotation = DQuat::from_rotation_x(0.7) * DQuat::from_rotation_y(-1.1);
+        let expected_local = DVec3::new(12.25, 0.89, -44.5);
+        let expected_rotation = DQuat::from_rotation_y(0.3);
+        let requested_position = root_position + root_rotation * expected_local;
+        let requested_rotation = root_rotation * expected_rotation;
+
+        let (actual_position, actual_rotation) = pose_relative_to_scene_root(
+            requested_position,
+            requested_rotation,
+            root_position,
+            root_rotation,
+        );
+
+        assert!((actual_position - expected_local).length() < 1e-7);
+        assert!(actual_rotation.abs_diff_eq(expected_rotation, 1e-12));
+    }
+
     // ── MoveEntity's frame contract ─────────────────────────────────────
 
-    /// `MoveEntity::translation` is GRID-ABSOLUTE, so the handler must split it
+    /// `MoveEntity::translation` is in the active physics frame, so the handler must split it
     /// into the `(CellCoord, Transform)` pair big_space stores — writing only
     /// `Transform` would leave the stale cell in place and land the body
     /// `cell × edge` from the requested spot.
     ///
-    /// Pinned at a NON-zero cell: in cell 0 the grid-absolute position and the
+    /// Pinned at a NON-zero cell: in cell 0 the active-frame position and the
     /// local `Transform` are identical, which is why the sandbox never showed this
     /// and the moonbase (2 km cells) teleported a dragged prim out of sight.
     #[test]
@@ -3491,6 +3486,7 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
         // Starts at grid-absolute (0, 3947, 0) = cell y=2 + local y=-53.
         let body = app
             .world_mut()
@@ -3530,21 +3526,35 @@ mod tests {
         );
     }
 
-    /// A body that is not grid-direct has no cell, so its translation IS the
-    /// authored value and no cell may be invented for it.
+    /// A body below a plain parent has no cell. The public active-frame target
+    /// must be converted through that parent exactly once, and no cell may be
+    /// invented for it.
     #[test]
     fn move_entity_leaves_a_cell_less_entity_alone() {
         use super::*;
-        use big_space::prelude::CellCoord;
+        use big_space::prelude::{CellCoord, Grid};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_move_entity_command);
 
+        let grid = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+        let parent = app
+            .world_mut()
+            .spawn((Transform::from_xyz(10.0, 0.0, 0.0), ChildOf(grid)))
+            .id();
         let loose = app
             .world_mut()
-            .spawn((Transform::default(), GlobalTransform::default()))
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(parent),
+            ))
             .id();
         app.world_mut()
             .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
@@ -3558,7 +3568,7 @@ mod tests {
 
         assert_eq!(
             app.world().get::<Transform>(loose).unwrap().translation,
-            Vec3::new(1.0, 2.0, 3.0)
+            Vec3::new(-9.0, 2.0, 3.0)
         );
         assert!(app.world().get::<CellCoord>(loose).is_none());
     }
@@ -3572,12 +3582,19 @@ mod tests {
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_move_entity_command);
 
+        let grid = app
+            .world_mut()
+            .spawn((big_space::prelude::Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+
         let body = app
             .world_mut()
             .spawn((
                 RigidBody::Dynamic,
                 Transform::default(),
                 GlobalTransform::default(),
+                ChildOf(grid),
             ))
             .id();
         app.world_mut()
@@ -3610,12 +3627,19 @@ mod tests {
         });
         app.add_observer(on_move_entity_command);
 
+        let grid = app
+            .world_mut()
+            .spawn((big_space::prelude::Grid::new(2_000.0, 0.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+
         let body = app
             .world_mut()
             .spawn((
                 RigidBody::Dynamic,
                 Transform::default(),
                 GlobalTransform::default(),
+                ChildOf(grid),
             ))
             .id();
         app.world_mut()
@@ -3637,6 +3661,64 @@ mod tests {
 
     // ── C4b: move-transform → runtime-layer persistence ─────────────────
 
+    #[test]
+    fn rotate_entity_stores_parent_local_but_round_trips_in_active_frame() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_rotate_entity_command);
+
+        let active = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active));
+        let parent_rotation = Quat::from_rotation_y(0.7);
+        let parent = app
+            .world_mut()
+            .spawn((
+                Transform::from_rotation(parent_rotation),
+                ChildOf(active),
+            ))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((Transform::default(), ChildOf(parent)))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, lunco_core::GlobalEntityId::from_raw(12));
+        let desired = DQuat::from_rotation_x(-0.35);
+
+        app.world_mut().trigger(RotateEntity {
+            entity_id: 12,
+            rotation: desired.to_array(),
+        });
+        app.update();
+
+        let stored = app.world().get::<Transform>(body).unwrap().rotation;
+        let expected_local = parent_rotation.inverse().as_dquat() * desired;
+        assert!(stored.dot(expected_local.as_quat()).abs() > 1.0 - 1.0e-6);
+
+        let mut state: bevy::ecs::system::SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = bevy::ecs::system::SystemState::new(app.world_mut());
+        let (parents, grids, spatial) = state.get(app.world()).unwrap();
+        let (_, round_trip) = lunco_core::coords::pose_in_grid(
+            body,
+            active,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .expect("body remains connected to active frame");
+        assert!(round_trip.as_quat().dot(desired.as_quat()).abs() > 1.0 - 1.0e-6);
+    }
+
     /// Build a headless app with the runtime-move producer wired and an active
     /// USD document containing `/World`, plus a sim entity bound to `prim_path`
     /// under api id `api_id`. Returns `(app, doc_id)`.
@@ -3653,6 +3735,7 @@ mod tests {
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(persist_move_to_runtime_layer);
+        app.add_observer(persist_rotation_to_runtime_layer);
 
         let doc = {
             let mut reg = app
@@ -3667,12 +3750,22 @@ mod tests {
         ws.active_document = Some(doc);
         app.insert_resource(lunco_workspace::WorkspaceResource(ws));
 
+        let grid = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
         let ent = app
             .world_mut()
-            .spawn(UsdPrimPath {
-                stage_handle: Handle::default(),
-                path: prim_path.to_string(),
-            })
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: prim_path.to_string(),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(grid),
+            ))
             .id();
         app.world_mut()
             .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
@@ -3714,6 +3807,32 @@ mod tests {
             !docu.source().contains("xformOp:translate"),
             "save excludes runtime move"
         );
+    }
+
+    #[test]
+    fn rotation_of_authored_prim_persists_parent_local_orientation() {
+        use super::*;
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+
+        let (mut app, doc) = app_with_runtime_producer("/World", 43);
+        let requested = DQuat::from_rotation_x(0.2);
+        app.world_mut().trigger(RotateEntity {
+            entity_id: 43,
+            rotation: requested.to_array(),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
+        let docu = reg.host(doc).expect("doc alive").document();
+        let world = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let authored = docu
+            .runtime_data()
+            .prim_attribute_value::<[f64; 3]>(&world, "xformOp:rotateXYZ")
+            .expect("rotation authored in runtime layer");
+        assert!((authored[0] - 0.2_f64.to_degrees()).abs() < 1.0e-9);
+        assert!(authored[1].abs() < 1.0e-9 && authored[2].abs() < 1.0e-9);
     }
 
     // ── A10: ONE wheel-param table ──────────────────────────────────────
@@ -3864,34 +3983,13 @@ mod tests {
     // ── C4b: spawn → referenced runtime-layer prim ──────────────────────
 
     #[test]
-    fn spawn_persists_referenced_prim_to_runtime_layer() {
+    fn document_backed_spawn_is_one_atomic_usd_change() {
         use super::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
-        // Persistence is a HOST behaviour: the observer deliberately skips
-        // `Standalone` (there the direct ECS spawn is the sole instance, and
-        // authoring it into the runtime layer too would double-instantiate it).
-        // A real app always has the role; this hand-built one must supply it or
-        // the observer fails `Res` validation.
-        app.insert_resource(lunco_core::NetworkRole::Host);
-        app.add_observer(persist_spawn_to_runtime_layer);
-
-        // Catalog with one spawnable asset.
-        let mut catalog = SpawnCatalog::default();
-        catalog.add_unique(crate::catalog::SpawnableEntry {
-            id: "test_rover".into(),
-            display_name: "Test Rover".into(),
-            category: "Rovers".into(),
-            source: SpawnSource::UsdFile("vessels/rovers/test_rover.usda".into()),
-            spawn_lift: 0.0,
-            default_transform: Transform::default(),
-        });
-        app.insert_resource(catalog);
-
-        // Active USD doc whose default prim is /World.
         let doc = {
             let mut reg = app
                 .world_mut()
@@ -3902,18 +4000,18 @@ mod tests {
                 lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
-        let mut ws = lunco_workspace::Workspace::default();
-        ws.active_document = Some(doc);
-        app.insert_resource(lunco_workspace::WorkspaceResource(ws));
-        app.update();
-
-        // Spawn it at a drop position.
-        let grid = app.world_mut().spawn_empty().id();
-        app.world_mut().trigger(SpawnEntity {
-            target: grid,
-            entry_id: "test_rover".into(),
-            position: Vec3::new(2.0, 0.0, 7.0),
-            rotation: None,
+        let (prim_path, ops) = runtime_spawn_ops(
+            "test_rover",
+            "vessels/rovers/test_rover.usda",
+            "/World",
+            DVec3::new(2.0, 0.0, 7.0),
+            DQuat::IDENTITY,
+        );
+        assert_eq!(ops.len(), 3, "spawn lowers to one complete change set");
+        app.world_mut().trigger(ApplyUsdOps {
+            doc,
+            label: "Spawn Test Rover".into(),
+            ops,
         });
         for _ in 0..3 {
             app.update();
@@ -3921,7 +4019,7 @@ mod tests {
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
-        let prim = lunco_usd_bevy::SdfPath::new("/World/test_rover_1").unwrap();
+        let prim = lunco_usd_bevy::SdfPath::new(&prim_path).unwrap();
         // The referenced spawn prim landed under the default prim, in RUNTIME...
         assert!(
             docu.runtime_data().spec(&prim).is_some(),
@@ -3950,5 +4048,24 @@ mod tests {
             "spawn leaked into save:\n{}",
             docu.source()
         );
+    }
+
+    #[test]
+    fn document_backed_spawn_normalizes_the_pseudo_root_parent() {
+        use super::*;
+
+        let (prim_path, ops) = runtime_spawn_ops(
+            "test_rover",
+            "vessels/rovers/test_rover.usda",
+            "/",
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+        );
+
+        assert!(prim_path.starts_with("/test_rover_"));
+        assert!(matches!(
+            &ops[0],
+            UsdOp::AddPrim { parent_path, .. } if parent_path == "/"
+        ));
     }
 }

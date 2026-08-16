@@ -101,6 +101,196 @@ impl RenderPos {
     }
 }
 
+/// Read entity poses in the one f64 frame currently used by physics and
+/// site-local interaction.
+///
+/// This is the user/runtime boundary for generic positions and orientations.
+/// Callers do not inspect a `Grid`, choose an ancestor, or read a
+/// camera-relative [`GlobalTransform`]; the world shell/celestial projection
+/// owns [`crate::ActivePhysicsFrame`] and this parameter performs the complete
+/// BigSpace hierarchy conversion. Explicit astronomical products continue to
+/// use their typed semantic reference frames instead.
+#[derive(SystemParam)]
+pub struct ActiveFramePoseQuery<'w, 's> {
+    active_frame: Res<'w, crate::ActivePhysicsFrame>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    grids: Query<'w, 's, &'static Grid>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+}
+
+impl ActiveFramePoseQuery<'_, '_> {
+    /// The concrete BigSpace grid that defines this query's coordinates.
+    pub fn frame(&self) -> Entity {
+        self.active_frame.0
+    }
+
+    /// Resolve `entity` into [`Self::frame`]. Missing or disconnected frame
+    /// topology returns `None`; choosing another grid would make the answer
+    /// load-order dependent.
+    pub fn pose(&self, entity: Entity) -> Option<(GridPos, GridRot)> {
+        pose_in_grid(
+            entity,
+            self.active_frame.0,
+            &self.parents,
+            &self.grids,
+            &self.spatial,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+    }
+
+    /// Resolve only the active-frame position of `entity`.
+    pub fn position(&self, entity: Entity) -> Option<GridPos> {
+        self.pose(entity).map(|(position, _)| position)
+    }
+
+    /// Resolve only the active-frame orientation of `entity`.
+    pub fn rotation(&self, entity: Entity) -> Option<GridRot> {
+        self.pose(entity).map(|(_, rotation)| rotation)
+    }
+}
+
+#[cfg(test)]
+mod active_frame_pose_tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    fn read_pose(world: &mut World, entity: Entity) -> (GridPos, GridRot) {
+        let mut state: SystemState<ActiveFramePoseQuery> = SystemState::new(world);
+        state
+            .get(world)
+            .expect("query validates")
+            .pose(entity)
+            .expect("entity is connected to the active frame")
+    }
+
+    #[test]
+    fn active_frame_pose_is_invariant_to_rotating_and_translating_ancestors() {
+        let mut world = World::new();
+        let root = world
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        let body = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(80_000, -4_000, 7_000),
+                Transform::from_rotation(Quat::from_rotation_y(0.8)),
+                ChildOf(root),
+            ))
+            .id();
+        let site = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(500, -900, 200),
+                Transform::from_rotation(Quat::from_rotation_z(-0.4)),
+                ChildOf(body),
+            ))
+            .id();
+        world.insert_resource(crate::ActivePhysicsFrame(site));
+        let local_position = DVec3::new(123.25, -1_901.5, -88.5);
+        let local_rotation = DQuat::from_rotation_y(0.2);
+        let entity = world
+            .spawn((
+                Transform::from_translation(local_position.as_vec3())
+                    .with_rotation(local_rotation.as_quat()),
+                ChildOf(site),
+            ))
+            .id();
+
+        let before = read_pose(&mut world, entity);
+        assert!((before.0 .0 - local_position).length() < 1.0e-4);
+        assert!(before.1 .0.angle_between(local_rotation).abs() < 1.0e-6);
+
+        world.entity_mut(body).insert((
+            CellCoord::new(-120_000, 17_000, 99_000),
+            Transform::from_rotation(Quat::from_rotation_x(-1.1)),
+        ));
+        let after = read_pose(&mut world, entity);
+        assert!((after.0 .0 - local_position).length() < 1.0e-4);
+        assert!(after.1 .0.angle_between(local_rotation).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn active_frame_position_converts_to_the_entity_parent_once() {
+        let mut world = World::new();
+        let active = world
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        let parent_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let parent = world
+            .spawn((
+                Transform::from_xyz(100.0, -20.0, 50.0).with_rotation(parent_rotation),
+                ChildOf(active),
+            ))
+            .id();
+        let entity = world
+            .spawn((Transform::default(), ChildOf(parent)))
+            .id();
+        let desired = DVec3::new(125.0, -17.0, 40.0);
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let (cell, local) = position_in_grid_to_parent_local(
+            entity,
+            desired,
+            active,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .expect("entity and active frame are connected");
+
+        assert!(cell.is_none(), "plain parents do not invent BigSpace cells");
+        let expected = parent_rotation.inverse().as_dquat()
+            * (desired - DVec3::new(100.0, -20.0, 50.0));
+        assert!((local.as_dvec3() - expected).length() < 1.0e-5);
+    }
+
+    #[test]
+    fn active_frame_rotation_converts_to_the_entity_parent_once() {
+        let mut world = World::new();
+        let active = world
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        let parent_rotation = Quat::from_rotation_y(0.8);
+        let parent = world
+            .spawn((
+                Transform::from_rotation(parent_rotation),
+                ChildOf(active),
+            ))
+            .id();
+        let entity = world
+            .spawn((Transform::default(), ChildOf(parent)))
+            .id();
+        let desired = DQuat::from_rotation_x(-0.4);
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let local = rotation_in_grid_to_parent_local(
+            entity,
+            desired,
+            active,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .expect("entity and active frame are connected");
+
+        let expected = (parent_rotation.inverse().as_dquat() * desired).normalize();
+        assert!(
+            local.dot(expected).abs() > 1.0 - 1.0e-12,
+            "local={local:?} expected={expected:?}"
+        );
+    }
+}
+
 /// grid − grid = a frame-free lever arm / offset vector. This is the CQ-201
 /// invariant as a type: subtracting two grid-absolute points is always legal;
 /// subtracting a grid point from a render point no longer compiles.
@@ -463,6 +653,63 @@ pub fn pose_in_grid<F: QueryFilter>(
         inverse * (entity_position - target_position),
         inverse * entity_rotation,
     ))
+}
+
+/// Convert a point expressed in `target_grid` into the storage coordinates of
+/// `entity`'s actual parent.
+///
+/// This is the inverse boundary used by user-facing placement commands. Callers
+/// speak one stable semantic frame (normally [`crate::ActivePhysicsFrame`]); this
+/// helper walks the existing hierarchy once, removes the parent's complete f64
+/// pose, and performs BigSpace's cell split only when the parent is a [`Grid`].
+/// A disconnected entity returns `None` rather than silently treating either
+/// frame as identity.
+pub fn position_in_grid_to_parent_local<F: QueryFilter>(
+    entity: Entity,
+    position: DVec3,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(Option<CellCoord>, Vec3)> {
+    let parent = q_parents.get(entity).ok()?.parent();
+    let (parent_position, parent_rotation) = if parent == target_grid {
+        (DVec3::ZERO, DQuat::IDENTITY)
+    } else {
+        pose_in_grid(parent, target_grid, q_parents, q_grids, q_spatial)?
+    };
+    let parent_local = parent_rotation.inverse() * (position - parent_position);
+    if let Ok(grid) = q_grids.get(parent) {
+        let (cell, local) = grid.translation_to_grid(parent_local);
+        Some((Some(cell), local))
+    } else {
+        Some((None, parent_local.as_vec3()))
+    }
+}
+
+/// Convert an orientation expressed in `target_grid` into the local rotation
+/// stored on `entity` below its actual parent.
+///
+/// Rotations are not frame-invariant: a body-fixed parent Grid rotates relative
+/// to an inertial grid, and a nested assembly parent may itself be rotated. This
+/// is the rotational half of [`position_in_grid_to_parent_local`]; user-facing
+/// pose commands must use both halves rather than writing an active-frame
+/// quaternion directly into `Transform`.
+pub fn rotation_in_grid_to_parent_local<F: QueryFilter>(
+    entity: Entity,
+    rotation: DQuat,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<DQuat> {
+    let parent = q_parents.get(entity).ok()?.parent();
+    let parent_rotation = if parent == target_grid {
+        DQuat::IDENTITY
+    } else {
+        pose_in_grid(parent, target_grid, q_parents, q_grids, q_spatial)?.1
+    };
+    Some((parent_rotation.inverse() * rotation).normalize())
 }
 
 /// Convert a complete f64 pose from one arbitrary BigSpace Grid to another.

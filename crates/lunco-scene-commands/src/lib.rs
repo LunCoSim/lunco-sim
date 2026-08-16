@@ -49,8 +49,8 @@ pub mod commands;
 /// lived in the panel, which is what broke the `--no-ui` server build (`commands`
 /// reached into `crate::ui` for it).
 pub mod doc_resolve;
-/// `QueryEntity` — the READ side of the scene verbs, reporting the same
-/// grid-absolute frame [`commands::MoveEntity`] accepts.
+/// `QueryEntity` — the READ side of the scene verbs, reporting the same semantic
+/// active physics frame [`commands::MoveEntity`] accepts.
 pub mod entity_query;
 /// `RunLint` — lint the loaded scene on demand, through the authored rules.
 pub mod lint_command;

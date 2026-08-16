@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::coords::RenderPos;
+use lunco_core::coords::GridPos;
 use lunco_core::{Severity, TelemetryEvent, TelemetryValue, TriggerZone};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
@@ -50,7 +50,7 @@ impl ApiQueryProvider for RaycastProvider {
                 "Raycast: `dir` must be non-zero".to_string(),
             );
         };
-        cast_ray_response(world, RenderPos(origin), dir, max)
+        cast_ray_response(world, GridPos(origin), dir, max)
     }
 }
 
@@ -80,7 +80,7 @@ impl ApiQueryProvider for GroundHeightProvider {
             .get("max")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(2.0e5);
-        let origin = RenderPos(DVec3::new(x, from, z));
+        let origin = GridPos(DVec3::new(x, from, z));
         match cast_ray_response(world, origin, Dir3::NEG_Y, max) {
             ApiResponse::Ok { data: Some(d), .. } => {
                 let hit = d
@@ -106,17 +106,19 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// Shared cast → JSON. Maps the hit collider back to its `GlobalEntityId` (null
 /// when the collider has no registered id, e.g. unregistered terrain).
 ///
-/// `origin` is a [`RenderPos`] — **render space**, the frame API callers see
-/// (entity positions, nav targets); `cast_ray_render` shifts it into avian's
-/// grid-absolute physics frame, and the returned `point` is mapped back so
-/// callers stay in one frame.
-fn cast_ray_response(world: &mut World, origin: RenderPos, dir: Dir3, max: f64) -> ApiResponse {
+/// `origin` is a [`GridPos`] in the explicit
+/// [`lunco_core::ActivePhysicsFrame`] — the same f64 frame used by Avian,
+/// `TerrainHeight`, spawn commands, position ports, and site-local navigation.
+/// API callers never provide a camera-relative render point: that frame moves
+/// whenever BigSpace recentres and is therefore not stable user or simulation
+/// state. The returned point stays in the same active frame.
+fn cast_ray_response(world: &mut World, origin: GridPos, dir: Dir3, max: f64) -> ApiResponse {
     let mut state: SystemState<(lunco_physics::GridSpatialQuery, Res<ApiEntityRegistry>)> =
         SystemState::new(world);
     let (spatial, registry) = state
         .get(world)
         .expect("SpatialQuery + registry always validate");
-    match spatial.cast_ray_render(origin, dir, max, true, &SpatialQueryFilter::default()) {
+    match spatial.cast_ray_grid(origin, dir, max, true, &SpatialQueryFilter::default()) {
         Some(hit) => {
             let point = origin.0 + (*dir).as_dvec3() * hit.distance;
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());
@@ -349,7 +351,59 @@ pub(crate) fn register_collision_event_bridge(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::time::TimeUpdateStrategy;
+    use core::time::Duration;
     use lunco_core::GlobalEntityId;
+
+    fn response_data(response: ApiResponse) -> serde_json::Value {
+        match response {
+            ApiResponse::Ok {
+                data: Some(data), ..
+            } => data,
+            other => panic!("expected query data, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ground_height_uses_the_active_physics_frame_at_an_elevated_site() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            PhysicsPlugins::default(),
+        ));
+        app.init_asset::<Mesh>()
+            .init_resource::<ApiEntityRegistry>()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+                15_625,
+            )));
+        app.finish();
+        app.cleanup();
+
+        let frame = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(20.0, 1.0, 20.0),
+            Transform::from_xyz(0.0, -1_900.0, 0.0),
+        ));
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let data = response_data(GroundHeightProvider.execute(
+            app.world_mut(),
+            &serde_json::json!({"x": 0.0, "z": 0.0, "from": -1_800.0, "max": 200.0}),
+        ));
+        assert_eq!(data["hit"], true);
+        let height = data["height"].as_f64().expect("height");
+        assert!(
+            (height - -1_899.5).abs() < 1.0e-6,
+            "active-frame height must remain at the authored -1899.5 m ground top, got {height}"
+        );
+    }
 
     #[test]
     fn contact_pair_uses_body_fallback_and_marks_unregistered_zero() {

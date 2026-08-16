@@ -6,21 +6,21 @@
 //! transport layer to know how to read a pose out of the ECS. It did that by
 //! reading `GlobalTransform` — the RENDER frame, which big_space rebases onto the
 //! floating origin — so a bolted-down prim reported a different position every
-//! time the camera crossed a cell, and the number matched neither the authored
-//! USD nor what [`MoveEntity`](crate::commands::MoveEntity) takes back.
+//! time the camera crossed a cell. A later implementation composed all the way
+//! through the celestial root instead, which made a stationary surface object
+//! drift as its body translated and rotated.
 //!
 //! The frame contract belongs to the crate that owns the scene verbs, so the read
-//! side now sits beside the write side: `QueryEntity` reports exactly the
-//! grid-absolute frame `MoveEntity` accepts. Query a position, hand it straight
-//! back, and the object does not move — a property this pair could not have had
-//! while they lived in different crates with different ideas about frames.
+//! side now sits beside the write side: `QueryEntity` reports exactly the active
+//! physics frame `MoveEntity` accepts. Query a position, hand it straight back,
+//! and the object does not move. The concrete BigSpace grid remains an internal
+//! implementation detail owned by `ActivePhysicsFrame`.
 //!
 //! The command uses the canonical API envelope:
 //! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
@@ -56,20 +56,19 @@ impl ApiQueryProvider for QueryEntityProvider {
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,
                 Option<&lunco_core::CelestialBody>,
+                Option<&Transform>,
             )>,
-            Query<&GlobalTransform>,
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
+            lunco_core::coords::ActiveFramePoseQuery,
         )> = SystemState::new(world);
-        let Ok((q_meta, q_gt, q_parents, q_grids, q_spatial)) = state.get(world) else {
+        let Ok((q_meta, poses)) = state.get(world) else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 "QueryEntity: world state unavailable".to_string(),
             );
         };
 
-        let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+        let (name, accepts_commands, body, transform) =
+            q_meta.get(entity).unwrap_or((None, false, None, None));
         // NOTE: the reported kind string is deliberately unchanged — a lander accepts
         // commands and has always reported as "rover" here.
         let kind = if accepts_commands {
@@ -80,19 +79,19 @@ impl ApiQueryProvider for QueryEntityProvider {
             "unknown"
         };
 
-        // Scale is frame-independent. Position and rotation are not: a
-        // body-fixed BigSpace branch may rotate relative to the floating-origin
-        // render frame, so both parts of the reported pose must come from the
-        // same cell-chain composition.
-        let scale = q_gt
-            .get(entity)
-            .ok()
-            .map(GlobalTransform::to_scale_rotation_translation)
-            .map(|(scale, _, _)| scale)
-            .unwrap_or(Vec3::ONE);
-        let (pos, rot) = lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
-            .map(|(position, rotation)| (position.0, rotation.0.as_quat()))
-            .unwrap_or((bevy::math::DVec3::ZERO, Quat::IDENTITY));
+        let Some((pos, rot)) = poses.pose(entity) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                format!(
+                    "QueryEntity: entity {raw} is not connected to the active physics frame"
+                ),
+            );
+        };
+        let pos = pos.0;
+        let rot = rot.0.as_quat();
+        // Object scale is authored on the object itself. Ancestor/grid scale is
+        // not part of the rigid active-frame pose contract.
+        let scale = transform.map_or(Vec3::ONE, |tf| tf.scale);
         // Euler YXZ (yaw, pitch, roll) — matches the sun / steering authoring
         // convention, handier than a quat.
         let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
@@ -103,7 +102,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             "position": [pos.x, pos.y, pos.z],
             // The frame `position` is in, named on the wire: a client holding a
             // bare triple has no way to know whether it may hand it back.
-            "position_frame": "grid_absolute",
+            "position_frame": "active_physics",
             "rotation": [rot.x, rot.y, rot.z, rot.w],
             "euler": [yaw, pitch, roll],
             "scale": [scale.x, scale.y, scale.z],
@@ -123,6 +122,7 @@ pub fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use big_space::prelude::{CellCoord, Grid};
 
     /// The round-trip contract: what `QueryEntity` reports is what `MoveEntity`
     /// takes. Pinned at a NON-zero cell, because in cell 0 the render frame, the
@@ -130,7 +130,7 @@ mod tests {
     /// frame bug hides — which is exactly why this shipped broken to the moonbase
     /// while the sandbox looked fine.
     #[test]
-    fn reports_grid_absolute_not_the_render_frame() {
+    fn reports_active_physics_position_not_the_render_frame() {
         const EDGE: f32 = 2000.0;
         let mut app = App::new();
         app.init_resource::<ApiEntityRegistry>();
@@ -145,6 +145,8 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(grid));
         // Two cells up, 53 m down within the cell: grid-absolute Y = 3947.
         let cell = CellCoord::new(0, 2, 0);
         let local = Vec3::new(10.0, -53.0, 4.0);
@@ -181,12 +183,12 @@ mod tests {
             y, local.y as f64,
             "the cell-local translation must never pass for the position"
         );
-        assert_eq!(data["position_frame"], "grid_absolute");
+        assert_eq!(data["position_frame"], "active_physics");
         assert_eq!(data["name"], "SolarPanel");
     }
 
     #[test]
-    fn reports_rotation_in_the_same_grid_absolute_frame_as_position() {
+    fn reports_rotation_in_the_same_active_physics_frame_as_position() {
         let mut app = App::new();
         app.init_resource::<ApiEntityRegistry>();
 
@@ -200,6 +202,8 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(grid));
         let local_rotation = Quat::from_rotation_x(0.3);
         let prim = app
             .world_mut()
@@ -227,11 +231,77 @@ mod tests {
             q[2].as_f64().unwrap() as f32,
             q[3].as_f64().unwrap() as f32,
         );
-        let expected = grid_rotation * local_rotation;
+        let expected = local_rotation;
         assert!(
             reported.dot(expected).abs() > 1.0 - 1e-6,
-            "rotation must include the same parent-grid frame as position: reported={reported:?} expected={expected:?}"
+            "the active grid's own world rotation must not leak into its stable user frame: reported={reported:?} expected={expected:?}"
         );
+    }
+
+    #[test]
+    fn stationary_surface_pose_does_not_follow_rotating_celestial_ancestors() {
+        let mut app = App::new();
+        app.init_resource::<ApiEntityRegistry>();
+        let root = app
+            .world_mut()
+            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(80_000, 0, -20_000),
+                Transform::from_rotation(Quat::from_rotation_y(0.4)),
+                ChildOf(root),
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(0, -1, 0),
+                Transform::from_rotation(Quat::from_rotation_x(-0.3)),
+                ChildOf(body),
+            ))
+            .id();
+        app.world_mut()
+            .insert_resource(lunco_core::ActivePhysicsFrame(site));
+        let rover = app
+            .world_mut()
+            .spawn((
+                Name::new("Rover"),
+                Transform::from_xyz(12.5, 98.0, -4.0),
+                GlobalTransform::default(),
+                ChildOf(site),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ApiEntityRegistry>()
+            .assign(rover, GlobalEntityId::from_raw(44));
+
+        let read = |app: &mut App| {
+            let ApiResponse::Ok {
+                data: Some(data), ..
+            } = QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 44 }))
+            else {
+                panic!("expected successful query");
+            };
+            data["position"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_f64().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let before = read(&mut app);
+        app.world_mut().entity_mut(body).insert((
+            CellCoord::new(-120_000, 4_000, 90_000),
+            Transform::from_rotation(Quat::from_rotation_z(-1.1)),
+        ));
+        let after = read(&mut app);
+
+        assert_eq!(before, after, "surface coordinates must be body-motion invariant");
+        assert_eq!(after, vec![12.5, 98.0, -4.0]);
     }
 
     /// A missing entity is an error, not a silent (0,0,0).

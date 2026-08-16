@@ -158,7 +158,7 @@ You'll use these constantly (the complete table is in
 | `cmd(name, #{params})` | **WRITE** — fire any command by name (spawn, possess, set input…). Returns `#{ id, ok, data, error }`. |
 | `query(name, #{params})` | **READ** — call a query provider (Raycast, Nearest, GroundHeight…). |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`). |
-| `find(name)` / `world_pos(id)` | locate an entity; read its float-origin-correct position. |
+| `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` next tick). |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
 | `list_entities()` | every entity (`#{id,name,type,pos}`) — filter/select in-script. |
@@ -206,8 +206,8 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `set(id, "Comp.field", value)` | bool | reflected component **write** — the mirror of `get`; coerces by field type (int→float, `[x,y,z]`→Vec3); `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
 | `set_setting("Res.field", value)` | bool | reflected **resource write** — tune any registered setting; `false` on bad path/type |
-| `world_pos(id)` | `[x,y,z]` \| `()` | float-origin-correct world position |
-| `world_forward(id)` | `[x,y,z]` \| `()` | world heading |
+| `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
+| `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
 | `find(name)` | id (`-1` if none) | entity id by `Name` |
 | `name(id)` | string \| `()` | reverse of `find` |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |

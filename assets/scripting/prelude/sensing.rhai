@@ -19,7 +19,8 @@ fn velocity(id) {
 /// Speed in m/s (0.0 if no velocity).
 fn speed(id) { let v = velocity(id); if v == () { 0.0 } else { vlen(v) } }
 
-/// Cast a world-space ray. Returns #{hit, entity, distance, point, normal};
+/// Cast a ray in the active simulation frame. Returns
+/// #{hit, entity, distance, point, normal};
 /// `hit` is false when nothing is struck.
 fn raycast(origin, dir, max) { query("Raycast", #{ origin: origin, dir: dir, max: max }) }
 
@@ -34,7 +35,8 @@ fn obstacle_ahead(entity, dist) {
     r.hit == true
 }
 
-/// Ground/terrain height (world Y) under a world (x,z), or () if nothing below.
+/// Ground/terrain height (active-frame Y) under active-frame (x,z), or () if
+/// nothing below.
 ///
 /// Casts a ray against COLLIDERS, so it only answers where physics has actually
 /// streamed in. On a scene with a collider ring (colliders exist only around the
@@ -46,7 +48,7 @@ fn ground_height(x, z) {
     r.height
 }
 
-/// Terrain height (world Y) under a world (x,z) from the DEM oracle, or () if the
+/// Terrain height (active-frame Y) under active-frame (x,z) from the DEM oracle, or () if the
 /// point is outside the height field.
 ///
 /// **The one to use for placing anything on the surface.** It reads the retained

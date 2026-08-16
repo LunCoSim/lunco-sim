@@ -220,9 +220,9 @@ pub fn spawn_usd_entry(
     ));
 
     // Plain child of the scene root — the same shape scene-load gives a scene's
-    // own top-level prims (see [`SpawnAnchor`]). `world_pos` is grid-absolute at
-    // cell 0 and the scene root sits at cell 0 / identity, so it is already the
-    // correct scene-root-relative local transform.
+    // own top-level prims (see [`SpawnAnchor`]). The command boundary has already
+    // converted `world_pos` from the active physics frame into this scene root's
+    // local coordinates.
     ent.try_insert(ChildOf(anchor.entity()));
 
     SpawnResult {
@@ -564,8 +564,8 @@ mod spawn_anchor_tests {
         );
     }
 
-    /// The spawn position is grid-absolute at cell 0 and the scene root sits at
-    /// cell 0 / identity, so anchoring must leave the authored coordinate intact.
+    /// The fixture's active frame and scene root coincide, so anchoring must
+    /// leave the requested coordinate intact.
     #[test]
     fn spawn_preserves_the_requested_coordinate() {
         let (app, root, _scene_root) = spawn();

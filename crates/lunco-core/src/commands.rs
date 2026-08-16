@@ -474,29 +474,32 @@ impl MarkClientLocalExt for bevy::app::App {
 /// `reflect_default` semantics (hand-written here — `#[Command]` cannot expand
 /// inside `lunco-core` itself, since it emits absolute `::lunco_core::…` paths):
 /// API/rhai callers may omit optional fields — a missing `rotation` defaults to
-/// `None` (→ identity) and a missing/unresolved `target` falls back to the first
-/// grid in the handler.
+/// `None` (→ identity). Position is always expressed in the current semantic
+/// [`crate::ActivePhysicsFrame`]; callers never pass a Bevy grid entity or perform
+/// BigSpace hierarchy conversion themselves.
 #[allow(missing_docs)]
 #[derive(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug, Serialize, Deserialize)]
 #[reflect(Event, Default)]
 pub struct SpawnEntity {
-    /// The grid entity to spawn under. `Entity::PLACEHOLDER` (or an id that
-    /// doesn't resolve) → first grid.
-    pub target: bevy::prelude::Entity,
     /// The catalog entry ID (e.g. "ball_dynamic", "skid_rover").
     pub entry_id: String,
-    /// World-space position (x, y, z).
-    pub position: bevy::prelude::Vec3,
-    /// World-space rotation (optional; omitted → identity).
-    pub rotation: Option<bevy::prelude::Quat>,
+    /// Position in the active physics frame, in metres. Kept as f64 through
+    /// command transport and frame conversion; narrowing occurs only at the
+    /// final scene-root-local Bevy `Transform` boundary.
+    pub position: [f64; 3],
+    /// Rotation in the active physics frame as an `(x, y, z, w)` unit
+    /// quaternion (optional; omitted → identity). Kept as f64 across the
+    /// command boundary for the same reason as `position`; Bevy's f32
+    /// [`bevy::prelude::Quat`] is a render/local-transform representation, not a
+    /// simulation-frame interchange type.
+    pub rotation: Option<[f64; 4]>,
 }
 
 impl Default for SpawnEntity {
     fn default() -> Self {
         Self {
-            target: bevy::prelude::Entity::PLACEHOLDER,
             entry_id: String::new(),
-            position: bevy::prelude::Vec3::ZERO,
+            position: [0.0; 3],
             rotation: None,
         }
     }

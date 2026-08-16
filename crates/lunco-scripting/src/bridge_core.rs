@@ -691,18 +691,20 @@ pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
 
 // ── Verbs: reads ────────────────────────────────────────────────────────────
 
-/// `world_pos(id)` — absolute (big_space) world position, or `None`.
+/// `world_pos(id)` — f64 position in the active simulation frame, or `None`.
+///
+/// For a surface scene this is the authored site frame used by Avian, terrain,
+/// routes, and spawn commands. Celestial/root transforms are an implementation
+/// detail and cannot leak into ordinary script navigation.
 pub fn world_pos(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-        )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial) =
-            state.get(world).expect("read-only queries always validate");
-        coords::world_position(entity, &q_parents, &q_grids, &q_spatial).map(|p| p.0)
+        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        state
+            .get(world)
+            .expect("active-frame query always validates")
+            .position(entity)
+            .map(|position| position.0)
     })
     .flatten()
 }
@@ -742,32 +744,37 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
     .flatten()
 }
 
-/// `world_forward(id)` — unit heading in world space, or `None`.
+/// `world_forward(id)` — unit heading in the active simulation frame, or `None`.
 pub fn world_forward(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        // GlobalTransform's rotation is true world orientation (the float-origin
-        // offset only affects translation), so its forward vector is valid.
-        let gt = world.get::<GlobalTransform>(entity)?;
-        let f = gt.forward();
-        Some(DVec3::new(f.x as f64, f.y as f64, f.z as f64))
+        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        let rotation = state
+            .get(world)
+            .expect("active-frame query always validates")
+            .rotation(entity)?;
+        Some(rotation.0 * DVec3::NEG_Z)
     })
     .flatten()
 }
 
-/// `world_rotation(id)` — the entity's true world orientation as a quaternion
-/// `[x, y, z, w]`, or `None`. The GENERAL orientation accessor: every world axis
+/// `world_rotation(id)` — orientation in the active simulation frame as a
+/// quaternion `[x, y, z, w]`, or `None`. The GENERAL orientation accessor: every axis
 /// (`up`, `forward`, `right`) is `quat * unit_axis`, derived rhai-side, so this
 /// one host fn subsumes `world_forward` and unblocks tilt/tip-over logic (a rover
 /// is tipped when its up-vector's `y` drops below `cos(θ)`) without a per-axis
-/// Rust fn each. Same `GlobalTransform` source as `world_forward` — the float
-/// origin offsets only translation, so the world rotation is exact.
+/// Rust fn each. It uses the same active-frame hierarchy sample as
+/// `world_forward`, so surface-up remains +Y below a rotated celestial branch.
 pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let gt = world.get::<GlobalTransform>(entity)?;
-        let q = gt.rotation();
-        Some([q.x as f64, q.y as f64, q.z as f64, q.w as f64])
+        let mut state: SystemState<coords::ActiveFramePoseQuery> = SystemState::new(world);
+        let q = state
+            .get(world)
+            .expect("active-frame query always validates")
+            .rotation(entity)?
+            .0;
+        Some([q.x, q.y, q.z, q.w])
     })
     .flatten()
 }
@@ -1033,17 +1040,14 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
         // One SystemState carries every per-entity read so the loop never
         // re-borrows the World.
         let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
+            coords::ActiveFramePoseQuery,
             Query<(
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,
                 Option<&CelestialBody>,
             )>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_meta) =
-            state.get(world).expect("read-only queries always validate");
+        let (poses, q_meta) = state.get(world).expect("read-only queries always validate");
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
@@ -1058,7 +1062,8 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                 } else {
                     "unknown"
                 };
-                let pos = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
+                let pos = poses
+                    .position(entity)
                     .map(|v| vec3_value(b, v.0.x, v.0.y, v.0.z))
                     .unwrap_or_else(|| b.unit());
                 b.map(vec![
@@ -1329,7 +1334,55 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::DQuat;
     use lunco_core::session::{AuthorityRole, CommandPolicy, UserSession};
+
+    #[test]
+    fn script_pose_reads_share_the_active_frame_below_rotating_ancestors() {
+        let mut world = World::new();
+        lunco_core::ensure_world_root(&mut world);
+        world.init_resource::<ApiEntityRegistry>();
+        let root = world.resource::<lunco_core::ActivePhysicsFrame>().0;
+        let body = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(100_000, -2_000, 40_000),
+                Transform::from_rotation(Quat::from_rotation_x(0.9)),
+                ChildOf(root),
+            ))
+            .id();
+        let site = world
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new(800, -950, 300),
+                Transform::from_rotation(Quat::from_rotation_z(-0.7)),
+                ChildOf(body),
+            ))
+            .id();
+        world.insert_resource(lunco_core::ActivePhysicsFrame(site));
+        let local_position = DVec3::new(14.0, -1_901.5, -8.0);
+        let local_rotation = DQuat::from_rotation_y(0.35);
+        let entity = world
+            .spawn((
+                Transform::from_translation(local_position.as_vec3())
+                    .with_rotation(local_rotation.as_quat()),
+                ChildOf(site),
+            ))
+            .id();
+        world
+            .resource_mut::<ApiEntityRegistry>()
+            .assign(entity, GlobalEntityId::from_raw(42));
+
+        let _scope = WorldScope::enter(&mut world);
+        let position = world_pos(42).expect("position");
+        let forward = world_forward(42).expect("forward");
+        let rotation = world_rotation(42).expect("rotation");
+
+        assert!((position - local_position).length() < 1.0e-4);
+        assert!((forward - local_rotation * DVec3::NEG_Z).length() < 1.0e-6);
+        let rotation = DQuat::from_array(rotation);
+        assert!(rotation.angle_between(local_rotation).abs() < 1.0e-6);
+    }
 
     /// §3.4: a `cmd()` from a script launched by a remote session is
     /// re-authorized against that session (same gate as the networked path);

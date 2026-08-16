@@ -42,18 +42,15 @@ fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ entity_id: id, prop
 // ways: position is `[x, y, z]`, orientation is `[x, y, z, w]` — so a script can
 // read a pose, transform it with `qrot`/`vadd`, and write it straight back.
 //
-// FRAME: position is GRID-ABSOLUTE — the frame USD authors `xformOp:translate`
-// in, and the frame `world_pos` reports. It is NOT the raw `Transform`
-// translation, which is only the remainder within the entity's big_space cell
-// (short by cell x edge — 2 km per cell at the moonbase, 0 in the sandbox,
-// which is why frame bugs of this family hide in the sandbox and only bite at a
-// site). Rotation is frame-invariant, so it needs no such care.
+// FRAME: position and rotation are in the semantic active physics frame. The
+// runtime owns conversion to the entity's actual parent and BigSpace cell/local
+// storage; scripts never inspect grids or compensate for a rotating body frame.
 //
 // Both pin the body Kinematic for the write, so the physics solver treats the
 // authored pose as authoritative for a tick instead of immediately arguing with
 // it, and both carry the pose to joint-connected descendants.
 
-/// Move an entity to a grid-absolute position `[x, y, z]`.
+/// Move an entity to an active-physics-frame position `[x, y, z]`.
 fn set_world_pos(id, p)        { cmd("MoveEntity", #{ entity_id: id, translation: p }) }
 
 /// Set an entity's world orientation from a quaternion `[x, y, z, w]` — the

@@ -67,8 +67,8 @@ f.push(t_true(p.type_name != "", "PROBE has a non-empty type_name"));
 
 // The frame contract: world_position is meaningless unless it says which frame
 // it is in, and `MoveEntity` consumes that same frame. A provider that dropped
-// the tag would leave callers guessing between grid-absolute and local.
-f.push(t_eq(p.position_frame, "grid_absolute", "world_position carries its frame"));
+// the tag would leave callers guessing between active-frame and parent-local.
+f.push(t_eq(p.position_frame, "active_physics", "world_position carries its frame"));
 
 // Named-attribute reads must agree with the read-everything form. These are two
 // different code paths in the provider (selected vs. enumerated attributes), and
