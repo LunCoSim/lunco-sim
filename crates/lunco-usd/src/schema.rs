@@ -1175,6 +1175,23 @@ class "SquatterAPI" (
                 stage_units_per_unit: 1.0
             }
         );
+        assert_eq!(
+            reg.linear_unit("Cylinder_1", "radiusTop"),
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
+        );
+        assert_eq!(
+            reg.linear_unit("Capsule_1", "radiusBottom"),
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
+        );
+        assert_eq!(
+            reg.linear_unit("Cylinder_1", "radius"),
+            LinearUnit::None,
+            "successor schemas must not inherit a dead predecessor spelling"
+        );
         assert_ne!(
             reg.linear_unit("Camera", "focalLength"),
             reg.linear_unit("Cylinder", "height")

@@ -240,6 +240,20 @@ fn sun_tracker_asset_wiring_migrated() {
 }
 
 #[test]
+fn comms_antenna_joints_keep_their_controller_wiring() {
+    let (app, id) = build_from_source(&asset_src("components/comms/antenna.usda"));
+
+    assert_eq!(
+        conns(&app, id, "/CommsAntenna/YawJoint", "inputs:angle"),
+        ["/CommsAntenna/EarthTrackerController.outputs:az"]
+    );
+    assert_eq!(
+        conns(&app, id, "/CommsAntenna/ElevationJoint", "inputs:angle"),
+        ["/CommsAntenna/EarthTrackerController.outputs:el"]
+    );
+}
+
+#[test]
 fn sandbox_scene_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("scenes/luncosim/sandbox_scene.usda"));
     assert_eq!(

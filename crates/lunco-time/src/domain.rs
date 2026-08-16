@@ -1118,11 +1118,21 @@ pub fn write_epoch_from_celestial_clock(
     mut world: ResMut<WorldTime>,
     q_domain: Query<&TimeDomain>,
     mut last_epoch: Local<f64>,
+    mut last_mission_origin: Local<Option<(u64, u64)>>,
 ) {
     // A scene epoch is an intentional re-anchor.  The local diagnostic cursor
     // belongs to the old anchor; comparing the first value from the new anchor
     // against it turns every twin open into a false 241-day discontinuity.
-    if mission.is_changed() {
+    //
+    // `MissionClock` is also the live calendar state and is mutably sampled by
+    // `advance_world_clock` every frame. Resource change detection therefore
+    // cannot distinguish an explicit mission re-anchor from ordinary clock
+    // progression. Compare the stable mission-origin fields instead.
+    let mission_origin = (mission.mission_tick0, mission.mission_epoch0_jd.to_bits());
+    if last_mission_origin
+        .replace(mission_origin)
+        .is_some_and(|previous| previous != mission_origin)
+    {
         *last_epoch = 0.0;
     }
     let Some(clocks) = clocks else { return };
@@ -1152,6 +1162,15 @@ pub fn write_epoch_from_celestial_clock(
     }
     *last_epoch = next;
     world.epoch_jd = next;
+}
+
+#[cfg(test)]
+fn mission_origin_changed(
+    previous: &mut Option<(u64, u64)>,
+    mission: &crate::MissionClock,
+) -> bool {
+    let current = (mission.mission_tick0, mission.mission_epoch0_jd.to_bits());
+    previous.replace(current).is_some_and(|old| old != current)
 }
 
 #[cfg(test)]
@@ -1186,6 +1205,22 @@ mod tests {
             playback: None,
             root: Some(kind),
         }
+    }
+
+    #[test]
+    fn mission_origin_detection_ignores_per_frame_clock_mutation() {
+        let mut previous = None;
+        let mut mission = crate::MissionClock::default();
+
+        assert!(!mission_origin_changed(&mut previous, &mission));
+        // `advance_world_clock` mutates this resource every frame, but the
+        // mission origin has not changed and must not reset the detector.
+        mission.regime = crate::TimeRegime::KinematicWarp;
+        assert!(!mission_origin_changed(&mut previous, &mission));
+
+        mission.mission_epoch0_jd += 10.0;
+        assert!(mission_origin_changed(&mut previous, &mission));
+        assert!(!mission_origin_changed(&mut previous, &mission));
     }
 
     /// Resolve `domain`'s `t` with no prior frame (so every `dt` starts from `t`).

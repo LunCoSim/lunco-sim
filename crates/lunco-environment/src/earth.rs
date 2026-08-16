@@ -121,6 +121,16 @@ pub fn compute_local_earth(
     // ephemeris".
     let present = dir.is_some();
     let Some(dir) = dir.filter(|d| d.0.is_finite() && d.0.length_squared() > 1.0e-12) else {
+        // A previously valid ephemeris can disappear after the scene has
+        // already been running (provider dropout, frame teardown, or a
+        // re-anchor waiting for its site frame). Do not leave the last valid
+        // LocalEarth cached: the apply phase would otherwise publish that
+        // stale vector and the tracker would keep commanding an old target.
+        for (entity, existing, _) in &q_targets {
+            if existing.is_some() {
+                commands.entity(entity).remove::<LocalEarth>();
+            }
+        }
         *missing_frames = missing_frames
             .saturating_add(1)
             .min(EARTH_DIRECTION_WARN_AFTER_FRAMES);
@@ -287,6 +297,49 @@ mod tests {
             outputs.get(lunco_cosim::GRAVITY_SOURCE_CONNECTOR),
             Some(&9.81)
         );
+    }
+
+    #[test]
+    fn earth_direction_dropout_removes_cached_vector_and_outputs() {
+        let mut app = App::new();
+        app.insert_resource(EarthDirectionWorld(Vec3::NEG_Z));
+        app.add_systems(
+            Update,
+            (compute_local_earth, inject_local_earth_into_cosim).chain(),
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                crate::EnvironmentProbe,
+                crate::EarthDirectionRequired,
+                lunco_cosim::SimComponent::default(),
+            ))
+            .id();
+
+        app.update();
+        assert!(app.world().get::<LocalEarth>(entity).is_some());
+        assert!(app
+            .world()
+            .get::<lunco_cosim::SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .contains_key(EARTH_MOUNT_Z_CONNECTOR));
+
+        app.world_mut().resource_mut::<EarthDirectionWorld>().0 = Vec3::ZERO;
+        app.update();
+
+        assert!(
+            app.world().get::<LocalEarth>(entity).is_none(),
+            "ephemeris dropout must not leave a stale local Earth vector"
+        );
+        let outputs = &app
+            .world()
+            .get::<lunco_cosim::SimComponent>(entity)
+            .unwrap()
+            .outputs;
+        assert!(!outputs.contains_key(EARTH_MOUNT_X_CONNECTOR));
+        assert!(!outputs.contains_key(EARTH_MOUNT_Y_CONNECTOR));
+        assert!(!outputs.contains_key(EARTH_MOUNT_Z_CONNECTOR));
     }
 
     /// An unmounted model receives the world/site direction unchanged.
