@@ -177,7 +177,7 @@ impl Panel for MissionControl {
                     .num_columns(4)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        for (i, &m) in [1.0, 2.0, 4.0, 8.0].iter().enumerate() {
+                        for (i, &m) in lunco_time::REALTIME_RATE_OPTIONS.iter().enumerate() {
                             if ui
                                 .selectable_label(speed == m, format!("{}x", m))
                                 .on_hover_text("Physics runs at this rate")
@@ -199,7 +199,7 @@ impl Panel for MissionControl {
                     .num_columns(4)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        for (i, &m) in [100.0, 1000.0, 10000.0, 100000.0].iter().enumerate() {
+                        for (i, &m) in lunco_time::KINEMATIC_WARP_RATE_OPTIONS.iter().enumerate() {
                             if ui
                                 .selectable_label(speed == m, format!("{}x", m))
                                 .on_hover_text(

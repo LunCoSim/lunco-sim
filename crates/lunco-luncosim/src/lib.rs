@@ -64,42 +64,6 @@ pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
 /// Short source revision stamped into this build for diagnostics.
 pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
 
-/// The app-level raw-frame cap that protects the fixed loop from a render hitch.
-///
-/// `Time<Virtual>::max_delta` is applied before the transport rate, so a fixed
-/// 33 ms cap becomes a 264 ms fixed-time burst at 8x. A loaded rover scene can
-/// then spend the whole next frame draining that burst and never get back to
-/// rendering. Keep the normal 33 ms cap at low rates, but tighten the raw cap
-/// as the rate rises so one frame asks for at most this many fixed ticks.
-const BASE_VIRTUAL_MAX_DELTA: std::time::Duration = std::time::Duration::from_millis(33);
-const MAX_FIXED_STEPS_PER_FRAME: u32 = 16;
-
-fn fixed_step_raw_delta_limit(
-    rate: f64,
-    fixed_timestep: std::time::Duration,
-) -> std::time::Duration {
-    if !(rate > 0.0 && rate <= lunco_time::MAX_REALTIME_RATE) {
-        return BASE_VIRTUAL_MAX_DELTA;
-    }
-    let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
-    budget.min(BASE_VIRTUAL_MAX_DELTA)
-}
-
-/// Keep Bevy's fixed-loop catch-up bounded when the user selects a realtime
-/// transport rate. The transport still owns the requested rate and runs at the
-/// full rate while frames fit inside the budget; a genuinely overloaded frame
-/// drops excess virtual time through Bevy's normal `max_delta` semantics instead
-/// of recursively scheduling larger fixed bursts until the window freezes.
-fn limit_fixed_step_burst(
-    transport: Res<lunco_time::TimeTransport>,
-    fixed: Res<Time<Fixed>>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-) {
-    let limit = fixed_step_raw_delta_limit(transport.rate, fixed.timestep());
-    if virtual_time.max_delta() != limit {
-        virtual_time.set_max_delta(limit);
-    }
-}
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
@@ -277,28 +241,38 @@ mod startup_scene_tests {
 
 #[cfg(test)]
 mod fixed_step_budget_tests {
-    use super::{fixed_step_raw_delta_limit, BASE_VIRTUAL_MAX_DELTA, MAX_FIXED_STEPS_PER_FRAME};
     use std::time::Duration;
 
     #[test]
     fn low_rates_keep_the_normal_virtual_delta_cap() {
         assert_eq!(
-            fixed_step_raw_delta_limit(1.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(1.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
         assert_eq!(
-            fixed_step_raw_delta_limit(4.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(4.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
     }
 
     #[test]
     fn eight_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
         let fixed = Duration::from_secs_f64(1.0 / 60.0);
-        let limit = fixed_step_raw_delta_limit(8.0, fixed);
+        let limit = lunco_time::fixed_step_raw_delta_limit(8.0, fixed);
         let requested_fixed = limit.as_secs_f64() * 8.0 / fixed.as_secs_f64();
         assert!(
-            requested_fixed <= MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            requested_fixed <= lunco_time::MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            "raw cap requests {requested_fixed} fixed ticks"
+        );
+    }
+
+    #[test]
+    fn sixteen_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
+        let fixed = Duration::from_secs_f64(1.0 / 60.0);
+        let limit = lunco_time::fixed_step_raw_delta_limit(16.0, fixed);
+        let requested_fixed = limit.as_secs_f64() * 16.0 / fixed.as_secs_f64();
+        assert!(
+            requested_fixed <= lunco_time::MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
             "raw cap requests {requested_fixed} fixed ticks"
         );
     }
@@ -306,8 +280,8 @@ mod fixed_step_budget_tests {
     #[test]
     fn kinematic_warp_restores_the_normal_raw_cap() {
         assert_eq!(
-            fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
     }
 }
@@ -2478,17 +2452,7 @@ impl Plugin for SandboxCorePlugin {
         // custom Twin without copying it into assets/.
         let scene_path = startup_scene_arg(&args);
 
-        // Cap how much catchup `FixedUpdate` does after a slow frame. Default
-        // Bevy behaviour: a 50ms frame breeds 3 catch-up fixed ticks next frame,
-        // making that frame slow too — a self-feeding jitter cascade. The cap
-        // lives on `Time<Virtual>`; `Time<Fixed>` reads its delta from Virtual,
-        // so capping Virtual transitively caps fixed catchup. 33ms ≈ 2 ticks —
-        // residual real time is dropped instead of compounded.
-        let mut virtual_time = Time::<Virtual>::default();
-        virtual_time.set_max_delta(std::time::Duration::from_millis(33));
-
         app.insert_resource(ScenePath(scene_path))
-            .insert_resource(virtual_time)
             // Match the workbench theme's backdrop so the window's first-frame
             // clear lines up with egui's panel fill (no "left hairline" at panel
             // boundaries under non-integer DPRs). Harmless headless.
@@ -2565,14 +2529,6 @@ impl Plugin for SandboxCorePlugin {
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
-            // Bound rate-scaled FixedUpdate bursts before the next loop. At 8x
-            // the ordinary 33 ms raw cap requests ~16 fixed ticks; retain that
-            // complete 8x budget while preventing a slower hitch from queuing
-            // an unbounded catch-up burst.
-            .add_systems(
-                PreUpdate,
-                limit_fixed_step_burst.after(lunco_time::TimeSpineSet),
-            )
             .add_systems(
                 Update,
                 (

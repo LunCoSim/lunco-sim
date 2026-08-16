@@ -42,7 +42,7 @@
 //!    vsync, no realtime pacing).
 //!
 //!    This is *not* the same as asking the sim to warp. Realtime warp is capped
-//!    at `MAX_REALTIME_RATE = 8`; above that the physics tick FREEZES rather
+//!    at `MAX_REALTIME_RATE = 16`; above that the physics tick FREEZES rather
 //!    than going faster. Manual stepping sidesteps the rate limiter entirely
 //!    because there is no "realtime" to be a multiple of.
 //!

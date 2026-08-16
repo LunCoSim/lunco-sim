@@ -6,7 +6,10 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::{Avatar, CelestialBody};
-use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
+use lunco_time::{
+    SetTimeTransport, TimeTransport, TransportMode, WorldTime, KINEMATIC_WARP_RATE_OPTIONS,
+    REALTIME_RATE_OPTIONS,
+};
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
@@ -59,8 +62,10 @@ impl Panel for CelestialTimePanel {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
-            for &m in multipliers.iter() {
+            for &m in REALTIME_RATE_OPTIONS
+                .iter()
+                .chain(KINEMATIC_WARP_RATE_OPTIONS.iter())
+            {
                 if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
                     ctx.trigger(SetTimeTransport {
                         playing: Some(true),

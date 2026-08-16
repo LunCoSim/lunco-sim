@@ -505,7 +505,6 @@ impl Plugin for SandboxEditUiPlugin {
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
             .init_resource::<checkpoint_click::WaypointPlacement>()
-            .init_resource::<scene_context::SceneContextMenuState>()
             // An armed placement names the vessel whose route it edits, and a
             // context menu names the waypoint it opened on. Both are entities of
             // the scene being unloaded — carried across a reload they leave the
@@ -522,9 +521,6 @@ impl Plugin for SandboxEditUiPlugin {
                         }
                         *menu = checkpoint_click::WaypointContextMenuState::default();
                     },
-                    |mut menu: ResMut<scene_context::SceneContextMenuState>| {
-                        *menu = scene_context::SceneContextMenuState::default();
-                    },
                     |q_reached: Query<Entity, With<lunco_autopilot::usd_tree::ReachedWaypoints>>,
                      mut commands: Commands| {
                         for entity in q_reached.iter() {
@@ -535,7 +531,6 @@ impl Plugin for SandboxEditUiPlugin {
             )
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
-            .add_observer(scene_context::on_scene_right_click_context)
             // Consumes the ground click that follows a Move / Insert-after.
             .add_observer(checkpoint_click::on_scene_click_place_waypoint)
             // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
@@ -558,7 +553,6 @@ impl Plugin for SandboxEditUiPlugin {
                     )
                         .before(lunco_workbench::WorkbenchRenderSet),
                     checkpoint_click::draw_waypoint_context_menu,
-                    scene_context::draw_scene_context_menu,
                     // Crosshair + Esc-to-cancel while a placement is armed.
                     checkpoint_click::handle_waypoint_placement_mode,
                 ),

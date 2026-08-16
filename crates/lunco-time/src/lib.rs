@@ -24,6 +24,7 @@
 //! it the tick + wall clock and writes the derived views.
 
 use bevy::prelude::*;
+use std::time::Duration;
 
 use lunco_core::{SimTick, SECS_PER_TICK};
 
@@ -44,40 +45,69 @@ pub use scales::{
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;
 
+/// The highest transport rate that still runs the fixed-step integrators.
+///
+/// Above this boundary the clock intentionally enters [`TimeRegime::KinematicWarp`]
+/// and freezes the deterministic tick. Keep this value in the time crate so the
+/// transport regime and the application-level fixed-step budget cannot drift apart.
+pub const MAX_REALTIME_RATE: f64 = 16.0;
+
+/// User-selectable rates in the realtime-physics band.
+///
+/// The transport regime and every UI that offers simulation rates must use this
+/// list. Keeping the list beside [`MAX_REALTIME_RATE`] prevents a control surface
+/// from advertising a rate that the clock would interpret differently.
+pub const REALTIME_RATE_OPTIONS: &[f64] = &[1.0, 2.0, 4.0, 8.0, 16.0];
+
+/// User-selectable kinematic-warp rates. These advance pure epoch consumers
+/// while the deterministic physics tick remains frozen.
+pub const KINEMATIC_WARP_RATE_OPTIONS: &[f64] = &[100.0, 1_000.0, 10_000.0, 100_000.0, 1_000_000.0];
+
+/// Maximum number of fixed simulation steps a rendered frame may drain while
+/// running a realtime transport rate. This is a catch-up guard, not a rate cap:
+/// frames that arrive on time still receive their complete requested rate.
+pub const MAX_FIXED_STEPS_PER_FRAME: u32 = 16;
+
+/// Raw wall-clock delta cap used by the fixed-step budget.
+pub const BASE_VIRTUAL_MAX_DELTA: Duration = Duration::from_millis(33);
+
+/// Return the raw frame delta that keeps a realtime transport inside the fixed
+/// step budget. Bevy applies `Time<Virtual>::max_delta` before its relative
+/// speed, so the cap must be divided by the requested rate.
+pub fn fixed_step_raw_delta_limit(rate: f64, fixed_timestep: Duration) -> Duration {
+    if !(rate > 0.0 && rate <= MAX_REALTIME_RATE) {
+        return BASE_VIRTUAL_MAX_DELTA;
+    }
+    let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
+    budget.min(BASE_VIRTUAL_MAX_DELTA)
+}
+
+/// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.
+///
+/// This is the only fixed-step budget projection. The transport still controls
+/// the simulation rate through `Time<Virtual>::relative_speed`; this system only
+/// limits how much raw wall time a hitch may turn into one catch-up burst.
+fn apply_fixed_step_budget(
+    transport: Res<TimeTransport>,
+    fixed: Option<Res<Time<Fixed>>>,
+    virtual_time: Option<ResMut<Time<Virtual>>>,
+) {
+    let (Some(fixed), Some(mut virtual_time)) = (fixed, virtual_time) else {
+        return;
+    };
+    let limit = fixed_step_raw_delta_limit(transport.rate, fixed.timestep());
+    if virtual_time.max_delta() != limit {
+        virtual_time.set_max_delta(limit);
+    }
+}
+
 /// J2000.0 epoch as a Julian Date (TDB). Default mission epoch.
 pub const J2000_JD: f64 = 2_451_545.0;
 
-/// Above this rate the realtime integrators (avian, Modelica) cannot keep up, so
-/// the world clock switches to [`TimeRegime::KinematicWarp`]: the tick freezes
-/// (physics pauses) and only **pure** consumers (ephemeris, lighting, sidereal)
-/// advance, as a pure function of `epoch`. Makes the implicit
-/// "`speed > MAX → physics_enabled = false`" cliff explicit.
-///
-/// # Why the ceiling is small (and why 100 was a death spiral)
-///
-/// Bevy clamps the **raw** frame delta to `max_delta` (33 ms in the sandbox) and
-/// only *then* multiplies by `relative_speed` (= this rate). So the virtual time
-/// handed to `FixedUpdate` in a hitched frame is `33 ms × rate`, and the number
-/// of fixed steps run **in that one frame** is `33 ms × rate / SECS_PER_TICK`
-/// (1/60 s):
-///
-/// | rate | virtual time per clamped frame | fixed steps in that frame | avian substeps (×12) |
-/// |------|-------------------------------|---------------------------|----------------------|
-/// | 8    | 0.264 s                       | ~16                       | ~190                 |
-/// | 100  | 3.3 s                         | **~198**                  | **~2376**            |
-///
-/// At 100 the frame that runs 198 steps is itself slow, which re-clamps to
-/// `max_delta`, which yields another 198 — the clamp does not save you, it
-/// *pins you at the worst case*. 8× keeps the worst-case burst inside what the
-/// solver sustains on native while still being a useful fast-forward; anything
-/// beyond it belongs in [`TimeRegime::KinematicWarp`], which is exactly what
-/// crossing this constant selects.
-///
-/// TODO(P11): a ceiling alone is a mitigation, not the fix. The structural fix is
-/// a **per-frame fixed-step budget** (cap the steps drained per frame and degrade
-/// fidelity rather than spin — doc 28 §3.3). That budget lives with the
-/// `Time<Fixed>`/`max_delta` configuration in `lunco-luncosim`, not here.
-pub const MAX_REALTIME_RATE: f64 = 8.0;
+/// Above [`MAX_REALTIME_RATE`] the realtime integrators (avian, Modelica) cannot
+/// keep up, so the world clock switches to [`TimeRegime::KinematicWarp`]: the
+/// tick freezes (physics pauses) and only **pure** consumers (ephemeris,
+/// lighting, sidereal) advance, as a pure function of `epoch`.
 
 /// Transport play state. Replaces the scattered `paused` booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
@@ -486,6 +516,13 @@ impl Plugin for TimePlugin {
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
         // self-sufficient where it doesn't.
+        // Own the virtual-clock baseline here as well. Applications must not
+        // install a second max-delta/rate policy beside the time spine.
+        app.init_resource::<Time<Virtual>>();
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
+
         app.init_resource::<SimTick>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
@@ -493,7 +530,13 @@ impl Plugin for TimePlugin {
             .register_type::<MissionClock>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
-            .add_systems(PreUpdate, advance_world_clock.in_set(TimeSpineSet))
+            .add_systems(
+                PreUpdate,
+                (
+                    advance_world_clock.in_set(TimeSpineSet),
+                    apply_fixed_step_budget.after(TimeSpineSet),
+                ),
+            )
             .add_systems(Startup, seed_mission_clock_from_wall);
 
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
@@ -552,18 +595,85 @@ mod tests {
         assert_eq!(rs, MAX_REALTIME_RATE); // one rate → relative_speed (> 0 ⇒ running)
     }
 
+    #[test]
+    fn realtime_rate_options_stay_inside_the_physics_band() {
+        assert!(!REALTIME_RATE_OPTIONS.is_empty());
+        assert!(REALTIME_RATE_OPTIONS
+            .windows(2)
+            .all(|rates| rates[0] < rates[1]));
+        assert_eq!(
+            REALTIME_RATE_OPTIONS.last().copied(),
+            Some(MAX_REALTIME_RATE)
+        );
+        assert!(REALTIME_RATE_OPTIONS.iter().all(|&rate| advance_clock(
+            &mut MissionClock::default(),
+            0,
+            rate,
+            false,
+            0.0
+        ) > 0.0));
+        assert!(KINEMATIC_WARP_RATE_OPTIONS
+            .iter()
+            .all(|&rate| rate > MAX_REALTIME_RATE));
+    }
+
+    #[derive(Resource, Default)]
+    struct FixedRunCount(u32);
+
+    fn count_fixed_runs(mut count: ResMut<FixedRunCount>) {
+        count.0 += 1;
+    }
+
+    fn fixed_runs_after_manual_frames(rate: f64) -> u32 {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_secs_f64(1.0 / 120.0),
+            ))
+            .insert_resource(TimeTransport {
+                mode: TransportMode::Playing,
+                rate,
+            })
+            .init_resource::<FixedRunCount>()
+            .add_systems(FixedUpdate, count_fixed_runs);
+
+        for _ in 0..120 {
+            app.update();
+        }
+
+        app.world().resource::<FixedRunCount>().0
+    }
+
+    #[test]
+    fn realtime_transport_rate_scales_the_real_fixed_schedule() {
+        let one_x = fixed_runs_after_manual_frames(1.0);
+        let eight_x = fixed_runs_after_manual_frames(8.0);
+        let sixteen_x = fixed_runs_after_manual_frames(MAX_REALTIME_RATE);
+
+        assert!(one_x > 0, "1x never entered FixedUpdate");
+        assert!(
+            eight_x >= one_x * 7,
+            "8x fixed schedule ran {eight_x} ticks versus {one_x} at 1x"
+        );
+        assert!(
+            sixteen_x >= one_x * 14,
+            "16x fixed schedule ran {sixteen_x} ticks versus {one_x} at 1x"
+        );
+    }
+
     /// The ceiling exists because `max_delta`-clamped frames × `relative_speed`
     /// is the fixed-step burst size (see [`MAX_REALTIME_RATE`]). Lock it low
     /// enough that one hitched 33 ms frame cannot demand a runaway step count.
     #[test]
     fn realtime_ceiling_bounds_the_fixed_step_burst() {
-        const MAX_DELTA_S: f64 = 1.0 / 30.0; // Bevy's clamp (sandbox uses ~33 ms)
-        let steps_per_hitched_frame = MAX_DELTA_S * MAX_REALTIME_RATE / SECS_PER_TICK;
+        let fixed = Duration::from_secs_f64(1.0 / 60.0);
+        let raw_limit = fixed_step_raw_delta_limit(MAX_REALTIME_RATE, fixed);
+        let steps_per_hitched_frame =
+            raw_limit.as_secs_f64() * MAX_REALTIME_RATE / fixed.as_secs_f64();
         assert!(
-            steps_per_hitched_frame <= 20.0,
-            "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one clamped frame demand \
-             {steps_per_hitched_frame:.0} fixed steps — that frame is slow, which \
-             re-clamps, which demands the same burst again (death spiral)"
+            steps_per_hitched_frame <= MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one capped frame demand \
+             {steps_per_hitched_frame:.0} fixed steps — above the central fixed-step budget"
         );
         // Just above the ceiling must escape to the kinematic (tick-frozen) regime.
         let mut c = MissionClock::default();

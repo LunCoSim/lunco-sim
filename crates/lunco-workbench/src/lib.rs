@@ -1149,28 +1149,40 @@ impl WorkbenchLayout {
     pub fn register<P: Panel + 'static>(&mut self, panel: P) {
         let id = panel.id();
         let slot = panel.default_slot();
-        match slot {
-            PanelSlot::SideBrowser => {
-                if !self.side_browser.contains(&id) {
-                    self.side_browser.push(id);
+        // A perspective may declare a panel before the domain plugin registers
+        // its renderer. In that case the declared slot is authoritative: do
+        // not append the panel to its authored default as well, or a stacked
+        // Build preset silently turns back into one tab strip.
+        let declared = self.side_browser.contains(&id)
+            || self.side_browser_bottom.contains(&id)
+            || self.center.contains(&id)
+            || self.right_inspector.contains(&id)
+            || self.right_inspector_bottom.contains(&id)
+            || self.bottom.contains(&id);
+        if !declared {
+            match slot {
+                PanelSlot::SideBrowser => {
+                    if !self.side_browser.contains(&id) {
+                        self.side_browser.push(id);
+                    }
                 }
-            }
-            PanelSlot::Center => {
-                if !self.center.contains(&id) {
-                    self.center.push(id);
+                PanelSlot::Center => {
+                    if !self.center.contains(&id) {
+                        self.center.push(id);
+                    }
                 }
-            }
-            PanelSlot::RightInspector => {
-                if !self.right_inspector.contains(&id) {
-                    self.right_inspector.push(id);
+                PanelSlot::RightInspector => {
+                    if !self.right_inspector.contains(&id) {
+                        self.right_inspector.push(id);
+                    }
                 }
-            }
-            PanelSlot::Bottom => {
-                if !self.bottom.contains(&id) {
-                    self.bottom.push(id);
+                PanelSlot::Bottom => {
+                    if !self.bottom.contains(&id) {
+                        self.bottom.push(id);
+                    }
                 }
+                PanelSlot::Hidden => { /* registered, intentionally not docked */ }
             }
-            PanelSlot::Hidden => { /* registered, intentionally not docked */ }
         }
         self.panels.insert(id, Box::new(panel));
         self.rebuild_dock();
@@ -4101,7 +4113,7 @@ fn render_layout(
                 // moves. That is a sky-viewing tool, not a fast-forward, so it stays
                 // in the celestial/mission-control panels.
                 ui.horizontal(|ui| {
-                    for m in [1.0_f64, 2.0, 4.0, 8.0] {
+                    for &m in lunco_time::REALTIME_RATE_OPTIONS {
                         let on = !paused && (rate - m).abs() < f64::EPSILON;
                         if ui
                             .selectable_label(on, format!("{m:.0}x"))
@@ -5116,6 +5128,26 @@ mod tests {
                 "missing dock panel {id}"
             );
         }
+    }
+
+    #[test]
+    fn registering_a_predeclared_stacked_panel_keeps_its_declared_slot() {
+        let mut layout = WorkbenchLayout::default();
+        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
+        layout.set_center(vec![PanelId("viewport")]);
+        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+
+        layout.register(DockPanel(PanelId("entities")));
+        layout.register(DockPanel(PanelId("telemetry")));
+        layout.register(DockPanel(PanelId("viewport")));
+        layout.register(DockPanel(PanelId("inspector")));
+        layout.register(DockPanel(PanelId("spawn")));
+
+        assert_eq!(layout.side_browser, [PanelId("entities")]);
+        assert_eq!(layout.side_browser_bottom, [PanelId("telemetry")]);
+        assert_eq!(layout.right_inspector, [PanelId("inspector")]);
+        assert_eq!(layout.right_inspector_bottom, [PanelId("spawn")]);
+        assert!(layout.bottom.is_empty());
     }
 
     struct TestPerspective {
