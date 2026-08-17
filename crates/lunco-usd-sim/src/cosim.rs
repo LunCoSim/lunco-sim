@@ -32,13 +32,14 @@ use lunco_core::{
     SceneTransitionCompleted, SceneTransitionFailed, WorldGrid,
 };
 use lunco_cosim::{
-    CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts, SimComponent, SimConnection,
-    SimStatus,
+    ConnectionBinding, CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts,
+    SimComponent, SimConnection, SimStatus,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 use lunco_render::SceneCamera;
 use lunco_scripting::python::{get_python_status, PythonStatus};
@@ -109,6 +110,17 @@ pub(crate) struct PythonUnavailablePrograms {
 pub(crate) struct UsdModelicaPortContract {
     inputs: BTreeSet<String>,
     outputs: BTreeSet<String>,
+}
+
+/// The authored co-simulation schedule for a USD Modelica participant.
+///
+/// This is kept separate from the public port contract because the latter is
+/// about names/types while this is master-algorithm timing. It is projected once
+/// from the composed USD prim and carried into `ModelicaModel` when the source
+/// asset becomes executable.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct UsdModelicaSchedule {
+    pub communication_period_secs: f64,
 }
 
 impl UsdModelicaPortContract {
@@ -689,6 +701,29 @@ fn process_usd_cosim_prim_read(
         return;
     }
 
+    // Modelica is a continuous-time participant, not a render callback. The
+    // communication period is an authored co-simulation policy on the composed
+    // program prim; when omitted, the LunCoProgramAPI fallback is the documented
+    // 10 Hz boundary. Invalid authored values are rejected to the same safe
+    // default and made visible in the log rather than becoming a zero-period
+    // busy loop.
+    let communication_period_secs = modelica_path.as_ref().map(|_| {
+        let authored = reader.scalar::<f64>(sdf_path, "lunco:program:communicationPeriod");
+        match authored {
+            Some(value)
+                if value.is_finite()
+                    && value >= lunco_core::SECS_PER_TICK => value,
+            Some(value) => {
+                warn!(
+                    "[usd-cosim] {}: lunco:program:communicationPeriod={value:?} is invalid; using the schema default {:.3}s",
+                    prim_path.path, DEFAULT_COMMUNICATION_PERIOD_SECS
+                );
+                DEFAULT_COMMUNICATION_PERIOD_SECS
+            }
+            None => DEFAULT_COMMUNICATION_PERIOD_SECS,
+        }
+    });
+
     // A Python source is not a usable cosim participant until its interpreter
     // is available. Check at the authoritative USD bind boundary, before
     // publishing a pending load or claiming the program is bound. This keeps
@@ -810,6 +845,11 @@ fn process_usd_cosim_prim_read(
         status: SimStatus::Compiling,
         is_stepping: false,
     });
+    if let Some(communication_period_secs) = communication_period_secs {
+        commands.entity(entity).try_insert(UsdModelicaSchedule {
+            communication_period_secs,
+        });
+    }
     if let Some(asset_path) = modelica_path {
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
@@ -981,7 +1021,7 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
 /// removes the pending marker. Stable retry behaviour: if the asset
 /// isn't ready this frame we just skip — the system runs again next
 /// frame.
-pub fn dispatch_loaded_modelica_sources(
+pub(crate) fn dispatch_loaded_modelica_sources(
     mut commands: Commands,
     mut q: Query<(
         Entity,
@@ -989,6 +1029,7 @@ pub fn dispatch_loaded_modelica_sources(
         &UsdPrimPath,
         &mut SimComponent,
         Option<&UsdInputDefaults>,
+        Option<&UsdModelicaSchedule>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1014,9 +1055,9 @@ pub fn dispatch_loaded_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _), (_, _, b, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _), (_, _, b, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults) in pending {
+    for (entity, pending, prim_path, mut component, usd_defaults, schedule) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -1156,6 +1197,9 @@ pub fn dispatch_loaded_modelica_sources(
             source_uri: pending.asset_path.clone(),
             parameters,
             inputs,
+            communication_period_secs: schedule
+                .map(|schedule| schedule.communication_period_secs)
+                .unwrap_or(DEFAULT_COMMUNICATION_PERIOD_SECS),
             // Durable verdict: `modelica_status` reads this first, so the
             // component reports `Error` on every subsequent tick instead of
             // reverting to `Compiling`.
@@ -2435,6 +2479,115 @@ pub fn rewire_usd_connections(
     }
 }
 
+/// Whether the causal-participant projection needs to be recomputed.
+///
+/// Connections are an immutable derived cache, so additions/removals are the
+/// normal topology revision. Endpoint lifecycle transitions are included as
+/// well: a wire can become executable after a joint, wheel, or model surface
+/// is admitted. BindingRevision covers the scene epoch seal, which is the
+/// fail-closed boundary while projection is still incomplete.
+fn causal_participants_changed(
+    arrivals: Query<
+        (),
+        Or<(
+            Added<SimConnection>,
+            Changed<ConnectionBinding>,
+            Added<ModelicaModel>,
+            Added<lunco_core::CausalStateSink>,
+        )>,
+    >,
+    mut removed_connections: RemovedComponents<SimConnection>,
+    mut removed_models: RemovedComponents<ModelicaModel>,
+    revision: Res<lunco_cosim::BindingRevision>,
+) -> bool {
+    !arrivals.is_empty()
+        || removed_connections.read().next().is_some()
+        || removed_models.read().next().is_some()
+        || revision.is_changed()
+}
+
+/// Recompute the shared-clock participant set from the resolved causal graph.
+///
+/// A Modelica model is a shared-clock participant when, following authored
+/// causal connections backwards, it can reach a stateful engine sink:
+///
+/// * an input on a backend-owned CausalStateSink endpoint.
+///
+/// The reverse closure also captures intermediate Modelica or script nodes, so
+/// a model feeding another model that eventually drives a body remains coupled.
+/// Telemetry, electrical, or supervisory outputs do not become barriers merely
+/// because those models are live.
+///
+/// The projection is fail-closed until the binding epoch is sealed and every
+/// connection has reached a terminal binding state. During that interval every
+/// live Modelica participant is treated as coupled, so an incomplete graph
+/// cannot accidentally release a causal participant.
+fn derive_causal_barrier_participants(world: &mut World) {
+    let modelica_entities: bevy::ecs::entity::EntityHashSet = world
+        .query_filtered::<Entity, With<ModelicaModel>>()
+        .iter(world)
+        .collect();
+
+    let stateful_sinks: bevy::ecs::entity::EntityHashSet = world
+        .query_filtered::<Entity, With<lunco_core::CausalStateSink>>()
+        .iter(world)
+        .collect();
+
+    let connections: Vec<(Entity, Entity, String, Option<ConnectionBinding>)> = world
+        .query_filtered::<(&SimConnection, Option<&ConnectionBinding>), With<SimConnection>>()
+        .iter(world)
+        .map(|(connection, binding)| {
+            (
+                connection.start_element,
+                connection.end_element,
+                connection.end_connector.clone(),
+                binding.cloned(),
+            )
+        })
+        .collect();
+
+    // Reverse adjacency: stateful sink <- upstream source.
+    let mut upstream: std::collections::HashMap<Entity, Vec<Entity>> =
+        std::collections::HashMap::new();
+    for (start, end, _, _) in &connections {
+        upstream.entry(*end).or_default().push(*start);
+    }
+
+    let mut causal_entities = stateful_sinks.clone();
+    let mut frontier: Vec<Entity> = stateful_sinks.into_iter().collect();
+    while let Some(sink) = frontier.pop() {
+        for source in upstream.get(&sink).into_iter().flatten().copied() {
+            if causal_entities.insert(source) {
+                frontier.push(source);
+            }
+        }
+    }
+
+    let participants: Vec<Entity> = modelica_entities
+        .iter()
+        .copied()
+        .filter(|entity| causal_entities.contains(entity))
+        .collect();
+
+    let bindings_terminal = connections.iter().all(|(_, _, _, binding)| {
+        matches!(
+            binding,
+            Some(ConnectionBinding::Bound) | Some(ConnectionBinding::Failed)
+        )
+    });
+    let topology_ready = world
+        .get_resource::<lunco_cosim::BindingRevision>()
+        .is_some_and(|revision| revision.sealed)
+        && bindings_terminal;
+
+    let mut projection = world.resource_mut::<lunco_core::SimulationBarrierParticipants>();
+    if topology_ready {
+        projection.replace(participants);
+    } else {
+        projection.topology_ready = false;
+    }
+}
+
 /// The authored constants on a prim's unconnected `inputs:` ports — a model's
 /// parameters, as USD stated them.
 ///
@@ -2724,8 +2877,10 @@ impl lunco_api::ApiQueryProvider for ReleasePortProvider {
 
 /// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
-/// state, and propagated cosim values. Lets you probe the running
-/// binary without polling logs.
+/// state, and propagated cosim values. The response also includes the
+/// authoritative synchronization projection so a rate/worker diagnosis can
+/// distinguish a causal barrier from an unrelated model still running on its
+/// worker. Lets you probe the running binary without polling logs.
 pub struct CosimStatusProvider;
 
 impl lunco_api::ApiQueryProvider for CosimStatusProvider {
@@ -2774,6 +2929,14 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
+                    "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
+                    "modelica_communication_period_secs": model
+                        .map(ModelicaModel::communication_period_secs)
+                        .unwrap_or(0.0),
+                    "modelica_next_communication_time": model
+                        .map(|m| m.next_communication_time)
+                        .unwrap_or(0.0),
+                    "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
                     // The Modelica worker's durable failure verdict is the
                     // reason readiness may be holding the world. Surface it
                     // here beside timing/ports so live API diagnosis does not
@@ -2784,7 +2947,50 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                 })
             })
             .collect();
-        lunco_api::ApiResponse::ok(serde_json::json!({ "entities": entities }))
+        let barrier = world
+            .get_resource::<lunco_core::SimulationBarrier>()
+            .copied()
+            .unwrap_or_default();
+        let (topology_ready, causal_participant_count) = world
+            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .map(|participants| (participants.topology_ready, participants.entities.len()))
+            .unwrap_or((false, 0));
+        let causal_participants = world
+            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .map(|participants| {
+                participants
+                    .entities
+                    .iter()
+                    .map(|entity| {
+                        serde_json::json!({
+                            "entity": entity.to_bits(),
+                            "name": world.get::<Name>(*entity).map(Name::as_str),
+                            "usd_path": world
+                                .get::<UsdPrimPath>(*entity)
+                                .map(|path| path.path.as_str()),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let causal_sink_count = world
+            .query_filtered::<(), With<lunco_core::CausalStateSink>>()
+            .iter(world)
+            .count();
+        lunco_api::ApiResponse::ok(serde_json::json!({
+            "entities": entities,
+            "synchronization": {
+                "barrier_held": barrier.held,
+                "active_participants": barrier.active_participants,
+                "shared_clock_participants": barrier.shared_clock_participants,
+                "worst_lag_secs": barrier.worst_lag_secs,
+                "worst_entity": barrier.worst_entity.map(Entity::to_bits),
+                "topology_ready": topology_ready,
+                "causal_participant_count": causal_participant_count,
+                "causal_participants": causal_participants,
+                "causal_sink_count": causal_sink_count,
+            }
+        }))
     }
 }
 
@@ -3844,6 +4050,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
         .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
         .init_resource::<lunco_cosim::BindingRevision>()
+        .init_resource::<lunco_core::SimulationBarrierParticipants>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
@@ -4017,6 +4224,16 @@ pub(crate) fn install(app: &mut App) {
             .after(seed_usd_input_defaults)
             .in_set(CosimUpdateSet::Wiring),
     );
+    // The Modelica worker must know which entities are on the shared causal
+    // path before the next FixedUpdate. This is a graph projection, not a
+    // per-frame solver heuristic; it stays dormant until topology or endpoint
+    // lifecycle changes.
+    app.add_systems(
+        Update,
+        derive_causal_barrier_participants
+            .after(CosimUpdateSet::Wiring)
+            .run_if(causal_participants_changed),
+    );
 
     app.add_systems(
         FixedUpdate,
@@ -4077,6 +4294,82 @@ register_commands!(on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let coupled = world.spawn(ModelicaModel::default()).id();
+        let intermediate = world.spawn_empty().id();
+        let telemetry_only = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+
+        world.spawn((
+            SimConnection {
+                start_element: coupled,
+                end_element: intermediate,
+                end_connector: "input".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Bound,
+        ));
+        world.spawn((
+            SimConnection {
+                start_element: intermediate,
+                end_element: body,
+                end_connector: "force_y".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Bound,
+        ));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(participants.topology_ready);
+        assert!(participants.entities.contains(&coupled));
+        assert!(!participants.entities.contains(&telemetry_only));
+        assert!(participants.requires_barrier(coupled));
+        assert!(!participants.requires_barrier(telemetry_only));
+    }
+
+    #[test]
+    fn unresolved_topology_keeps_the_barrier_fail_closed() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let model = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+        world.spawn((SimConnection {
+            start_element: model,
+            end_element: body,
+            end_connector: "force_y".into(),
+            ..Default::default()
+        },));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(!participants.topology_ready);
+        assert!(participants.requires_barrier(model));
+    }
 
     // ── resolve_root_prim ────────────────────────────────────────────
     //

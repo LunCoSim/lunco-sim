@@ -1000,6 +1000,8 @@ pub fn on_compile_model(
                     // (A3 — the macro-step target, advanced one fixed-tick delta
                     // per tick by `spawn_modelica_requests`).
                     target_time: 0.0,
+                    communication_period_secs: crate::worker::DEFAULT_COMMUNICATION_PERIOD_SECS,
+                    next_communication_time: crate::worker::DEFAULT_COMMUNICATION_PERIOD_SECS,
                     last_step_time: 0.0,
                     session_id,
                     // Newly-compiled model starts paused/ready — no auto-start.

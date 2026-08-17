@@ -993,6 +993,18 @@ pub const MAX_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * MAX_MICRO_STEPS_PER_MACRO as 
 /// `dt` would just round to a full micro-step and overshoot.
 const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
 
+/// Default communication period for a live Modelica participant.
+///
+/// Modelica is a continuous-time participant, but it is not a 60 Hz render
+/// callback.  The master algorithm samples its inputs and publishes its
+/// outputs at declared communication points; between points the last output is
+/// held.  Ten Hz is the documented semantic default for a participant that
+/// does not author a different period.  A participant that must exchange state
+/// on every physics tick authors one fixed-tick period explicitly.
+pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
+
+const COMMUNICATION_EPS: f64 = 1e-9;
+
 /// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
 ///
 /// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
@@ -1025,9 +1037,10 @@ fn integrate_macro_step(
 }
 
 /// Model-vs-world lag past which the co-sim worker is visibly waiting on the
-/// coupling barrier. Surfaced as a rate-limited `warn!` + [`CosimLag`]; physics
-/// is held while the in-flight result is pending, so this is not permission to
-/// apply stale forces.
+/// coupling barrier. Surfaced as a rate-limited `warn!` + [`CosimLag`]. Every
+/// participant in the shared simulation holds the deterministic fixed clock
+/// while its result is pending; the worker itself remains off-thread so the UI
+/// and render/update schedule stay responsive.
 const LAG_WARN_SECS: f64 = 0.25;
 
 /// Fixed ticks between two lag warnings (5 s at 60 Hz) — the warn is on the
@@ -1043,8 +1056,9 @@ const LAG_WARN_COOLDOWN_TICKS: u32 = 300;
 ///
 /// `worst_secs` is the distance between the next communication point and the
 /// model's last completed state. During an in-flight step it describes the
-/// amount of simulation the main loop is waiting for; it is not a stale-force
-/// allowance because the physics clock is held by `RealtimeCoupling`.
+/// amount of simulation the participant is waiting to process; it is not
+/// permission to apply stale state because the shared simulation holds until
+/// the result lands.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct CosimLag {
     /// Worst `|model_time − world_time|` seen on the last fixed tick, seconds.
@@ -3084,11 +3098,18 @@ pub struct ModelicaModel {
     pub current_time: f64,
     /// The **world clock this model is coupled to**, in model-local seconds
     /// (0 at compile/reset). Advanced by exactly one `Time<Fixed>` delta per
-    /// unpaused FIXED TICK — never per render frame (A3). The macro step
-    /// requested each tick is `target_time − current_time`, so a model that
-    /// missed ticks (worker busy, long compile, `rate` burst) catches the time
-    /// up instead of losing it forever.
+    /// unpaused FIXED TICK — never per render frame (A3). It is compared with
+    /// `next_communication_time`; the worker is asked to integrate only at the
+    /// declared communication points, not at every fixed tick.
     pub target_time: f64,
+    /// Simulation seconds between Modelica communication points. Inputs are
+    /// sampled and outputs are published at these points; the last published
+    /// output is held between them. This is the explicit co-simulation
+    /// communication policy, not a wall-clock sleep or a render cadence.
+    pub communication_period_secs: f64,
+    /// Next communication point on the model's local clock.
+    #[reflect(ignore)]
+    pub next_communication_time: f64,
     pub last_step_time: f64,
     pub session_id: u64,
     pub paused: bool,
@@ -3165,6 +3186,26 @@ pub struct ModelicaModel {
     pub resume_after_compile: bool,
 }
 
+impl ModelicaModel {
+    /// Return the validated communication period used by the master algorithm.
+    ///
+    /// `ModelicaModel` is also used by small headless tests and by the editor
+    /// before USD scheduling metadata has arrived. Treating an omitted/invalid
+    /// value as the schema's documented default keeps those construction paths
+    /// on the same explicit schedule; an authored value is never silently
+    /// replaced when it is finite and representable.
+    #[inline]
+    pub fn communication_period_secs(&self) -> f64 {
+        if self.communication_period_secs.is_finite()
+            && self.communication_period_secs >= LIVE_MICRO_DT
+        {
+            self.communication_period_secs
+        } else {
+            DEFAULT_COMMUNICATION_PERIOD_SECS
+        }
+    }
+}
+
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
@@ -3195,9 +3236,10 @@ pub fn on_remove_modelica(
 /// Returns the `dt` to request, or `None` for "nothing to do this tick".
 ///
 /// The requested `dt` is the **whole deficit**, clamped to
-/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None` and the caller does
-/// not advance `target_time`; the next communication point is scheduled only
-/// after the previous result releases the barrier.
+/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None`. A coupled caller
+/// holds the shared target clock until the result lands; an independent caller
+/// may continue advancing its target clock while the worker runs, preserving
+/// the same communication-point semantics without stalling unrelated physics.
 ///
 /// While a step is in flight we do not dispatch another (one macro step per
 /// model at a time — the worker owns one `SimulationSession` per entity).
@@ -3227,10 +3269,11 @@ pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bo
 /// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    time: Res<Time<Fixed>>,
+    mut fixed_time: ResMut<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
     mut lag: ResMut<CosimLag>,
-    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
+    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
@@ -3239,15 +3282,19 @@ pub fn spawn_modelica_requests(
     // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
     // show up as MORE fixed ticks, never as a longer one, so accumulating it
     // per tick is exactly "one tick of world time".
-    let fixed_dt = time.delta_secs_f64();
+    let fixed_dt = fixed_time.delta_secs_f64();
 
     let mut worst_secs = 0.0_f64;
     let mut worst_entity = None;
     let mut live_models = 0usize;
+    let mut shared_clock_models = 0usize;
     let mut coupling_held = false;
     let mut faults = faults;
 
     for (entity, mut model) in q_models.iter_mut() {
+        let shared_clock_participant = participants
+            .as_deref()
+            .is_none_or(|participants| participants.requires_barrier(entity));
         if model.paused {
             // A paused model's clock is frozen WITH the world's: the target does
             // not advance, so unpausing does not trigger a catch-up burst for
@@ -3287,14 +3334,22 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
-        // A live Modelica step is the communication barrier for the next
-        // physics step. Do not advance target_time while the worker is busy:
-        // accumulating debt here was the source of the unbounded stale-force
-        // condition reported by the episode recording. Physics remains held
-        // until this result lands, so one slow worker step costs wall time but
-        // never turns into a multi-tick extrapolation.
+        // A live Modelica step is a barrier only when the resolved topology says
+        // this participant can affect shared state. A telemetry/electrical
+        // participant still owns an explicit communication schedule and may be
+        // in flight, but its zero-order-held outputs must not stop Avian or the
+        // controllers. The unresolved topology state is fail-closed above.
         if model.is_stepping {
-            coupling_held = true;
+            if !shared_clock_participant {
+                // The world keeps advancing while this independent participant
+                // solves. Account for that world time instead of freezing its
+                // target clock at the dispatch instant; the next communication
+                // point then represents the actual shared-world timestamp.
+                model.target_time += fixed_dt;
+            } else {
+                coupling_held = true;
+                shared_clock_models += 1;
+            }
             live_models += 1;
             let lag_secs = (model.target_time - model.current_time).abs();
             if lag_secs > worst_secs {
@@ -3309,15 +3364,26 @@ pub fn spawn_modelica_requests(
 
         // ── Lag measurement (A3.2) ─────────────────────────────────────────
         live_models += 1;
+        if shared_clock_participant {
+            shared_clock_models += 1;
+        }
         let lag_secs = (model.target_time - model.current_time).abs();
         if lag_secs > worst_secs {
             worst_secs = lag_secs;
             worst_entity = Some(entity);
         }
 
-        // ── Macro step to the communication point (A3.1) ────────────────────
-        let Some(dt) = plan_macro_step(model.target_time, model.current_time, model.is_stepping)
+        // ── Macro step to the next declared communication point ─────────────
+        let period = model.communication_period_secs();
+        if model.target_time + COMMUNICATION_EPS < model.next_communication_time {
+            continue;
+        }
+        let Some(dt) = plan_macro_step(model.next_communication_time, model.current_time, false)
         else {
+            // The solver can land a tiny amount past a point because its
+            // micro-step ladder is discrete. Move the schedule to the next
+            // point instead of repeatedly dispatching a sub-micro-step.
+            model.next_communication_time = model.current_time + period;
             continue;
         };
 
@@ -3336,7 +3402,7 @@ pub fn spawn_modelica_requests(
         });
         if sent.is_ok() {
             model.is_stepping = true;
-            coupling_held = true;
+            coupling_held |= shared_clock_participant;
         } else {
             model.paused = true;
             model.is_compiled = false;
@@ -3361,21 +3427,43 @@ pub fn spawn_modelica_requests(
     lag.models = live_models;
 
     if let Some(mut coupling) = coupling {
-        coupling.physics_held = coupling_held;
-        coupling.active_models = live_models;
+        if faults
+            .as_deref()
+            .is_some_and(lunco_core::RuntimeFaults::active)
+        {
+            coupling_held = true;
+        }
+        coupling.held = coupling_held;
+        coupling.active_participants = live_models;
+        coupling.shared_clock_participants = shared_clock_models;
         coupling.worst_lag_secs = worst_secs;
         coupling.worst_entity = worst_entity;
     }
 
-    // Rate-limited divergence alarm. A sustained lag means the forces avian is
-    // integrating come from a model state this far in the past — the coupling is
-    // no longer a co-simulation, it's an extrapolation.
+    if coupling_held {
+        // Bevy's fixed runner may have accumulated several fixed periods for
+        // this render frame before this first solver request was dispatched.
+        // The current fixed iteration is the only valid one; discard the
+        // remaining overstep so the runner cannot execute another tick after
+        // the barrier has been raised. `advance_world_clock` pauses the virtual
+        // clock before the next frame, which then keeps every FixedUpdate
+        // consumer (SimTick, Rhai, controllers, Modelica, and Avian) stopped
+        // until the result is released in Update.
+        lunco_time::discard_fixed_overstep(&mut fixed_time);
+    }
+
+    // Rate-limited divergence alarm. A coupled participant keeps the shared
+    // simulation held while it waits; an independent participant is allowed
+    // to finish asynchronously while its last validated output remains
+    // zero-order-held. The worker is asynchronous in wall-clock execution,
+    // never a second simulation-time authority.
     if lag.cooldown > 0 {
         lag.cooldown -= 1;
     } else if worst_secs > LAG_WARN_SECS {
         warn!(
-            "[cosim] Modelica coupling is waiting {:.3}s for the fixed-step result \
-             (entity {:?}, {} live model(s)); physics remains held until it lands.",
+            "[cosim] Modelica participant is {:.3}s behind its communication point \
+             (entity {:?}, {} live model(s)); causal membership determines \
+             whether the shared simulation waits for the result.",
             worst_secs, worst_entity, live_models,
         );
         lag.cooldown = LAG_WARN_COOLDOWN_TICKS;
@@ -3389,7 +3477,7 @@ pub fn spawn_modelica_requests(
 /// UI display. On `is_new_model`, clears old data and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    mut q_models: Query<&mut ModelicaModel>,
+    mut q_models: Query<(Entity, &mut ModelicaModel)>,
     // `workbench_state` was the home of `compilation_error` (B.3
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
@@ -3411,10 +3499,13 @@ pub fn handle_modelica_responses(
     mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
+    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let mut compile_states = compile_states;
     let mut source_roots = source_roots;
+    let mut faults = faults;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
@@ -3484,7 +3575,7 @@ pub fn handle_modelica_responses(
         }
 
         let lifecycle_result = result.is_new_model || result.is_parameter_update || result.is_reset;
-        if let Ok(mut model) = q_models.get_mut(result.entity) {
+        if let Ok((_, mut model)) = q_models.get_mut(result.entity) {
             // ALWAYS check session ID before resetting is_stepping
             // Stale results must NOT reset the flag.
             if result.session_id < model.session_id {
@@ -3629,6 +3720,23 @@ pub fn handle_modelica_responses(
                     level: crate::NoticeLevel::Error,
                     text: format!("[{}] {prefix}: {err}", model.model_name),
                 });
+                // A failed in-flight solver step has no valid replacement
+                // state. It is a terminal shared-simulation fault, not a
+                // reason to release the barrier and let Avian/Rhai continue
+                // against stale Modelica outputs. Compile/reset/parameter
+                // diagnostics remain scoped to their document lifecycle; only
+                // an error on an already-running step reaches this terminal
+                // runtime boundary.
+                if !lifecycle_result {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "modelica-step-failed",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            err.clone(),
+                        );
+                    }
+                }
                 model.paused = true;
                 // A failed Compile/Step must not silently auto-play on a
                 // later, unrelated successful compile: clear the resume
@@ -3698,6 +3806,7 @@ pub fn handle_modelica_responses(
 
                 model.current_time = 0.0;
                 model.target_time = 0.0;
+                model.next_communication_time = model.communication_period_secs();
                 model.last_step_time = 0.0;
 
                 info!(
@@ -3711,6 +3820,7 @@ pub fn handle_modelica_responses(
             } else if result.is_parameter_update {
                 model.current_time = 0.0;
                 model.target_time = 0.0;
+                model.next_communication_time = model.communication_period_secs();
                 model.last_step_time = 0.0;
             } else if result.is_reset {
                 model.current_time = 0.0;
@@ -3718,6 +3828,7 @@ pub fn handle_modelica_responses(
                 // otherwise the fresh model would immediately owe the catch-up
                 // path every second the old one had run (A3).
                 model.target_time = 0.0;
+                model.next_communication_time = model.communication_period_secs();
                 model.last_step_time = 0.0;
                 model.variables.clear();
                 // Preserve inputs and parameters
@@ -3739,6 +3850,8 @@ pub fn handle_modelica_responses(
             if result.error.is_none() && result.loaded_source_root_id.is_none() {
                 model.current_time = result.new_time;
                 model.last_step_time = result.new_time;
+                model.next_communication_time =
+                    model.current_time + model.communication_period_secs();
             }
             let time_val = model.current_time;
 
@@ -3782,9 +3895,18 @@ pub fn handle_modelica_responses(
     // already observed this release, so the current physics step consumes only
     // the fresh output that just arrived.
     if let Some(mut coupling) = coupling {
-        coupling.physics_held = q_models
-            .iter()
-            .any(|model| !model.paused && model.is_compiled && model.is_stepping);
+        coupling.held = q_models.iter().any(|(entity, model)| {
+            let shared_clock_participant = participants
+                .as_deref()
+                .is_none_or(|participants| participants.requires_barrier(entity));
+            shared_clock_participant && !model.paused && model.is_compiled && model.is_stepping
+        });
+        if faults
+            .as_deref()
+            .is_some_and(lunco_core::RuntimeFaults::active)
+        {
+            coupling.held = true;
+        }
     }
 }
 

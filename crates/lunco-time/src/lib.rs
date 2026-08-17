@@ -82,6 +82,22 @@ pub fn fixed_step_raw_delta_limit(rate: f64, fixed_timestep: Duration) -> Durati
     budget.min(BASE_VIRTUAL_MAX_DELTA)
 }
 
+/// Close the remainder of the current Bevy fixed-loop burst after a simulation
+/// barrier is raised from inside one fixed iteration.
+///
+/// `Time<Virtual>::pause()` prevents the next render frame from accumulating
+/// fixed time, but Bevy's current `FixedMain` loop may already have additional
+/// `Time<Fixed>::overstep()` queued for this frame. A barrier that lets that
+/// remainder run would advance some fixed consumers after the coupling decision
+/// and others before it. Discarding only the unconsumed overstep preserves the
+/// completed fixed tick and makes the barrier take effect at this boundary.
+pub fn discard_fixed_overstep(fixed: &mut Time<Fixed>) {
+    let remaining = fixed.overstep();
+    if !remaining.is_zero() {
+        fixed.discard_overstep(remaining);
+    }
+}
+
 /// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.
 ///
 /// This is the only fixed-step budget projection. The transport still controls
@@ -437,9 +453,18 @@ pub fn advance_world_clock(
     mut clock: ResMut<MissionClock>,
     mut world: ResMut<WorldTime>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    coupling: Option<Res<lunco_core::SimulationBarrier>>,
 ) {
     let real_secs = real.elapsed_secs_f64();
-    let paused = matches!(transport.mode, TransportMode::Paused);
+    // A Modelica result that feeds an Avian force/torque port is a barrier for
+    // the whole deterministic simulation, not just for Avian. If only the
+    // physics clock stopped, SimTick, Rhai, controllers, and co-simulation
+    // propagation would continue producing state for a body that did not move.
+    // Treat the barrier as a transport pause here so every FixedUpdate consumer
+    // shares one coherent boundary. The resource is optional so the time spine
+    // remains usable in small/headless apps that do not install co-simulation.
+    let coupling_held = coupling.is_some_and(|state| state.held);
+    let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held;
     let relative_speed = advance_clock(&mut clock, tick.0, transport.rate, paused, real_secs);
 
     // Epoch/regime are read back from the now-updated `clock` (no return struct
@@ -683,6 +708,18 @@ mod tests {
     }
 
     #[test]
+    fn fixed_barrier_discards_only_unconsumed_overstep() {
+        let mut fixed = Time::<Fixed>::from_seconds(1.0);
+        fixed.accumulate_overstep(Duration::from_secs(3));
+        assert_eq!(fixed.overstep(), Duration::from_secs(3));
+
+        discard_fixed_overstep(&mut fixed);
+
+        assert_eq!(fixed.overstep(), Duration::ZERO);
+        assert_eq!(fixed.elapsed(), Duration::ZERO);
+    }
+
+    #[test]
     fn high_warp_switches_to_kinematic_and_freezes_tick() {
         let mut c = MissionClock::default();
         let rs = advance_clock(&mut c, 0, 500.0, false, 0.0);
@@ -820,5 +857,28 @@ mod tests {
         let vt = world.resource::<Time<Virtual>>();
         assert!(!vt.is_paused());
         assert_eq!(vt.relative_speed_f64(), 2.0);
+    }
+
+    #[test]
+    fn realtime_coupling_barrier_pauses_the_fixed_simulation() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = bevy::prelude::World::new();
+        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(TimeTransport::default());
+        world.insert_resource(Time::<bevy::time::Real>::default());
+        world.insert_resource(MissionClock::default());
+        world.insert_resource(WorldTime::default());
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(lunco_core::SimulationBarrier {
+            held: true,
+            ..Default::default()
+        });
+
+        world.run_system_once(advance_world_clock).unwrap();
+
+        let vt = world.resource::<Time<Virtual>>();
+        assert!(vt.is_paused());
+        assert_eq!(vt.relative_speed_f64(), 1.0);
     }
 }

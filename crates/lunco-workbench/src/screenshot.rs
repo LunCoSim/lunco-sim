@@ -1227,7 +1227,7 @@ fn drive_offline_clock(
     // frozen after a capture until the worker releases the next physics step;
     // otherwise a slow worker produces duplicate frames at the same simulation
     // time and the captured sequence outruns its force state.
-    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    coupling: Option<Res<lunco_core::SimulationBarrier>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut commands: Commands,
 ) {
@@ -1282,7 +1282,7 @@ fn drive_offline_clock(
     } else if state.frame_just_captured {
         if coupling
             .as_deref()
-            .is_some_and(|coupling| coupling.physics_held && coupling.active_models > 0)
+            .is_some_and(|coupling| coupling.held && coupling.active_participants > 0)
         {
             commands.insert_resource(TimeUpdateStrategy::ManualDuration(
                 std::time::Duration::ZERO,

@@ -15,6 +15,7 @@
 //! recorder) and the pacer (`lunco-modelica`) depend on core, and neither depends on
 //! the other.
 
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
 /// Outstanding requests to keep the app updating continuously, ignoring the
@@ -44,22 +45,64 @@ impl KeepAwake {
     }
 }
 
-/// Fixed-step barrier between live Modelica outputs and rigid-body physics.
+/// Fixed-step barrier between live simulation participants.
 ///
-/// A live Modelica model may be evaluated off-thread, but physics must not
-/// integrate while the output for its next communication point is still in
-/// flight. The Modelica bridge raises `physics_held` before dispatching a step
-/// and clears it when the result lands. Physics reads this resource as an
-/// additional hold; no stale force value is allowed to accumulate while the
-/// worker is behind.
+/// A participant may execute its solver off-thread, but the deterministic
+/// shared simulation must not advance while the result for its next
+/// communication point is in flight. The participant bridge raises `held`
+/// before dispatching a step and clears it when the result lands. The time
+/// spine projects this state onto `Time<Virtual>`, so SimTick, Rhai,
+/// controllers, co-simulation propagation, and Avian share one barrier.
+///
+/// Barrier membership is supplied by the composed simulation topology. The
+/// resource starts unresolved, which is deliberately fail-closed while a scene
+/// is still being projected. Once the wiring projection has sealed a topology,
+/// only participants in the reverse causal closure of a stateful engine sink
+/// hold this barrier. A model that has no such path is still stepped and its
+/// outputs are held at communication points, but it cannot stall the shared
+/// physics clock.
 #[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct RealtimeCoupling {
-    /// Whether the next physics step must wait for a Modelica result.
-    pub physics_held: bool,
-    /// Number of live compiled Modelica models measured on the last fixed tick.
-    pub active_models: usize,
+pub struct SimulationBarrier {
+    /// Whether the next shared simulation step must wait for a participant result.
+    pub held: bool,
+    /// Number of live compiled participants measured on the last fixed tick.
+    pub active_participants: usize,
+    /// Number of live participants whose causal path requires this barrier.
+    pub shared_clock_participants: usize,
     /// Largest target/current clock gap on the last fixed tick.
     pub worst_lag_secs: f64,
-    /// Model responsible for `worst_lag_secs`.
+    /// Participant responsible for `worst_lag_secs`.
     pub worst_entity: Option<Entity>,
+}
+
+/// The authoritative set of participants that must synchronize with the
+/// shared fixed-step world.
+///
+/// This is a projection of the resolved simulation graph, not a property of a
+/// solver implementation. The USD/co-simulation projection computes the
+/// reverse causal closure from stateful sinks (Avian forces, wheel actuators,
+/// and joint drives) to their upstream producers. Modelica uses this resource
+/// only to decide whether a pending worker result is a shared-clock barrier.
+///
+/// `topology_ready == false` means the graph is not trustworthy yet. Consumers
+/// must then treat every live Modelica participant as coupled. This avoids
+/// releasing the world during scene loading merely because the graph has not
+/// been projected yet.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct SimulationBarrierParticipants {
+    pub topology_ready: bool,
+    pub entities: EntityHashSet,
+}
+
+impl SimulationBarrierParticipants {
+    #[inline]
+    pub fn requires_barrier(&self, entity: Entity) -> bool {
+        !self.topology_ready || self.entities.contains(&entity)
+    }
+
+    pub fn replace(&mut self, entities: impl IntoIterator<Item = Entity>) {
+        self.entities.clear();
+        self.entities.extend(entities);
+        self.topology_ready = true;
+    }
 }

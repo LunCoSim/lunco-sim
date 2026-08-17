@@ -311,24 +311,27 @@ whether it **integrates** and whether it **interacts**:
   *uniformly* (drives both `Time<Virtual>.relative_speed` **and** the tick), so physics + Modelica +
   epoch move together. Bounded by solver stability.
 
-  > **How Modelica actually keeps up** (finding `A3`, fixed 2026-07-12). A `rate` burst produces
-  > **more fixed ticks**, never longer ones, and the Modelica solver runs off-thread — so "moving
-  > together" cannot mean "one solver step per dispatch." It means the model's clock is driven to the
-  > fixed-step clock: `ModelicaModel.target_time` advances by exactly one `Time<Fixed>` delta per
-  > **unpaused fixed tick**, and each tick the master requests
-  > `dt = target_time − current_time` (clamped to `MAX_MACRO_STEP_DT`, then integrated as an integer
-  > ladder of `SECS_PER_TICK / 3` micro-steps). A model that misses ticks — worker busy, long compile,
-  > `rate = 10` — **catches the time up** instead of losing it.
+  > **How Modelica stays coherent** (the A3 refinement). A `rate` burst produces **more fixed ticks**,
+  > never longer ones, and the Modelica solver runs off-thread. Modelica is scheduled at its explicit
+  > `lunco:program:communicationPeriod` rather than once per render/fixed callback: inputs are sampled
+  > and outputs published at that point, with a declared zero-order hold between points. The default is
+  > 0.1 simulation seconds (10 Hz); a fixed-tick participant authors `1/60` explicitly.
+  > The worker is therefore asynchronous in wall-clock execution, while the shared simulation is
+  > synchronous at those communication points: `Time<Virtual>` is held until the result is consumed in
+  > `Update`. Rhai, controllers, connection propagation, Avian, and every other shared fixed-step
+  > participant see the same causal boundary.
   >
-  > **Model time is therefore a pure function of the fixed-step clock. It does not depend on the
-  > render frame rate, on GPU load, or on window focus.** It used to: the dispatcher skipped any tick
-  > with a step in flight and always sent `Time<Fixed>::delta`, so at most one macro step ran per
-  > RENDER FRAME — at 30 FPS the model ran at half speed, at `rate = 10` it ran 10× too slow, and the
-  > skipped time was gone for good.
+  > The requested `dt = communication_point − current_time` is clamped to `MAX_MACRO_STEP_DT`, then
+  > integrated as an integer ladder of `SECS_PER_TICK / 3` micro-steps. A slow worker costs wall time; it does not
+  > create an unbounded model-time debt or allow the world to run ahead on stale state. Any remaining
+  > same-frame fixed overstep is discarded when the barrier is raised.
   >
-  > The residual coupling delay (the model state is one in-flight macro step old) is **measured**, not
-  > assumed: `lunco_modelica::worker::CosimLag` records `|model_time − world_time|` every fixed tick
-  > and warns past 0.25 s.
+  > **Model time is therefore a pure function of admitted fixed ticks. It does not depend on render
+  > frame rate, GPU load, or window focus.** `CosimLag` records the communication gap and warns past
+  > 0.25 s. An independent model still uses this authoritative fixed simulation time and explicit
+  > communication points; its worker may be in flight without holding the shared world because its
+  > outputs do not reach a state-writing sink. It is not a second clock and it is not silently
+  > extrapolated.
 - **`KinematicWarp`** — tick **freezes** (physics and Modelica pause); only **pure** consumers
   (ephemeris, spin, lighting, sidereal) advance, as pure functions of epoch. **A `rate` above
   `MAX_REALTIME_RATE` falls into this regime** (`lunco-time/src/lib.rs`).

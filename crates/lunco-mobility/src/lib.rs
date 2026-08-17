@@ -75,6 +75,23 @@ macro_rules! drive_diag_block {
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
 
+fn mark_wheel_ports_causal(
+    trigger: On<Add, WheelRaycast>,
+    query: Query<&WheelRaycast>,
+    mut commands: Commands,
+) {
+    let Ok(wheel) = query.get(trigger.entity) else {
+        return;
+    };
+    for port in [wheel.drive_port, wheel.steer_port] {
+        if port != Entity::PLACEHOLDER {
+            commands
+                .entity(port)
+                .try_insert(lunco_core::CausalStateSink);
+        }
+    }
+}
+
 impl Plugin for LunCoMobilityPlugin {
     fn build(&self, app: &mut App) {
         // Expose physics-backed spatial queries (Raycast, GroundHeight) so the
@@ -96,6 +113,7 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
             .register_type::<ProxyWheelMassFolded>()
+            .add_observer(mark_wheel_ports_causal)
             // A vehicle's mass must not depend on which `drivetrain` variant
             // realizes its wheels. Ungated: this is a one-shot mass-property
             // correction per chassis, not a force, so it must land even while

@@ -289,12 +289,12 @@ pub fn physics_is_live(
 /// it is also self-healing if anything pauses the physics clock out of band.
 pub fn apply_physics_holds(
     holds: Res<PhysicsHolds>,
-    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    coupling: Option<Res<lunco_core::SimulationBarrier>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
     let held = holds.is_held()
-        || coupling.is_some_and(|state| state.physics_held)
+        || coupling.is_some_and(|state| state.held)
         || faults.is_some_and(|state| state.active());
     if held != physics_time.is_paused() {
         if held {
@@ -317,7 +317,7 @@ pub fn apply_physics_holds(
 /// integrated step.
 pub fn grant_physics_step(
     holds: Res<PhysicsHolds>,
-    coupling: Option<Res<lunco_core::RealtimeCoupling>>,
+    coupling: Option<Res<lunco_core::SimulationBarrier>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut steps: ResMut<PhysicsStepRequest>,
     mut physics_time: ResMut<Time<Physics>>,
@@ -327,7 +327,7 @@ pub fn grant_physics_step(
         physics_time.pause();
         return;
     }
-    if coupling.is_some_and(|state| state.physics_held) {
+    if coupling.is_some_and(|state| state.held) {
         // Modelica owns a solver barrier, not the caller's recording clock.
         // Keep queued cinematic steps until the in-flight model result releases
         // the barrier; dropping them makes a deterministic recorder capture the
@@ -504,8 +504,8 @@ mod tests {
         world.insert_resource(PhysicsHolds::default());
         world.insert_resource(PhysicsStepRequest::default());
         world.insert_resource(Time::<Physics>::default());
-        world.insert_resource(lunco_core::RealtimeCoupling {
-            physics_held: true,
+        world.insert_resource(lunco_core::SimulationBarrier {
+            held: true,
             ..Default::default()
         });
 
@@ -517,9 +517,7 @@ mod tests {
         assert!(world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 1);
 
-        world
-            .resource_mut::<lunco_core::RealtimeCoupling>()
-            .physics_held = false;
+        world.resource_mut::<lunco_core::SimulationBarrier>().held = false;
         world.run_system_once(grant_physics_step).unwrap();
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);

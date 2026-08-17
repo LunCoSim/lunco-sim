@@ -682,6 +682,14 @@ class "LunCoProgramAPI" (
         Programs that never touch physics — a supervisory script, a battery model —
         leave this alone. It is not a quality rating."""
     )
+    uniform double lunco:program:communicationPeriod = 0.1 (
+        doc = """Simulation seconds between Modelica co-simulation communication
+        points. Inputs are sampled and outputs are published at each point; the
+        last output is held between points. This is a simulation-time period, not
+        a wall-clock sleep and not a render-frame rate. The default 0.1 seconds
+        provides the standard 10 Hz live boundary. A participant that must
+        exchange state every physics tick authors 0.0166666667 explicitly."""
+    )
 }
 
 class "LunCoEnvironmentProbeAPI" (

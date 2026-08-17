@@ -165,14 +165,25 @@ already hit `BDF step too small` and worker OOM on `RoverThermalSystem` / `Abdul
 
 1. **Off the render thread.** Heavy steppers run on the worker / server tick
    (already true — rumoca runs on a worker thread per [`22-domain-cosim.md`](22-domain-cosim.md)),
-   never blocking the main loop. A runaway stepper fails its *run*, it does not
-   stall the app.
+   never blocking the UI/update loop. For a causal participant, the worker is
+   asynchronous in wall-clock execution while the shared simulation remains at
+   one deterministic communication point until the result arrives. An
+   independent participant may finish without holding the world; its last
+   validated output remains zero-order-held. The app remains responsive and a
+   failed worker step becomes a durable model fault rather than being accepted
+   as a successful result.
 2. **Sub-rate.** Slow domains change slowly — step thermal at 5–10 Hz, not 60.
-   Decouple the model's clock from the 60 Hz `SimTick` (the multi-clock hook in
-   [`14-simulation-layers.md`](14-simulation-layers.md) §multi-clock).
+   The live master now uses the authored
+   `lunco:program:communicationPeriod` as the co-simulation boundary (0.1 s by
+   default). It samples inputs and holds the last validated output between
+   points, while the 60 Hz `SimTick`, Avian, and Rhai continue. A model that
+   needs a fixed-tick exchange authors `1/60` explicitly; this is a causal
+   communication policy, not a wall-clock throttle.
 3. **Step budget.** Cap solver substeps per communication step; on exceed,
-   degrade fidelity rather than spin (the `FidelityPolicy` hook), and surface it
-   — never silently freeze.
+   report the participant failure and hold the shared simulation rather than
+   silently degrading a state that other participants consume. An explicitly
+   independent domain may choose a separate communication policy, but that is
+   a declared co-simulation boundary, not an implicit Modelica fallback.
 
 A program that makes no realtime promise tolerates all three naturally. One that DOES
 cannot sub-rate and cannot exceed its step budget — which is exactly why the promise is
