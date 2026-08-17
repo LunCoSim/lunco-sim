@@ -4424,11 +4424,10 @@ fn render_layout(
         // Drop the per-tab body border (the rectangle around every
         // panel content area). This is the "border when unfolded".
         style.tab.tab_body.stroke = egui::Stroke::NONE;
-        // The tab strip is chrome, so it owns an opaque theme fill. Ordinary
-        // tab bodies follow the single workbench appearance setting; the
-        // dedicated ViewportPanel remains transparent because it hosts the
-        // full-window scene camera.
-        style.tab_bar.bg_fill = theme.colors.mantle;
+        // The tab strip is distinct chrome, so it uses the theme's crust while
+        // ordinary tab bodies use mantle. The dedicated ViewportPanel remains
+        // transparent because it hosts the full-window scene camera.
+        style.tab_bar.bg_fill = theme.colors.crust;
         // Drop the hairline under the active tab name too — same
         // visual-noise reason as the tab body stroke.
         style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
