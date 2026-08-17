@@ -375,48 +375,36 @@ impl Panel for CinematicPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let Some(mantle) = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|theme| theme.colors.mantle)
-        else {
-            return;
-        };
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                ui.heading("Cinematic");
-                ui.add_space(4.0);
+        ctx.panel_content_frame().show(ui, |ui| {
+            ui.heading("Cinematic");
+            ui.add_space(4.0);
 
-                if ui
-                    .button("📷 Add Camera Here")
-                    .on_hover_text("Capture the current view as a new Camera prim in the scene")
-                    .clicked()
-                {
-                    ctx.trigger(AddCameraHere { name: None });
-                }
-                ui.small("Fly the view, then capture — the camera is authored into");
-                ui.small("the scene and saved with it.");
+            if ui
+                .button("📷 Add Camera Here")
+                .on_hover_text("Capture the current view as a new Camera prim in the scene")
+                .clicked()
+            {
+                ctx.trigger(AddCameraHere { name: None });
+            }
+            ui.small("Fly the view, then capture — the camera is authored into");
+            ui.small("the scene and saved with it.");
 
-                ui.add_space(6.0);
-                let show = ctx.resource::<CinematicViz>().is_some_and(|v| v.show_paths);
-                let mut show_mut = show;
-                if ui
-                    .checkbox(&mut show_mut, "Show camera paths")
-                    .on_hover_text(
-                        "Draw each animated camera's authored trajectory in the viewport",
-                    )
-                    .changed()
-                {
-                    ctx.set_resource(CinematicViz {
-                        show_paths: show_mut,
-                    });
-                }
+            ui.add_space(6.0);
+            let show = ctx.resource::<CinematicViz>().is_some_and(|v| v.show_paths);
+            let mut show_mut = show;
+            if ui
+                .checkbox(&mut show_mut, "Show camera paths")
+                .on_hover_text("Draw each animated camera's authored trajectory in the viewport")
+                .changed()
+            {
+                ctx.set_resource(CinematicViz {
+                    show_paths: show_mut,
+                });
+            }
 
-                ui.separator();
-                transport_section(ui, ctx);
-            });
+            ui.separator();
+            transport_section(ui, ctx);
+        });
     }
 }
 

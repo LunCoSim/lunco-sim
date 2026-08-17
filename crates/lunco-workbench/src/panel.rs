@@ -166,6 +166,32 @@ impl<'w> PanelCtx<'w> {
         self.world.resource::<T>()
     }
 
+    /// Resolve the shared fill for a panel-owned content surface.
+    ///
+    /// The workbench setting controls this centrally so a panel cannot drift
+    /// from the dock body's appearance. A panel that wants a card should use
+    /// [`Self::panel_content_frame`] rather than copying the theme fill.
+    pub fn panel_content_fill(&self) -> egui::Color32 {
+        if self
+            .resource::<crate::WorkbenchAppearanceSettings>()
+            .is_some_and(|settings| settings.transparent_tab_content)
+        {
+            egui::Color32::TRANSPARENT
+        } else {
+            self.resource_expect::<lunco_theme::Theme>().colors.mantle
+        }
+    }
+
+    /// Build the standard panel-content surface with the active workbench
+    /// appearance and centralized theme spacing/rounding.
+    pub fn panel_content_frame(&self) -> egui::Frame {
+        let theme = self.resource_expect::<lunco_theme::Theme>();
+        egui::Frame::new()
+            .fill(self.panel_content_fill())
+            .inner_margin(theme.spacing.window_padding)
+            .corner_radius(theme.rounding.window)
+    }
+
     /// O(1) read of one entity's component (e.g. the selected entity).
     /// This is a direct hash lookup, not a scan.
     pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {

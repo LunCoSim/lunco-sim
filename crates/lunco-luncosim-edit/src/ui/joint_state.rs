@@ -282,16 +282,11 @@ impl Panel for JointStatePanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                egui::ScrollArea::both()
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| joint_state_content(ui, ctx));
-            });
+        ctx.panel_content_frame().show(ui, |ui| {
+            egui::ScrollArea::both()
+                .auto_shrink([false, true])
+                .show(ui, |ui| joint_state_content(ui, ctx));
+        });
     }
 }
 

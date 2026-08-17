@@ -139,15 +139,7 @@ impl Panel for MissionControl {
         let mut set_speed: Option<f64> = None;
         let mut set_policy: Option<lunco_core::PossessionPolicy> = None;
 
-        let frame = egui::Frame::new()
-            .fill(
-                theme
-                    .as_ref()
-                    .map(|t| t.colors.mantle)
-                    .unwrap_or(egui::Color32::TRANSPARENT),
-            )
-            .inner_margin(8.0)
-            .corner_radius(4);
+        let frame = ctx.panel_content_frame();
 
         frame.show(ui, |ui| {
             // ── Time Control ──

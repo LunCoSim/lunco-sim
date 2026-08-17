@@ -39,14 +39,7 @@ impl Panel for CodePanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx
-            .resource::<lunco_theme::Theme>()
-            .map(|t| t.colors.mantle)
-            .unwrap_or(egui::Color32::from_rgb(24, 24, 37));
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
+        ctx.panel_content_frame()
             .show(ui, |ui| code_panel_content(ui, ctx));
     }
 }
