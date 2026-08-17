@@ -68,7 +68,6 @@ pub mod mount;
 pub mod nurbs;
 pub mod program;
 pub mod read;
-pub mod scene_lifecycle;
 pub mod trim;
 pub mod units;
 pub mod usd_data;
@@ -189,6 +188,8 @@ impl Plugin for UsdBevyPlugin {
             // lunco-core's `register_core_resources` (e.g. a focused test app)
             // still has it. Idempotent — a no-op if core already registered it.
             .init_resource::<lunco_core::SceneViewport>()
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<lunco_core::TheLocalAvatar>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
             // Ph0′: the live canonical stages, built main-thread from each
@@ -222,8 +223,10 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (
                     camera_switch::cycle_active_camera,
+                    camera_switch::request_initial_avatar_view,
                     camera_switch::reconcile_scene_viewport
-                        .after(camera_switch::cycle_active_camera),
+                        .after(camera_switch::cycle_active_camera)
+                        .after(camera_switch::request_initial_avatar_view),
                     camera_switch::enforce_one_window_camera
                         .after(camera_switch::reconcile_scene_viewport),
                     camera_switch::update_camera_selection_status
@@ -231,7 +234,7 @@ impl Plugin for UsdBevyPlugin {
                 ),
             )
             .add_systems(
-                scene_lifecycle::SceneTeardown,
+                lunco_core::scene_lifecycle::SceneTeardown,
                 camera_switch::reset_camera_selection,
             )
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
@@ -684,6 +687,16 @@ pub struct MaterialPlan {
 /// into the live world.
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
+
+/// Root of a live USD scene mount.
+///
+/// This marker belongs to the USD projection boundary because visual
+/// synchronization must identify the ownership root without depending on the
+/// simulation translator.  Additive mounts use the same root marker; the
+/// shared [`lunco_core::SceneMountState`] decides which roots are still valid
+/// after a replacement.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdSceneRoot;
 
 /// Returns whether an entity belongs to an off-screen USD preview stage.
 ///
@@ -1597,31 +1610,29 @@ fn instantiate_usd_prim_from_stage(
             let child_entity = match &child_member {
                 Some(member) => {
                     if is_low_precision_root_target {
-                        commands
-                            .spawn((
-                                base_components,
-                                ChildOf(entity),
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            base_components,
+                            (
                                 member.clone(),
                                 big_space::grid::propagation::LowPrecisionRoot,
-                            ))
-                            .id()
+                            ),
+                        )
                     } else {
-                        commands
-                            .spawn((base_components, ChildOf(entity), member.clone()))
-                            .id()
+                        queue_usd_child_spawn(commands, entity, base_components, (member.clone(),))
                     }
                 }
                 None => {
                     if is_low_precision_root_target {
-                        commands
-                            .spawn((
-                                base_components,
-                                ChildOf(entity),
-                                big_space::grid::propagation::LowPrecisionRoot,
-                            ))
-                            .id()
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            base_components,
+                            (big_space::grid::propagation::LowPrecisionRoot,),
+                        )
                     } else {
-                        commands.spawn((base_components, ChildOf(entity))).id()
+                        queue_usd_child_spawn(commands, entity, base_components, ())
                     }
                 }
             };
@@ -1647,6 +1658,60 @@ fn instantiate_usd_prim_from_stage(
             }
         }
     }
+}
+
+/// Queue a USD child spawn with a final parent-liveness check.
+///
+/// A scene replacement can invalidate a parent after the visual extractor has
+/// queued work but before Bevy applies that work.  `Commands::spawn((..., ChildOf
+/// (parent)))` would still create an unparented orphan when the parent is gone;
+/// worse, its `UsdPrimPath` observer would continue projecting the orphan.  The
+/// empty allocation is harmlessly reclaimed when the check fails, and the
+/// authored bundle is inserted only while the parent is live.
+fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
+    commands: &mut Commands,
+    parent: Entity,
+    base: Base,
+    extra: Extra,
+) -> Entity {
+    let child = commands.spawn_empty().id();
+    commands.queue(move |world: &mut World| {
+        if world.get_entity(parent).is_err() || !scene_mount_entity_is_live(world, parent) {
+            let _ = world.despawn(child);
+            return;
+        }
+        let Ok(mut entity) = world.get_entity_mut(child) else {
+            return;
+        };
+        entity.insert((base, ChildOf(parent), extra));
+    });
+    child
+}
+
+/// Check the scene ownership fence from inside a deferred command.
+///
+/// The command is the last point before a child bundle would trigger its USD
+/// observers. A replacement may have invalidated the root while the parent
+/// entity is still present in the deferred-despawn window, so a parent-liveness
+/// check alone is insufficient.
+fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
+    let Some(state) = world.get_resource::<lunco_core::SceneMountState>() else {
+        return true;
+    };
+    let mut current = entity;
+    for _ in 0..1024 {
+        if world.get::<UsdSceneRoot>(current).is_some() {
+            return state.contains_root(current);
+        }
+        let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) else {
+            return true;
+        };
+        if world.get_entity(parent).is_err() {
+            return false;
+        }
+        current = parent;
+    }
+    false
 }
 
 /// Observer: fires the moment a new `UsdPrimPath` is added to an entity.
@@ -1787,7 +1852,10 @@ pub fn sync_usd_visuals(
         )>,
     >,
     q_child_of: Query<&ChildOf>,
+    q_entities: Query<Entity>,
+    q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    mount_state: Res<lunco_core::SceneMountState>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1818,14 +1886,33 @@ pub fn sync_usd_visuals(
     );
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
-        if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
-            commands.entity(entity).remove::<UsdAwaitingStage>();
+        if !loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
+            continue;
+        }
+
+        let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
+        let stale_mount = match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
+        {
+            Ok(Some(root)) => !mount_state.contains_root(root),
+            Ok(None) => false,
+            Err(()) => true,
+        };
+        if !preview_only && stale_mount {
+            // The stage event is real, but this entity belongs to a root that
+            // was invalidated by a newer load.  Do not enqueue even one
+            // deferred command against it: teardown is intentionally deferred
+            // too, and this is the window that previously produced Bevy's
+            // invalid-entity panic in `sync_usd_visuals`.
+            continue;
+        }
+
+        {
+            commands.entity(entity).try_remove::<UsdAwaitingStage>();
             let is_high_precision_parent = q_high_precision.contains(entity)
                 || q_child_of
                     .get(entity)
                     .ok()
                     .is_some_and(|c| q_high_precision.contains(c.parent()));
-            let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
 
             instantiate_usd_prim(
                 entity,
@@ -1845,6 +1932,99 @@ pub fn sync_usd_visuals(
                 budget_bytes,
             );
         }
+    }
+}
+
+/// Find the live-scene ownership root for a projected entity.
+///
+/// Entities in a preview or an additive/unrooted projection may have no live
+/// scene root ancestor and are intentionally left to their own projection
+/// policy.  A regular scene entity always reaches `UsdSceneRoot`, including
+/// the root itself.  The bound prevents malformed relationship data from
+/// turning a failed load into an infinite loop during error handling.
+pub fn scene_root_ancestor(
+    entity: Entity,
+    q_scene_root: &Query<(), With<UsdSceneRoot>>,
+    q_child_of: &Query<&ChildOf>,
+    q_entities: &Query<Entity>,
+) -> Result<Option<Entity>, ()> {
+    let mut current = entity;
+    for _ in 0..1024 {
+        if q_scene_root.contains(current) {
+            return Ok(Some(current));
+        }
+        let Ok(parent) = q_child_of.get(current) else {
+            return Ok(None);
+        };
+        current = parent.parent();
+        if !q_entities.contains(current) {
+            return Err(());
+        }
+    }
+    warn!(
+        "[usd] scene hierarchy exceeded 1024 ancestors at {:?}",
+        entity
+    );
+    Err(())
+}
+
+#[cfg(test)]
+mod scene_mount_tests {
+    use super::*;
+
+    #[derive(Resource)]
+    struct ExpectedRoots {
+        root: Entity,
+        child: Entity,
+        detached: Entity,
+    }
+
+    fn assert_root_ancestry(
+        expected: Res<ExpectedRoots>,
+        q_scene_root: Query<(), With<UsdSceneRoot>>,
+        q_child_of: Query<&ChildOf>,
+        q_entities: Query<Entity>,
+    ) {
+        assert_eq!(
+            scene_root_ancestor(expected.child, &q_scene_root, &q_child_of, &q_entities),
+            Ok(Some(expected.root))
+        );
+        assert_eq!(
+            scene_root_ancestor(expected.detached, &q_scene_root, &q_child_of, &q_entities),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn projected_descendants_resolve_their_scene_mount_root() {
+        let mut app = App::new();
+        let (root, child, detached) = {
+            let world = app.world_mut();
+            let root = world.spawn(UsdSceneRoot).id();
+            let child = world.spawn(ChildOf(root)).id();
+            let detached = world.spawn_empty().id();
+            (root, child, detached)
+        };
+        app.insert_resource(ExpectedRoots {
+            root,
+            child,
+            detached,
+        })
+        .add_systems(Update, assert_root_ancestry);
+        app.update();
+    }
+
+    #[test]
+    fn an_invalidated_root_is_no_longer_owned_by_the_mount() {
+        let root = Entity::from_bits(41);
+        let mut state = lunco_core::SceneMountState::default();
+        state.register_root(root, true);
+        assert!(state.contains_root(root));
+        assert_eq!(state.active_root(), Some(root));
+
+        state.begin_replacement();
+        assert!(!state.contains_root(root));
+        assert_eq!(state.active_root(), None);
     }
 }
 

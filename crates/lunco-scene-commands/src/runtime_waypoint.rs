@@ -18,7 +18,7 @@ use lunco_core::{
     TelemetryEvent, TelemetryValue, TriggerZone,
 };
 use lunco_usd::document::WAYPOINT_MARKER_ASSET;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 
 use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 
@@ -48,7 +48,7 @@ pub struct RuntimeWaypointBinding {
 pub struct RuntimeWaypointSpawner<'w, 's> {
     pub asset_server: Res<'w, AssetServer>,
     pub catalog: Res<'w, SpawnCatalog>,
-    pub q_scene_root: Query<'w, 's, Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    pub q_scene_root: Query<'w, 's, Entity, With<UsdSceneRoot>>,
 }
 
 /// The synthetic key used by the live route and by the arrival set.

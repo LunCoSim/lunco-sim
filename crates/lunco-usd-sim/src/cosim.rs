@@ -51,7 +51,7 @@ use lunco_scripting::{
 };
 use lunco_usd_bevy::{
     CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
-    UsdStageAsset,
+    UsdSceneRoot, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap};
@@ -1030,7 +1030,9 @@ pub fn dispatch_loaded_modelica_sources(
                 text: format!("[{}] Asset load error: {error}", component.model_name),
             });
             component.status = SimStatus::Error(error);
-            commands.entity(entity).remove::<PendingModelicaSource>();
+            commands
+                .entity(entity)
+                .try_remove::<PendingModelicaSource>();
             continue;
         }
         let Some(src) = sources.get(&pending.handle) else {
@@ -1186,28 +1188,58 @@ pub fn dispatch_loaded_modelica_sources(
             });
         }
 
-        commands.entity(entity).remove::<PendingModelicaSource>();
+        commands
+            .entity(entity)
+            .try_remove::<PendingModelicaSource>();
     }
 }
 
 /// Drain `PendingPythonSource` analogously to the Modelica version.
+fn python_source_load_error(asset_path: &str) -> String {
+    format!("failed to load Python source `{asset_path}` via AssetServer")
+}
+
+fn mark_python_source_load_failed(sim: &mut SimComponent, error: &str) {
+    // The bind-time interface is still valid, but the executable source is not.
+    // This terminal state releases the binding epoch and readiness producer;
+    // leaving `Compiling` here would wait forever for a source that cannot arrive.
+    sim.status = SimStatus::Error(error.to_owned());
+}
+
 pub fn dispatch_loaded_python_sources(
     mut commands: Commands,
     q: Query<(Entity, &PendingPythonSource)>,
     sources: Res<Assets<PythonSource>>,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<ScriptRegistry>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
     // The `SimComponent` was published at BIND with the USD-declared interface;
     // dispatch reads it to seed the editor document and flips it live.
     mut sims: Query<&mut SimComponent>,
 ) {
     for (entity, pending) in q.iter() {
         if asset_server.load_state(&pending.handle).is_failed() {
-            warn!(
-                "[usd-cosim] failed to load Python source `{}` via AssetServer",
-                pending.asset_path
-            );
-            commands.entity(entity).remove::<PendingPythonSource>();
+            let error = python_source_load_error(&pending.asset_path);
+            let model_name = if let Ok(mut sim) = sims.get_mut(entity) {
+                let model_name = sim.model_name.clone();
+                mark_python_source_load_failed(&mut sim, &error);
+                model_name
+            } else {
+                format!("Python:{}", pending.asset_path)
+            };
+            warn!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{model_name}] Asset load error: {error}"),
+            });
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_DISPATCH_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error),
+                timestamp: 0.0,
+            });
+            commands.entity(entity).try_remove::<PendingPythonSource>();
             continue;
         }
         let Some(src) = sources.get(&pending.handle) else {
@@ -1277,7 +1309,7 @@ pub fn dispatch_loaded_python_sources(
             sim.status = SimStatus::Running;
         }
 
-        commands.entity(entity).remove::<PendingPythonSource>();
+        commands.entity(entity).try_remove::<PendingPythonSource>();
     }
 }
 
@@ -3157,6 +3189,7 @@ fn on_restart_scene(
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     scene: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
     // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
     // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
@@ -3178,6 +3211,12 @@ fn on_restart_scene(
         .map(|p| p.to_string())
         .unwrap_or_else(|| "restarted-scene".to_string());
     info!("[restart-scene] reloading `{}` from disk", label);
+
+    // Reject late events and deferred projections from the outgoing root while
+    // its recursive despawn is still queued.
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
 
     // Restart is an explicit replacement transaction. Cancel the old load
     // identity before reclaiming its parked entities.
@@ -3228,8 +3267,16 @@ fn on_restart_scene(
 pub struct ClearScene {}
 
 #[on_command(ClearScene)]
-fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneEntities) {
+fn on_clear_scene(
+    trigger: On<ClearScene>,
+    mut commands: Commands,
+    scene: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
+) {
     info!("[clear-scene] clearing viewport");
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
     commands.trigger(lunco_core::SceneTransitionStarted {
         transition: SceneTransition::Clear,
     });
@@ -3283,8 +3330,8 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // A scene is its entities AND the resources derived from it. Resources are
     // restored through the registry rather than named here, so a subsystem that
     // adds scene-derived state does not also have to edit this function — see
-    // `lunco_usd_bevy::scene_lifecycle`.
-    commands.queue(lunco_usd_bevy::scene_lifecycle::run_scene_teardown);
+    // `lunco_core::scene_lifecycle`.
+    commands.queue(lunco_core::scene_lifecycle::run_scene_teardown);
 
     let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_physics_owned) = (
         &scene.grid,
@@ -3613,9 +3660,6 @@ pub fn spawn_scene_root_world(
 /// The preview viewport (`lunco_usd::ui::viewport`) mounts its own private root
 /// the same way, so consumers that must act on the *running* scene should scope
 /// their query rather than assume a single one exists.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdSceneRoot;
-
 /// Spawn a USD scene root from an **already-built** stage handle.
 ///
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
@@ -3689,6 +3733,16 @@ pub fn spawn_scene_root_with_stage(
             ChildOf(grid),
         ))
         .id();
+    let primary = world
+        .get_resource::<SceneLoadInFlight>()
+        .is_some_and(|load| {
+            load.stage_id == new_id
+                && load.path == asset_path
+                && (load.root_prim.is_empty() || load.root_prim == root_prim)
+        });
+    if let Some(mut state) = world.get_resource_mut::<lunco_core::SceneMountState>() {
+        state.register_root(root, primary);
+    }
     info!(
         "[scene] spawned `{}` @ `{}` (entity {})",
         asset_path, root_prim, root
@@ -3771,7 +3825,7 @@ pub(crate) fn install(app: &mut App) {
     // entities that gave it meaning. This runs before clear_scene_entities'
     // deferred despawns, so the outgoing hook still sees the outgoing world.
     app.add_systems(
-        lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+        lunco_core::scene_lifecycle::SceneTeardown,
         stop_scene_owned_scripts,
     );
 
@@ -3896,7 +3950,7 @@ pub(crate) fn install(app: &mut App) {
         report_python_unavailable.after(CosimUpdateSet::Scene),
     );
     app.add_systems(
-        lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+        lunco_core::scene_lifecycle::SceneTeardown,
         reset_python_unavailable,
     );
 
@@ -4191,6 +4245,27 @@ mod tests {
         assert_eq!(
             modelica_status(&model),
             SimStatus::Error("singular system".into())
+        );
+    }
+
+    #[test]
+    fn failed_python_source_is_terminal_for_binding_readiness() {
+        let mut sim = SimComponent {
+            model_name: "Python:models/controller.py".into(),
+            status: SimStatus::Compiling,
+            ..default()
+        };
+
+        let error = python_source_load_error("models/controller.py");
+        let model_name = sim.model_name.clone();
+        mark_python_source_load_failed(&mut sim, &error);
+
+        assert_eq!(model_name, "Python:models/controller.py");
+        assert!(error.contains("models/controller.py"));
+        assert_eq!(sim.status, SimStatus::Error(error));
+        assert!(
+            modelica_models_terminal(std::iter::once((None, Some(&sim)))),
+            "a source that failed to load must release the binding epoch as a terminal error"
         );
     }
 

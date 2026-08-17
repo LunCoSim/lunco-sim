@@ -1066,11 +1066,12 @@ mod tests {
             .spawn((ActionState::<UserIntent>::default(), get_avatar_input_map()))
             .id();
 
-        for key in [KeyCode::KeyQ, KeyCode::KeyW] {
-            app.world_mut()
-                .resource_mut::<ButtonInput<KeyCode>>()
-                .press(key);
-        }
+        // Exercise the real transition order: W is already held when Q goes
+        // down.  Pressing both in one input batch does not cover the
+        // just-pressed/held-state path used by a player.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
         app.update();
 
         let state = app
@@ -1078,6 +1079,18 @@ mod tests {
             .entity(entity)
             .get::<ActionState<UserIntent>>()
             .expect("input manager action state");
+        assert!(state.pressed(&UserIntent::MoveForward));
+        assert!(!state.pressed(&UserIntent::MoveDown));
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyQ);
+        app.update();
+        let state = app
+            .world()
+            .entity(entity)
+            .get::<ActionState<UserIntent>>()
+            .expect("action state after Q transition");
         assert!(state.pressed(&UserIntent::MoveDown));
         assert!(state.pressed(&UserIntent::MoveForward));
 

@@ -42,7 +42,7 @@ use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
 // document/file command surface below is headless-safe. Gate only this.
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::{TwinAdded, WorkspaceResource};
@@ -484,11 +484,7 @@ fn on_load_scene(
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
     mut commands: Commands,
-    q_usd: Query<(
-        Entity,
-        &UsdPrimPath,
-        Has<lunco_usd_sim::cosim::UsdSceneRoot>,
-    )>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
     in_flight: Option<Res<SceneLoadInFlight>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
@@ -500,6 +496,7 @@ fn on_load_scene(
     // entities from the scene being cleared (their despawn is deferred, so the
     // query would still read non-empty and clobber the reason mid-open).
     mut empty_reason: ResMut<EmptyViewportReason>,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to the Twin
     // root) or an already-relative asset path; bail if an absolute path lies
@@ -590,6 +587,14 @@ fn on_load_scene(
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
+    // Invalidate outgoing roots NOW, before Bevy applies the deferred
+    // despawns below.  The visual sync system may still query those entities
+    // during this boundary frame; the mount state is its authoritative
+    // ownership fence.
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
+
     // Record the transaction identity. A later request with a different
     // identity replaces it through the same teardown path; the transaction is
     // not a process-wide lock on scene selection.
@@ -672,7 +677,7 @@ register_commands!(
 fn on_restart_scene_refresh_active_document(
     trigger: On<RestartScene>,
     asset_server: Option<Res<AssetServer>>,
-    q_usd: Query<(&UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
+    q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -1385,7 +1390,7 @@ fn on_set_dome_light(
     trigger: On<SetDomeLight>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
     asset_server: Res<AssetServer>,
-    roots: Query<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();

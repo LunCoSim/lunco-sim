@@ -512,7 +512,7 @@ impl Plugin for SandboxEditUiPlugin {
             // vessel that no longer exists, with the possession and selection
             // observers standing down for it (`WaypointToolActive`).
             .add_systems(
-                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                lunco_core::scene_lifecycle::SceneTeardown,
                 (
                     |mut placement: ResMut<checkpoint_click::WaypointPlacement>,
                      mut menu: ResMut<checkpoint_click::WaypointContextMenuState>| {

@@ -530,10 +530,9 @@ fn rendered_and_analytical_orbit_use_the_same_typed_frame_transform() {
 }
 
 /// Scene reload must tear the sky down **completely** — by architecture, not a
-/// maintained despawn list. When the declarations disappear (a scene without bodies is
-/// loaded) every celestial-derived entity must be gone: no orbiting ghost bodies, no
-/// stale orbit lines, no globe tiles. This is what fixes "reload without sun/earth and
-/// it still moves".
+/// maintained despawn list. The replacement may be body-less or may declare a
+/// different sky; either way, the outgoing derived entities and active physics
+/// grid must be cleared at the scene boundary before the replacement integrates.
 #[test]
 fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     let mut app = celestial_test_app(); // declares Sun/Earth/Moon
@@ -563,6 +562,10 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     app.world_mut()
         .insert_resource(lunco_core::ActivePhysicsFrame(surface_frame));
 
+    // The shared scene boundary runs while the outgoing declarations still exist;
+    // this is the ordering used by LoadScene/ClearScene.
+    lunco_core::scene_lifecycle::run_scene_teardown(app.world_mut());
+
     // Reload into a scene WITHOUT bodies: despawn every `CelestialBodyDecl` (that is
     // what scene-clear does to the USD-projected declaration entities).
     let decls: Vec<Entity> = app
@@ -574,8 +577,8 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
         app.world_mut().despawn(e);
     }
 
-    // Teardown fires on the next frame and clears everything…
-    app.update();
+    // The teardown already cleared everything before the old declaration entities
+    // were removed.
     app.update();
     assert_eq!(
         count_derived(&mut app),

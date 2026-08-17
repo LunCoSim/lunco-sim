@@ -283,7 +283,7 @@ impl Plugin for UsdReadinessPlugin {
         // Both producers above re-declare from live state on the next frame, so
         // clearing here costs nothing that is still true.
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             |mut registry: ResMut<ReadinessRegistry>,
              mut dirty: ResMut<crate::cosim::BindingEpochDirty>,
              wait: Option<Res<crate::cosim::BindingEpochWait>>,

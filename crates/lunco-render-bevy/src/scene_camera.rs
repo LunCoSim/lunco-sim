@@ -44,13 +44,7 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 /// non-HDR target is a no-op that still pays for a downsample/upsample chain, which
 /// is precisely the bug (`R4`) four crates in this repo shipped. Here it is refused,
 /// loudly, instead of silently wasting the passes.
-fn apply(
-    commands: &mut Commands,
-    e: Entity,
-    cam: &SceneCamera,
-    profile: RenderProfile,
-    initial_inactive: bool,
-) {
+fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderProfile) {
     let mut ec = commands.entity(e);
     let (tonemapping, msaa) = if profile.is_fast() {
         (Tonemapping::None, Msaa::Off)
@@ -68,29 +62,17 @@ fn apply(
     // the SCENE camera to black leaves the chrome's own clear untouched and gives the
     // additive sky something to add to.
     //
-    // Set through `entry`, not by inserting a fresh `Camera`: `order`, `viewport` and
-    // `is_active` on this entity are owned by the viewport reconciler, and a wholesale
-    // insert would reset all three.
-    ec.entry::<Camera>().and_modify(move |mut c| {
-        if initial_inactive {
-            c.is_active = false;
-        }
-        if !matches!(c.clear_color, ClearColorConfig::Custom(_)) {
-            c.clear_color = ClearColorConfig::Custom(Color::BLACK);
-        }
-    });
-
     // `Hdr` is a marker component in `bevy_camera` — render-FREE. So "this camera is
     // HDR" is expressible headless too; only the pipeline that acts on it is not.
     if cam.hdr && !profile.is_fast() {
         ec.try_insert(Hdr);
     } else {
-        ec.remove::<Hdr>();
+        ec.try_remove::<Hdr>();
     }
 
     match (cam.bloom, cam.hdr, profile) {
         (_, _, RenderProfile::Fast) => {
-            ec.remove::<Bloom>();
+            ec.try_remove::<Bloom>();
         }
         (Some(b), true, _) => {
             ec.try_insert(Bloom {
@@ -105,33 +87,53 @@ fn apply(
                  non-HDR target renders nothing and still pays for the downsample chain. \
                  Use `SceneCamera::with_bloom`, which turns hdr on for you."
             );
-            ec.remove::<Bloom>();
+            ec.try_remove::<Bloom>();
         }
         (None, _, _) => {
-            ec.remove::<Bloom>();
+            ec.try_remove::<Bloom>();
         }
+    }
+}
+
+/// Configure the existing camera while it is still borrowed by this system.
+/// Scene teardown is deferred, so a queued `EntityEntry` mutation can outlive
+/// the camera and panic when the teardown buffer is applied. The viewport
+/// reconciler remains the only writer of `is_active` after initial binding;
+/// this function only applies the camera's render-clear intent.
+fn configure_camera(camera: Option<&mut Camera>, initial_inactive: bool) {
+    let Some(camera) = camera else { return };
+    if initial_inactive {
+        camera.is_active = false;
+    }
+    if !matches!(camera.clear_color, ClearColorConfig::Custom(_)) {
+        camera.clear_color = ClearColorConfig::Custom(Color::BLACK);
     }
 }
 
 fn bind_scene_camera(
     add: On<Add, SceneCamera>,
     cams: Query<&SceneCamera>,
+    mut cameras: Query<&mut Camera>,
     profile: Res<RenderProfile>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(cam) = cams.get(e) else { return };
-    apply(&mut commands, e, cam, *profile, true);
+    if let Ok(mut camera) = cameras.get_mut(e) {
+        configure_camera(Some(&mut camera), true);
+    }
+    apply(&mut commands, e, cam, *profile);
 }
 
 /// Re-apply when the look is retuned live (the render-settings panel).
 fn rebind_changed_scene_camera(
-    changed: Query<(Entity, &SceneCamera), Changed<SceneCamera>>,
+    mut changed: Query<(Entity, &SceneCamera, Option<&mut Camera>), Changed<SceneCamera>>,
     profile: Res<RenderProfile>,
     mut commands: Commands,
 ) {
-    for (e, cam) in &changed {
-        apply(&mut commands, e, cam, *profile, false);
+    for (e, cam, mut camera) in &mut changed {
+        configure_camera(camera.as_deref_mut(), false);
+        apply(&mut commands, e, cam, *profile);
     }
 }
 
@@ -225,5 +227,33 @@ mod tests {
         assert_eq!(entity.get::<Tonemapping>(), Some(&Tonemapping::None));
         assert!(!entity.contains::<Hdr>());
         assert!(!entity.contains::<Bloom>());
+    }
+
+    fn despawn_scene_cameras(mut commands: Commands, cameras: Query<Entity, With<SceneCamera>>) {
+        for entity in &cameras {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    #[test]
+    fn changed_camera_rebind_ignores_deferred_scene_despawn() {
+        let mut a = app();
+        let entity = a
+            .world_mut()
+            .spawn((SceneCamera::default(), Camera::default()))
+            .id();
+        a.update();
+
+        a.world_mut()
+            .get_mut::<SceneCamera>(entity)
+            .unwrap()
+            .tone_map = ToneMap::AgX;
+        a.add_systems(
+            Update,
+            despawn_scene_cameras.before(rebind_changed_scene_camera),
+        );
+        a.update();
+
+        assert!(a.world().get_entity(entity).is_err());
     }
 }

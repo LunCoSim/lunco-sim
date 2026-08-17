@@ -654,6 +654,20 @@ pub(crate) fn load_runtime_ui_manifest(mut commands: Commands, server: Res<Asset
     });
 }
 
+fn spawn_runtime_ui_surface(
+    commands: &mut Commands,
+    definition: &RuntimeUiSurfaceDefinition,
+    server: &AssetServer,
+) {
+    let template: Handle<HtmlTemplate> = server.load(definition.template.clone());
+    let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
+    commands.spawn((
+        Node::default(),
+        RuntimeUiSurface::from_definition(definition, template, stylesheet),
+        Visibility::Hidden,
+    ));
+}
+
 pub(crate) fn sync_runtime_ui_manifest(
     mut commands: Commands,
     manifests: Res<Assets<RuntimeUiManifest>>,
@@ -698,17 +712,10 @@ pub(crate) fn sync_runtime_ui_manifest(
     }
 
     for root in &roots {
-        commands.entity(root).despawn_related::<Children>();
         commands.entity(root).try_despawn();
     }
     for definition in &manifest.surfaces {
-        let template: Handle<HtmlTemplate> = server.load(definition.template.clone());
-        let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
-        commands.spawn((
-            Node::default(),
-            RuntimeUiSurface::from_definition(definition, template, stylesheet),
-            Visibility::Hidden,
-        ));
+        spawn_runtime_ui_surface(&mut commands, definition, &server);
     }
     state.applied = Some(state.handle.id());
     state.rebuild_pending = true;
@@ -717,11 +724,15 @@ pub(crate) fn sync_runtime_ui_manifest(
 /// Attach HUI/Flair only to surfaces that can currently be shown. Runtime
 /// manifests may describe many optional overlays, but hidden trees still incur
 /// HUI compilation, CSS matching, and Bevy UI layout cost if they are mounted.
-/// The marker root remains alive so an exposure can activate it later without
-/// rebuilding the manifest.
+/// A hidden surface has no presentation root. When its exposure becomes
+/// visible again, this system creates a fresh root from the authoritative
+/// manifest before HUI builds it. This keeps HUI's private build state and all
+/// template-owned presentation components within one lifecycle.
 pub(crate) fn mount_runtime_ui_surfaces(
     mut commands: Commands,
     manifest_state: Res<RuntimeUiManifestState>,
+    manifests: Res<Assets<RuntimeUiManifest>>,
+    server: Res<AssetServer>,
     exposures: Res<EngineExposures>,
     layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
     gates: Option<Res<RuntimeUiGates>>,
@@ -735,6 +746,25 @@ pub(crate) fn mount_runtime_ui_surfaces(
 ) {
     if manifest_state.rebuild_pending {
         return;
+    }
+
+    let Some(manifest) = manifests.get(&manifest_state.handle) else {
+        return;
+    };
+    let existing_namespaces: HashSet<String> = roots
+        .iter()
+        .map(|(_, surface, _)| surface.namespace.clone())
+        .collect();
+    for definition in &manifest.surfaces {
+        if existing_namespaces.contains(&definition.namespace)
+            || !exposures
+                .surfaces
+                .get(&definition.namespace)
+                .is_some_and(|exposure| exposure.visible)
+        {
+            continue;
+        }
+        spawn_runtime_ui_surface(&mut commands, definition, &server);
     }
 
     let window = windows.iter().next();
@@ -893,11 +923,56 @@ pub(crate) fn apply_runtime_ui_exposures(
     {
         let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
         let placement_changed = surface.applied_placement != placement;
+        let exposure = exposures.surfaces.get(&surface.namespace);
+        let perspective_visible = surface
+            .visible_in_perspective
+            .as_ref()
+            .is_none_or(|required| {
+                layout.as_ref().is_some_and(|layout| {
+                    layout
+                        .active_perspective()
+                        .is_some_and(|active| active.as_str() == required)
+                })
+            });
+        let gate_visible = surface
+            .gate
+            .as_deref()
+            .is_none_or(|gate| gates.as_ref().is_some_and(|gates| gates.allows(gate)));
+        let should_be_visible = exposure.is_some_and(|exposure| exposure.visible)
+            && perspective_visible
+            && gate_visible
+            && placement.is_some();
+        // Scene teardown and HUI template rebuilds can reset the root's Bevy
+        // visibility without changing the engine exposure revision. The
+        // revision remains the property/style fast path, but visibility is a
+        // presentation lifecycle invariant and must be repaired independently.
+        let visibility_matches = if should_be_visible {
+            matches!(*visibility, Visibility::Visible)
+        } else {
+            matches!(*visibility, Visibility::Hidden)
+        };
+        let visibility_changed = !visibility_matches;
+        if !should_be_visible && surface.mounted {
+            // HUI builds the template root on this entity itself and keeps
+            // private build-state components on it. Despawn the complete
+            // presentation root so a later mount starts from the manifest,
+            // rather than attempting to partially reverse HUI's build.
+            //
+            // Visibility is changed in the main world before the deferred
+            // despawn is applied. Render extraction runs after Update, so a
+            // root that is already in the render world's previous frame
+            // cannot leak one more visible frame while the command queue is
+            // being flushed.
+            *visibility = Visibility::Hidden;
+            commands.entity(entity).try_despawn();
+            continue;
+        }
         if surface.applied_revision == exposures.revision
             && !layout_changed
             && !gates_changed
             && !theme_changed
             && !placement_changed
+            && !visibility_changed
         {
             continue;
         }
@@ -913,32 +988,17 @@ pub(crate) fn apply_runtime_ui_exposures(
         }
         surface.applied_placement = placement;
 
-        let Some(exposure) = exposures.surfaces.get(&surface.namespace) else {
+        let Some(exposure) = exposure else {
             *visibility = Visibility::Hidden;
             surface.applied_revision = exposures.revision;
             continue;
         };
 
-        let perspective_visible = surface
-            .visible_in_perspective
-            .as_ref()
-            .is_none_or(|required| {
-                layout.as_ref().is_some_and(|layout| {
-                    layout
-                        .active_perspective()
-                        .is_some_and(|active| active.as_str() == required)
-                })
-            });
-        let gate_visible = surface
-            .gate
-            .as_deref()
-            .is_none_or(|gate| gates.as_ref().is_some_and(|gates| gates.allows(gate)));
-        *visibility =
-            if exposure.visible && perspective_visible && gate_visible && placement.is_some() {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
+        *visibility = if should_be_visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
         if !matches!(*visibility, Visibility::Visible) {
             surface.input_rect = None;
         }
@@ -1287,6 +1347,63 @@ mod tests {
         manifest
             .validate()
             .expect("shipped runtime UI manifest should validate");
+    }
+
+    #[test]
+    fn mounted_surface_is_fully_despawned_when_exposure_turns_off() {
+        let mut app = App::new();
+        let mut exposures = EngineExposures::default();
+        {
+            let mut terrain = exposures.writer("terrain-progress");
+            terrain.visible(false);
+        }
+        let revision = exposures.revision;
+        app.insert_resource(exposures)
+            .insert_resource(RuntimeUiManifestState {
+                handle: Handle::default(),
+                applied: Some(AssetId::default()),
+                rebuild_pending: false,
+            });
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                HtmlNode(Handle::default()),
+                Styled::Inherited,
+                InlineStyle::default(),
+                TemplateProperties::default(),
+                RuntimeUiSurface {
+                    namespace: "terrain-progress".to_owned(),
+                    required_for_recording: false,
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    interactive: false,
+                    mounted: true,
+                    presentation_ready: false,
+                    placement: RuntimeUiPlacement::Viewport,
+                    applied_revision: revision,
+                    applied_placement: None,
+                    input_rect: None,
+                },
+                Visibility::Visible,
+            ))
+            .id();
+        let child = app.world_mut().spawn((Node::default(), ChildOf(root))).id();
+        let grandchild = app
+            .world_mut()
+            .spawn((Node::default(), ChildOf(child)))
+            .id();
+
+        app.add_systems(Update, apply_runtime_ui_exposures);
+        app.update();
+
+        assert!(app.world().get_entity(root).is_err());
+        assert!(app.world().get_entity(child).is_err());
+        assert!(app.world().get_entity(grandchild).is_err());
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub mod programs;
 pub mod reconcile;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
 pub mod scene;
+/// Shared scene teardown schedule for all scene-owned subsystems.
+pub mod scene_lifecycle;
 /// Always-on networking **authority** substrate (no wire dependency):
 /// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
@@ -92,6 +94,7 @@ pub use scene::{
     SceneTransition, SceneTransitionCompleted, SceneTransitionFailed, SceneTransitionIntent,
     SceneTransitionStarted,
 };
+pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
 pub use session::{
     authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,
     BufferedClientInputs, InputFrame, LocalDriveInput, LocalSession, NetConnectRequest,
@@ -903,6 +906,10 @@ impl Plugin for LunCoCorePlugin {
         // because the invariant is the engine's, not any app's — an app that
         // spawns an avatar must not have to remember to install its bookkeeping.
         app.init_resource::<TheLocalAvatar>();
+        // Scene projection has an ownership fence independent of the USD
+        // plugins.  Load/restart/clear invalidate it synchronously, while the
+        // deferred root spawner registers the replacement after creation.
+        app.init_resource::<SceneMountState>();
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
             .register_type::<NeedsGroundSettle>()
@@ -974,6 +981,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // switch and workbench write it. Core-guaranteed so every windowed
         // binary has it without ordering worries.
         .init_resource::<SceneViewport>()
+        .init_resource::<SceneMountState>()
         .init_resource::<session::NetworkRole>()
         .init_resource::<session::LocalSession>()
         .init_resource::<session::SyncApplyGuard>()

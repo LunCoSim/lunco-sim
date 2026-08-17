@@ -320,18 +320,13 @@ impl Plugin for CelestialPlugin {
         );
         app.add_systems(Update, big_space_setup::sync_site_gravity);
 
-        // The mirror of spawn: when a scene reload leaves the world with a celestial
-        // hierarchy but no declarations (reloaded into a scene without a sky), tear the
-        // hierarchy down. Gated the same way, inverted — so spawn and teardown can
-        // never both run in one frame.
+        // Celestial state is scene-owned, including when the replacement scene also
+        // declares celestial bodies. Teardown must happen at the shared replacement
+        // boundary rather than waiting for a body-less Update; otherwise a second
+        // celestial scene can inherit the outgoing active physics grid.
         app.add_systems(
-            Update,
-            teardown_celestial_when_undeclared.run_if(
-                |q_decl: Query<(), With<CelestialBodyDecl>>,
-                 q_derived: Query<(), With<big_space_setup::CelestialDerived>>| {
-                    q_decl.is_empty() && !q_derived.is_empty()
-                },
-            ),
+            lunco_core::scene_lifecycle::SceneTeardown,
+            teardown_celestial,
         );
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
@@ -482,8 +477,12 @@ impl Plugin for CelestialPlugin {
     }
 }
 
-/// Tear down everything the celestial subsystem spawned, when a scene reload has left
-/// the world with a hierarchy but no [`CelestialBodyDecl`] (see the run condition).
+/// Tear down everything the celestial subsystem spawned at every scene boundary.
+///
+/// This runs before the outgoing scene entities are despawned and does not inspect
+/// the incoming declarations. A replacement scene may contain its own sky; that
+/// must still start from a clean celestial projection and the persistent world
+/// physics frame.
 ///
 /// This is the *architecture* that prevents the reload bugs by design, not by a
 /// maintained despawn list:
@@ -507,7 +506,7 @@ impl Plugin for CelestialPlugin {
 /// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
 /// from the scene-clear choke point — so a detached/fast sky clock is already back on
 /// its `Epoch` root by the time this runs.
-fn teardown_celestial_when_undeclared(
+fn teardown_celestial(
     mut commands: Commands,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
@@ -538,7 +537,7 @@ fn teardown_celestial_when_undeclared(
         commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
     }
 
-    info!("[celestial] scene has no bodies → tore down {n} celestial entities");
+    info!("[celestial] scene teardown → removed {n} celestial entities");
 }
 
 /// Standalone gravity plugin — registers gravity configuration types.

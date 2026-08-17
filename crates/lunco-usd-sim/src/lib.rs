@@ -408,7 +408,7 @@ mod runtime_safety_tests {
         app.init_resource::<lunco_physics::PhysicsHolds>();
         app.insert_resource(LoadedScene("escape-containment"));
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             reset_scene_runtime_safety,
         );
 
@@ -423,7 +423,7 @@ mod runtime_safety_tests {
         // replacement is deliberately admitted only after the edge, proving a
         // terminal fault is scoped to the outgoing scene rather than latched in
         // the process.
-        lunco_usd_bevy::scene_lifecycle::run_scene_teardown(app.world_mut());
+        lunco_core::scene_lifecycle::run_scene_teardown(app.world_mut());
         assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
         assert!(!app
             .world()
@@ -441,7 +441,7 @@ mod runtime_safety_tests {
             .resource_mut::<lunco_core::RuntimeFaults>()
             .raise("physics-body-escaped", None, "replacement", "out of bounds");
         assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
-        lunco_usd_bevy::scene_lifecycle::run_scene_teardown(app.world_mut());
+        lunco_core::scene_lifecycle::run_scene_teardown(app.world_mut());
         assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
     }
 }
@@ -452,11 +452,11 @@ impl Plugin for UsdSimPlugin {
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
             .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             reset_scene_runtime_safety,
         );
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             retire_scene_cameras,
         );
         // Autopilot actors claim scene vessels and hold compiled trees of the scene's
@@ -464,7 +464,7 @@ impl Plugin for UsdSimPlugin {
         // with the rest of the scene (despawn + release the claim, so the respawned
         // vessel can be re-engaged and its waypoints reset cleanly).
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             lunco_autopilot::teardown_autopilot_actors,
         );
         app.register_type::<PhysicalWheel>()

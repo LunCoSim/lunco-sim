@@ -52,7 +52,7 @@ struct BodyImageryDecl {
 ///
 /// Keyed on the GLOBE ENTITY, not on the NAIF id. Keying on the id made this a
 /// scene-lifetime fact stored in a world-lifetime resource: teardown despawns
-/// every globe (`teardown_celestial_when_undeclared`) but could not despawn a
+/// every globe (the celestial `SceneTeardown` system) but could not despawn a
 /// number in a `Vec`, so the next scene's Earth was skipped as "already bound"
 /// and rendered ocean blue forever — visible only when a session loaded a second
 /// celestial scene, which is why the sandbox always looked right. An entity is

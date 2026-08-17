@@ -181,7 +181,7 @@ impl Plugin for SandboxUiPlugin {
         }
         lunco_workbench::install_render_recovery_teardown(
             app,
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
         );
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
@@ -237,7 +237,7 @@ impl Plugin for SandboxUiPlugin {
                 app.init_resource::<models_palette::AttachState>();
                 // Disarm on scene teardown — see `AttachState`.
                 app.add_systems(
-                    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                    lunco_core::scene_lifecycle::SceneTeardown,
                     |mut attach: ResMut<models_palette::AttachState>| {
                         if *attach != models_palette::AttachState::Idle {
                             *attach = models_palette::AttachState::Idle;

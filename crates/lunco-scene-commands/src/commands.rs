@@ -29,7 +29,8 @@ use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::{
-    collision_aabb, CanonicalStages, UsdPrimPath, UsdStageAsset, SPAWN_GROUND_CLEARANCE,
+    collision_aabb, CanonicalStages, UsdPrimPath, UsdSceneRoot, UsdStageAsset,
+    SPAWN_GROUND_CLEARANCE,
 };
 
 /// Detach a joint by despawning it.
@@ -390,7 +391,7 @@ pub fn on_spawn_entity_command(
     q_grids: Query<Entity, With<Grid>>,
     // The scene anchor a runtime spawn parents under (plain child, DRY with
     // scene-load — see `spawn_usd_entry`). Absent only before any scene loads.
-    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    q_scene_root: Query<Entity, With<UsdSceneRoot>>,
     // Present only while a scene load is still landing; tells a spawn that
     // arrives mid-load that the anchor is COMING rather than absent.
     scene_loading: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
@@ -542,7 +543,7 @@ pub fn apply_replicated_spawns(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    q_scene_root: Query<Entity, With<UsdSceneRoot>>,
 ) {
     if pending.0.is_empty() {
         return;
@@ -3424,7 +3425,7 @@ impl Plugin for SpawnCommandPlugin {
         // panel editing whatever now holds the recycled id. Scene state, so it
         // unloads with the scene.
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::scene_lifecycle::SceneTeardown,
             |mut selected: ResMut<crate::SelectedEntities>| {
                 if !selected.entities.is_empty() {
                     selected.entities.clear();

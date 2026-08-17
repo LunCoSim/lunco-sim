@@ -120,14 +120,16 @@ Omniverse Viewport, which owns an active `camera`):
 | `rect: Option<(UVec2, UVec2)>` | window sub-rect, or full-window | the workbench |
 
 An authored selection is retained as `(stage, USD prim path)` and re-resolved
-after re-projection; the ECS entity is only the current realization. A command
-or camera track changes the explicit selection resource, while exactly **one**
-system writes `SceneViewport::active_camera`, window-camera `is_active`, and
-`viewport`: `lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the
-viewport (`is_active = bound-camera && visible`) and relocates the big_space
+after re-projection; the ECS entity is only the current realization. A command,
+camera track, or the authored local-avatar marker for an otherwise unclaimed
+scene changes the selection intent, while exactly **one** system writes
+`SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
+`lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
+(`is_active = bound-camera && visible`) and relocates the big_space
 `FloatingOrigin` onto the active camera. A missing, stale, or projectionless
 explicit request produces no active camera and a visible status diagnostic; it
-never selects the avatar or the first camera as a repair.
+never selects the first camera as a repair or silently substitutes a different
+authored camera.
 
 ### 6.3 Switching
 
@@ -137,8 +139,10 @@ The viewport has explicit presentation ownership:
   `CameraTrack` cuts select authored cameras. Director requests are held while
   the operator owns the viewport.
 - **Operator:** `SetUserCamera { name }`, `ObserveAvatar`, or `KeyC` explicitly
-  selects a camera and takes ownership. `ResumeCameraDirector` returns control
-  to the authored track.
+  selects a camera and takes ownership. A newly projected authored local avatar
+  publishes the same avatar-view intent only when the scene has no existing
+  director/operator selection, providing the normal initial view after reload.
+  `ResumeCameraDirector` returns control to the authored track.
 
 Names match a full USD prim path or its leaf. A scene with no authored window
 camera remains a deliberate no-camera scene; it does not silently create or

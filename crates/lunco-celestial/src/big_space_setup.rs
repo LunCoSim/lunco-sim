@@ -173,7 +173,8 @@ fn blueprint_tile_look_untextured(
 /// **The celestial ownership marker.** EVERY entity the celestial subsystem spawns in
 /// Rust — grids, bodies, inertial anchors, orbit views, mission spacecraft — carries
 /// this, and teardown despawns the whole set in one query
-/// ([`teardown_celestial_when_undeclared`](crate::teardown_celestial_when_undeclared)).
+/// (the [`SceneTeardown`](lunco_core::scene_lifecycle::SceneTeardown) system
+/// registered by [`CelestialPlugin`](crate::CelestialPlugin)).
 ///
 /// This is the *architecture* that keeps scene reload correct: celestial content is
 /// declared per scene (`CelestialBodyDecl`), and everything derived from that

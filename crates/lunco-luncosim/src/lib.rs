@@ -2470,7 +2470,7 @@ impl Plugin for SandboxCorePlugin {
             // a lunar scene restores the luncosim's own value, so whatever loads
             // next starts from the app's baseline rather than the last scene's.
             .add_systems(
-                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                lunco_core::scene_lifecycle::SceneTeardown,
                 |mut commands: Commands| commands.insert_resource(SANDBOX_GRAVITY),
             )
             // Studio lighting for the luncosim — a generic editor scene, NOT a

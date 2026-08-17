@@ -4843,6 +4843,10 @@ mod tests {
             direction.z < -0.5,
             "Q+W must retain forward travel at a pitched view, got {direction:?}"
         );
+        assert!(
+            direction.y < -0.5,
+            "Q+W must retain downward travel at a pitched view, got {direction:?}"
+        );
     }
 
     #[test]

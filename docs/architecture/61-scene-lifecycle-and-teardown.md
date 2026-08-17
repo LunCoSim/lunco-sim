@@ -45,7 +45,7 @@ transition merely because it entered through a different command.
 
 Resources, caches and worker-side handles are not entities and are not covered
 by a despawn. They are unloaded by the `SceneTeardown` schedule
-(`lunco_usd_bevy::scene_lifecycle`), run from the same teardown.
+(`lunco_core::scene_lifecycle`), run from the same teardown.
 
 Scene safety state follows the same boundary. `lunco_core::RuntimeFaults` records
 the first terminal physics/runtime failure for the active scene, while
@@ -67,7 +67,7 @@ It is a **schedule**, not a registry, and that choice is the design:
 
 ```rust
 app.add_systems(
-    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+    lunco_core::scene_lifecycle::SceneTeardown,
     |mut commands: Commands| commands.remove_resource::<MySceneCache>(),
 );
 ```

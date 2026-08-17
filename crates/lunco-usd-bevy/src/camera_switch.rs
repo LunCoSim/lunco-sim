@@ -28,7 +28,7 @@
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};
-use lunco_core::{on_command, Command, LocalAvatar, SceneViewport};
+use lunco_core::{on_command, Command, LocalAvatar, SceneViewport, TheLocalAvatar};
 use lunco_render::SceneCamera;
 
 use crate::UsdPrimPath;
@@ -228,17 +228,50 @@ pub fn on_observe_avatar(_trigger: On<ObserveAvatar>, mut commands: Commands) {
 /// director camera selected behind the scenes.
 pub fn on_request_local_avatar_view(
     _trigger: On<lunco_core::RequestLocalAvatarView>,
-    q_avatar: Query<Entity, (With<LocalAvatar>, With<SceneCamera>)>,
+    local_avatar: Res<TheLocalAvatar>,
+    q_cameras: Query<(), With<SceneCamera>>,
     mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
 ) {
-    match q_avatar.single() {
-        Ok(target) => commands.trigger(ActivateCamera::user(target)),
-        Err(_) => {
-            let message = "the scene has no local avatar camera to observe".to_string();
-            record_camera_error(&mut status, message.clone());
-            warn!("[camera] {message}");
-        }
+    let target = local_avatar.0.filter(|entity| q_cameras.contains(*entity));
+    let Some(target) = target else {
+        let message = "the scene has no local avatar camera to observe".to_string();
+        record_camera_error(&mut status, message.clone());
+        warn!("[camera] {message}");
+        return;
+    };
+    commands.trigger(ActivateCamera::user(target));
+}
+
+/// Establish the authored avatar as the initial presentation view once it has
+/// been projected. Scene teardown intentionally clears the previous camera
+/// selection because its USD key belongs to the outgoing stage; the incoming
+/// avatar is the authored replacement for that default view.
+///
+/// This is change-gated rather than a reconciler fallback. An explicit
+/// director or operator request therefore remains authoritative, while a
+/// scene reload cannot leave the main viewport with no camera merely because
+/// the replacement avatar was spawned after teardown.
+pub fn request_initial_avatar_view(
+    q_avatar: Query<
+        (),
+        (
+            With<LocalAvatar>,
+            Or<(Added<LocalAvatar>, Added<SceneCamera>)>,
+        ),
+    >,
+    local_avatar: Res<TheLocalAvatar>,
+    selection: Res<ViewportCameraSelection>,
+    mut commands: Commands,
+) {
+    if selection.owner() != CameraSelectionOwner::None {
+        return;
+    }
+    if local_avatar
+        .0
+        .is_some_and(|avatar| q_avatar.contains(avatar))
+    {
+        commands.trigger(lunco_core::RequestLocalAvatarView);
     }
 }
 
@@ -773,5 +806,149 @@ mod tests {
             "a camera-less presentation must remain visibly camera-less"
         );
         assert_eq!(app.world().resource::<SceneViewport>().active_camera, None);
+    }
+
+    #[test]
+    fn projected_local_avatar_reestablishes_initial_view_after_selection_reset() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let avatar = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            None,
+            "camera binding is reconciler-owned and waits for the render host"
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::User
+        );
+        assert!(
+            app.world()
+                .resource::<ViewportCameraSelection>()
+                .requested
+                .as_ref()
+                .is_some_and(|requested| matches!(
+                    requested,
+                    RequestedCamera::Entity(entity) if *entity == avatar
+                )),
+            "the incoming avatar must publish the existing selection intent"
+        );
+    }
+
+    #[test]
+    fn initial_avatar_view_does_not_override_explicit_director_selection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let director = app
+            .world_mut()
+            .spawn((SceneCamera::default(), Name::new("Director")))
+            .id();
+        app.world_mut().trigger(ActivateCamera::director(director));
+
+        let _ = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::Director
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(director))
+        );
+    }
+
+    #[test]
+    fn initial_avatar_view_waits_for_a_camera_added_after_the_avatar() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let avatar = app.world_mut().spawn(LocalAvatar).id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::None,
+            "the intent must wait until the avatar has a usable scene camera"
+        );
+
+        app.world_mut()
+            .entity_mut(avatar)
+            .insert(SceneCamera::default());
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::User
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(avatar))
+        );
+    }
+
+    #[test]
+    fn avatar_view_request_uses_newest_claim_during_deferred_demotion() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view);
+
+        let old = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+        let new = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        // The old role removal is deferred by the component hook, but the
+        // authoritative slot already names the newest claimant.
+        assert_eq!(app.world().resource::<TheLocalAvatar>().0, Some(new));
+        assert!(app.world().get::<SceneCamera>(old).is_some());
+        app.world_mut().trigger(lunco_core::RequestLocalAvatarView);
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(new))
+        );
     }
 }
