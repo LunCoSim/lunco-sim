@@ -10,9 +10,10 @@
 //! ecliptic axes and rotate the ground away from gravity. Keeping the DEM,
 //! globe handoff, camera, and surface operations in one body-fixed precision
 //! branch avoids an AU-scale hierarchy joint between moving surface pieces.
-//! Runs after
-//! `ephemeris_update_system` (which re-zeroes the solar grid on epoch change)
-//! and overrides it whenever a [`SiteAnchor`] is authored.
+//! Runs after `ephemeris_update_system` (which re-zeroes the solar grid on an
+//! accepted celestial solve) and overrides it whenever a [`SiteAnchor`] is
+//! authored. The caller applies the one shared celestial solve gate; this
+//! module has no private epoch gate.
 //!
 //! **Bound entities**: prims with a [`GeodeticAnchor`] (ground stations) or a
 //! [`KeplerOrbit`] (satellites) are re-parented onto their body's rotating
@@ -147,7 +148,6 @@ pub fn anchor_solar_frame_to_site(
     >,
     q_parents: Query<&ChildOf, Without<SiteAnchor>>,
     q_grids: Query<&Grid>,
-    mut last_jd: Local<f64>,
     // One-shot latch for the "declared a site but cannot anchor it" diagnostics
     // below. It is paired with a settle counter so asynchronous celestial
     // bootstrap does not produce a permanent false alarm during scene load.
@@ -198,15 +198,10 @@ pub fn anchor_solar_frame_to_site(
     }
     *unresolved_frames = 0;
 
+    // The shared celestial solve gate owns temporal cadence. Keeping a second
+    // local epoch comparison here would allow site pinning to observe a
+    // different epoch from the body pose it is derived from.
     let jd = world_time.epoch_jd;
-    // Same cadence as the ephemeris projection + site edits; ordering after
-    // `ephemeris_update_system` guarantees we override its origin re-zero on
-    // the frames it re-projects.
-    let epoch_changed = (jd - *last_jd).abs() >= 1e-9;
-    if !epoch_changed && q_site_changed.is_empty() && *last_jd != 0.0 {
-        return;
-    }
-    *last_jd = jd;
 
     // Site tangent alignment (world axes) — identity when there is no anchor.
     let (align, site_frame_origin, site_geo_offset) = if let Some(anchor) = anchor_opt {
@@ -687,7 +682,6 @@ pub fn place_celestial_bound_entities(
             Without<lunco_terrain_surface::TerrainGeoref>,
         ),
     >,
-    q_added: Query<(), Or<(Added<GeodeticAnchor>, Added<KeplerOrbit>)>>,
     // Descendant walk for the `LowPrecisionRoot` stamp below — same shape as
     // `orbital_pin_scene_visibility`'s `q_children` in this file.
     q_children: Query<&Children>,
@@ -703,17 +697,14 @@ pub fn place_celestial_bound_entities(
         ),
     >,
     mut commands: Commands,
-    mut last_jd: Local<f64>,
 ) {
     if q_bound.is_empty() {
         return;
     }
     let jd = world_time.epoch_jd;
-    let epoch_changed = (jd - *last_jd).abs() >= 1e-9;
-    if !epoch_changed && q_added.is_empty() && *last_jd != 0.0 {
-        return;
-    }
-    *last_jd = jd;
+    // Temporal cadence is owned by `cadence::tracked_needs_solve` at the
+    // registration boundary. A second Local epoch gate here used to place
+    // bound entities at a different cadence from the body frames.
 
     for (entity, anchor, orbit, visibility) in q_bound.iter_mut() {
         let body = anchor.map(|a| a.body).or_else(|| orbit.map(|o| o.body));

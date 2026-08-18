@@ -9,7 +9,9 @@ use lunco_materials::{ParamValue, ShaderLook};
 use lunco_time::WorldTime;
 
 /// Update body and frame positions based on ephemeris data.
-/// Optimized: Only re-computes if Epoch has changed significantly.
+/// The caller applies the shared celestial solve gate. Translation and body
+/// rotation are committed in the same gated chain so no descendant can observe
+/// a half-advanced celestial frame.
 pub fn ephemeris_update_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
@@ -20,7 +22,7 @@ pub fn ephemeris_update_system(
         return;
     };
 
-    // The epoch gate is NOT here any more. It used to be a private
+    // The epoch gate is NOT here. It used to be a private
     // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
     // all" — which meant a running clock re-projected the whole body/frame
     // hierarchy every single frame. It is now the shared

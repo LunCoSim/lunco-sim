@@ -21,7 +21,9 @@
 //! At that budget and 1× realtime the celestial systems solve about once every
 //! **71 s of sim time** instead of 60×/s. The step is below the perceptual
 //! threshold, so nothing needs interpolating — the poses simply advance in
-//! increments too small to see.
+//! increments too small to see. At a high warp rate the same angular budget
+//! naturally opens every render frame; that is required because the rendered
+//! body pose, body rotation, and every dependent frame must advance together.
 //!
 //! Measured cost of solving every frame on `sandbox_scene.usda`: ~10 ms/frame
 //! across `ephemeris_update_system`, `update_solar_poses`,
@@ -40,14 +42,6 @@ use serde::{Deserialize, Serialize};
 /// (12.2°/day): the budget must hold for the fastest thing on screen, so the
 /// tolerance is converted through the tighter of the two.
 const MAX_BODY_DEG_PER_DAY: f64 = 13.2;
-
-/// Upper bound for the expensive celestial presentation solve.
-///
-/// The epoch itself remains exact at every frame. This floor only limits how
-/// often the five-system pose/light cluster is allowed to consume the frame at
-/// extreme warp rates; without it, 100 000x opens the angular-error gate every
-/// frame and starves input and API command processing.
-const MIN_CELESTIAL_SOLVE_INTERVAL_SECS: f64 = 1.0 / 30.0;
 
 /// How much celestial angular error is acceptable before the tree is re-solved.
 ///
@@ -102,9 +96,6 @@ pub struct CelestialSolvedEpoch {
     /// [`CelestialInputsRevision`] at that solve — a structural change moves this
     /// and forces one re-solve regardless of the epoch.
     pub revision: u64,
-    /// Wall time of the last expensive solve, used only to bound extreme-warp
-    /// presentation work.
-    pub last_solve_wall_secs: f64,
 }
 
 impl Default for CelestialSolvedEpoch {
@@ -112,7 +103,6 @@ impl Default for CelestialSolvedEpoch {
         Self {
             jd: f64::NEG_INFINITY,
             revision: 0,
-            last_solve_wall_secs: f64::NEG_INFINITY,
         }
     }
 }
@@ -139,12 +129,13 @@ pub fn bump_celestial_inputs_revision(
     site_moved: Query<(), Changed<crate::geo::GeodeticAnchor>>,
     decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
     grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
+    orbit_changed: Query<(), Or<(Added<crate::KeplerOrbit>, Changed<crate::KeplerOrbit>)>>,
     site_aligned_added: Query<(), Added<crate::big_space_setup::SiteAligned>>,
     directional_light_added: Query<(), Added<bevy::light::DirectionalLight>>,
     mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
     // [frames, bumps, site_added, site_moved, decl_added, grid_added,
-    //  site_aligned_added, directional_light_added, removed]
-    mut stats: Local<[u32; 9]>,
+    //  orbit_changed, site_aligned_added, directional_light_added, removed]
+    mut stats: Local<[u32; 10]>,
 ) {
     // `removed.read()` must be DRAINED — an unread reader keeps redelivering, so
     // the revision would go on bumping for frames after the fact. `.count()`
@@ -154,6 +145,7 @@ pub fn bump_celestial_inputs_revision(
     let removed = decl_removed.read().count();
     let (site_a, site_m) = (!site_added.is_empty(), !site_moved.is_empty());
     let (decl_a, grid_a) = (!decl_added.is_empty(), !grid_added.is_empty());
+    let orbit_c = !orbit_changed.is_empty();
     // These are structural edges produced by the projections themselves. The
     // first valid site frame and the first USD light can arrive after the input
     // revision was already committed, so they must reopen the solve gate.
@@ -162,7 +154,8 @@ pub fn bump_celestial_inputs_revision(
         !directional_light_added.is_empty(),
     );
 
-    let bumped = removed > 0 || site_a || site_m || decl_a || grid_a || aligned_a || light_a;
+    let bumped =
+        removed > 0 || site_a || site_m || decl_a || grid_a || orbit_c || aligned_a || light_a;
     if bumped {
         rev.0 = rev.0.wrapping_add(1);
     }
@@ -179,15 +172,17 @@ pub fn bump_celestial_inputs_revision(
     stats[3] += u32::from(site_m);
     stats[4] += u32::from(decl_a);
     stats[5] += u32::from(grid_a);
-    stats[6] += u32::from(aligned_a);
-    stats[7] += u32::from(light_a);
-    stats[8] += u32::from(removed > 0);
+    stats[6] += u32::from(orbit_c);
+    stats[7] += u32::from(aligned_a);
+    stats[8] += u32::from(light_a);
+    stats[9] += u32::from(removed > 0);
     if stats[0] >= WINDOW {
         if stats[1] * 2 > WINDOW {
             info!(
                 "[celestial] inputs revision bumped on {}/{} frames — \
                  site_added={} site_moved={} decl_added={} grid_added={} \
-                 site_aligned_added={} directional_light_added={} decl_removed={}",
+                 orbit_changed={} site_aligned_added={} directional_light_added={} \
+                 decl_removed={}",
                 stats[1],
                 stats[0],
                 stats[2],
@@ -197,9 +192,10 @@ pub fn bump_celestial_inputs_revision(
                 stats[6],
                 stats[7],
                 stats[8],
+                stats[9],
             );
         }
-        *stats = [0; 9];
+        *stats = [0; 10];
     }
 }
 
@@ -233,12 +229,26 @@ pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
     lunco_core::gate::tracked("celestial_needs_solve", celestial_needs_solve)
 }
 
+/// Decide whether the current celestial inputs are outside the committed
+/// solve. This is deliberately a pure epoch/revision decision: wall-clock
+/// time is not a valid proxy for geometric error when simulation time is
+/// warped.
+fn epoch_requires_solve(
+    current_jd: f64,
+    solved_jd: f64,
+    current_revision: u64,
+    solved_revision: u64,
+    max_epoch_step_jd: f64,
+) -> bool {
+    current_revision != solved_revision
+        || (current_jd - solved_jd).abs() >= max_epoch_step_jd
+}
+
 pub(crate) fn celestial_needs_solve(
     world: Option<Res<WorldTime>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
-    real: Res<Time<Real>>,
     activity: Option<Res<lunco_core::gate::GateActivity>>,
 ) -> bool {
     let step = settings
@@ -247,24 +257,19 @@ pub(crate) fn celestial_needs_solve(
     if let Some(activity) = activity {
         activity.expect_open("celestial_needs_solve", step <= 0.0);
     }
-    if revision.0 != solved.revision {
-        return true;
-    }
     // No clock yet (bare test app) — never gate; the old behaviour was to run.
     let Some(world) = world else {
         return true;
     };
-    // EXACT is the deterministic scene-test contract. Production extreme warp
-    // uses the angular budget but cannot spend an expensive full-cluster solve
-    // on every render frame.
-    if step > 0.0
-        && real.elapsed_secs_f64() - solved.last_solve_wall_secs < MIN_CELESTIAL_SOLVE_INTERVAL_SECS
-    {
-        return false;
-    }
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
-    (world.epoch_jd - solved.jd).abs() >= step
+    epoch_requires_solve(
+        world.epoch_jd,
+        solved.jd,
+        revision.0,
+        solved.revision,
+        step,
+    )
 }
 
 /// Record the epoch AND the input revision the cluster just solved for.
@@ -278,7 +283,6 @@ pub fn commit_celestial_epoch(
     world: Option<Res<WorldTime>>,
     settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
-    real: Res<Time<Real>>,
     mut solved: ResMut<CelestialSolvedEpoch>,
     mut solves: Local<u64>,
 ) {
@@ -334,5 +338,33 @@ pub fn commit_celestial_epoch(
         );
     }
     solved.revision = revision.0;
-    solved.last_solve_wall_secs = real.elapsed_secs_f64();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_warp_epoch_advance_opens_the_gate_each_render_frame() {
+        let step = CelestialCadenceSettings::default().max_epoch_step_jd();
+        // At 100000x, one 60 Hz render interval represents this much simulated
+        // time. It exceeds the angular-error budget, so the geometric pose must
+        // be solved on that frame instead of being held for a wall-time quota.
+        let one_frame_at_100kx = 100_000.0 / 60.0 / 86_400.0;
+        assert!(one_frame_at_100kx > step);
+        assert!(epoch_requires_solve(
+            one_frame_at_100kx,
+            0.0,
+            0,
+            0,
+            step,
+        ));
+    }
+
+    #[test]
+    fn unchanged_epoch_stays_gated_until_a_structural_revision() {
+        let step = CelestialCadenceSettings::default().max_epoch_step_jd();
+        assert!(!epoch_requires_solve(10.0, 10.0, 4, 4, step));
+        assert!(epoch_requires_solve(10.0, 10.0, 5, 4, step));
+    }
 }

@@ -347,9 +347,11 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<systems::SunDirectionWorld>();
 
         // Celestial cadence: the tree is re-solved on an ANGULAR ERROR BUDGET,
-        // not every frame and not at a fixed Hz (sim time warps, so a rate is
-        // wrong at every other warp factor — see `cadence`). Solving every frame
-        // measured ~10 ms/frame across the five systems gated below.
+        // not at a fixed wall-clock Hz (sim time warps, so a rate is wrong at
+        // every other warp factor — see `cadence`). At extreme warp the budget
+        // intentionally opens every render frame so the visible celestial pose
+        // remains continuous. Expensive orbit-mesh rebuilding has its own
+        // presentation policy and is not part of this pose transaction.
         //
         // The cadence gate belongs on the systems that solve celestial state.
         // BigSpace propagation is driven by actual CellCoord/Transform and
@@ -377,7 +379,7 @@ impl Plugin for CelestialPlugin {
             PreUpdate,
             (
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
-                body_rotation_system,
+                body_rotation_system.run_if(cadence::tracked_needs_solve()),
                 // Doc 43: site-anchored solar frame + geodetic/orbit placement.
                 // `ephemeris_update_system` never touches the Solar Grid (id 10),
                 // so the pin persists between anchor runs — no mid-chain window
@@ -409,7 +411,8 @@ impl Plugin for CelestialPlugin {
                 placement::attach_site_scene_to_surface_grid
                     .run_if(cadence::tracked_needs_solve())
                     .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
-                placement::place_celestial_bound_entities,
+                placement::place_celestial_bound_entities
+                    .run_if(cadence::tracked_needs_solve()),
                 soi_transition_system,
             )
                 .chain()
