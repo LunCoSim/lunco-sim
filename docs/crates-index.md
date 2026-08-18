@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), canonical diagram data types, and shared terminal runtime faults/fixed-step coupling state. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
+| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the typed scene-transition lifecycle and teardown schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, and shared terminal runtime faults/fixed-step coupling state. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, and recents. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, and file indexing. |

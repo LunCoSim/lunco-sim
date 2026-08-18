@@ -52,7 +52,7 @@ use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
     clear_scene_entities, normalize_scene_asset_path, resolve_root_prim, spawn_scene_root_world,
-    ClearScene, LoadScene, RestartScene, SceneEntities, SceneLoadInFlight,
+    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
 
 /// Stable id for the USD document kind in
@@ -92,7 +92,7 @@ impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
-        app.add_observer(on_scene_transition_intent);
+        app.init_resource::<lunco_core::SceneTransitionCoordinator>();
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -139,6 +139,11 @@ impl Plugin for UsdCommandsPlugin {
         // a UI feature gate.
         app.init_resource::<EmptyViewportReason>();
         app.add_observer(open_usd_docs_on_twin_added);
+        app.add_observer(execute_admitted_load_scene);
+        // Restart document refresh belongs to the admitted transaction, not the
+        // raw request. A restart queued behind a load must refresh the document
+        // that is active when that load reaches its terminal edge.
+        app.add_observer(on_restart_scene_refresh_active_document);
         // A mount that died on a missing/unreadable stage leaves the same empty
         // viewport as a deliberate clear. `on_load_scene` cleared the reason on
         // the way in (a load was committed), so without this the placeholder
@@ -225,28 +230,6 @@ impl Plugin for UsdCommandsPlugin {
 /// that owns path resolution and scene mounting. This is the single adapter
 /// between higher-level domains and the USD command surface; it carries typed
 /// data all the way through and never parses a command name or JSON payload.
-fn on_scene_transition_intent(
-    trigger: On<lunco_core::SceneTransitionIntent>,
-    mut commands: Commands,
-) {
-    match &trigger.event().transition {
-        lunco_core::SceneTransition::Load { path, root_prim } => {
-            commands.trigger(LoadScene {
-                path: path.clone(),
-                root_prim: root_prim.clone(),
-            });
-        }
-        lunco_core::SceneTransition::Clear => {
-            commands.trigger(ClearScene {});
-        }
-        lunco_core::SceneTransition::Restart { reset_document, .. } => {
-            commands.trigger(RestartScene {
-                reset_document: *reset_document,
-            });
-        }
-    }
-}
-
 /// On `TwinAdded`, make the viewport **reflect the opened Twin/folder**
 /// — clear-and-replace, so a previously loaded scene never lingers:
 ///
@@ -483,43 +466,19 @@ fn on_load_scene(
     // panic — a required `Res` here aborts the whole `Main` schedule.
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
-    mut commands: Commands,
-    q_usd: Query<(
-        Entity,
-        &UsdPrimPath,
-        Has<lunco_usd_sim::cosim::UsdSceneRoot>,
-    )>,
-    scene: SceneEntities,
-    in_flight: Option<Res<SceneLoadInFlight>>,
+    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
-    // A real scene is mounting — clear any empty-viewport reason recorded by a
-    // prior clear/folder-open, so it can't haunt the placeholder once this load
-    // despawns/resolves. Done HERE (not in `update_viewport_placeholder`) so a
-    // freshly-set reason is not wiped on the same frame by stale `UsdPrimPath`
-    // entities from the scene being cleared (their despawn is deferred, so the
-    // query would still read non-empty and clobber the reason mid-open).
-    mut empty_reason: ResMut<EmptyViewportReason>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to the Twin
     // root) or an already-relative asset path; bail if an absolute path lies
     // outside the assets dir.
-    let (Some(asset_server), Some(_stages)) = (asset_server, stages) else {
+    let (Some(_asset_server), Some(_stages)) = (asset_server, stages) else {
         return;
     };
     let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
         return;
     };
-    // A new transaction supersedes any terminal failure recorded for the
-    // outgoing stage. The failure record belongs to one stage identity, not to
-    // the process or the next scene.
-    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
-    // A real scene is committed to mount — drop any empty-viewport reason. This
-    // is the authoritative "scene loaded" signal; see the note on `empty_reason`
-    // above for why this clear lives here and not in the per-frame placeholder
-    // system.
-    empty_reason.0 = None;
-
     // Canonicalize to the document's own source. This also lets the no-op guard
     // below recognise the active scene by asset id, so a redundant load is a true
     // no-op instead of a destructive remount.
@@ -534,20 +493,61 @@ fn on_load_scene(
     }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
-    // A load already in flight is a transaction, not a global lock. The exact
-    // same identity is a no-op; a different identity replaces the transaction
-    // and performs the normal teardown before mounting the new request. This
-    // keeps a failed or slow asset from disabling the scene browser.
-    if let Some(g) = &in_flight {
-        if g.path == path && g.root_prim == root_prim {
+    let request = lunco_core::SceneTransitionRequest::load(path.clone(), root_prim);
+    match coordinator.admit(request) {
+        lunco_core::SceneTransitionAdmission::AlreadyActive => {
             info!("[load-scene] `{}` is already mounting — no-op", path);
-            return;
         }
-        info!(
-            "[load-scene] replacing in-flight scene `{}` with `{}`",
-            g.path, path
-        );
+        lunco_core::SceneTransitionAdmission::Queued => {
+            info!(
+                "[load-scene] queued `{}` behind the active scene transaction",
+                path
+            );
+        }
+        lunco_core::SceneTransitionAdmission::Admitted => {
+            info!(
+                "[load-scene] admitted `{}` for the next scene lifecycle phase",
+                path
+            );
+        }
     }
+}
+
+/// Execute the load request that won admission at the scene lifecycle boundary.
+/// Public command observers never mutate scene state directly.
+fn execute_admitted_load_scene(
+    trigger: On<lunco_core::SceneTransitionAdmitted>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    q_usd: Query<(
+        Entity,
+        &UsdPrimPath,
+        Has<lunco_usd_sim::cosim::UsdSceneRoot>,
+    )>,
+    scene: SceneEntities,
+    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
+    // A real scene is mounting — clear any empty-viewport reason recorded by a
+    // prior clear/folder-open, so it can't haunt the placeholder once this load
+    // despawns/resolves. Done HERE (not in `update_viewport_placeholder`) so a
+    // freshly-set reason is not wiped on the same frame by stale `UsdPrimPath`
+    // entities from the scene being cleared (their despawn is deferred, so the
+    // query would still read non-empty and clobber the reason mid-open).
+    mut empty_reason: ResMut<EmptyViewportReason>,
+) {
+    let lunco_core::SceneTransitionRequest::Load { path, root_prim } = &trigger.event().request
+    else {
+        return;
+    };
+    let path = path.clone();
+    let root_prim = root_prim.clone();
+
+    let transition = lunco_core::SceneTransition::load(path.clone(), root_prim.clone());
+    coordinator.start(transition.clone());
+    // Admission is the commit point. Only now does this request own scene state;
+    // a request queued behind another transaction must not mutate the active
+    // transaction's diagnostics or viewport reason.
+    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+    empty_reason.0 = None;
 
     // Blender-style no-op: same stage, same root prim, already mounted.
     //
@@ -570,6 +570,7 @@ fn on_load_scene(
     let new_id = asset_server
         .load::<lunco_usd_bevy::UsdStageAsset>(&path)
         .id();
+    let stage_already_loaded = asset_server.load_state(new_id).is_loaded();
     if q_usd.iter().any(|(_, upp, is_scene_root)| {
         upp.stage_handle.id() == new_id
             && if root_prim.is_empty() {
@@ -582,26 +583,20 @@ fn on_load_scene(
             "[load-scene] `{}` @ `{}` already loaded — no-op",
             path, root_prim
         );
-        commands.trigger(lunco_core::SceneTransitionCompleted {
-            transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
-        });
+        commands.trigger(lunco_core::SceneTransitionCompleted { transition });
         return;
     }
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
-    // Record the transaction identity. A later request with a different
-    // identity replaces it through the same teardown path; the transaction is
-    // not a process-wide lock on scene selection.
+    // Record the asset/projection phase of the admitted transaction. A later
+    // request remains pending in the coordinator until this phase publishes a
+    // terminal lifecycle edge.
     commands.insert_resource(SceneLoadInFlight {
         path: path.clone(),
-        root_prim: root_prim.clone(),
-        transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
         stage_id: new_id,
     });
-    commands.trigger(lunco_core::SceneTransitionStarted {
-        transition: lunco_core::SceneTransition::load(path.clone(), root_prim.clone()),
-    });
+    commands.trigger(lunco_core::SceneTransitionStarted { transition });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     clear_scene_entities(&mut commands, &scene);
@@ -609,6 +604,11 @@ fn on_load_scene(
     // Spawn via shared helper, deferred so despawns flush first.
     commands.queue(move |world: &mut World| {
         spawn_scene_root_world(world, &path, &root_prim);
+        if stage_already_loaded {
+            world.write_message(lunco_usd_sim::cosim::SceneStageAssetOutcome::Loaded {
+                stage_id: new_id,
+            });
+        }
     });
 }
 
@@ -644,7 +644,6 @@ fn doc_backed_source_for_abs(
 
 register_commands!(
     on_load_scene,
-    on_restart_scene_refresh_active_document,
     on_apply_usd_op,
     on_apply_usd_ops,
     // The USD half of the generic `UndoDocument`/`RedoDocument` verbs. Registering the
@@ -668,9 +667,8 @@ register_commands!(
 /// confirmed intent which discards both their authored and runtime layers. The
 /// document registry owns both policies so every file-backed domain keeps the
 /// same identity and history invariants.
-#[on_command(RestartScene)]
 fn on_restart_scene_refresh_active_document(
-    trigger: On<RestartScene>,
+    trigger: On<lunco_core::SceneTransitionStarted>,
     asset_server: Option<Res<AssetServer>>,
     q_usd: Query<(&UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
@@ -678,6 +676,10 @@ fn on_restart_scene_refresh_active_document(
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     role: Option<Res<lunco_core::NetworkRole>>,
 ) {
+    let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
+    else {
+        return;
+    };
     // The authoritative host/standalone process owns the source file. Clients
     // restart the currently replicated asset and must not invent a local base.
     if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
@@ -724,14 +726,14 @@ fn on_restart_scene_refresh_active_document(
         );
         return;
     };
-    let (_, outcome) = if trigger.event().reset_document {
+    let (_, outcome) = if *reset_document {
         registry.reset_file(path, source)
     } else {
         registry.open_file(path, source)
     };
     match outcome {
         OpenOutcome::Refreshed => {
-            if trigger.event().reset_document {
+            if *reset_document {
                 info!("[restart-scene] fully reset active Twin from disk before remount")
             } else {
                 info!("[restart-scene] refreshed active Twin source before remount")

@@ -68,7 +68,6 @@ pub mod mount;
 pub mod nurbs;
 pub mod program;
 pub mod read;
-pub mod scene_lifecycle;
 pub mod trim;
 pub mod units;
 pub mod usd_data;

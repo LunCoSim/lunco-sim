@@ -179,10 +179,7 @@ impl Plugin for SandboxUiPlugin {
                 retain_workbench_chrome: true,
             });
         }
-        lunco_workbench::install_render_recovery_teardown(
-            app,
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-        );
+        lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
             // USD Twin browser. NOTE: the USD *viewport preview*
@@ -237,7 +234,7 @@ impl Plugin for SandboxUiPlugin {
                 app.init_resource::<models_palette::AttachState>();
                 // Disarm on scene teardown — see `AttachState`.
                 app.add_systems(
-                    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                    lunco_core::SceneTeardown,
                     |mut attach: ResMut<models_palette::AttachState>| {
                         if *attach != models_palette::AttachState::Idle {
                             *attach = models_palette::AttachState::Idle;

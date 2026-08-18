@@ -1612,7 +1612,7 @@ pub fn setup_autopilot_session(
 
 /// Scene-reset lifecycle: an autopilot actor is scene-derived state — it claims a
 /// scene vessel and holds a compiled tree of that scene's route. When the scene is
-/// cleared/reloaded ([`lunco_usd_bevy::scene_lifecycle::SceneTeardown`]) the vessel
+/// cleared/reloaded ([`lunco_core::SceneTeardown`]) the vessel
 /// it drives is despawned with the scene, so the actor must go too — a stale actor
 /// would keep its old tree (and its old cursor) aimed at a dead entity, and its
 /// session claim would block the respawned vessel (whose [`GlobalEntityId`] is

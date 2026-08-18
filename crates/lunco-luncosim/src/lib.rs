@@ -2505,10 +2505,9 @@ impl Plugin for SandboxCorePlugin {
             // is for. What it must not do is leave that override behind: unloading
             // a lunar scene restores the luncosim's own value, so whatever loads
             // next starts from the app's baseline rather than the last scene's.
-            .add_systems(
-                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-                |mut commands: Commands| commands.insert_resource(SANDBOX_GRAVITY),
-            )
+            .add_systems(lunco_core::SceneTeardown, |mut commands: Commands| {
+                commands.insert_resource(SANDBOX_GRAVITY)
+            })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
             // calibrated lunar surface (the canonical 128 klx / EV15 `LunarSun`
             // crushes the dark blueprint ground to black). Inserted BEFORE

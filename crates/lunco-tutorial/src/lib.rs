@@ -1732,7 +1732,7 @@ mod tests {
     #[test]
     fn world_lesson_waits_for_mount_and_cancels_cleanly() {
         #[derive(Resource, Default)]
-        struct TransitionsSeen(Vec<lunco_core::SceneTransition>);
+        struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1755,7 +1755,7 @@ mod tests {
         app.insert_resource(TransitionsSeen::default());
         app.add_observer(
             |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
-                seen.0.push(trigger.event().transition.clone());
+                seen.0.push(trigger.event().request.clone());
             },
         );
 
@@ -1766,7 +1766,7 @@ mod tests {
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
         assert_eq!(
             app.world().resource::<TransitionsSeen>().0,
-            vec![lunco_core::SceneTransition::load(
+            vec![lunco_core::SceneTransitionRequest::load(
                 "lunco://tutorials/sandbox/first_drive.usda",
                 "",
             )]
@@ -1792,8 +1792,11 @@ mod tests {
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
         assert!(app.world().resource::<TransitionsSeen>().0.ends_with(&[
-            lunco_core::SceneTransition::load("lunco://tutorials/sandbox/first_drive.usda", "",),
-            lunco_core::SceneTransition::Clear,
+            lunco_core::SceneTransitionRequest::load(
+                "lunco://tutorials/sandbox/first_drive.usda",
+                "",
+            ),
+            lunco_core::SceneTransitionRequest::Clear,
         ]));
     }
 
@@ -1804,7 +1807,7 @@ mod tests {
     #[test]
     fn replacing_world_lesson_clears_before_loading_same_stage() {
         #[derive(Resource, Default)]
-        struct TransitionsSeen(Vec<lunco_core::SceneTransition>);
+        struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1829,7 +1832,7 @@ mod tests {
         app.insert_resource(TransitionsSeen::default());
         app.add_observer(
             |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
-                seen.0.push(trigger.event().transition.clone());
+                seen.0.push(trigger.event().request.clone());
             },
         );
 
@@ -1854,8 +1857,8 @@ mod tests {
         assert!(matches!(
             app.world().resource::<TransitionsSeen>().0.as_slice(),
             [
-                lunco_core::SceneTransition::Load { .. },
-                lunco_core::SceneTransition::Clear,
+                lunco_core::SceneTransitionRequest::Load { .. },
+                lunco_core::SceneTransitionRequest::Clear,
             ]
         ));
 
@@ -1867,9 +1870,9 @@ mod tests {
         assert!(matches!(
             app.world().resource::<TransitionsSeen>().0.as_slice(),
             [
-                lunco_core::SceneTransition::Load { .. },
-                lunco_core::SceneTransition::Clear,
-                lunco_core::SceneTransition::Load { .. },
+                lunco_core::SceneTransitionRequest::Load { .. },
+                lunco_core::SceneTransitionRequest::Clear,
+                lunco_core::SceneTransitionRequest::Load { .. },
             ]
         ));
 

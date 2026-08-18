@@ -43,9 +43,34 @@ transition merely because it entered through a different command.
 
 ## Everything else — the `SceneTeardown` schedule
 
-Resources, caches and worker-side handles are not entities and are not covered
-by a despawn. They are unloaded by the `SceneTeardown` schedule
-(`lunco_usd_bevy::scene_lifecycle`), run from the same teardown.
+Resources, caches, worker-side handles, and subsystem-derived entity trees are
+not covered by the USD prim sweep. They are retired by the dependency-light
+`lunco_core::SceneTeardown` schedule, run before the outgoing prims are
+despawned and before replacement projection starts.
+
+Celestial state follows the same boundary. Its derived tree is retired and
+`ActivePhysicsFrame` is restored to the persistent world root unconditionally;
+this is not inferred from a later frame with no body declarations, because a
+restart can replace old declarations with new declarations in one transaction.
+
+## Transition admission and schedule boundary
+
+Scene commands never mutate the world in the caller's schedule. API, UI, Rhai,
+and tutorial entry points submit a typed `SceneTransitionRequest` to the single
+`SceneTransitionCoordinator`. The coordinator retains one active transaction
+and one latest pending request. It publishes `SceneTransitionAdmitted` only from
+the `First` lifecycle phase; private lifecycle observers execute that admitted
+request, followed by an explicit deferred-command flush before normal projection
+schedules run. Public command handlers therefore have one role—submission—and
+contain no execution-mode marker, retry branch, or mid-frame mutation path.
+
+Loading closes from the authoritative asset/projection outcome in `Last`, after
+normal projection schedules have finished. `Last`'s deferred-command flush
+publishes `SceneTransitionCompleted` or `SceneTransitionFailed` and admits any
+pending request; only the following frame's `First` lifecycle phase can execute
+it. A second request therefore cannot replace an in-flight stage, and consumers
+do not need staging markers, stale-entity guards, retries, or per-frame recovery
+checks.
 
 Scene safety state follows the same boundary. `lunco_core::RuntimeFaults` records
 the first terminal physics/runtime failure for the active scene, while
@@ -67,7 +92,7 @@ It is a **schedule**, not a registry, and that choice is the design:
 
 ```rust
 app.add_systems(
-    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+    lunco_core::SceneTeardown,
     |mut commands: Commands| commands.remove_resource::<MySceneCache>(),
 );
 ```

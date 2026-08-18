@@ -563,8 +563,10 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     app.world_mut()
         .insert_resource(lunco_core::ActivePhysicsFrame(surface_frame));
 
-    // Reload into a scene WITHOUT bodies: despawn every `CelestialBodyDecl` (that is
-    // what scene-clear does to the USD-projected declaration entities).
+    // Reload into a scene WITHOUT bodies. The scene owner runs the explicit
+    // teardown transaction while the outgoing declarations still exist, then
+    // reclaims the USD-projected declaration entities.
+    lunco_core::run_scene_teardown(app.world_mut());
     let decls: Vec<Entity> = app
         .world_mut()
         .query_filtered::<Entity, With<lunco_celestial::CelestialBodyDecl>>()
@@ -574,7 +576,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
         app.world_mut().despawn(e);
     }
 
-    // Teardown fires on the next frame and clears everything…
+    // Deferred teardown writes and entity reclamation settle normally.
     app.update();
     app.update();
     assert_eq!(

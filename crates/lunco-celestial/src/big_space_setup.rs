@@ -173,13 +173,13 @@ fn blueprint_tile_look_untextured(
 /// **The celestial ownership marker.** EVERY entity the celestial subsystem spawns in
 /// Rust — grids, bodies, inertial anchors, orbit views, mission spacecraft — carries
 /// this, and teardown despawns the whole set in one query
-/// ([`teardown_celestial_when_undeclared`](crate::teardown_celestial_when_undeclared)).
+/// ([`teardown_celestial_scene`](crate::teardown_celestial_scene)).
 ///
 /// This is the *architecture* that keeps scene reload correct: celestial content is
 /// declared per scene (`CelestialBodyDecl`), and everything derived from that
-/// declaration is owned by this marker, so "reload into a scene without a sky" tears
-/// the sky down completely — no orbiting ghost bodies, no stale orbit lines, no sky
-/// clock — without anyone maintaining a list of what to despawn. The invariant is
+/// declaration is owned by this marker, so every scene replacement tears the old sky
+/// down completely before projecting the new one — no orbiting ghost bodies, stale
+/// orbit lines, or old physics frame — without maintaining a despawn list. The invariant is
 /// one line: *if the celestial subsystem spawns it, it carries `CelestialDerived`.*
 #[derive(Component)]
 pub struct CelestialDerived;

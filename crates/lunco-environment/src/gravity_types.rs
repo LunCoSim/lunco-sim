@@ -68,7 +68,7 @@ pub const EARTH_SURFACE_GRAVITY: f64 = 9.80665;
 /// A scene may override it (`UsdPhysicsScene`), so the app registers its
 /// start-up value as the baseline that scene teardown restores — otherwise a
 /// lunar scene would leave 1.62 behind for whatever loads next. That is what
-/// `Clone` is for here; see `lunco_usd_bevy::scene_lifecycle`.
+/// `Clone` is for here; see [`lunco_core::SceneTeardown`].
 ///
 /// # Examples
 ///

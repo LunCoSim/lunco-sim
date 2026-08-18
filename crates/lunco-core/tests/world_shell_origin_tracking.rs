@@ -37,10 +37,9 @@ fn world_grid_global_transform_tracks_traveling_origin() {
     };
 
     // A "camera" far from the scene, in real cells of the WorldGrid — the
-    // orbital-view shape (WorldGrid edge is 2 km; threshold 1e10 means
-    // translation_to_grid would keep small offsets in f32, so write the cell
-    // directly the way `orbit_system` does after `translation_to_grid` of an
-    // astronomical position).
+    // orbital-view shape. Write a distant cell directly so this test isolates
+    // origin propagation from the already-covered `translation_to_grid`
+    // decomposition.
     const CELLS: i64 = 100_000; // 2e8 m — Earth-ish range
     let camera = app
         .world_mut()

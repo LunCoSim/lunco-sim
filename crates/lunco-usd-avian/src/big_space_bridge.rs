@@ -515,7 +515,11 @@ fn pose_to_position(
                 &q_grids,
                 &q_spatial,
             )
-            .expect("active PhysicsFrame must be an ancestor of every physical body")
+            .unwrap_or_else(|| {
+                panic!(
+                    "physical entity {e:?} is below active PhysicsFrame {active_frame:?} but its hierarchy is not a valid BigSpace grid chain"
+                )
+            })
         } else {
             pose_in_grid_seeded(
                 e,
@@ -526,7 +530,11 @@ fn pose_to_position(
                 &q_grids,
                 &q_spatial,
             )
-            .expect("active PhysicsFrame must share a BigSpace root with every collider")
+            .unwrap_or_else(|| {
+                panic!(
+                    "physical entity {e:?} does not share a BigSpace root with active PhysicsFrame {active_frame:?}"
+                )
+            })
         };
         let (p, r) = (GridPos(position), GridRot(rotation));
         pos.0 = p.0;

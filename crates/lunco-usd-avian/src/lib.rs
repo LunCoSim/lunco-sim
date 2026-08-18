@@ -223,10 +223,7 @@ impl Plugin for UsdAvianPlugin {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(JointAttachPlugin);
-        app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-            prepare_scene_physics_teardown,
-        );
+        app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
         //   right after `sync_usd_visuals` translates each prim, so the
@@ -245,7 +242,7 @@ impl Plugin for UsdAvianPlugin {
         app.init_resource::<lunco_lint::LintReport>();
         app.init_resource::<CollisionGroupTables>();
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::SceneTeardown,
             |mut commands: Commands,
              mut lint: ResMut<lunco_lint::LintReport>,
              mut groups: ResMut<CollisionGroupTables>| {

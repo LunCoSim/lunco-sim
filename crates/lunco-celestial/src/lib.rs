@@ -320,19 +320,13 @@ impl Plugin for CelestialPlugin {
         );
         app.add_systems(Update, big_space_setup::sync_site_gravity);
 
-        // The mirror of spawn: when a scene reload leaves the world with a celestial
-        // hierarchy but no declarations (reloaded into a scene without a sky), tear the
-        // hierarchy down. Gated the same way, inverted — so spawn and teardown can
-        // never both run in one frame.
-        app.add_systems(
-            Update,
-            teardown_celestial_when_undeclared.run_if(
-                |q_decl: Query<(), With<CelestialBodyDecl>>,
-                 q_derived: Query<(), With<big_space_setup::CelestialDerived>>| {
-                    q_decl.is_empty() && !q_derived.is_empty()
-                },
-            ),
-        );
+        // Teardown is the first phase of the scene replacement transaction.
+        // It cannot be inferred from a frame where declarations happen to be
+        // absent: a restart may project the replacement declarations in the
+        // same frame, so that state is never observable. Retire the old sky and
+        // restore the persistent physics frame exactly once at the lifecycle
+        // boundary, before any replacement prim is projected.
+        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
         // Core celestial updates in PreUpdate for Coordinate Stability
@@ -482,8 +476,7 @@ impl Plugin for CelestialPlugin {
     }
 }
 
-/// Tear down everything the celestial subsystem spawned, when a scene reload has left
-/// the world with a hierarchy but no [`CelestialBodyDecl`] (see the run condition).
+/// Tear down everything the celestial subsystem spawned at the scene boundary.
 ///
 /// This is the *architecture* that prevents the reload bugs by design, not by a
 /// maintained despawn list:
@@ -507,7 +500,7 @@ impl Plugin for CelestialPlugin {
 /// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
 /// from the scene-clear choke point — so a detached/fast sky clock is already back on
 /// its `Epoch` root by the time this runs.
-fn teardown_celestial_when_undeclared(
+fn teardown_celestial_scene(
     mut commands: Commands,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
@@ -538,7 +531,44 @@ fn teardown_celestial_when_undeclared(
         commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
     }
 
-    info!("[celestial] scene has no bodies → tore down {n} celestial entities");
+    info!("[celestial] scene teardown retired {n} derived entities");
+}
+
+#[cfg(test)]
+mod scene_teardown_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_declarations_cannot_suppress_celestial_teardown() {
+        let mut app = App::new();
+        app.init_resource::<MissionRegistry>();
+        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
+
+        let world_root = app.world_mut().spawn(lunco_core::WorldRoot).id();
+        let outgoing_frame = app.world_mut().spawn_empty().id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(outgoing_frame));
+        let outgoing = app
+            .world_mut()
+            .spawn(big_space_setup::CelestialDerived)
+            .id();
+        // This is the restart shape that defeated the former Update/run_if:
+        // replacement declarations already exist before the next frame.
+        let replacement_decl = app
+            .world_mut()
+            .spawn(CelestialBodyDecl {
+                naif: ephemeris_id::MOON,
+            })
+            .id();
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert!(app.world().get_entity(outgoing).is_err());
+        assert!(app.world().get_entity(replacement_decl).is_ok());
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            world_root
+        );
+    }
 }
 
 /// Standalone gravity plugin — registers gravity configuration types.

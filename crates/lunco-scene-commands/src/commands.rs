@@ -3395,7 +3395,7 @@ impl Plugin for SpawnCommandPlugin {
         // panel editing whatever now holds the recycled id. Scene state, so it
         // unloads with the scene.
         app.add_systems(
-            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            lunco_core::SceneTeardown,
             |mut selected: ResMut<crate::SelectedEntities>| {
                 if !selected.entities.is_empty() {
                     selected.entities.clear();

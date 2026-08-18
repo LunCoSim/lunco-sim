@@ -147,9 +147,9 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
     // root/WorldGrid rendered in surface convention while the rest of the
     // world moved in origin-relative convention.
     //
-    // The root grid's `switching_threshold` is deliberately SMALL (not the
-    // WorldGrid's 1e10): it bounds the f32 remainder of the origin's pose in
-    // this grid (`edge/2 + threshold`), i.e. it is a PRECISION knob — see
+    // The root and WorldGrid use the same deliberately SMALL threshold. It
+    // bounds the f32 remainder of the origin's pose in each grid
+    // (`edge/2 + threshold`), i.e. it is a PRECISION knob — see
     // `docs/architecture/46` and the cell-edge rule in `big_space_setup.rs`.
     //
     // NO `Transform` on the root — big_space's canonical root shape (its

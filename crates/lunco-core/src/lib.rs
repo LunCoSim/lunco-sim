@@ -88,8 +88,9 @@ pub use markers::{
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
-    SceneTransition, SceneTransitionCompleted, SceneTransitionFailed, SceneTransitionIntent,
-    SceneTransitionStarted,
+    run_scene_teardown, SceneTeardown, SceneTransition, SceneTransitionAdmission,
+    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
+    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use session::{
     authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,

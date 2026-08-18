@@ -27,8 +27,8 @@ use lunco_render::SceneCamera;
 use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
 use lunco_terrain_globe::{
-    create_quadsphere_tile_mesh, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch,
-    TerrainTile, TileCoord,
+    GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch, TerrainTile, TileCoord,
+    create_quadsphere_tile_mesh,
 };
 use lunco_terrain_surface::SurfaceOracle;
 
@@ -492,6 +492,25 @@ fn build_draw_cover(
     draw
 }
 
+/// Resolve the active camera in a body's rotating surface Grid.
+///
+/// Globe selection is simulation-space work: it chooses persistent tile
+/// identities and therefore must use BigSpace's authoritative
+/// `(CellCoord, Transform)` hierarchy. [`GlobalTransform`] is a camera-relative
+/// f32 render product; reconstructing a cross-body position from two of them
+/// quantizes the Earth-Moon baseline and can make the selected quadtree branch
+/// alternate as the floating origin moves.
+fn camera_position_in_surface_grid(
+    camera: Entity,
+    surface_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<DVec3> {
+    lunco_core::coords::pose_in_grid(camera, surface_grid, q_parents, q_grids, q_spatial)
+        .map(|(position, _)| position)
+}
+
 /// Per-frame: stream each body's cube-sphere tile set against the camera.
 pub(crate) fn update_globe_lod(
     mut commands: Commands,
@@ -500,9 +519,10 @@ pub(crate) fn update_globe_lod(
     // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"
     // is a render-FREE question, and asking it with `Camera3d` was what made this
     // crate link bevy_core_pipeline → wgpu. See `lunco_render::camera`.
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<SceneCamera>>,
-    transforms: Query<&GlobalTransform>,
+    cameras: Query<(Entity, &Camera, &bevy::camera::RenderTarget), With<SceneCamera>>,
+    q_parents: Query<&ChildOf>,
     grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     material_ready: Query<(), With<ShaderLookReady>>,
     visibility: Query<&Visibility>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobeHandoff>)>,
@@ -511,37 +531,44 @@ pub(crate) fn update_globe_lod(
     // an arbitrary Camera3d — including offscreen preview cameras — and
     // archetype moves can flip iteration order between frames, alternating
     // the LOD focus point and thrashing the whole tile set every frame.
-    let Some(cam) = cameras
+    let mut active_cameras = cameras
         .iter()
-        .filter(|(c, _, target)| {
+        .filter(|(_, c, target)| {
             c.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
         })
-        .map(|(_, gt, _)| gt)
-        .next()
-    else {
+        .map(|(entity, _, _)| entity);
+    let Some(camera_entity) = active_cameras.next() else {
         return;
     };
-    let cam_pos = cam.translation().as_dvec3();
+    assert!(
+        active_cameras.next().is_none(),
+        "globe LOD requires exactly one active window SceneCamera"
+    );
 
     for (body_ent, lod, mut tiles, handoff) in &mut bodies {
-        // Camera relative to the body centre (= the surface grid origin, inertial),
-        // in the frame the tiles live in. f32 render-space is plenty for choosing
-        // the LOD; tile PLACEMENT below stays f64-precise via `translation_to_grid`.
-        let Ok(sg_gt) = transforms.get(lod.surface_grid) else {
-            continue;
-        };
-        let Ok(sg_grid) = grids.get(lod.surface_grid) else {
-            continue;
-        };
-        // The surface grid is a rotating body-fixed frame.  Subtracting only
-        // translations projects a world-space camera into the wrong cube-sphere
-        // face as soon as the body's rotation is non-identity, leaving the
-        // actually viewed branch uncovered (black gaps at the DEM/globe
-        // horizon).  Undo the live grid rotation at this one frame boundary;
-        // tile coordinates and placement remain in the same body-local frame.
-        let (_, surface_rotation, surface_translation) = sg_gt.to_scale_rotation_translation();
-        let camera_body_local =
-            surface_rotation.as_dquat().inverse() * (cam_pos - surface_translation.as_dvec3());
+        // Camera relative to the body centre in the rotating frame the tiles
+        // live in. This is an f64 cross-grid conversion through BigSpace's
+        // authoritative cells. LOD identity must never be inferred from the
+        // lossy, floating-origin-relative render `GlobalTransform` projection.
+        let camera_body_local = camera_position_in_surface_grid(
+            camera_entity,
+            lod.surface_grid,
+            &q_parents,
+            &grids,
+            &q_spatial,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "globe LOD camera {camera_entity:?} and surface Grid {:?} are not connected through one BigSpace hierarchy",
+                lod.surface_grid
+            )
+        });
+        let sg_grid = grids.get(lod.surface_grid).unwrap_or_else(|_| {
+            panic!(
+                "GlobeLod on body {body_ent:?} names {:?} as its surface Grid, but that entity has no Grid component",
+                lod.surface_grid
+            )
+        });
 
         // A handoff changes the geometry of every resident tile that crosses its
         // boundary. Retire the old meshes before solving the new cover so a
@@ -549,9 +576,8 @@ pub(crate) fn update_globe_lod(
         let handoff_changed = tiles.last_solve_handoff.as_ref() != handoff;
         if handoff_changed {
             debug!(
-            "globe LOD handoff solve: body={body_ent:?} camera={cam_pos:?} surface_grid={:?} surface_grid_world={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
+                "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} surface_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
                 lod.surface_grid,
-                sg_gt.translation(),
                 lod.radius_m,
                 handoff.is_some()
             );
@@ -898,6 +924,103 @@ pub(crate) fn update_globe_lod(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn cross_body_lod_camera_uses_the_authoritative_big_space_pose() {
+        let mut world = World::new();
+        let grid = Grid::new(2_000.0, 100.0);
+        let root = world.spawn(grid.clone()).id();
+
+        let earth_center = DVec3::new(-4_671_234.375, 81_234.625, -19_876.125);
+        let earth_rotation = Quat::from_rotation_y(1.234_567);
+        let (earth_cell, earth_local) = grid.translation_to_grid(earth_center);
+        let earth_fixed = world
+            .spawn((
+                grid.clone(),
+                earth_cell,
+                Transform::from_translation(earth_local).with_rotation(earth_rotation),
+                ChildOf(root),
+            ))
+            .id();
+        let earth_surface = world
+            .spawn((
+                grid.clone(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(earth_fixed),
+            ))
+            .id();
+
+        let moon_center = DVec3::new(379_728_918.812_5, -43_210.437_5, 77_777.312_5);
+        let moon_rotation = Quat::from_rotation_y(-0.456_789);
+        let (moon_cell, moon_local) = grid.translation_to_grid(moon_center);
+        let moon_fixed = world
+            .spawn((
+                grid.clone(),
+                moon_cell,
+                Transform::from_translation(moon_local).with_rotation(moon_rotation),
+                ChildOf(root),
+            ))
+            .id();
+        let moon_surface = world
+            .spawn((
+                grid.clone(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(moon_fixed),
+            ))
+            .id();
+
+        let camera_moon_local = DVec3::new(123.456_789, 1_737_412.345_678, -987.654_321);
+        let (camera_cell, camera_local) = grid.translation_to_grid(camera_moon_local);
+        let camera = world
+            .spawn((
+                camera_cell,
+                Transform::from_translation(camera_local),
+                ChildOf(moon_surface),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let actual = {
+            let (q_parents, q_grids, q_spatial) = state.get(&world).unwrap();
+            camera_position_in_surface_grid(camera, earth_surface, &q_parents, &q_grids, &q_spatial)
+                .expect("the Moon camera and Earth surface share the celestial BigSpace")
+        };
+        let expected_root = moon_center
+            + moon_rotation.as_dquat()
+                * grid
+                    .grid_position_double(&camera_cell, &Transform::from_translation(camera_local));
+        let expected = earth_rotation.as_dquat().inverse() * (expected_root - earth_center);
+
+        assert!(
+            actual.distance(expected) < 1.0e-3,
+            "cross-body camera pose lost BigSpace precision: actual={actual:?}, expected={expected:?}, error={} m",
+            actual.distance(expected)
+        );
+
+        // Re-express the exact same camera pose across a cell boundary. The
+        // selected globe position is physical state, so BigSpace recentering
+        // must not perturb it or trigger a different LOD branch.
+        world.entity_mut(camera).insert((
+            CellCoord::new(camera_cell.x + 1, camera_cell.y, camera_cell.z),
+            Transform::from_translation(camera_local - Vec3::X * grid.cell_edge_length()),
+        ));
+        let after_recenter = {
+            let (q_parents, q_grids, q_spatial) = state.get(&world).unwrap();
+            camera_position_in_surface_grid(camera, earth_surface, &q_parents, &q_grids, &q_spatial)
+                .unwrap()
+        };
+        assert!(
+            after_recenter.distance(actual) < 1.0e-3,
+            "camera LOD pose changed across an equivalent BigSpace cell expression: before={actual:?}, after={after_recenter:?}"
+        );
+    }
 
     #[test]
     fn finite_dem_edge_relief_is_not_extruded_into_the_globe_collar() {
