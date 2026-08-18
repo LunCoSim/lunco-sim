@@ -937,6 +937,8 @@ pub fn on_compile_model(
             // per-frame "worker hung?" warning spam during multi-
             // second Modelica compiles.
             model.is_stepping = true;
+            model.in_flight_step = None;
+            model.next_step_id = 1;
             model.is_compiling = true;
             model.last_error = None;
             // Capture the generation being compiled; promoted to
@@ -1019,6 +1021,8 @@ pub fn on_compile_model(
                     last_error: None,
                     document: doc,
                     is_stepping: true,
+                    in_flight_step: None,
+                    next_step_id: 1,
                     is_compiling: true,
                     is_compiled: false,
                     compiled_generation: 0,
@@ -2327,6 +2331,8 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
             };
             model.session_id += 1;
             model.is_stepping = true;
+            model.in_flight_step = None;
+            model.next_step_id = 1;
             model.current_time = 0.0;
             // Reset rewinds the world clock this model is coupled to as well
             // (A3) — otherwise the reset model would immediately owe the

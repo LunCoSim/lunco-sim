@@ -3,8 +3,9 @@
 > Status: Active · Audience: contributors wiring simulation engines together
 >
 > Connects multiple simulation engines (Modelica, FMU, GMAT, Avian) in a
-> single Bevy world via explicit `SimConnection`s between named ports.
-> Implements the FMI/SSP pattern.
+> single Bevy world via explicit `SimConnection`s between named ports. Its
+> master-side transaction is FMI/SSP-shaped; the current Modelica backend is not
+> itself an FMI implementation.
 
 This architecture doc summarizes the high-level model. For in-depth
 engineering docs (system ordering, panel registration, convention details),
@@ -88,17 +89,29 @@ advances on the fixed 60 Hz clock, but a Modelica participant is not a 60 Hz
 render callback. Inputs are sampled and outputs are published only at the next
 declared point; the last validated output is held between points. The USD
 `LunCoProgramAPI` property `lunco:program:communicationPeriod` is the source of
-truth, with its documented 0.1 s (10 Hz) fallback. A model that needs every
-physics tick authors one fixed-tick period explicitly.
+truth. When the property is omitted, the schema's documented 0.1 s (10 Hz)
+value is used. An authored non-finite, sub-tick, over-sized, or non-lattice
+value is a terminal model-configuration error and is never replaced by that
+semantic default. The live Rumoca participant accepts communication periods
+from one master fixed tick through `MAX_MACRO_STEP_DT`, in integer master-tick
+units. This master admits at most one asynchronous participant transaction per
+fixed tick, so a sub-tick period is rejected instead of being silently
+undersampled. A model that needs every physics tick authors one fixed-tick
+period explicitly.
 
-**2. The macro step is `communication_point − current_time`, clamped.**
+**2. The macro step is `communication_point − current_time`, bounded by the
+participant contract.**
 `current_time` is the model's own clock (`stepper.time()`), reported back by the
 worker. A `TimeTransport.rate` burst therefore produces more Avian/Rhai fixed
 ticks and proportionally more *declared* Modelica communication points, rather
 than multiplying worker callbacks at the render cadence. The requested `dt` is
-capped at `MAX_MACRO_STEP_DT` (~0.18 s), so one explicit time jump cannot hand
-the solver a ten-second step. A worker result is still required before the
-shared world crosses the communication point, so no stale value crosses a
+capped at `MAX_MACRO_STEP_DT` (~0.18 s) for catch-up, so one explicit time jump
+cannot hand the solver a ten-second step. Normal authored communication points
+are validated to fit that bound and the fixed master-tick lattice; the worker
+receives the master's sequence number and `[start_time, stop_time]`, validates
+both against its own solver clock, and the main thread accepts only the exact
+in-flight response at that endpoint. A worker result is still required before
+the shared world crosses the communication point, so no stale value crosses a
 causal boundary.
 
 **3. The communication barrier follows the causal topology; worker execution is asynchronous.**
@@ -132,6 +145,16 @@ with non-blocking implementation for independent paths:
   binding epoch or any edge is unresolved, membership remains fail-closed and
   all live Modelica participants retain the barrier.
 
+**4. Script participants use the same fixed-step transaction boundary.**
+`sync_script_inputs` runs after causal propagation and physics actuation, then
+the public `lunco_scripting::ScriptingSet` executes each Python/Rhai participant
+once. Its output is published before the next propagation phase, so the output
+is consumed on the following fixed tick. This explicit one-tick delay is the
+conservative discrete co-simulation rule; it prevents a script/physics
+algebraic cycle from depending on Bevy system insertion order. Modelica input
+sampling and script input sampling therefore occur at named schedule edges,
+not as unsynchronised per-frame callbacks.
+
 Because the wait is real, it is **surfaced**: `lunco_modelica::worker::CosimLag`
 records the communication gap for every live participant every fixed tick, and
 `warn!`s (rate-limited) past 0.25 s. An off-thread worker is not a second
@@ -139,13 +162,13 @@ simulation clock. An independent model still uses the same authoritative world
 time and explicit communication points; it is simply not allowed to stall the
 world when its outputs are not on a shared-state causal path.
 
-**4. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
+**5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
 The worker's command-squashing (which correctly collapses redundant
 `UpdateParameters`/`Compile`) explicitly does **not** apply to `Step`: dropping
 one would delete `dt` of simulated time and ack it as a success. If back-pressure
 is ever needed there, `dt`s must be **summed**, never dropped.
 
-**5. The live solver is not the batch solver.** The interactive path integrates a
+**6. The live solver is not the batch solver.** The interactive path integrates a
 fixed ladder of `SECS_PER_TICK / 3` micro-steps with an explicit-family solver;
 the batch/Fast-Run path keeps its adaptive-implicit BDF. See
 [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a — that

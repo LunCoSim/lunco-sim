@@ -567,8 +567,15 @@ fn on_load_scene(
     let new_id = asset_server
         .load::<lunco_usd_bevy::UsdStageAsset>(&path)
         .id();
-    if q_usd.iter().any(|(_, upp, is_scene_root)| {
+    if q_usd.iter().any(|(entity, upp, is_scene_root)| {
+        let current_mount_is_live = mount_state.as_deref().is_none_or(|state| {
+            // A replacement invalidates the old root synchronously, while its
+            // deferred despawn is still visible to this query. Never let that
+            // stale entity satisfy the idempotent-load guard.
+            state.contains_root(entity)
+        });
         upp.stage_handle.id() == new_id
+            && current_mount_is_live
             && if root_prim.is_empty() {
                 is_scene_root
             } else {

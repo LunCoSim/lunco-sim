@@ -28,7 +28,15 @@ exists.
 
 ```bash
 cargo run -p lunco-luncosim-server     # headless, NO flags needed
+cargo run -p lunco-luncosim-server -- --headless-max-speed --scene path/to/scene.usda
 ```
+
+`--headless-max-speed` is a wall-clock execution mode for the production
+simulation loop: it uses the same fixed timestep, port propagation, worker
+transport, and causal barrier, but does not sleep between updates. It is not a
+fake physics-rate multiplier and does not release a participant whose causal
+step is still in flight. Use the API `Exit` command to stop a long-running
+session, or use `luncosim test` when a bounded deterministic verdict is needed.
 
 A windowed build of this same bin is available for symmetry/debugging, but for
 the GUI you'd normally just run `-p lunco-luncosim`.

@@ -150,9 +150,11 @@ fn mark_actuator_driven_motor(
         .entity(trigger.entity)
         .try_insert(lunco_core::ActuatorDrivenJoint);
     if let Ok(motor) = query.get(trigger.entity) {
-        commands
-            .entity(motor.port_entity)
-            .try_insert(lunco_core::CausalStateSink);
+        if motor.port_entity != Entity::PLACEHOLDER {
+            commands
+                .entity(motor.port_entity)
+                .try_insert(lunco_core::CausalStateSink);
+        }
     }
 }
 
@@ -168,9 +170,11 @@ fn mark_actuator_driven_steer(
         .entity(trigger.entity)
         .try_insert(lunco_core::ActuatorDrivenJoint);
     if let Ok(steering) = query.get(trigger.entity) {
-        commands
-            .entity(steering.port_entity)
-            .try_insert(lunco_core::CausalStateSink);
+        if steering.port_entity != Entity::PLACEHOLDER {
+            commands
+                .entity(steering.port_entity)
+                .try_insert(lunco_core::CausalStateSink);
+        }
     }
 }
 

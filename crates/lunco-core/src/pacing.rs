@@ -18,6 +18,23 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
+/// How the host drives the simulation application.
+///
+/// This is execution policy, not another simulation clock. `Realtime` lets the
+/// host derive virtual time from the wall clock; `MaxSpeed` tells a headless
+/// host to feed the fixed lattice explicitly and run the Bevy schedule without
+/// a wall-clock wait. The fixed timestep, transport rate, and co-simulation
+/// barrier remain the same in both modes.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SimulationExecutionMode {
+    /// Use the host's normal wall-clock pacing.
+    #[default]
+    Realtime,
+    /// Advance one fixed simulation duration per host update, as fast as the
+    /// CPU and causal participants permit.
+    MaxSpeed,
+}
+
 /// Outstanding requests to keep the app updating continuously, ignoring the
 /// unfocused power-saving throttle.
 ///

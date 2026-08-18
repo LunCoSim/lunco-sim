@@ -83,6 +83,11 @@ struct UsdTelemetryProjected;
 /// the difference has to reach the UI, not just the log.
 pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
 
+/// Telemetry event for a USD program whose authored execution policy is
+/// invalid. It is distinct from a worker dispatch failure: the source was
+/// never admitted because the scene configuration itself is not executable.
+pub const MODEL_CONFIGURATION_INVALID: &str = "MODEL_CONFIGURATION_INVALID";
+
 /// Marker indicating a USD-driven cosim entity has been wired up by
 /// `process_usd_cosim_prims`. Prevents the system from re-processing
 /// the same entity on the same tick.
@@ -703,26 +708,66 @@ fn process_usd_cosim_prim_read(
 
     // Modelica is a continuous-time participant, not a render callback. The
     // communication period is an authored co-simulation policy on the composed
-    // program prim; when omitted, the LunCoProgramAPI fallback is the documented
-    // 10 Hz boundary. Invalid authored values are rejected to the same safe
-    // default and made visible in the log rather than becoming a zero-period
-    // busy loop.
-    let communication_period_secs = modelica_path.as_ref().map(|_| {
-        let authored = reader.scalar::<f64>(sdf_path, "lunco:program:communicationPeriod");
-        match authored {
-            Some(value)
-                if value.is_finite()
-                    && value >= lunco_core::SECS_PER_TICK => value,
-            Some(value) => {
-                warn!(
-                    "[usd-cosim] {}: lunco:program:communicationPeriod={value:?} is invalid; using the schema default {:.3}s",
-                    prim_path.path, DEFAULT_COMMUNICATION_PERIOD_SECS
-                );
-                DEFAULT_COMMUNICATION_PERIOD_SECS
+    // program prim. An omitted property resolves to the schema's documented
+    // 0.1 s default; an explicit invalid value is a terminal scene error, not
+    // an invitation to run under a different schedule.
+    let communication_period_result = match modelica_path.as_ref() {
+        None => Ok(None),
+        Some(_) => {
+            let authored = reader
+                .attr_names(sdf_path)
+                .iter()
+                .any(|name| name == "lunco:program:communicationPeriod");
+            if !authored {
+                Ok(Some(DEFAULT_COMMUNICATION_PERIOD_SECS))
+            } else {
+                match reader.real(sdf_path, "lunco:program:communicationPeriod") {
+                    Some(value) => lunco_modelica::validate_communication_period_secs(value)
+                        .map(Some)
+                        .map_err(|reason| {
+                            format!(
+                                "{}: lunco:program:communicationPeriod is invalid: {reason}",
+                                prim_path.path,
+                            )
+                        }),
+                    None => Err(format!(
+                        "{}: lunco:program:communicationPeriod is not a valid authored real value",
+                        prim_path.path,
+                    )),
+                }
             }
-            None => DEFAULT_COMMUNICATION_PERIOD_SECS,
         }
-    });
+    };
+    let communication_period_secs = match communication_period_result {
+        Ok(value) => value,
+        Err(reason) => {
+            let (inputs, outputs) = declared_interface(reader, sdf_path);
+            let model_name = modelica_path
+                .as_deref()
+                .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
+            commands.entity(entity).try_insert((
+                UsdSimProcessed,
+                lunco_core::NotPredictable,
+                SimComponent {
+                    model_name,
+                    inputs,
+                    outputs,
+                    status: SimStatus::Error(reason.clone()),
+                    ..default()
+                },
+            ));
+            wiring_dirty.0 = true;
+            error!("[usd-cosim] {reason}");
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_CONFIGURATION_INVALID.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(reason),
+                timestamp: 0.0,
+            });
+            return;
+        }
+    };
 
     // A Python source is not a usable cosim participant until its interpreter
     // is available. Check at the authoritative USD bind boundary, before
@@ -1150,6 +1195,30 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         // the component, or the next tick overwrites it. Closed-channel
         // detection is `send(..).is_err()`, the same test
         // `source_roots::ensure_loaded` uses.
+        let Some(schedule) = schedule else {
+            let error = format!(
+                "Modelica source `{}` has no projected co-simulation schedule",
+                pending.asset_path
+            );
+            component.status = SimStatus::Error(error.clone());
+            commands
+                .entity(entity)
+                .try_remove::<PendingModelicaSource>();
+            error!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{}] {error}", component.model_name),
+            });
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_CONFIGURATION_INVALID.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error),
+                timestamp: 0.0,
+            });
+            continue;
+        };
+
         let parameter_overrides = usd_defaults
             .map(|defaults| {
                 defaults
@@ -1197,9 +1266,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             source_uri: pending.asset_path.clone(),
             parameters,
             inputs,
-            communication_period_secs: schedule
-                .map(|schedule| schedule.communication_period_secs)
-                .unwrap_or(DEFAULT_COMMUNICATION_PERIOD_SECS),
+            communication_period_secs: schedule.communication_period_secs,
             // Durable verdict: `modelica_status` reads this first, so the
             // component reports `Error` on every subsequent tick instead of
             // reverting to `Compiling`.
@@ -2491,18 +2558,23 @@ fn causal_participants_changed(
         (),
         Or<(
             Added<SimConnection>,
+            Changed<SimConnection>,
             Changed<ConnectionBinding>,
             Added<ModelicaModel>,
             Added<lunco_core::CausalStateSink>,
         )>,
     >,
     mut removed_connections: RemovedComponents<SimConnection>,
+    mut removed_bindings: RemovedComponents<ConnectionBinding>,
     mut removed_models: RemovedComponents<ModelicaModel>,
+    mut removed_sinks: RemovedComponents<lunco_core::CausalStateSink>,
     revision: Res<lunco_cosim::BindingRevision>,
 ) -> bool {
     !arrivals.is_empty()
         || removed_connections.read().next().is_some()
+        || removed_bindings.read().next().is_some()
         || removed_models.read().next().is_some()
+        || removed_sinks.read().next().is_some()
         || revision.is_changed()
 }
 
@@ -2546,11 +2618,16 @@ fn derive_causal_barrier_participants(world: &mut World) {
         })
         .collect();
 
-    // Reverse adjacency: stateful sink <- upstream source.
+    // Reverse adjacency: stateful sink <- upstream source. Only executable
+    // edges participate in the causal closure. A failed edge is terminal for
+    // binding/readiness, but it is not a live signal path and must not couple
+    // an otherwise independent participant to the shared clock.
     let mut upstream: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
-    for (start, end, _, _) in &connections {
-        upstream.entry(*end).or_default().push(*start);
+    for (start, end, _, binding) in &connections {
+        if matches!(binding, Some(ConnectionBinding::Bound)) {
+            upstream.entry(*end).or_default().push(*start);
+        }
     }
 
     let mut causal_entities = stateful_sinks.clone();
@@ -2930,9 +3007,12 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
                     "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
-                    "modelica_communication_period_secs": model
-                        .map(ModelicaModel::communication_period_secs)
-                        .unwrap_or(0.0),
+                    "modelica_communication_period_secs": model.and_then(|m| {
+                        m.communication_period_secs.is_finite().then_some(m.communication_period_secs)
+                    }),
+                    "modelica_schedule_error": model.and_then(|m| {
+                        m.validated_communication_period_secs().err()
+                    }),
                     "modelica_next_communication_time": model
                         .map(|m| m.next_communication_time)
                         .unwrap_or(0.0),
@@ -3393,7 +3473,7 @@ fn on_restart_scene(
     trigger: On<RestartScene>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
     mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
@@ -3402,7 +3482,12 @@ fn on_restart_scene(
     // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
     // drop the scheme and load a *different* raw-file asset, breaking twin routing
     // (avatar/camera setup, composed runtime edits) and leaving a stale camera.
-    let Some((_, upp)) = q_usd.iter().next() else {
+    let Some((_, upp, _)) = q_usd.iter().find(|(entity, _, is_scene_root)| {
+        *is_scene_root
+            && mount_state
+                .as_deref()
+                .is_none_or(|state| state.contains_root(*entity))
+    }) else {
         warn!("[restart-scene] no scene is loaded — nothing to restart");
         return;
     };
@@ -4027,6 +4112,15 @@ pub(crate) fn install(app: &mut App) {
     };
     use lunco_modelica::ModelicaSet;
 
+    // Script execution is part of the fixed co-simulation transaction. Its
+    // input snapshot is taken after propagation/actuation, its output becomes
+    // visible on the next tick, and the transaction completes before the
+    // Modelica master dispatches the next communication point.
+    app.configure_sets(
+        FixedUpdate,
+        lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
+    );
+
     // Scene-owned scripting state must end at the same boundary as the USD
     // entities that gave it meaning. This runs before clear_scene_entities'
     // deferred despawns, so the outgoing hook still sees the outgoing world.
@@ -4246,19 +4340,31 @@ pub(crate) fn install(app: &mut App) {
             // copied into it. Cold runs happened to order the two systems the
             // other way, which made the first telemetry sample nondeterministic.
             sync_modelica_outputs
-                .before(lunco_scripting::world_bridge::tick_rhai_scenarios)
+                .before(lunco_scripting::ScriptingSet)
                 .before(PropagateCosimSet::Propagate),
-            sync_script_outputs.before(PropagateCosimSet::Propagate),
-            sync_modelica_inputs
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(ModelicaSet::SpawnRequests),
+            // Script backends consume the input snapshot and publish their
+            // output snapshot as one fixed-step transaction. Script outputs
+            // are published before the propagation phase, then the backend
+            // executes after this tick's propagated inputs. That gives the
+            // explicit one-tick causal delay required for a conservative
+            // discrete co-simulation exchange and avoids an algebraic
+            // same-tick script/physics cycle.
             sync_script_inputs
+                .after(PropagateCosimSet::Propagate)
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(lunco_scripting::ScriptingSet)
+                .before(ModelicaSet::SpawnRequests),
+            sync_script_outputs
+                .before(lunco_scripting::ScriptingSet)
+                .before(PropagateCosimSet::Propagate),
+            sync_modelica_inputs
                 .after(ApplyForcesCosimSet::ApplyForces)
                 .before(ModelicaSet::SpawnRequests),
             // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
             fire_connected_events
                 .after(sync_modelica_outputs)
-                .after(sync_script_outputs),
+                .after(sync_script_outputs)
+                .before(PropagateCosimSet::Propagate),
         ),
     );
 
@@ -4369,6 +4475,39 @@ mod tests {
         let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
         assert!(!participants.topology_ready);
         assert!(participants.requires_barrier(model));
+    }
+
+    #[test]
+    fn failed_edge_does_not_make_model_a_shared_clock_participant() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let model = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+        world.spawn((
+            SimConnection {
+                start_element: model,
+                end_element: body,
+                end_connector: "force_y".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Failed,
+        ));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(participants.topology_ready);
+        assert!(!participants.entities.contains(&model));
+        assert!(!participants.requires_barrier(model));
     }
 
     // ── resolve_root_prim ────────────────────────────────────────────

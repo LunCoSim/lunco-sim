@@ -1377,8 +1377,9 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
 pub use worker::{
-    handle_modelica_responses, spawn_modelica_requests, ModelicaChannels, ModelicaCommand,
-    ModelicaModel, ModelicaResult, DEFAULT_COMMUNICATION_PERIOD_SECS,
+    handle_modelica_responses, spawn_modelica_requests, validate_communication_period_secs,
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaResult,
+    DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 
 #[cfg(feature = "lunco-api")]

@@ -114,8 +114,8 @@ mod tests {
     #[test]
     fn replacement_invalidates_primary_and_additive_roots() {
         let mut state = SceneMountState::default();
-        let primary = Entity::from_raw(1);
-        let additive = Entity::from_raw(2);
+        let primary = Entity::from_raw_u32(1).expect("test entity index is valid");
+        let additive = Entity::from_raw_u32(2).expect("test entity index is valid");
         state.register_root(primary, true);
         state.register_root(additive, false);
         assert!(state.contains_root(primary));

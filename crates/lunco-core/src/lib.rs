@@ -70,7 +70,9 @@ pub use faults::{RuntimeFault, RuntimeFaults};
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
-pub use pacing::{KeepAwake, SimulationBarrier, SimulationBarrierParticipants};
+pub use pacing::{
+    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+};
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external

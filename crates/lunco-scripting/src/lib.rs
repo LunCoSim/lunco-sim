@@ -91,6 +91,17 @@ pub struct ScriptRegistry {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct SceneOwnedScript;
 
+/// Fixed-step execution boundary for every stateful scripting backend.
+///
+/// Co-simulation owns the port exchange around this boundary: inputs are
+/// copied into `ScriptedModel` before the set, the selected backend executes
+/// exactly once for the fixed tick, and its output snapshot is published for
+/// the next propagation phase. Keeping this as a public system set makes that
+/// ordering an explicit cross-crate contract instead of relying on Bevy's
+/// insertion order.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScriptingSet;
+
 impl ScriptRegistry {
     /// Insert (or replace) a `ScriptDocument` host under `id`, attaching a journal
     /// recorder when a journal is wired. **The one insert funnel** — every attach
@@ -304,6 +315,8 @@ impl Plugin for LunCoScriptingPlugin {
         app.register_type::<ScriptedModel>()
             .register_type::<doc::ScriptLanguage>();
 
+        app.configure_sets(FixedUpdate, ScriptingSet);
+
         let python_status = python::get_python_status();
         app.insert_resource(python_status);
 
@@ -328,7 +341,9 @@ impl Plugin for LunCoScriptingPlugin {
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.add_systems(
                 FixedUpdate,
-                run_scripted_models.run_if(scenario::scenario_execution_enabled),
+                run_scripted_models
+                    .in_set(ScriptingSet)
+                    .run_if(scenario::scenario_execution_enabled),
             );
         }
 
@@ -438,7 +453,9 @@ impl Plugin for LunCoScriptingPlugin {
                 FixedUpdate,
                 // Scenario execution stays fixed-step so control writes retain
                 // deterministic physics timing.
-                world_bridge::tick_rhai_scenarios.run_if(scenario::scenario_execution_enabled),
+                world_bridge::tick_rhai_scenarios
+                    .in_set(ScriptingSet)
+                    .run_if(scenario::scenario_execution_enabled),
             );
         }
 

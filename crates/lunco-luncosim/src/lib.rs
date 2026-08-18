@@ -386,6 +386,11 @@ PERFORMANCE:
                          HDR, bloom and MSAA. Startup-only; restart to change it.
         --no-vsync       Uncap the frame rate (present without vsync).
         --no-throttle    Keep running at full rate while unfocused.
+        --headless-max-speed
+                         With --no-ui, run the fixed simulation lattice as fast
+                         as CPU and causal participants permit. This changes
+                         wall-clock execution only; it does not fake a transport
+                         rate or bypass the co-simulation barrier.
         --log-diag       Log FPS / frame-time / physics diagnostics.
 
 SUBCOMMAND:
@@ -425,9 +430,16 @@ fn print_help_if_requested() -> bool {
 /// Printed with `println!` rather than `info!` because it must survive `RUST_LOG`
 /// filtering and precede `LogPlugin` — a build identity that a log level can suppress is
 /// exactly as useless as none.
-fn log_build_identity(headless: bool, offscreen: bool) {
+fn log_build_identity(
+    headless: bool,
+    offscreen: bool,
+    execution_mode: lunco_core::SimulationExecutionMode,
+) {
     let mode = if headless {
-        "headless"
+        match execution_mode {
+            lunco_core::SimulationExecutionMode::Realtime => "headless",
+            lunco_core::SimulationExecutionMode::MaxSpeed => "headless-max-speed",
+        }
     } else if offscreen {
         "offscreen"
     } else {
@@ -457,6 +469,18 @@ fn run_with_mode(headless: bool) -> AppExit {
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
     let args: Vec<String> = std::env::args().collect();
+    let max_speed_requested = args.iter().any(|arg| arg == "--headless-max-speed");
+    if max_speed_requested && !headless {
+        eprintln!(
+            "luncosim: --headless-max-speed requires --no-ui or the luncosim-server launcher"
+        );
+        return AppExit::error();
+    }
+    let execution_mode = if max_speed_requested {
+        lunco_core::SimulationExecutionMode::MaxSpeed
+    } else {
+        lunco_core::SimulationExecutionMode::Realtime
+    };
     let render_profile = match parse_render_profile(&args) {
         Ok(profile) => profile,
         Err(error) => {
@@ -472,7 +496,7 @@ fn run_with_mode(headless: bool) -> AppExit {
             return AppExit::error();
         }
     };
-    log_build_identity(headless, offscreen);
+    log_build_identity(headless, offscreen, execution_mode);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
     // point that runs LunCoSim — GUI `luncosim`, headless `luncosim-server` —
@@ -524,7 +548,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     }
 
     if headless {
-        app.add_plugins(SandboxHeadlessPlugin);
+        app.add_plugins(SandboxHeadlessPlugin { execution_mode });
     }
 
     // Return the AppExit so a non-zero exit (e.g. the startup-scene fail-loud
@@ -3385,6 +3409,7 @@ fn report_modelica_status(
     }
 }
 
+#[cfg(any(feature = "ui", test))]
 fn modelica_source_label(source_uri: &str, model_name: &str) -> String {
     source_uri
         .rsplit(['/', '\\'])
@@ -3910,10 +3935,23 @@ fn parse_record_size() -> (u32, u32) {
     (1280, 720)
 }
 
-pub struct SandboxHeadlessPlugin;
+pub struct SandboxHeadlessPlugin {
+    /// Host execution policy. Max-speed mode uses an explicit fixed duration
+    /// and a zero-wait runner; realtime mode remains wall-clock paced.
+    pub execution_mode: lunco_core::SimulationExecutionMode,
+}
+
+impl Default for SandboxHeadlessPlugin {
+    fn default() -> Self {
+        Self {
+            execution_mode: lunco_core::SimulationExecutionMode::Realtime,
+        }
+    }
+}
 
 impl Plugin for SandboxHeadlessPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(self.execution_mode);
         // A scenario's presentation intents remain valid in a headless run, but
         // there is deliberately no workbench/HUD to receive them. Acknowledge
         // the explicit presentation surface as no-ops so one scenario works in
@@ -3953,14 +3991,27 @@ impl Plugin for SandboxHeadlessPlugin {
         // the authoritative server can't simulate or replicate a drivable rover.
         app.insert_resource(lunco_usd::NoRenderVisuals);
 
-        // No winit event loop drives updates headless, so install a runner that
-        // ticks the app at the sim's fixed rate. (Windowed builds are paced by
-        // winit / vsync.)
-        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
-        ));
+        // No winit event loop drives updates headless. Realtime mode uses the
+        // fixed cadence as the server's wall-clock pacing; max-speed mode feeds
+        // one fixed duration per update and removes the wait entirely. Both
+        // modes still execute the same schedules and the same causal barrier.
+        let wait = match self.execution_mode {
+            lunco_core::SimulationExecutionMode::Realtime => {
+                std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ)
+            }
+            lunco_core::SimulationExecutionMode::MaxSpeed => {
+                app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_secs_f64(lunco_core::SECS_PER_TICK),
+                ));
+                std::time::Duration::ZERO
+            }
+        };
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(wait));
 
-        info!("[luncosim] running HEADLESS (--no-ui): no window/GPU/egui; local simulation only");
+        info!(
+            "[luncosim] running HEADLESS (--no-ui), execution={:?}: no window/GPU/egui; local simulation only",
+            self.execution_mode
+        );
     }
 }
 
