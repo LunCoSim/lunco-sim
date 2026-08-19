@@ -47,6 +47,21 @@ pub trait EphemerisProvider: Send + Sync + 'static {
     /// this body* — which is what they now do.
     fn position(&self, body_id: i32, epoch_jd: f64) -> Option<EclipticAu>;
 
+    /// A certified upper bound for the angular rate of every position this
+    /// provider can return, in radians per simulated day.
+    ///
+    /// The cadence policy uses this bound to turn its geometric angular-error
+    /// tolerance into an epoch step. `f64::INFINITY` means that the provider
+    /// cannot certify a bound; the caller then solves every frame. Returning a
+    /// guessed constant here would be worse than the extra solve because it
+    /// would make a visibly stale frame look valid.
+    fn maximum_angular_rate_rad_per_day(&self) -> f64;
+
+    /// Monotonic revision of the provider's motion model. A dataset arriving
+    /// asynchronously must reopen the cadence policy without making the policy
+    /// scan provider storage every frame.
+    fn motion_revision(&self) -> u64;
+
     /// The body's parent in the gravitational hierarchy. `None` ⇒ it is already heliocentric
     /// (or unknown).
     ///
@@ -102,6 +117,14 @@ impl EphemerisProvider for NoOpEphemerisProvider {
     fn position(&self, _body_id: i32, _epoch_jd: f64) -> Option<EclipticAu> {
         None
     }
+
+    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+        0.0
+    }
+
+    fn motion_revision(&self) -> u64 {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +154,14 @@ mod p8_tests {
                 -1024 => Some(crate::ephemeris_id::EARTH),
                 _ => None,
             }
+        }
+
+        fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+            0.0
+        }
+
+        fn motion_revision(&self) -> u64 {
+            0
         }
     }
 
@@ -172,6 +203,12 @@ mod p8_tests {
         impl EphemerisProvider for Flat {
             fn position(&self, _id: i32, _jd: f64) -> Option<EclipticAu> {
                 Some(EclipticAu::new(DVec3::new(1.0, 0.0, 0.0)))
+            }
+            fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+                0.0
+            }
+            fn motion_revision(&self) -> u64 {
+                0
             }
             // no `parent_id` override ⇒ no tree
         }

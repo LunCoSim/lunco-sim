@@ -1,19 +1,15 @@
 //! Site-anchored solar hierarchy + celestial-bound entity placement (doc 43
 //! §2.6).
 //!
-//! **Site anchoring**: the solar hierarchy is pinned and the site scene is
-//! re-branched under its body's surface grid once that frame exists. The
-//! solar hierarchy is pinned so the site's geodetic point coincides with the
-//! scene origin and ENU aligns with the scene axes (East=+X, North=−Z,
-//! Up=+Y). During the handoff the authored ENU pose is converted exactly into
-//! the body's fixed Cartesian frame; preserving the old world pose would keep
-//! ecliptic axes and rotate the ground away from gravity. Keeping the DEM,
-//! globe handoff, camera, and surface operations in one body-fixed precision
-//! branch avoids an AU-scale hierarchy joint between moving surface pieces.
-//! Runs after `ephemeris_update_system` (which re-zeroes the solar grid on an
-//! accepted celestial solve) and overrides it whenever a [`SiteAnchor`] is
-//! authored. The caller applies the one shared celestial solve gate; this
-//! module has no private epoch gate.
+//! **Site anchoring**: the site scene is re-branched under its body's surface
+//! grid once that frame exists. During the handoff the authored ENU pose is
+//! converted exactly into the body's fixed Cartesian frame; preserving the old
+//! world pose would keep ecliptic axes and rotate the ground away from gravity.
+//! Keeping the DEM, globe handoff, camera, and surface operations in one
+//! body-fixed precision branch avoids an AU-scale hierarchy joint between
+//! moving surface pieces. The solar grid remains inertial and is never re-posed
+//! to make the site coincide with the world origin. The caller applies the one
+//! shared celestial solve gate; this module has no private epoch gate.
 //!
 //! **Bound entities**: prims with a [`GeodeticAnchor`] (ground stations) or a
 //! [`KeplerOrbit`] (satellites) are re-parented onto their body's rotating
@@ -28,12 +24,9 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 
 use lunco_time::WorldTime;
 
-use crate::big_space_setup::SolarSystemRoot;
-use crate::coords::ecliptic_to_bevy;
-use crate::ephemeris::EphemerisResource;
 use crate::geo::{
-    body_rotation, equatorial_frame, geodetic_to_body_fixed, solar_tangent_frame, GeodeticAnchor,
-    LocalTangentFrame, SiteAnchor,
+    GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
+    geodetic_to_body_fixed,
 };
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
@@ -66,11 +59,11 @@ fn site_enu_to_body_fixed_pose(
 
 /// Read an entity's pose in its direct Grid frame.
 ///
-/// A site scene is mounted under the canonical `WorldGrid` before celestial
-/// handoff. Its authored coordinates are therefore already local ENU values;
-/// composing them through the whole solar hierarchy would mix that local frame
-/// with the grid's storage cells. This helper deliberately stops at the direct
-/// parent Grid, then the site-anchor conversion below changes semantic frames.
+/// The USD loader mounts a site scene under the canonical world grid before
+/// celestial handoff. Its authored coordinates are already local ENU values;
+/// composing them through the full solar hierarchy would mix that semantic
+/// frame with BigSpace storage cells. The helper stops at the direct parent
+/// grid, after which the site-anchor conversion changes semantic frames.
 fn direct_grid_pose(
     entity: Entity,
     parent: Entity,
@@ -83,10 +76,6 @@ fn direct_grid_pose(
     let position = grid.grid_position_double(&cell, transform);
     Some((position, transform.rotation.as_dquat()))
 }
-
-/// Celestial projection is multi-stage. Give the solar grid and ephemeris a
-/// short settle window before reporting a structural anchoring failure.
-const ANCHOR_SETTLE_FRAMES: u32 = 30;
 
 /// Orbital view mode state.
 ///
@@ -110,298 +99,6 @@ pub struct OrbitalViewPin {
     pub dir: DVec3,
     /// Viewpoint distance from the body centre, metres.
     pub distance: f64,
-}
-
-/// Pin the solar hierarchy so the authored site anchor coincides with the
-/// local scene origin, ENU-aligned. World = R·(solar − p_site) with R mapping
-/// East→+X, Up→+Y, North→−Z. Runs only on epoch/site changes — the orbital
-/// view never re-poses the world (see [`OrbitalViewPin`]).
-#[allow(clippy::type_complexity)]
-pub fn anchor_solar_frame_to_site(
-    world_time: Res<WorldTime>,
-    ephemeris: Option<Res<EphemerisResource>>,
-    registry: Res<CelestialBodyRegistry>,
-    frame_index: Res<crate::ReferenceFrameIndex>,
-    q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
-    q_site_changed: Query<(), Or<(Added<SiteAnchor>, Changed<GeodeticAnchor>)>>,
-    // `With<Grid>` states a PRECONDITION of the code below (it does cell
-    // arithmetic against this entity's own `Grid`), not a disambiguation.
-    // It used to be the latter: the Sun body also carried `SolarSystemRoot`, and
-    // this filter was the only reason `single_mut()` saw one entity. The marker is
-    // singular at the spawn site now, held by `solar_system_root_is_singular`.
-    mut q_solar: Query<
-        (Entity, &mut CellCoord, &mut Transform),
-        (With<SolarSystemRoot>, With<Grid>),
-    >,
-    mut q_align: Query<
-        (Entity, &mut Transform),
-        (
-            With<crate::big_space_setup::SiteAlignGrid>,
-            Without<SolarSystemRoot>,
-            Without<ReferenceFrame>,
-        ),
-    >,
-    mut commands: Commands,
-    q_frames_stored: Query<
-        (Entity, &ReferenceFrame, &CellCoord, &Transform, &ChildOf),
-        (With<Grid>, Without<SolarSystemRoot>),
-    >,
-    q_parents: Query<&ChildOf, Without<SiteAnchor>>,
-    q_grids: Query<&Grid>,
-    // One-shot latch for the "declared a site but cannot anchor it" diagnostics
-    // below. It is paired with a settle counter so asynchronous celestial
-    // bootstrap does not produce a permanent false alarm during scene load.
-    mut warned: Local<bool>,
-    // Celestial entities and ephemeris data arrive in separate projections. Do
-    // not turn their expected startup ordering into a permanent scene warning.
-    mut unresolved_frames: Local<u32>,
-) {
-    // The diagnostics below latch so a structural fault doesn't repeat every
-    // gated frame — but the latch belongs to the SCENE, not the process. A new
-    // site anchor is a new scene: re-arm, or the twin loaded after the sandbox
-    // scene inherits a spent latch and reports nothing at all.
-    if !q_site_changed.is_empty() {
-        *warned = false;
-        *unresolved_frames = 0;
-    }
-    let Some(ephemeris) = ephemeris else { return };
-    let anchor_opt = q_site.iter().next();
-    // Without a site anchor the solar tree stays heliocentric.
-    if anchor_opt.is_none() {
-        return;
-    }
-    // From here on the scene HAS asked to be site-anchored, so every remaining
-    // early return is a failure to deliver something the scene declared — and
-    // its visible consequence is severe and silent: no `SiteAligned` ⇒
-    // `update_sun_light_system` falls back to an IDENTITY alignment and aims the
-    // sun along raw ECLIPTIC axes, which puts it below the local horizon and
-    // renders the whole scene black. Say so once instead of letting a black
-    // frame be the only symptom.
-    let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else {
-        *unresolved_frames = (*unresolved_frames).saturating_add(1);
-        if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
-            *warned = true;
-            warn!(
-                "[celestial] site-anchored scene has {} Solar Grid entities (need exactly 1) — \
-                 cannot anchor the solar frame, so the sun stays ECLIPTIC-aligned and the \
-                 scene will render unlit",
-                q_solar.iter().count()
-            );
-        }
-        return;
-    };
-    if *warned {
-        info!(
-            "[celestial] solar anchoring prerequisites are available again; the prior warning was startup ordering"
-        );
-        *warned = false;
-    }
-    *unresolved_frames = 0;
-
-    // The shared celestial solve gate owns temporal cadence. Keeping a second
-    // local epoch comparison here would allow site pinning to observe a
-    // different epoch from the body pose it is derived from.
-    let jd = world_time.epoch_jd;
-
-    // Site tangent alignment (world axes) — identity when there is no anchor.
-    let (align, site_frame_origin, site_geo_offset) = if let Some(anchor) = anchor_opt {
-        let Some(desc) = registry.get(anchor.body) else {
-            *unresolved_frames = (*unresolved_frames).saturating_add(1);
-            if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
-                *warned = true;
-                warn!(
-                    "[celestial] site anchor names body {} but the registry declares no such \
-                     body — cannot anchor the solar frame, so the scene will render unlit",
-                    anchor.body
-                );
-            }
-            return;
-        };
-        // No ephemeris ⇒ we do not know where the body IS, so we cannot anchor a site to it.
-        // Leaving the anchor un-placed is honest; placing it at the Sun's centre is not.
-        let Some(p) = ephemeris.provider.global_position(anchor.body, jd) else {
-            *unresolved_frames = (*unresolved_frames).saturating_add(1);
-            if !*warned && *unresolved_frames >= ANCHOR_SETTLE_FRAMES {
-                *warned = true;
-                warn!(
-                    "[celestial] ephemeris has no position for body {} at JD {jd:.5} \
-                     (NoOp provider, or the epoch is outside its span) — cannot anchor the \
-                     solar frame, so the scene will render unlit",
-                    anchor.body
-                );
-            }
-            return;
-        };
-        if *warned {
-            info!(
-                "[celestial] Earth-relative ephemeris is available again; the prior warning was startup ordering"
-            );
-            *warned = false;
-        }
-        let body_center = ecliptic_to_bevy(p).raw();
-        let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
-        // Rows East/Up/−North → world axes.
-        let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-            DVec3::new(frame.east.x, frame.up.x, -frame.north.x),
-            DVec3::new(frame.east.y, frame.up.y, -frame.north.y),
-            DVec3::new(frame.east.z, frame.up.z, -frame.north.z),
-        ));
-        (
-            align,
-            frame.origin,
-            Some((
-                anchor.body,
-                geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m),
-            )),
-        )
-    } else {
-        (DQuat::IDENTITY, DVec3::ZERO, None)
-    };
-
-    // The pin must cancel what the RENDERER will actually compose — the
-    // STORED (`CellCoord` + f32 `Transform`) grid chain — not the ideal f64
-    // ephemeris. Each stored pose still carries an f32 remainder whose ULP
-    // grows with the grid's cell edge, and as the bodies move those remainders
-    // step in ULP increments. A pin computed from smooth f64 positions does
-    // NOT track the steps, so the whole moon subtree (the visible surface)
-    // stepped against the scene — "lunar surface falling and jumping".
-    // Composing the site from the stored chain (every f32 read back into f64
-    // is exact) makes the rendered site land on the origin EXACTLY; the
-    // rounding moves to the far bodies, where metres are sub-pixel.
-    // Compose a point's solar-frame position from the STORED grid chain:
-    // start at the frame with `ephemeris_id`, offset `p0` in that (possibly
-    // rotating) frame, walk up to the Solar Grid over stored (cell,
-    // Transform) values — every f32 read back into f64 is exact.
-    let stored_in_solar = |ephemeris_id: i32, p0: DVec3| -> Option<DVec3> {
-        let start = frame_index.resolve(ReferenceFrame::BodyFixed { body: ephemeris_id })?;
-        let mut current = q_frames_stored.get(start).ok();
-        let mut p = p0;
-        let mut steps = 0;
-        loop {
-            let Some((_, _, c, t, child_of)) = current else {
-                break None;
-            };
-            steps += 1;
-            if steps > 8 {
-                break None;
-            }
-            let parent = child_of.parent();
-            let Ok(parent_grid) = q_grids.get(parent) else {
-                break None;
-            };
-            let edge = parent_grid.cell_edge_length() as f64;
-            p = t.rotation.as_dquat() * p
-                + DVec3::new(c.x as f64, c.y as f64, c.z as f64) * edge
-                + t.translation.as_dvec3();
-            if parent == solar_entity {
-                break Some(p);
-            }
-            current = q_frames_stored.iter().find(|(e, ..)| *e == parent);
-        }
-    };
-
-    // The ENU `align` rotation goes on the ZERO-TRANSLATION Site Align Grid
-    // (the Solar Grid's parent), NOT on the Solar Grid itself. big_space's
-    // origin propagation multiplies a grid's stored f32 quat into the
-    // origin's position vector at that node: on the Solar Grid that vector
-    // is heliocentric (~1.5e11 m), so the f32 quat's ~1e-7 relative error
-    // put a 15–20 km ULP STAIRCASE between the site branch and the celestial
-    // branch — the globe judders seen from the ground, the terrain judders
-    // seen from orbit. At the align node the origin vector is near-zero, so
-    // the same rotation costs sub-millimetres, and the 1 AU offset below
-    // travels through the Solar Grid's EXACT i64 cells in ecliptic axes.
-    //
-    // Cancellation is exact BY CONSTRUCTION now: the Solar pose is
-    // −site_in_solar in the SAME (ecliptic) axes the site composes through,
-    // so the rendered site lands on the origin whatever precision `align`
-    // has — the old "compute the translation from the rounded f32 quat"
-    // trick is obsolete.
-    let align_f32 = align.as_quat();
-    // Site offset in the (rotating) body frame — rotated by the STORED
-    // frame quat inside the walk, matching what tiles/children inherit.
-    let site_in_solar = if let Some((body_id, geo_local)) = site_geo_offset {
-        let Some(stored) = stored_in_solar(body_id, geo_local) else {
-            error_once!(
-                "[celestial] site pin refused: body-fixed frame {} has no complete stored Grid chain to the Solar frame",
-                body_id
-            );
-            return;
-        };
-        stored
-    } else {
-        site_frame_origin
-    };
-    let translation = -site_in_solar;
-
-    // The site pin is the ONE writer of the scene's ecliptic→world placement, so
-    // it is the one place this has to be checked: everything downstream — every
-    // grid cell, every tile's sample coordinate, every collider — is derived from
-    // the pair written just below, and a non-finite value here is not a bad pose,
-    // it is a poisoned FRAME.
-    //
-    // big_space is what makes it unrecoverable rather than merely wrong.
-    // `Grid::translation_to_grid` converts with `round(x / edge) as GridPrecision`,
-    // and Rust's float→int cast SATURATES: `-inf as i64` is `i64::MIN`, `inf` is
-    // `i64::MAX`. So an infinite translation does not produce an infinite cell that
-    // later maths can carry — it produces an extreme FINITE cell that looks
-    // legitimate to every consumer, while the returned remainder (`x - x_r*edge`
-    // = `inf - inf`) is NaN. From there the damage is silent and total: the cell
-    // magnitude overflows the drift diagnostics, and terrain samples the oracle at
-    // NaN coordinates, baking all-NaN tiles whose AABB half-extent is NaN — which
-    // is what finally trips `Aabb3d::new`'s `half_size >= 0.0` assertion over in
-    // `bevy_picking`, an entire subsystem away from the cause.
-    //
-    // Refusing the write keeps the previous good pin (or the un-anchored
-    // heliocentric default) instead, which is visibly wrong in ONE place rather
-    // than subtly wrong everywhere.
-    if !translation.is_finite() || !align_f32.is_finite() {
-        bevy::log::error!(
-            "[celestial] site pin REFUSED: non-finite site frame \
-             (translation={translation:?}, align={align_f32:?}). \
-             Anchor body {:?}, geodetic {:?}. Leaving the previous pin in place — \
-             writing this would saturate the big_space cell and NaN every \
-             derived frame.",
-            anchor_opt.map(|a| a.body),
-            anchor_opt.map(|a| &a.geodetic),
-        );
-        return;
-    }
-
-    if let Ok((align_entity, mut align_tf)) = q_align.single_mut() {
-        if align_tf.rotation != align_f32 {
-            align_tf.rotation = align_f32;
-        }
-        // Reaching here means a site anchor RESOLVED (body in the registry, an
-        // ephemeris position for it) — so the rotation now on the grid is the real
-        // ecliptic→world one. Say so on the entity: an identity quat here is
-        // otherwise indistinguishable from the default a celestial-but-unanchored
-        // scene leaves behind, and consumers that cannot tell aim the sun into the
-        // ecliptic frame (see `SiteAligned`).
-        commands
-            .entity(align_entity)
-            .try_insert(crate::big_space_setup::SiteAligned);
-    }
-
-    if let Ok(child_of) = q_parents.get(solar_entity) {
-        if let Ok(parent_grid) = q_grids.get(child_of.parent()) {
-            let (new_cell, new_translation) = parent_grid.translation_to_grid(translation);
-            if tf.rotation != Quat::IDENTITY {
-                tf.rotation = Quat::IDENTITY;
-            }
-            *cell = new_cell;
-            tf.translation = new_translation;
-            return;
-        }
-    }
-    // No parent grid → NO write. A raw f32 pose at heliocentric magnitude
-    // (~1.5e11 m) quantizes in ~16 km steps — every epoch tick the whole sky
-    // would leap kilometres (the "moon jumps around / LOD flaps / black
-    // frames" failure). `setup_big_space_hierarchy` parents the Solar Grid
-    // under the shell's `WorldGrid` precisely so this path never triggers.
-    bevy::log::warn_once!(
-        "[celestial] site pin skipped: Solar Grid's parent has no `Grid` — \
-         cannot express a heliocentric pose precisely"
-    );
 }
 
 /// Attach the site scene to the body's body-fixed surface frame.
@@ -582,8 +279,8 @@ pub fn attach_site_scene_to_surface_grid(
 /// on exit. Geometry parked at the world origin has no celestial identity, so
 /// from an orbital viewpoint it would float in space in front of the body.
 ///
-/// The SITE-ANCHORED scene is the opposite case and stays VISIBLE: the site
-/// pin places it at its true geodetic point on the anchor body, and under
+/// The SITE-ANCHORED scene is the opposite case and stays VISIBLE: the one-time
+/// surface-grid attachment places it at its true geodetic point on the anchor body, and under
 /// doc 47 Phase 6 the camera flies while the scene never moves — so from
 /// lunar orbit the moonbase genuinely lies on the Moon, exactly where it
 /// belongs. (The blanket hide dated from the retired world-pin design, where
@@ -634,8 +331,8 @@ pub fn orbital_pin_scene_visibility(
 
     // Collect each root plus its full subtree — descendants override the root's
     // visibility, so the root alone would leave the ground on screen. Unanchored
-    // locals toggle with the mode; the site-anchored subtree is pinned onto its
-    // body and is force-VISIBLE every pass (also self-heals scenes hidden by the
+    // locals toggle with the mode; the site-anchored subtree is mounted onto its
+    // body surface Grid and is force-VISIBLE every pass (also self-heals scenes hidden by the
     // pre-Phase-6 blanket hide).
     let mut targets: Vec<(Entity, Visibility)> = Vec::new();
     let mut stack: Vec<(Entity, Visibility)> = q_local.iter().map(|e| (e, target)).collect();
@@ -994,7 +691,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::Geodetic;
+    use crate::geo::{Geodetic, solar_tangent_frame};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]

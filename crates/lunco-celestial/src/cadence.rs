@@ -4,12 +4,10 @@
 //! ## Why not Hz
 //!
 //! Sim time is warpable, so any fixed rate is wrong at every other warp factor.
-//! On the Moon the sun sweeps `360° / 29.53 d = 12.2°/day` of *sim* time and the
-//! Moon sweeps `13.2°/day` around the Earth. At 1× realtime that is 1.5e-4 °/s,
-//! so re-solving at 60 Hz moves the sun by 2.5e-6° per frame — five orders of
-//! magnitude past anything observable. At 10 000× warp the same 60 Hz is barely
-//! adequate. A rate cannot be right in both regimes; a tolerance is right in all
-//! of them, because the epoch step it permits scales with the warp itself.
+//! The required epoch step is derived from a certified maximum angular-motion
+//! bound supplied by the active ephemeris provider and authored frame models.
+//! At low warp this avoids solving an unchanged render frame; at high warp the
+//! same geometric error budget automatically opens the gate as often as needed.
 //!
 //! ## What sets the default
 //!
@@ -18,30 +16,21 @@
 //! hard, so a sun step of `t` degrees shifts a terrain shadow by `d·tan(t)` —
 //! at a 30 km caster distance, 0.01° is ~5 m and 0.05° is ~26 m. Hence 0.01°.
 //!
-//! At that budget and 1× realtime the celestial systems solve about once every
-//! **71 s of sim time** instead of 60×/s. The step is below the perceptual
-//! threshold, so nothing needs interpolating — the poses simply advance in
-//! increments too small to see. At a high warp rate the same angular budget
-//! naturally opens every render frame; that is required because the rendered
-//! body pose, body rotation, and every dependent frame must advance together.
+//! At that budget the solve interval is a property of the live bound: body spin
+//! or an authored fast orbit can make it short, while a static provider can
+//! make it unbounded. An unbounded provider explicitly selects exact solving;
+//! it is never assigned a guessed rate. The whole dependent frame cluster
+//! advances together within the declared geometric error.
 //!
 //! Measured cost of solving every frame on `sandbox_scene.usda`: ~10 ms/frame
 //! across `ephemeris_update_system`, `update_solar_poses`,
-//! `trajectory_alignment_system`, `update_sun_light_system` and
-//! `anchor_solar_frame_to_site`. See
+//! `trajectory_alignment_system` and `update_sun_light_system`. See
 //! `docs/architecture/42-ui-frame-discipline.md` §6.
 
 use bevy::prelude::*;
 use lunco_settings::SettingsSection;
 use lunco_time::WorldTime;
 use serde::{Deserialize, Serialize};
-
-/// Fastest angular rate any tracked body sweeps, in degrees per day of sim time.
-///
-/// The Moon around the Earth (13.2°/day) rather than the sun over a lunar site
-/// (12.2°/day): the budget must hold for the fastest thing on screen, so the
-/// tolerance is converted through the tighter of the two.
-const MAX_BODY_DEG_PER_DAY: f64 = 13.2;
 
 /// How much celestial angular error is acceptable before the tree is re-solved.
 ///
@@ -60,11 +49,19 @@ impl CelestialCadenceSettings {
     /// developer's tolerance can never change a test's verdict.
     pub const EXACT: Self = Self { tolerance_deg: 0.0 };
 
-    /// The epoch step (in Julian days) this tolerance permits. `0.0` for the
-    /// exact setting, which makes the comparison in
-    /// [`celestial_needs_solve`] always true.
-    pub fn max_epoch_step_jd(&self) -> f64 {
-        self.tolerance_deg.max(0.0) / MAX_BODY_DEG_PER_DAY
+    /// The epoch step (in Julian days) this tolerance permits for a certified
+    /// angular-rate bound. An unbounded rate deliberately returns `0.0`, which
+    /// makes the shared gate solve every frame instead of under-sampling a
+    /// provider whose motion it cannot prove bounded.
+    pub fn max_epoch_step_jd(&self, maximum_rate_rad_per_day: f64) -> f64 {
+        let tolerance_rad = self.tolerance_deg.max(0.0).to_radians();
+        if tolerance_rad <= 0.0 || !maximum_rate_rad_per_day.is_finite() {
+            0.0
+        } else if maximum_rate_rad_per_day <= 0.0 {
+            f64::INFINITY
+        } else {
+            tolerance_rad / maximum_rate_rad_per_day
+        }
     }
 }
 
@@ -79,6 +76,87 @@ impl Default for CelestialCadenceSettings {
 
 impl SettingsSection for CelestialCadenceSettings {
     const KEY: &'static str = "celestial_cadence";
+}
+
+/// Motion bound used by the shared celestial solve gate.
+///
+/// The value is assembled from three authoritative owners: the active
+/// ephemeris provider's certified orbital bound, IAU body rotation elements in
+/// [`CelestialBodyRegistry`], and authored Kepler orbits. It is cached here so
+/// the run condition never walks a BigSpace hierarchy or performs a coordinate
+/// conversion. `INFINITY` is an explicit provider contract meaning "unknown";
+/// it selects exact solving rather than a hidden guessed rate.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct CelestialMotionBound {
+    pub maximum_rate_rad_per_day: f64,
+    pub provider_revision: u64,
+}
+
+impl Default for CelestialMotionBound {
+    fn default() -> Self {
+        Self {
+            maximum_rate_rad_per_day: 0.0,
+            provider_revision: 0,
+        }
+    }
+}
+
+fn kepler_max_rate_rad_per_day(orbit: &crate::KeplerOrbit, gm: f64) -> f64 {
+    let a = orbit.elements.semi_major_axis_m;
+    let e = orbit.elements.eccentricity;
+    if !a.is_finite() || a <= 0.0 || !e.is_finite() || !(0.0..1.0).contains(&e) {
+        return f64::INFINITY;
+    }
+    if !gm.is_finite() || gm <= 0.0 {
+        return f64::INFINITY;
+    }
+    let mean_motion = (gm / a.powi(3)).sqrt();
+    let periapsis_factor = (1.0 + e).sqrt() / (1.0 - e).powf(1.5);
+    mean_motion * periapsis_factor * 86_400.0
+}
+
+/// Rebuild the bound after the motion model or celestial inputs change.
+pub fn refresh_motion_bound(
+    registry: Res<crate::CelestialBodyRegistry>,
+    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
+    q_orbits: Query<&crate::KeplerOrbit>,
+    mut bound: ResMut<CelestialMotionBound>,
+) {
+    let provider_revision = ephemeris
+        .as_ref()
+        .map_or(0, |e| e.provider.motion_revision());
+    let provider_rate = ephemeris
+        .as_ref()
+        .map_or(0.0, |e| e.provider.maximum_angular_rate_rad_per_day());
+    let mut maximum_rate = provider_rate;
+
+    for body in &registry.bodies {
+        maximum_rate = maximum_rate.max(body.rotation_rate_rad_per_day().abs());
+    }
+    for orbit in &q_orbits {
+        let Some(body) = registry.get(orbit.body) else {
+            maximum_rate = f64::INFINITY;
+            break;
+        };
+        maximum_rate = maximum_rate.max(kepler_max_rate_rad_per_day(orbit, body.gm));
+    }
+
+    if !maximum_rate.is_finite() {
+        maximum_rate = f64::INFINITY;
+    }
+    *bound = CelestialMotionBound {
+        maximum_rate_rad_per_day: maximum_rate,
+        provider_revision,
+    };
+}
+
+pub(crate) fn provider_motion_changed(
+    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
+    bound: Res<CelestialMotionBound>,
+) -> bool {
+    ephemeris
+        .as_ref()
+        .is_some_and(|e| e.provider.motion_revision() != bound.provider_revision)
 }
 
 /// The epoch the celestial tree was last solved at.
@@ -113,9 +191,8 @@ impl Default for CelestialSolvedEpoch {
 ///
 /// The epoch is not the only input. Gating the cluster on epoch movement ALONE
 /// starves it whenever the inputs change at a standing epoch — a scene loaded
-/// while the sky is paused never gets its site frame, so `SiteAligned` is never
-/// inserted, the sun is never aimed, and the scene renders black with a bright
-/// light pointing under the ground.
+/// while the sky is paused never gets its site frame, the sun is never aimed,
+/// and the scene renders black with a bright light pointing under the ground.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CelestialInputsRevision(pub u64);
 
@@ -130,12 +207,12 @@ pub fn bump_celestial_inputs_revision(
     decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
     grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
     orbit_changed: Query<(), Or<(Added<crate::KeplerOrbit>, Changed<crate::KeplerOrbit>)>>,
-    site_aligned_added: Query<(), Added<crate::big_space_setup::SiteAligned>>,
     directional_light_added: Query<(), Added<bevy::light::DirectionalLight>>,
     mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
+    mut orbit_removed: RemovedComponents<crate::KeplerOrbit>,
     // [frames, bumps, site_added, site_moved, decl_added, grid_added,
-    //  orbit_changed, site_aligned_added, directional_light_added, removed]
-    mut stats: Local<[u32; 10]>,
+    //  orbit_changed, directional_light_added, removed]
+    mut stats: Local<[u32; 9]>,
 ) {
     // `removed.read()` must be DRAINED — an unread reader keeps redelivering, so
     // the revision would go on bumping for frames after the fact. `.count()`
@@ -143,19 +220,16 @@ pub fn bump_celestial_inputs_revision(
     // event and left any others to come back next frame, which is the same bug
     // the comment was written to prevent.
     let removed = decl_removed.read().count();
+    let orbit_removed = orbit_removed.read().count();
+    let any_removed = removed > 0 || orbit_removed > 0;
     let (site_a, site_m) = (!site_added.is_empty(), !site_moved.is_empty());
     let (decl_a, grid_a) = (!decl_added.is_empty(), !grid_added.is_empty());
     let orbit_c = !orbit_changed.is_empty();
-    // These are structural edges produced by the projections themselves. The
-    // first valid site frame and the first USD light can arrive after the input
-    // revision was already committed, so they must reopen the solve gate.
-    let (aligned_a, light_a) = (
-        !site_aligned_added.is_empty(),
-        !directional_light_added.is_empty(),
-    );
+    // A USD light can arrive after the input revision was already committed,
+    // so its appearance reopens the solve gate for the same frame transaction.
+    let light_a = !directional_light_added.is_empty();
 
-    let bumped =
-        removed > 0 || site_a || site_m || decl_a || grid_a || orbit_c || aligned_a || light_a;
+    let bumped = any_removed || site_a || site_m || decl_a || grid_a || orbit_c || light_a;
     if bumped {
         rev.0 = rev.0.wrapping_add(1);
     }
@@ -173,16 +247,15 @@ pub fn bump_celestial_inputs_revision(
     stats[4] += u32::from(decl_a);
     stats[5] += u32::from(grid_a);
     stats[6] += u32::from(orbit_c);
-    stats[7] += u32::from(aligned_a);
-    stats[8] += u32::from(light_a);
-    stats[9] += u32::from(removed > 0);
+    stats[7] += u32::from(light_a);
+    stats[8] += u32::from(any_removed);
     if stats[0] >= WINDOW {
         if stats[1] * 2 > WINDOW {
             info!(
                 "[celestial] inputs revision bumped on {}/{} frames — \
                  site_added={} site_moved={} decl_added={} grid_added={} \
-                 orbit_changed={} site_aligned_added={} directional_light_added={} \
-                 decl_removed={}",
+                 orbit_changed={} directional_light_added={} \
+                 celestial_removed={}",
                 stats[1],
                 stats[0],
                 stats[2],
@@ -192,10 +265,9 @@ pub fn bump_celestial_inputs_revision(
                 stats[6],
                 stats[7],
                 stats[8],
-                stats[9],
             );
         }
-        *stats = [0; 10];
+        *stats = [0; 9];
     }
 }
 
@@ -206,11 +278,9 @@ pub fn bump_celestial_inputs_revision(
 /// scenario reset does.
 ///
 /// One condition, applied to every member, because the cluster must advance
-/// ATOMICALLY. Gating the expensive value-producers (ephemeris, poses,
-/// trajectories) while leaving the site pin ungated puts the pin at the current
-/// epoch and the bodies at the last solved one — the sun disc and the light then
-/// disagree, and the world visibly snaps each time the gate finally fires ("I
-/// move and it jumps back").
+/// ATOMICALLY. Gating only part of the frame projection would put dependent
+/// frames at different epochs — the sun and bodies would disagree and the
+/// world would visibly snap each time the gate finally fired.
 /// [`celestial_needs_solve`], wrapped so its firing rate is reported.
 ///
 /// **This is the only way to obtain this gate.** The raw condition is
@@ -240,20 +310,21 @@ fn epoch_requires_solve(
     solved_revision: u64,
     max_epoch_step_jd: f64,
 ) -> bool {
-    current_revision != solved_revision
-        || (current_jd - solved_jd).abs() >= max_epoch_step_jd
+    current_revision != solved_revision || (current_jd - solved_jd).abs() >= max_epoch_step_jd
 }
 
 pub(crate) fn celestial_needs_solve(
     world: Option<Res<WorldTime>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
+    motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
     activity: Option<Res<lunco_core::gate::GateActivity>>,
 ) -> bool {
-    let step = settings
-        .map(|s| s.max_epoch_step_jd())
-        .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+    let step = settings.map_or_else(
+        || CelestialCadenceSettings::default().max_epoch_step_jd(motion.maximum_rate_rad_per_day),
+        |s| s.max_epoch_step_jd(motion.maximum_rate_rad_per_day),
+    );
     if let Some(activity) = activity {
         activity.expect_open("celestial_needs_solve", step <= 0.0);
     }
@@ -263,13 +334,7 @@ pub(crate) fn celestial_needs_solve(
     };
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
-    epoch_requires_solve(
-        world.epoch_jd,
-        solved.jd,
-        revision.0,
-        solved.revision,
-        step,
-    )
+    epoch_requires_solve(world.epoch_jd, solved.jd, revision.0, solved.revision, step)
 }
 
 /// Record the epoch AND the input revision the cluster just solved for.
@@ -282,6 +347,7 @@ pub(crate) fn celestial_needs_solve(
 pub fn commit_celestial_epoch(
     world: Option<Res<WorldTime>>,
     settings: Option<Res<CelestialCadenceSettings>>,
+    motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialSolvedEpoch>,
     mut solves: Local<u64>,
@@ -302,9 +368,13 @@ pub fn commit_celestial_epoch(
         // diagnostic that does not read the same input as the thing it explains
         // can only mislead, and it did: it made an EXACT-mode configuration look
         // like a broken gate.
-        let step = settings
-            .map(|s| s.max_epoch_step_jd())
-            .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+        let step = settings.map_or_else(
+            || {
+                CelestialCadenceSettings::default()
+                    .max_epoch_step_jd(motion.maximum_rate_rad_per_day)
+            },
+            |s| s.max_epoch_step_jd(motion.maximum_rate_rad_per_day),
+        );
         if step <= 0.0 {
             bevy::log::warn_once!(
                 "[celestial] cadence tolerance is 0 (EXACT): the gate solves EVERY \
@@ -346,25 +416,55 @@ mod tests {
 
     #[test]
     fn high_warp_epoch_advance_opens_the_gate_each_render_frame() {
-        let step = CelestialCadenceSettings::default().max_epoch_step_jd();
+        let motion = std::f64::consts::TAU / 27.321_661;
+        let step = CelestialCadenceSettings::default().max_epoch_step_jd(motion);
         // At 100000x, one 60 Hz render interval represents this much simulated
         // time. It exceeds the angular-error budget, so the geometric pose must
         // be solved on that frame instead of being held for a wall-time quota.
         let one_frame_at_100kx = 100_000.0 / 60.0 / 86_400.0;
         assert!(one_frame_at_100kx > step);
-        assert!(epoch_requires_solve(
-            one_frame_at_100kx,
-            0.0,
-            0,
-            0,
-            step,
-        ));
+        assert!(epoch_requires_solve(one_frame_at_100kx, 0.0, 0, 0, step,));
     }
 
     #[test]
     fn unchanged_epoch_stays_gated_until_a_structural_revision() {
-        let step = CelestialCadenceSettings::default().max_epoch_step_jd();
+        let step = CelestialCadenceSettings::default().max_epoch_step_jd(1.0);
         assert!(!epoch_requires_solve(10.0, 10.0, 4, 4, step));
         assert!(epoch_requires_solve(10.0, 10.0, 5, 4, step));
+    }
+
+    #[test]
+    fn earth_rotation_is_included_in_the_motion_bound() {
+        let registry = crate::CelestialBodyRegistry::default_system();
+        let earth = registry
+            .get(crate::ephemeris_id::EARTH)
+            .expect("built-in Earth");
+        assert!(earth.rotation_rate_rad_per_day() > 6.0);
+        let step = CelestialCadenceSettings::default()
+            .max_epoch_step_jd(earth.rotation_rate_rad_per_day());
+        assert!(step < 0.0001, "Earth spin must constrain the epoch step");
+    }
+
+    #[test]
+    fn an_unbounded_provider_forces_exact_solves() {
+        assert_eq!(
+            CelestialCadenceSettings::default().max_epoch_step_jd(f64::INFINITY),
+            0.0
+        );
+    }
+
+    #[test]
+    fn kepler_rate_bound_uses_periapsis_not_mean_motion() {
+        let orbit = crate::KeplerOrbit {
+            body: crate::ephemeris_id::EARTH,
+            elements: crate::KeplerianElements {
+                semi_major_axis_m: 7_000_000.0,
+                eccentricity: 0.5,
+                ..default()
+            },
+        };
+        let rate = kepler_max_rate_rad_per_day(&orbit, 3.986004418e14);
+        let mean = (3.986004418e14 / orbit.elements.semi_major_axis_m.powi(3)).sqrt() * 86_400.0;
+        assert!(rate > mean, "periapsis rate must bound mean motion");
     }
 }

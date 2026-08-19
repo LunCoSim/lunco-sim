@@ -15,12 +15,13 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use celestial_core::Vector3;
-use celestial_ephemeris::{moon::ElpMpp02Moon, planets::Vsop2013Emb, Vsop2013Earth, Vsop2013Sun};
-use celestial_time::julian::JulianDate;
+use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, moon::ElpMpp02Moon, planets::Vsop2013Emb};
 use celestial_time::TDB;
+use celestial_time::julian::JulianDate;
 use lunco_celestial::frames::{EclipticAu, IcrfAu};
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use lunco_celestial::ephemeris::{CsvDataPoint, EphemerisProvider, EphemerisResource};
@@ -48,6 +49,10 @@ pub struct CelestialEphemerisProvider {
     /// mission id `-1024`; the registry did not). Two descriptions of the shape of the solar
     /// system is one too many.
     parents: Arc<RwLock<HashMap<i32, i32>>>,
+    /// Changes whenever a mission dataset becomes available. The cadence
+    /// policy observes this atomic revision instead of locking provider data
+    /// on every render frame.
+    motion_revision: Arc<AtomicU64>,
 }
 
 const AU_KM: f64 = 149_597_870.7;
@@ -156,6 +161,7 @@ impl CelestialEphemerisProvider {
             moon: ElpMpp02Moon::new(),
             custom_data: Arc::new(RwLock::new(HashMap::new())),
             parents: Arc::new(RwLock::new(parents_from_registry())),
+            motion_revision: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -200,6 +206,7 @@ impl CelestialEphemerisProvider {
             moon: ElpMpp02Moon::new(),
             parents: Arc::new(RwLock::new(parents)),
             custom_data: Arc::new(RwLock::new(custom_data)),
+            motion_revision: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -366,12 +373,33 @@ impl EphemerisProvider for CelestialEphemerisProvider {
             }
         }
     }
+
+    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+        // The analytic provider's fastest parent-relative vector is the
+        // Moon's sidereal orbit. Mission CSVs have no certified derivative
+        // contract, so the exact cadence is required as soon as one is
+        // adopted instead of pretending the built-in rate still bounds it.
+        let has_custom_data = self
+            .custom_data
+            .read()
+            .map(|data| !data.is_empty())
+            .unwrap_or(true);
+        if has_custom_data {
+            f64::INFINITY
+        } else {
+            std::f64::consts::TAU / 27.321_661
+        }
+    }
+
+    fn motion_revision(&self) -> u64 {
+        self.motion_revision.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(test)]
 mod frame_tests {
     use super::*;
-    use lunco_celestial::{solar_tangent_frame, CelestialBodyRegistry, Geodetic};
+    use lunco_celestial::{CelestialBodyRegistry, Geodetic, solar_tangent_frame};
 
     /// The REAL conversion, not a copy of it.
     ///
@@ -529,6 +557,7 @@ impl Plugin for EphemerisPlugin {
         app.insert_resource(EphemerisVectors {
             data: provider.custom_data.clone(),
             parents: provider.parents.clone(),
+            motion_revision: provider.motion_revision.clone(),
         });
         app.insert_resource(EphemerisResource {
             provider: Arc::new(provider),
@@ -629,6 +658,7 @@ fn adopt_ephemeris_datasets(
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(meta.naif_id, points);
+        vectors.motion_revision.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -639,4 +669,5 @@ fn adopt_ephemeris_datasets(
 struct EphemerisVectors {
     data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
     parents: Arc<RwLock<HashMap<i32, i32>>>,
+    motion_revision: Arc<AtomicU64>,
 }

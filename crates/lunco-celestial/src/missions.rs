@@ -155,8 +155,8 @@ impl Plugin for MissionPlugin {
                 ),
                 spacecraft_visibility_system,
                 // NOT gated: the billboard tracks the CAMERA, not the epoch, and
-                // a camera-facing label that only re-aims every ~71 s of sim
-                // time would visibly swing. Its per-frame cost is now a guarded
+                // a camera-facing label that only re-aims on the celestial solve
+                // cadence would visibly swing. Its per-frame cost is now a guarded
                 // write instead of an unconditional one.
                 spacecraft_billboard_system,
             )

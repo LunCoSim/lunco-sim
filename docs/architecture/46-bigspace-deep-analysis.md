@@ -74,13 +74,16 @@ here is carried forward on trust.
 
 ## 0. Historical failure summary
 
-We use `big_space` **inverted**. The crate keeps rendered f32 coordinates small
-near the camera by storing positions as an **integer cell + small f32 offset**;
-the camera (the `FloatingOrigin`) travels through that partitioned world, and
-cells absorb astronomical magnitude. LunCo instead pins the camera at cell
-`(0,0,0)`, disables cell splitting on every celestial grid with a
-`switching_threshold` of `1e30`, stores body positions as **raw f32 at up to
-1.5e11 m**, and re-pins the whole solar tree to fake viewpoint changes.
+The failure baseline used `big_space` **inverted**. The crate keeps rendered
+f32 coordinates small near the camera by storing positions as an **integer cell
++ small f32 offset**; the camera (the `FloatingOrigin`) travels through that
+partitioned world, and cells absorb astronomical magnitude. The historical LunCo
+implementation instead pinned the camera at cell `(0,0,0)`, disabled cell
+splitting on every celestial grid with a `switching_threshold` of `1e30`, stored
+body positions as **raw f32 at up to 1.5e11 m**, and re-pinned the whole solar
+tree to fake viewpoint changes. The current tree uses the native cell split and
+does not perform that site re-pin; the remainder of this section preserves the
+measurements that justify those corrections.
 
 The consequences are arithmetic, not stylistic:
 
@@ -227,7 +230,9 @@ sites additionally hard-assume single-cell: networking sync
 - Each frame-grid receives its position **in its parent grid's frame**, written
   as `CellCoord` + `Transform` — which the `1e30` threshold degrades to raw f32
   in cell 0 (§1.2). Body entities are hard-zeroed on their own grid. The Solar
-  Grid (id 10) is skipped so the site pin isn't clobbered.
+  Solar Grid is not re-posed by site placement; frame children are written in
+  their declared parent Grid and the site subtree is mounted under the body's
+  surface Grid.
 - The write is **epoch-gated** (`systems.rs:30-33`, `|Δjd| < 1e-9` → return).
   A paused clock freezes the chain — which is why static screenshot bursts kept
   measuring "stable" while the user saw jitter whenever time ran. Test with the
@@ -558,8 +563,9 @@ trees; parent trajectories to the inertial grid; delete the counter-rotation.
 **Phase 2 — real cells in the celestial tree.**
 After Phase 0: replace every `1e30` with real thresholds, place bodies via
 `translation_to_grid`, flip the whole tree in one change. This alone kills the
-16 km/32 m re-quantization (§3). The site pin keeps working (it already walks
-stored cells + transforms).
+16 km/32 m re-quantization (§3). Site placement no longer depends on a pin; it
+uses the native nested surface Grid and stores the site pose through
+`Grid::translation_to_grid`.
 
 **Phase 3 — Option B bubble bridge.**
 Disable avian's transform sync; implement the `Position ↔ cell+Transform` bridge

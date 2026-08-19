@@ -2338,8 +2338,8 @@ mod tests {
     /// through the terrain's `GlobalTransform` inverse, while the DEM frame is
     /// grid-absolute. With no celestial the FloatingOrigin happened to sit in the
     /// site's own cell, the two frames coincided, and everything worked BY
-    /// ACCIDENT. The solar pin (`anchor_solar_frame_to_site`) moves the origin,
-    /// the offset appears, and the rover's node was computed ~966 m away — so it
+    /// ACCIDENT. The historical solar site pin moved the origin, the offset
+    /// appeared, and the rover's node was computed ~966 m away — so it
     /// got no tiles at all and fell.
     ///
     /// The assertion that matters is the SECOND one: the same body, at the same

@@ -175,13 +175,12 @@ impl Plugin for TrajectoryPlugin {
         // swam against them ("the orbital lines still jitter"). Same one-frame
         // lag that made the whole sky wobble before the pin moved to PostUpdate.
         //
-        // Ordered AFTER the re-pin (so the frame transforms it reads are this
-        // frame's) and BEFORE `Propagate` (so the fresh local pose reaches this
-        // frame's `GlobalTransform`s).
+        // Read the already-projected celestial frame and write the local pose
+        // before `Propagate`, so the fresh pose reaches this frame's
+        // `GlobalTransform`s. The solar hierarchy is never re-posed as a pin.
         app.add_systems(
             PostUpdate,
             trajectory_alignment_system
-                .after(crate::placement::anchor_solar_frame_to_site)
                 .before(bevy::transform::TransformSystems::Propagate)
                 // Same angular budget as the rest of the celestial cluster: an
                 // orbit line whose bodies moved <0.01° has not visibly moved
@@ -322,7 +321,9 @@ pub fn jump_probe_system(
                     prev_d.length(),
                     d.length(),
                     p.length(),
-                    parent.map(|pe| label(pe, &q_names)).unwrap_or_else(|| "<none>".into()),
+                    parent
+                        .map(|pe| label(pe, &q_names))
+                        .unwrap_or_else(|| "<none>".into()),
                 );
             }
             if jerk > heartbeat.0 {
@@ -593,8 +594,14 @@ pub fn handle_trajectory_tasks(
             path.update_epoch = data.epoch;
             path.anchor = data.anchor;
             commands.entity(entity).remove::<TrajectoryTask>();
-            debug!("Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
-                entity, path.points.len(), path.anchor.length(), view.tracked_id, view.reference_id);
+            debug!(
+                "Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
+                entity,
+                path.points.len(),
+                path.anchor.length(),
+                view.tracked_id,
+                view.reference_id
+            );
         }
     }
 }

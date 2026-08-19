@@ -995,11 +995,9 @@ impl Plugin for LunCoAvatarPlugin {
         // Transform writer.
         app.add_systems(Update, sync_avatar_easing);
 
-        // NOTE: there used to be a second, PostUpdate registration of
-        // `anchor_solar_frame_to_site` here for same-frame drag re-pins. The
-        // orbital view no longer re-poses the world (the camera itself flies —
-        // see `orbit_system`'s celestial branch), so the pin runs only at its
-        // canonical PreUpdate slot on epoch/site changes.
+        // Camera drag remains owned by the avatar view systems. Celestial
+        // placement is a separate PreUpdate frame migration; no camera input
+        // path re-poses the inertial hierarchy.
     }
 }
 

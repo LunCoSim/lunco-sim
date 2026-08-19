@@ -13,7 +13,7 @@
 > |---|---|
 > | **V1** — `Transform` on the `BigSpace` root | **resolved.** The root is `BigSpace + Grid + GlobalTransform` with **no `Transform`** — big_space's canonical root shape. See the correction sections at the end of this doc. |
 > | **V2** — cell binning disabled | **resolved.** `WorldGridConfig::switching_threshold` is **`100.0`** (it was `1e10`). |
-> | **V3** — per-frame re-posing of the Solar Grid | **resolved.** The floating origin travels with the observer; the world is not re-posed around a point. |
+> | **V3** — per-frame re-posing of the Solar Grid | **resolved.** The Solar Grid stays inertial, the floating origin travels with the observer, and site content is mounted under the body's surface Grid. |
 >
 > **`switching_threshold` is a PRECISION knob, not an extent knob.** big_space derives
 > `maximum_distance_from_origin = cell_edge/2 + switching_threshold`, and
@@ -107,7 +107,7 @@
 |---|-----------|-------|------------------------|
 | V1 | `Transform` on the `BigSpace` root (added for Avian) | `lunco-core/src/world.rs` | The root matches bevy-compat's *plain* propagation root query (`bevy_compat.rs:11-23`), which then walks the ENTIRE high-precision tree with f32 math, racing `propagate_high_precision` (no mutual ordering in the crate). The whole-frame strobe. Our `configure_sets` ordering makes the race deterministic, but the plain pass still rewrites every GT every frame — wasted work and a standing trap for anything reading GTs mid-frame. |
 | V2 | `switching_threshold = 1e10` (WorldGrid — **the historical value; it is `100.0` now**), effectively `∞` elsewhere | `WorldGridConfig` | Recentering never fires; `translation_to_grid` early-returns cell (0,0,0) below 1e10 m. The app is a **raw f32 absolute-coordinate world** wearing big_space as a costume. At 4×10⁸ m the ULP is 32–64 m → orbital-view jitter of camera, lines, and content; at 1e9+ it is worse. The user's diagnosis — "wrong usage of big_space coordinates" — is exactly right. |
-| V3 | Per-frame re-posing of the Solar Grid to pin the site at the world origin (doc 43's `anchor_solar_frame_to_site`) | `lunco-celestial/src/placement.rs` | Inverts the crate's model (the floating origin is supposed to ride the camera; the world is not re-posed around a point). Forces `is_local_origin_unchanged = false` → full-subtree GT recompute every frame, creates the transient mixed-convention windows that produced the phantom-target/teleport class of bugs, and required `touch_celestial_transforms` + ordering hacks to survive. |
+| V3 | Per-frame re-posing of the Solar Grid to pin the site at the world origin | Historical `lunco-celestial/src/placement.rs` implementation; removed | Inverted the crate's model (the floating origin is supposed to ride the camera; the world is not re-posed around a point). The current placement path is `attach_site_scene_to_surface_grid`; it performs one structural frame migration and leaves the inertial hierarchy untouched. |
 
 Secondary effects of V2: because the app has *never* run with a moving origin
 cell, code and content accumulated origin-absolute assumptions. Splitting just

@@ -5,16 +5,19 @@
 > The target architecture — doc [45](45-big-space-correct-usage.md) §2.1
 > establishes why, and cites the two-space split here as the correct target.
 
-Doc 43's site-anchored solar
-hierarchy is the as-built baseline; this doc explains why that design is
-structurally fragile and specifies the replacement.
+The earlier site-pinned solar hierarchy was the failure baseline for this
+document. The current implementation has removed that writer: the Solar Grid
+remains inertial, and site content is attached under the matching body-fixed
+surface Grid. This document retains the longer-term render-snapshot proposal,
+but its historical failure description must not be read as the current
+ownership model.
 
 ## 1. The as-built design and its systemic failure mode
 
-Doc 43 renders the sky by making the ENTIRE solar hierarchy a rigid subtree of
-the scene's `WorldGrid`, re-pinned every epoch tick so the geodetic site
-coincides with the scene origin (`anchor_solar_frame_to_site`). Scene content
-and physics stay near the origin; Earth/Sun stand in the correct sky.
+The historical implementation rendered the sky by making the ENTIRE solar
+hierarchy a rigid subtree of the scene's `WorldGrid`, re-pinned every epoch
+tick so the geodetic site coincided with the scene origin. Scene content and
+physics stayed near the origin; Earth/Sun stood in the correct sky.
 
 That single decision — *a 10¹¹-metre transform subtree, re-posed every tick,
 inside the same tree every gameplay system walks* — produced an entire class
@@ -114,14 +117,14 @@ traverses, multi-kilometre bases) and for **true orbital flight** of piloted
 vessels around one body (vessel physics in that body's grid). What it stops
 doing is *carrying the whole solar system as one rigid pose tree*.
 
-## 3. Interim hardening rules (as-built tree, shipped Jul 07)
+## 3. Current hardening rules (native nested-grid tree)
 
-Until the split lands, the unified tree survives only under these invariants —
-enforce them in review:
+The current unified tree follows these invariants:
 
-1. **The Solar Grid has exactly one writer** (`anchor_solar_frame_to_site`).
-   `ephemeris_update_system` must never touch id 10 — a transient un-anchored
-   pose, even mid-chain, IS observable by parallel systems.
+1. **The Solar Grid has no site-pin writer.** It is one inertial BigSpace Grid
+   under the canonical `WorldGrid`. `ephemeris_update_system` writes only the
+   relative poses owned by its reference-frame children; site content is
+   migrated once to the body's rotating surface Grid.
 2. Everything reading celestial transforms in `PreUpdate` orders
    `.after(CelestialEpochSet)`.
 3. Celestial `Transform`s are change-touched every frame
@@ -146,8 +149,8 @@ enforce them in review:
    the per-tick Solar Grid re-pin (the site frame lives in the snapshot).
 3. **Orbital mode** — celestial-rig camera + crossfade; globe LOD keyed to
    the rig; `FocusEntityById` targets rig coordinates.
-4. **Cleanup** — retire `touch_celestial_transforms` and the compat-ordering
-   workaround (nothing at 10¹¹ m remains in the tree to protect).
+4. **Cleanup** — retire the remaining render-tree consumers when the snapshot
+   rig lands; the current site pin itself is already retired.
 
 ## 5. Regression scenes & tests
 

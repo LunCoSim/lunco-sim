@@ -170,9 +170,10 @@ fn blueprint_tile_look_untextured(
         .with("transition", ParamValue::F32(0.0))
 }
 
-/// **The celestial ownership marker.** EVERY entity the celestial subsystem spawns in
-/// Rust — grids, bodies, inertial anchors, orbit views, mission spacecraft — carries
-/// this, and teardown despawns the whole set in one query
+/// **The celestial ownership marker.** Every celestial-owned root spawned by the
+/// subsystem carries this marker. Teardown despawns those roots recursively, so
+/// their grids, bodies, terrain tiles, labels, and other structural descendants
+/// are removed as one owned hierarchy
 /// ([`teardown_celestial_scene`](crate::teardown_celestial_scene)).
 ///
 /// This is the *architecture* that keeps scene reload correct: celestial content is
@@ -180,55 +181,19 @@ fn blueprint_tile_look_untextured(
 /// declaration is owned by this marker, so every scene replacement tears the old sky
 /// down completely before projecting the new one — no orbiting ghost bodies, stale
 /// orbit lines, or old physics frame — without maintaining a despawn list. The invariant is
-/// one line: *if the celestial subsystem spawns it, it carries `CelestialDerived`.*
+/// one line: *if the celestial subsystem owns a root, that root carries
+/// `CelestialDerived`.*
 #[derive(Component)]
 pub struct CelestialDerived;
 
 /// Marker for the solar system root grid (inertial, no rotation).
 ///
-/// **EXACTLY ONE entity carries this, and it is a `Grid`.** The marker is read in
-/// two different ways, and both depend on that:
-///
-/// - as an IDENTITY — `placement::anchor_solar_frame_to_site` takes it with
-///   `single_mut()` to pose the solar frame. A second bearer makes that `Err`, so
-///   the site frame is never anchored, `SiteAligned` is never inserted, and the
-///   sun is aimed along raw ecliptic axes: the scene renders black.
-/// - as an EXISTENCE latch — "does this scene have a sky?" — for the idempotent
-///   spawn gate, the cadence revision bump, and the sandbox's exposure mode.
-///
-/// The existence reading is why a violation hides: it answers the same whether one
-/// entity carries the marker or five. The Sun body carried it for exactly that
-/// reason, undetected, because the identity reading defended itself locally with a
-/// `With<Grid>` filter instead of the invariant being true. Do not re-add it to a
-/// body; a body is found through `CelestialBody`. `solar_system_root_is_singular`
-/// in `tests/celestial_integration.rs` is what now holds this.
+/// **Exactly one entity carries this marker, and it is a `Grid`.** It identifies
+/// the inertial solar frame for hierarchy construction and structural cadence
+/// tracking. Site scenes are mounted under their body's surface grid; this
+/// marker is never re-posed to make a site coincide with the world origin.
 #[derive(Component)]
 pub struct SolarSystemRoot;
-
-/// Marker for the zero-translation grid between the `WorldGrid` and the Solar
-/// Grid that carries the site-ENU `align` rotation — the only rotated joint
-/// in the celestial chain, placed where the origin vector is near-zero so the
-/// f32 quat costs sub-millimetres instead of the 15–20 km it cost on the
-/// heliocentric Solar Grid (see the spawn-site comment).
-#[derive(Component)]
-pub struct SiteAlignGrid;
-
-/// The align rotation on [`SiteAlignGrid`] has actually been ESTABLISHED from a
-/// site anchor — the ecliptic→world rotation is known, not merely defaulted.
-///
-/// `SiteAlignGrid` is spawned unconditionally with the celestial hierarchy, so its
-/// mere presence proves nothing: in a scene that opts into bodies but anchors no
-/// site (the flat sandbox), `anchor_solar_frame_to_site` early-returns and the grid
-/// keeps its IDENTITY rotation, which is indistinguishable from a legitimately
-/// identity alignment. A consumer that reads the rotation anyway gets the RAW
-/// ECLIPTIC frame in place of a world frame — for the sun light that means an
-/// emit direction along the horizon (`Y ≈ 2e-4`), i.e. an unlit arena.
-///
-/// Written by the single writer of the rotation (`anchor_solar_frame_to_site`) and
-/// carried on the same entity, so "the rotation is known" is a fact about state
-/// rather than an inference from two queries agreeing.
-#[derive(Component)]
-pub struct SiteAligned;
 
 /// Marker for the Earth-Moon barycenter grid (genuinely inertial — the EMB is a
 /// barycenter, so it has no IAU rotation model and `body_rotation_system` skips
@@ -353,7 +318,9 @@ pub fn setup_big_space_hierarchy(
         registry.get(crate::ephemeris_id::EARTH).cloned(),
         registry.get(crate::ephemeris_id::MOON).cloned(),
     ) else {
-        error!("[celestial] required Sun/Earth/Moon catalog entries are missing; refusing to build the celestial hierarchy");
+        error!(
+            "[celestial] required Sun/Earth/Moon catalog entries are missing; refusing to build the celestial hierarchy"
+        );
         return;
     };
 
@@ -382,37 +349,12 @@ pub fn setup_big_space_hierarchy(
     // Cells are `i64`, so small edges are free: 1 AU / 2 km ≈ 7.5e7 cells. Keep
     // every celestial grid at the same 2 km / 100 m as the root `WorldGrid` —
     // `max_distance` 1100 m, f32 ULP there ≈ 0.12 mm.
-    // ── Site-Align Grid — the ONLY rotated joint in the celestial chain ────
-    // Zero translation, zero cell; `anchor_solar_frame_to_site` writes the
-    // site-ENU `align` rotation HERE, not on the Solar Grid. big_space's
-    // origin propagation multiplies a grid's stored f32 rotation into the
-    // origin's position vector at that node: on the Solar Grid that vector
-    // is heliocentric (~1.5e11 m), so the f32 quat's ~1e-7 relative error
-    // cost 15–20 km — the measured ULP staircase that made the globe judder
-    // from the ground and the terrain judder from orbit ("the shadow on the
-    // moon oscillates"). At THIS node the origin vector is near-zero (the
-    // camera is within tens of km of the site), so the same f32 rotation
-    // costs sub-millimetres, and the 1 AU offset below travels through the
-    // EXACT i64 cells of the now identity-rotation Solar Grid.
-    let align_grid = commands
-        .spawn((
-            SiteAlignGrid,
-            // Subtree root: the entire body hierarchy chain-parents under this, so a
-            // recursive despawn here tears down every grid, body, anchor and globe tile.
-            CelestialDerived,
-            make_grid(),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            Name::new("Site Align Grid"),
-            ChildOf(big_space_root),
-        ))
-        .id();
-
+    // The solar hierarchy stays in its inertial frame. A site is mounted under
+    // the matching body-fixed surface grid by `attach_site_scene_to_surface_grid`;
+    // no celestial ancestor is re-posed to make that site the world origin.
     let solar_grid = commands
         .spawn((
+            CelestialDerived,
             SolarSystemRoot,
             ReferenceFrame::EclipticJ2000 {
                 center: crate::ephemeris_id::SUN,
@@ -424,7 +366,7 @@ pub fn setup_big_space_hierarchy(
             Visibility::default(),
             InheritedVisibility::default(),
             Name::new("Solar Grid (Inertial)"),
-            ChildOf(align_grid),
+            ChildOf(big_space_root),
         ))
         .id();
 
@@ -432,9 +374,7 @@ pub fn setup_big_space_hierarchy(
     //
     // Deliberately NOT tagged `SolarSystemRoot`: that marker names the one Solar
     // Grid entity, and the Sun is reached as a body (`CelestialBody`/ephemeris 10)
-    // like any other. It used to carry the marker too, which made
-    // `anchor_solar_frame_to_site`'s `single_mut()` ambiguous — masked only by a
-    // `With<Grid>` filter at that one call site out of seven.
+    // like any other.
     let _sun_body = commands
         .spawn((
             sun.body_component(),

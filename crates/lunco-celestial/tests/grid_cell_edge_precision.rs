@@ -8,9 +8,10 @@
 //! Re-splitting at the child cannot recover bits the parent already dropped, so
 //! the COARSEST grid in a chain sets the precision floor for its whole subtree.
 //!
-//! This reproduces the real Solar → EMB → Moon → Surface chain, with the site
-//! pinned to the root origin exactly as `anchor_solar_frame_to_site` does, and
-//! measures where a point 10 m from the site actually renders.
+//! This reproduces the real Solar → EMB → Moon → Surface chain, with the
+//! floating origin nested in the surface grid as the production camera is, and
+//! measures where a point 10 m from the site actually renders. No ancestor is
+//! re-posed to follow that origin.
 //!
 //! With the old edges (Solar 1e9, EMB 1e8) the error is tens of metres — the
 //! "lunar surface jitters / Earth jitters / orbit lines jump" report. With 2 km
@@ -58,15 +59,15 @@ const NEW: Chain = Chain {
     surface: (1_000.0, 100.0),
 };
 
-/// Build the chain, pin the site onto the root origin, return the probe's
-/// rendered offset error in metres.
+/// Build the chain and return the probe's rendered offset relative to the
+/// nested floating origin.
 fn probe_error_m(chain: &Chain) -> f64 {
     (probe_render_pos(chain, DVec3::ZERO) - PROBE_LOCAL.as_dvec3()).length()
 }
 
-/// Where the probe actually renders, in metres relative to the floating origin.
-/// `drift` advances the EMB along its orbit, simulating an epoch tick: the pin
-/// re-anchors, so a correct pipeline must return the SAME value every time.
+/// Where the probe actually renders, in metres relative to the nested floating
+/// origin. `drift` advances the EMB along its orbit, simulating an epoch tick;
+/// the local surface pose must not be changed by that upstream motion.
 fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let emb_in_solar = EMB_IN_SOLAR + drift;
     let root = Grid::new(2_000.0, 100.0);
@@ -76,26 +77,13 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let surface = Grid::new(chain.surface.0, chain.surface.1);
 
     // Store each frame's pose the way the real systems do: split through the
-    // PARENT grid. Read the stored values back in f64 (exact) so the pin can
-    // cancel what the renderer will actually compose.
+    // PARENT grid. The renderer composes these native BigSpace values; there is
+    // no compensating world-origin translation.
     let (emb_cell, emb_tf) = solar.translation_to_grid(emb_in_solar);
     let (moon_cell, moon_tf) = emb.translation_to_grid(MOON_IN_EMB);
     let (surf_cell, surf_tf) = body.translation_to_grid(SITE_IN_MOON);
 
-    let stored = |g: &Grid, c: CellCoord, t: Vec3| -> DVec3 {
-        DVec3::new(
-            c.x as f64 * g.cell_edge_length() as f64 + t.x as f64,
-            c.y as f64 * g.cell_edge_length() as f64 + t.y as f64,
-            c.z as f64 * g.cell_edge_length() as f64 + t.z as f64,
-        )
-    };
-    // Site position in the Solar frame, composed from the STORED chain.
-    let site_in_solar = stored(&solar, emb_cell, emb_tf)
-        + stored(&emb, moon_cell, moon_tf)
-        + stored(&body, surf_cell, surf_tf);
-
-    // The pin: slide the Solar Grid so the site lands on the root origin.
-    let (solar_cell, solar_tf) = root.translation_to_grid(-site_in_solar);
+    let (solar_cell, solar_tf) = root.translation_to_grid(DVec3::ZERO);
 
     let mut app = App::new();
     app.add_plugins(BigSpaceMinimalPlugins);
@@ -103,11 +91,6 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let probe;
     {
         let world = app.world_mut();
-
-        // Floating origin sits at the root origin — the parked camera.
-        let origin = world
-            .spawn((Transform::default(), CellCoord::default(), FloatingOrigin))
-            .id();
 
         probe = world
             .spawn((
@@ -119,6 +102,13 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
             .spawn((surface, Transform::from_translation(surf_tf), surf_cell))
             .add_children(&[probe])
             .id();
+        // Production surface cameras claim the floating origin in the site
+        // grid. Keeping it in this nested frame is what makes local f32
+        // transforms independent of AU-scale parent motion.
+        let origin = world
+            .spawn((Transform::default(), CellCoord::default(), FloatingOrigin))
+            .id();
+        world.entity_mut(surface_e).add_child(origin);
         let body_e = world
             .spawn((body, Transform::from_translation(moon_tf), moon_cell))
             .add_children(&[surface_e])
@@ -135,30 +125,37 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
         world
             .spawn(BigSpaceRootBundle::default())
             .insert(root)
-            .add_children(&[origin, solar_e]);
+            .add_children(&[solar_e]);
     }
 
     app.update();
 
-    let gt = app.world().get::<GlobalTransform>(probe).unwrap();
-    // The pin cancels the stored chain exactly in f64, so the probe MUST render
-    // at PROBE_LOCAL relative to the floating origin. Anything else is
-    // precision lost inside big_space's origin propagation.
-    gt.translation().as_dvec3()
+    let probe_gt = app.world().get::<GlobalTransform>(probe).unwrap();
+    let origin_gt = app
+        .world()
+        .iter_entities()
+        .find(|e| e.contains::<FloatingOrigin>())
+        .and_then(|e| e.get::<GlobalTransform>())
+        .expect("nested floating origin global transform");
+    probe_gt.translation().as_dvec3() - origin_gt.translation().as_dvec3()
 }
 
 #[test]
-fn coarse_cells_destroy_surface_precision() {
-    let err = probe_error_m(&OLD);
-    println!("OLD (Solar 1e9 / EMB 1e8): probe renders {err:.4} m off");
-    // The historical config loses metres. Assert it really is broken, so this
-    // test documents the failure mode rather than silently passing if big_space
-    // ever changes.
+fn coarse_parent_cells_destroy_split_precision() {
+    let grid = Grid::new(OLD.solar.0, OLD.solar.1);
+    let (cell, local) = grid.translation_to_grid(EMB_IN_SOLAR);
+    let reconstructed = DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64)
+        * grid.cell_edge_length() as f64
+        + local.as_dvec3();
+    let err = (reconstructed - EMB_IN_SOLAR).length();
+    println!("OLD (Solar 1e9 / EMB 1e8) split error: {err:.4} m");
+    // The historical config loses metres in the f32 cell-local remainder.
+    // Assert the representation failure directly rather than inferring it from
+    // a nested local pose whose parent motion is supposed to cancel.
     assert!(
         err > 1.0,
         "expected the old 1e9/1e8 m cells to lose >1 m, got {err:.6} m — \
-         if this now passes, big_space made LocalFloatingOrigin::translation f64 \
-         and the cell-edge precision constraint is gone"
+         if this now passes, the cell-local precision contract changed"
     );
 }
 
@@ -172,32 +169,19 @@ fn two_km_cells_keep_surface_precision_sub_millimetre() {
     );
 }
 
-/// A constant offset would be invisible. What the eye sees is the offset
-/// CHANGING as the epoch advances and the pin re-anchors the tree. One frame at
-/// 1x is ~26 m of EMB orbital motion (30 km/s); the site is pinned, so a correct
-/// pipeline renders the probe at the identical place both times.
+/// One frame at 1x is ~26 m of EMB orbital motion (30 km/s). Moving that parent
+/// must not alter a probe's local surface pose when the origin is nested in the
+/// surface frame.
 const ONE_FRAME_OF_ORBIT: DVec3 = DVec3::new(19.4, 0.0, -17.6); // |.| ~26 m
 
 #[test]
-fn coarse_cells_make_the_surface_jitter_between_frames() {
-    let a = probe_render_pos(&OLD, DVec3::ZERO);
-    let b = probe_render_pos(&OLD, ONE_FRAME_OF_ORBIT);
-    let jitter = (b - a).length();
-    println!("OLD per-frame jitter of a point 10 m away: {jitter:.4} m");
-    assert!(
-        jitter > 0.1,
-        "expected the old cells to jitter >0.1 m per frame, got {jitter:.6} m"
-    );
-}
-
-#[test]
-fn two_km_cells_do_not_jitter_between_frames() {
+fn nested_surface_origin_is_invariant_when_parent_grid_moves() {
     let a = probe_render_pos(&NEW, DVec3::ZERO);
     let b = probe_render_pos(&NEW, ONE_FRAME_OF_ORBIT);
     let jitter = (b - a).length();
-    println!("NEW per-frame jitter of a point 10 m away: {jitter:.9} m");
+    println!("native nested-grid local pose change: {jitter:.9} m");
     assert!(
         jitter < 1.0e-3,
-        "2 km cells must hold a pinned surface point still to sub-mm, got {jitter:.9} m"
+        "native nested-grid camera pose must remain stable to sub-mm, got {jitter:.9} m"
     );
 }

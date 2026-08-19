@@ -358,6 +358,7 @@ impl Plugin for CelestialPlugin {
         // hierarchy changes; no per-frame dirtying is allowed to manufacture a
         // change signal or hide an invalid low-precision subtree.
         app.init_resource::<cadence::CelestialSolvedEpoch>();
+        app.init_resource::<cadence::CelestialMotionBound>();
         lunco_settings::AppSettingsExt::register_settings_section::<
             cadence::CelestialCadenceSettings,
         >(app);
@@ -369,7 +370,19 @@ impl Plugin for CelestialPlugin {
         // (scene load, site edit, hierarchy rebuild) is visible to every gated
         // member in the same frame, and committed in `Last` with the epoch.
         app.init_resource::<cadence::CelestialInputsRevision>();
-        app.add_systems(First, cadence::bump_celestial_inputs_revision);
+        app.add_systems(
+            First,
+            (
+                cadence::bump_celestial_inputs_revision,
+                cadence::refresh_motion_bound.run_if(
+                    resource_changed::<cadence::CelestialInputsRevision>
+                        .or_else(resource_changed::<CelestialBodyRegistry>)
+                        .or_else(resource_changed::<ephemeris::EphemerisResource>)
+                        .or_else(cadence::provider_motion_changed),
+                ),
+            )
+                .chain(),
+        );
         app.add_systems(
             Last,
             cadence::commit_celestial_epoch.run_if(cadence::tracked_needs_solve()),
@@ -380,39 +393,13 @@ impl Plugin for CelestialPlugin {
             (
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system.run_if(cadence::tracked_needs_solve()),
-                // Doc 43: site-anchored solar frame + geodetic/orbit placement.
-                // `ephemeris_update_system` never touches the Solar Grid (id 10),
-                // so the pin persists between anchor runs — no mid-chain window
-                // where the hierarchy sits un-anchored.
-                //
-                // On the SAME condition as `ephemeris_update_system` above, and
-                // that is load-bearing: the pin is derived FROM the body poses,
-                // so solving it at a different epoch than the bodies puts the
-                // site frame and the tree at different instants. Ungating it
-                // (tried, 2026-07-26) made the pin fresh while the bodies stayed
-                // at the last solved epoch — the sun disc and the light then
-                // disagreed and the world snapped whenever the bodies caught up
-                // ("I move and it jumps back"). The cluster advances together or
-                // not at all; `celestial_needs_solve` also fires on structural
-                // edges, so a scene loading at a standing epoch still anchors.
-                // A scene's USD projection creates `CelestialBodyDecl` during
-                // `Update`, and the hierarchy is then spawned in `Update` too.
-                // The first `PreUpdate` that sees a newly-loaded site therefore
-                // precedes the `SolarSystemRoot` command application.  Do not
-                // call the anchorer in that transitional frame: it is not a
-                // broken scene and reporting it as one made a correctly staged
-                // package look unlit while its Earth/Moon imagery was loading.
-                // `Added<SolarSystemRoot>` bumps the cadence revision on the
-                // following frame, which makes this run as soon as the grid
-                // actually exists.
-                placement::anchor_solar_frame_to_site
-                    .run_if(cadence::tracked_needs_solve())
-                    .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
+                // The solar hierarchy stays inertial. Site content is mounted
+                // once beneath its body's rotating surface grid; no ancestor is
+                // re-posed to make a site coincide with the world origin.
                 placement::attach_site_scene_to_surface_grid
                     .run_if(cadence::tracked_needs_solve())
                     .run_if(|q: Query<(), With<big_space_setup::SolarSystemRoot>>| !q.is_empty()),
-                placement::place_celestial_bound_entities
-                    .run_if(cadence::tracked_needs_solve()),
+                placement::place_celestial_bound_entities.run_if(cadence::tracked_needs_solve()),
                 soi_transition_system,
             )
                 .chain()
@@ -484,12 +471,12 @@ impl Plugin for CelestialPlugin {
 /// This is the *architecture* that prevents the reload bugs by design, not by a
 /// maintained despawn list:
 ///
-/// * **Ownership marker.** Every celestial-derived entity carries
-///   [`CelestialDerived`](big_space_setup::CelestialDerived) — grids, bodies, inertial
-///   anchors, orbit views, mission spacecraft. Despawning that set (recursively, to
-///   catch unmarked children like globe tiles) removes the whole sky. A new celestial
-///   entity is covered the moment it carries the marker; the invariant lives in one
-///   line on the marker's doc.
+/// * **Ownership marker.** Every celestial-owned root carries
+///   [`CelestialDerived`](big_space_setup::CelestialDerived) — the solar hierarchy,
+///   orbit views, and mission spacecraft. Despawning those roots recursively removes
+///   their grids, bodies, terrain tiles, labels, and other structural descendants.
+///   A new ownership root is covered the moment it carries the marker; the invariant
+///   lives in one line on the marker's doc.
 /// * **Idempotent re-spawn.** The spawners gate on "does my output exist yet"
 ///   (`SolarSystemRoot`/`TrajectoryView` empty), not a `Local` latch — so once this
 ///   clears them, loading a scene *with* bodies rebuilds cleanly. Missions gate the

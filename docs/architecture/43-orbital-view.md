@@ -184,8 +184,9 @@ a settings-menu checkbox. Connectivity itself is doc 49's, not this doc's.
 - `lunco-celestial`: `geo.rs` (Geodetic, `GeodeticAnchor`, `SiteAnchor`,
   tangent frames, `body_rotation` — now shared with `body_rotation_system`),
   `kepler.rs` (`KeplerianElements`, `KeplerOrbit`, Newton solver),
-  `placement.rs` (`anchor_solar_frame_to_site`,
-  `place_celestial_bound_entities`).
+  `placement.rs` (`attach_site_scene_to_surface_grid`,
+  `place_celestial_bound_entities`). The Solar Grid remains inertial; a
+  surface site is attached once to the matching body-fixed surface Grid.
 - **`CelestialConfig`** `{spawn_hierarchy, spawn_observer_camera}` gates the
   hierarchy: defaults preserve `luncosim`; the luncosim runs the celestial
   stack dormant and `enable_celestial_on_site_anchor` flips it when a

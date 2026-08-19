@@ -23,6 +23,14 @@ impl EphemerisProvider for StubEphemeris {
             bevy::math::DVec3::new(epoch_jd, 0.0, 0.0),
         ))
     }
+
+    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+        0.0
+    }
+
+    fn motion_revision(&self) -> u64 {
+        0
+    }
 }
 
 /// Build the headless celestial app the tests share (see the notes in
@@ -57,21 +65,10 @@ fn celestial_test_app() -> App {
 
 /// **The `SolarSystemRoot` invariant: exactly one bearer, and it is the Grid.**
 ///
-/// `placement::anchor_solar_frame_to_site` takes this marker with `single_mut()`.
-/// A second bearer makes that call `Err`, so the solar frame is never anchored,
-/// `SiteAligned` is never inserted, and `update_sun_light_system` falls back to an
-/// identity alignment that aims the sun along raw ecliptic axes — below the local
-/// horizon. The scene renders black.
-///
-/// That is what the hierarchy actually shipped: the Sun body carried the marker as
-/// well as the Solar Grid. It stayed invisible because three of the four readers ask
-/// only *"does a sky exist"*, which answers the same for one bearer or five, and the
-/// fourth — the one that needed the identity — defended itself with a local
-/// `With<Grid>` filter. The invariant was never true; it was worked around at the
-/// single call site that would otherwise have noticed.
-///
-/// Asserted here rather than left to that runtime `warn!`, which can only fire once
-/// the scene is already unlit, and only in a session someone is watching.
+/// `SolarSystemRoot` is the one semantic marker for the inertial solar Grid.
+/// Site mounting is represented by the site's own nested Grid; there is no
+/// parallel alignment entity whose rotation can diverge from the body-fixed
+/// surface frame.
 #[test]
 fn solar_system_root_is_singular() {
     let mut app = celestial_test_app();
@@ -86,9 +83,7 @@ fn solar_system_root_is_singular() {
     assert_eq!(
         bearers.len(),
         1,
-        "`SolarSystemRoot` must name exactly one entity — found {}. \
-         `anchor_solar_frame_to_site` reads it with `single_mut()`, so a second \
-         bearer leaves the site frame unanchored and the scene unlit.",
+        "`SolarSystemRoot` must name exactly one entity — found {}",
         bearers.len()
     );
 
@@ -116,54 +111,63 @@ fn solar_system_root_is_singular() {
     );
 }
 
-/// A scene projection creates its body declarations and site anchor together,
-/// but the celestial hierarchy is deferred until the end of that Update.  The
-/// anchor pass therefore has to wait for the Solar Grid instead of diagnosing a
-/// healthy first load as an unlit scene; the `Added<SolarSystemRoot>` cadence
-/// edge must then run it on the following frame.
+/// A site is attached to the body's native surface Grid after the deferred
+/// celestial hierarchy exists. The handoff must not create a second alignment
+/// frame or re-pose the inertial solar Grid.
 #[test]
-fn site_anchor_waits_for_the_deferred_solar_grid_then_aligns() {
+fn site_anchor_mounts_under_the_body_surface_grid() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
         provider: Arc::new(StubEphemeris),
     });
-    app.world_mut().spawn((
-        lunco_celestial::geo::SiteAnchor,
-        lunco_celestial::geo::GeodeticAnchor {
-            body: lunco_celestial::ephemeris_id::MOON,
-            geodetic: lunco_celestial::geo::Geodetic::new(26.13, 3.63, 0.3),
-        },
-    ));
-
-    // The grid is created in Update, after this frame's PreUpdate anchor pass.
     app.update();
+
+    let world_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<lunco_core::WorldGrid>>()
+        .iter(app.world())
+        .next()
+        .expect("the canonical WorldGrid exists");
+    let site = app
+        .world_mut()
+        .spawn((
+            lunco_core::GridAnchor,
+            lunco_celestial::geo::SiteAnchor,
+            lunco_celestial::geo::GeodeticAnchor {
+                body: lunco_celestial::ephemeris_id::MOON,
+                geodetic: lunco_celestial::geo::Geodetic::new(26.13, 3.63, 0.3),
+            },
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            ChildOf(world_grid),
+        ))
+        .id();
+
+    app.update();
+    let parent = app
+        .world()
+        .get::<ChildOf>(site)
+        .expect("site parent")
+        .parent();
     assert!(
-        app.world_mut()
-            .query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>()
-            .iter(app.world())
-            .next()
+        app.world()
+            .get::<lunco_celestial::MoonSurfaceRoot>(parent)
             .is_some(),
-        "the declared bodies must create the Solar Grid"
+        "the site must be a child of the Moon surface frame"
     );
     assert!(
-        app.world_mut()
-            .query_filtered::<(), With<lunco_celestial::SiteAligned>>()
-            .iter(app.world())
-            .next()
-            .is_none(),
-        "the site cannot align before the deferred Solar Grid exists"
+        app.world().get::<Grid>(site).is_some(),
+        "the site owns its nested Grid"
     );
-
-    // `Added<SolarSystemRoot>` invalidates the cadence gate, so this is not
-    // delayed until the next clock-tolerance interval.
-    app.update();
-    assert!(
-        app.world_mut()
-            .query_filtered::<(), With<lunco_celestial::SiteAligned>>()
-            .iter(app.world())
-            .next()
-            .is_some(),
-        "the site must align on the first frame after the Solar Grid appears"
+    let solar_roots = {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>();
+        q.iter(world).count()
+    };
+    assert_eq!(
+        solar_roots, 1,
+        "site mounting must not duplicate or re-purpose the inertial solar Grid"
     );
 }
 
@@ -749,14 +753,13 @@ fn test_celestial_startup_and_movement() {
 /// **The sun may only be steered once the site frame is REAL.**
 ///
 /// A scene that opts into bodies but anchors no site (the flat sandbox referencing
-/// `solar_system.usda`) has a `SiteAlignGrid` — it is spawned with the hierarchy —
-/// but `anchor_solar_frame_to_site` never writes a rotation to it, so it holds
-/// IDENTITY. Gating `update_sun_light_system` on the grid's PRESENCE therefore read
-/// that identity as a known ecliptic→world rotation and aimed the scene's brightest
-/// `DirectionalLight` down the raw ecliptic vector — along the horizon, arena unlit.
+/// `solar_system.usda`) has no local ENU site frame. Gating
+/// `update_sun_light_system` on a guessed identity mapping would aim the scene's
+/// brightest `DirectionalLight` along raw ecliptic axes and can light the ground
+/// from below.
 ///
-/// The gate is `SiteAligned`, which only the writer sets. With no anchor, no sun
-/// steering may happen AT ALL — asserted on `SunDirectionWorld`, the system's own
+/// With no anchor, no sun steering may happen AT ALL — asserted on
+/// `SunDirectionWorld`, the system's own
 /// published output, rather than on one light: the steering picks the BRIGHTEST
 /// `DirectionalLight`, so an assertion aimed at a particular light passes for the
 /// irrelevant reason that some other light won the max.
@@ -776,6 +779,14 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
                 }
                 _ => lunco_celestial::frames::EclipticAu::ZERO,
             })
+        }
+
+        fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+            0.0
+        }
+
+        fn motion_revision(&self) -> u64 {
+            0
         }
     }
 
@@ -805,19 +816,11 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     // so this is "the gate held", not "nothing ran".
     let mut q = app
         .world_mut()
-        .query_filtered::<(), With<lunco_celestial::SiteAlignGrid>>();
+        .query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>();
     assert_eq!(
         q.iter(app.world()).count(),
         1,
-        "the align grid must exist — otherwise this test proves nothing about the gate"
-    );
-    let mut q_aligned = app
-        .world_mut()
-        .query_filtered::<(), With<lunco_celestial::SiteAligned>>();
-    assert_eq!(
-        q_aligned.iter(app.world()).count(),
-        0,
-        "no site is anchored, so no align rotation may be claimed as established"
+        "the solar hierarchy must exist — otherwise this test proves nothing about the gate"
     );
 
     // CONTROL for the ephemeris: it must be able to produce a direction, or the
@@ -910,7 +913,7 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
     // not "the hierarchy never came up".
     let mut q_grid = app
         .world_mut()
-        .query_filtered::<(), With<lunco_celestial::SiteAlignGrid>>();
+        .query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>();
     assert_eq!(
         q_grid.iter(app.world()).count(),
         1,

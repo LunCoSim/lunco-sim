@@ -4,6 +4,7 @@ use big_space::prelude::*;
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
 use crate::ephemeris::EphemerisResource;
+use crate::geo::solar_tangent_frame;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_time::WorldTime;
@@ -39,22 +40,6 @@ pub fn ephemeris_update_system(
             continue;
         };
 
-        // NEVER write the Solar Grid (id 10) here. Its parent-relative
-        // position is zero by definition (`position(10) == 0`), so in an
-        // un-anchored scene this write was a no-op — but in a site-anchored
-        // scene it ZEROED the pin that `anchor_solar_frame_to_site` re-applies
-        // later in the chain. Within that window the whole solar hierarchy sat
-        // at its raw heliocentric pose (~1.5e11 m off), and any UNORDERED
-        // reader that interleaved there (gravity field, focus commands, GT
-        // propagation for freshly spawned tiles) captured garbage: alternating
-        // gravity (surface jitter), Earth tiles frozen 1e11 m away (blinking
-        // Earth), camera teleports into empty space (click-to-focus black
-        // screen). Skipping the write means no frame — mid-chain or otherwise
-        // — ever holds the un-anchored pose.
-        if ephemeris_id == crate::ephemeris_id::SUN {
-            continue;
-        }
-
         // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
         // P8(d): no data ⇒ leave the body where it is. It used to be teleported to its
         // parent's centre — a failed CSV fetch put the body inside the Sun, and nothing said so.
@@ -74,8 +59,12 @@ pub fn ephemeris_update_system(
             continue;
         };
         let (new_cell, new_translation) = parent_grid.translation_to_grid(pos_bevy_m);
-        *cell = new_cell;
-        tf.translation = new_translation;
+        if *cell != new_cell {
+            *cell = new_cell;
+        }
+        if tf.translation != new_translation {
+            tf.translation = new_translation;
+        }
     }
 }
 
@@ -172,6 +161,7 @@ pub struct SunDirectionWorld(pub Vec3);
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
+    registry: Res<CelestialBodyRegistry>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_dir_out: ResMut<SunDirectionWorld>,
     // Declared by `lunco-environment` (which cannot depend on this crate) and
@@ -189,52 +179,24 @@ pub fn update_sun_light_system(
             Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
-    // The site-ENU alignment lives on the Site Align Grid (the Solar Grid's
-    // rotation is IDENTITY — see `anchor_solar_frame_to_site`).
-    q_solar: Query<
-        (&Transform, Option<&crate::big_space_setup::SiteAligned>),
-        (
-            With<crate::big_space_setup::SiteAlignGrid>,
-            With<big_space::prelude::Grid>,
-            Without<DirectionalLight>,
-        ),
-    >,
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
     orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
-    // The bodies as big_space placed them — used ONLY as a cross-check against
-    // the aim below, never as its source. See the disagreement note there.
-    q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody), Without<DirectionalLight>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
     // Last reported sun elevation, so the aim is logged on material change only.
     mut last_logged_elevation: Local<f32>,
 ) {
-    let Some((align_grid_tf, site_aligned)) = q_solar.iter().next() else {
-        return;
-    };
     let Some(ephemeris) = ephemeris else {
         return;
     };
-    // No site frame yet ⇒ nothing valid to compute. RETURN rather than aim with
-    // an identity alignment: without the site rotation the ecliptic direction is
-    // not a world direction, and writing it overwrites the USD-authored
-    // `xformOp:rotateXYZ` — a correct, measured opinion (`lunco://lighting/sun.usda`
-    // states this contract) — with a guess that lands tens of degrees off, usually
-    // below the horizon. That overwrite is what rendered every site-anchored scene
-    // black. An unaimed sun keeps the scene lit as authored.
-    if site_aligned.is_none() {
-        return;
-    }
-    let align_rot = align_grid_tf.rotation;
 
-    let Some(observer_body) = q_site
-        .iter()
-        .next()
-        .map(|a| a.body)
+    let site_anchor = q_site.iter().next();
+    let Some(observer_body) = site_anchor
+        .map(|anchor| anchor.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
     else {
+        return;
+    };
+    let Some(observer_desc) = registry.get(observer_body) else {
         return;
     };
 
@@ -249,30 +211,46 @@ pub fn update_sun_light_system(
         return;
     };
     let Some(ecliptic_dir) = sun_emit_direction(p_sun, p_observer) else {
-        // NoOp / degenerate ephemeris — leave the light to manual control.
+        // Degenerate ephemeris — leave the authored light untouched.
         return;
     };
 
-    // `ecliptic_dir` is in ECLIPTIC (solar-frame) axes. `align` on `SiteAlignGrid`
-    // is built from rows east/up/−north, i.e. it maps SOLAR → SITE, so the site-ENU
-    // world direction is `align * dir`.
-    //
-    // It used to be `align.inverse() * dir`, under a comment asserting `align` was
-    // `R_site_to_solar`. That single inversion aimed the sun 64° the wrong way —
-    // elevation −56° at a site whose scene authors +8.1° — so the light came from
-    // under the ground and every site-anchored scene rendered black while the sun
-    // disc hung in the sky. Verified against the two values `traverse.usda` authors
-    // as the measured consequence of its epoch (`lunco:sun:elevationDeg` 8.1,
-    // `lunco:sun:azimuthDeg` 95.7): this expression yields 8.14° / 95.7°.
-    let dir = (align_rot * ecliptic_dir).normalize();
+    let Some(anchor) = site_anchor else {
+        // Orbital views without a site do not own a local ENU light frame.
+        // Their authored lighting remains authoritative until a site scene is
+        // mounted; guessing a root-frame rotation would reintroduce the old
+        // implicit-frame bug.
+        return;
+    };
+    let site_frame = solar_tangent_frame(
+        observer_desc,
+        &anchor.geodetic,
+        ecliptic_to_bevy(p_observer).raw(),
+        world.epoch_jd,
+    );
+    // The site grid's local axes are ENU (+X east, +Y up, -Z north). The
+    // tangent basis is expressed in the inertial ecliptic frame, so this is
+    // the one explicit conversion for a light authored under that site.
+    // It is derived from the same body-fixed pose as terrain and physics,
+    // rather than from an ECS entity re-posed as a camera pin.
+    let solar_to_site = bevy::math::DQuat::from_mat3(&bevy::math::DMat3::from_cols(
+        site_frame.east,
+        site_frame.up,
+        -site_frame.north,
+    ))
+    .inverse();
+    let dir = (solar_to_site
+        * bevy::math::DVec3::new(
+            ecliptic_dir.x as f64,
+            ecliptic_dir.y as f64,
+            ecliptic_dir.z as f64,
+        ))
+    .as_vec3()
+    .normalize();
 
-    // Report each material change once, with a CROSS-CHECK against the Sun body's
-    // placed position. The two must agree: the light has to come from the sun that
-    // is drawn. They currently do NOT (body ≈ −55° while the aim is +8°), which
-    // means the disc is placed by a different frame than the aim — a real defect,
-    // but in the PLACEMENT, not here. The aim above is the one verified against the
-    // scene, so it stays authoritative and this line makes the disagreement visible
-    // instead of leaving it to be discovered as "the sun is in the wrong place".
+    // Report material changes from the same ephemeris snapshot and site frame
+    // used for the celestial body poses; there is no separate transform-chain
+    // cross-check that could observe a different floating-origin convention.
     let elevation_deg = (-dir.y).asin().to_degrees();
     if (elevation_deg - *last_logged_elevation).abs() > 0.5 {
         *last_logged_elevation = elevation_deg;
@@ -280,19 +258,10 @@ pub fn update_sun_light_system(
         // SUN's (the direction to it), not the emit direction's.
         let to_sun = -dir;
         let azimuth_deg = to_sun.x.atan2(-to_sun.z).to_degrees().rem_euclid(360.0);
-        let body_elevation = q_bodies
-            .iter()
-            .find(|(_, _, _, b)| b.ephemeris_id == crate::ephemeris_id::SUN)
-            .map(|(e, cell, tf, _)| {
-                let p = lunco_core::coords::world_position_seeded(
-                    e, cell, tf, &q_parents, &q_grids, &q_spatial,
-                );
-                (p.0.normalize_or_zero().y as f32).asin().to_degrees()
-            });
         debug!(
             "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
-             @ JD {:.5} (observer {observer_body}, sun BODY elevation {:?} — must match)",
-            world.epoch_jd, body_elevation,
+             @ JD {:.5} (observer {observer_body})",
+            world.epoch_jd,
         );
     }
     let up = if dir.dot(Vec3::Y).abs() > 0.99 {
@@ -326,9 +295,10 @@ pub fn update_sun_light_system(
         // stays ZERO — the resource's documented "not known", which the bridge
         // refuses to publish rather than reporting Earth due north on the horizon.
         let next = if to_earth.length_squared() > 0.5 {
-            // `align_rot`, NOT its inverse — this path carried the identical
-            // error, so the dish pointed at an Earth 64° from the one in the sky.
-            (align_rot * to_earth).normalize()
+            (solar_to_site
+                * bevy::math::DVec3::new(to_earth.x as f64, to_earth.y as f64, to_earth.z as f64))
+            .as_vec3()
+            .normalize()
         } else {
             Vec3::ZERO
         };
@@ -350,8 +320,7 @@ pub fn update_sun_light_system(
     if let Ok((light_entity, mut light_tf, mut light, light_name)) = q_light.single_mut() {
         debug!("[celestial] selected scene sun entity={light_entity:?} name={light_name:?}");
         // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
-        // from a direction that steps in f32-quat ULPs (the site pin's
-        // `align` is recomputed per frame) — continuous sub-texel
+        // from a direction that changes below a shadow-map texel — continuous
         // light-direction churn defeats the cascade shadow maps' texel
         // snapping, so every shadow edge crawls and waggles ("the shadow on
         // the moon oscillates"), worst at the polar site's grazing sun.
@@ -486,7 +455,7 @@ pub fn celestial_visuals_system(
     // NOT the cadence gate (`cadence::tracked_needs_solve`), and that is the
     // point: the transition is a function of CAMERA ALTITUDE, so gating it on the
     // epoch budget would leave a body on the wrong side of the texture↔blueprint
-    // ramp for ~71 s of sim time after a dive — the ramp would visibly lag the
+    // ramp for an entire cadence interval after a dive — the ramp would visibly lag the
     // approach. It gates on its own inputs instead.
     //
     // Two frames rather than one after a dirty input: `apply_look_to_tiles`
