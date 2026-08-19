@@ -34,7 +34,7 @@ pub mod reconcile;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
 pub mod scene;
 /// Shared scene teardown schedule for all scene-owned subsystems.
-pub mod scene_lifecycle;
+mod scene_lifecycle;
 /// Always-on networking **authority** substrate (no wire dependency):
 /// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
