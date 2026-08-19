@@ -34,13 +34,14 @@ use lunco_core::{
     SceneTransitionRequest, WorldGrid,
 };
 use lunco_cosim::{
-    CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts, SimComponent, SimConnection,
-    SimStatus,
+    ConnectionBinding, CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts,
+    SimComponent, SimConnection, SimStatus,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 use lunco_render::SceneCamera;
 use lunco_scripting::python::{get_python_status, PythonStatus};
@@ -53,7 +54,7 @@ use lunco_scripting::{
 };
 use lunco_usd_bevy::{
     CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
-    UsdStageAsset,
+    UsdSceneRoot, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap};
@@ -84,6 +85,11 @@ struct UsdTelemetryProjected;
 /// the difference has to reach the UI, not just the log.
 pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
 
+/// Telemetry event for a USD program whose authored execution policy is
+/// invalid. It is distinct from a worker dispatch failure: the source was
+/// never admitted because the scene configuration itself is not executable.
+pub const MODEL_CONFIGURATION_INVALID: &str = "MODEL_CONFIGURATION_INVALID";
+
 /// Marker indicating a USD-driven cosim entity has been wired up by
 /// `process_usd_cosim_prims`. Prevents the system from re-processing
 /// the same entity on the same tick.
@@ -111,6 +117,17 @@ pub(crate) struct PythonUnavailablePrograms {
 pub(crate) struct UsdModelicaPortContract {
     inputs: BTreeSet<String>,
     outputs: BTreeSet<String>,
+}
+
+/// The authored co-simulation schedule for a USD Modelica participant.
+///
+/// This is kept separate from the public port contract because the latter is
+/// about names/types while this is master-algorithm timing. It is projected once
+/// from the composed USD prim and carried into `ModelicaModel` when the source
+/// asset becomes executable.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct UsdModelicaSchedule {
+    pub communication_period_secs: f64,
 }
 
 impl UsdModelicaPortContract {
@@ -728,6 +745,69 @@ fn process_usd_cosim_prim_read(
         return;
     }
 
+    // Modelica is a continuous-time participant, not a render callback. The
+    // communication period is an authored co-simulation policy on the composed
+    // program prim. An omitted property resolves to the schema's documented
+    // 0.1 s default; an explicit invalid value is a terminal scene error, not
+    // an invitation to run under a different schedule.
+    let communication_period_result = match modelica_path.as_ref() {
+        None => Ok(None),
+        Some(_) => {
+            let authored = reader
+                .attr_names(sdf_path)
+                .iter()
+                .any(|name| name == "lunco:program:communicationPeriod");
+            if !authored {
+                Ok(Some(DEFAULT_COMMUNICATION_PERIOD_SECS))
+            } else {
+                match reader.real(sdf_path, "lunco:program:communicationPeriod") {
+                    Some(value) => lunco_modelica::validate_communication_period_secs(value)
+                        .map(Some)
+                        .map_err(|reason| {
+                            format!(
+                                "{}: lunco:program:communicationPeriod is invalid: {reason}",
+                                prim_path.path,
+                            )
+                        }),
+                    None => Err(format!(
+                        "{}: lunco:program:communicationPeriod is not a valid authored real value",
+                        prim_path.path,
+                    )),
+                }
+            }
+        }
+    };
+    let communication_period_secs = match communication_period_result {
+        Ok(value) => value,
+        Err(reason) => {
+            let (inputs, outputs) = declared_interface(reader, sdf_path);
+            let model_name = modelica_path
+                .as_deref()
+                .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
+            commands.entity(entity).try_insert((
+                UsdSimProcessed,
+                lunco_core::NotPredictable,
+                SimComponent {
+                    model_name,
+                    inputs,
+                    outputs,
+                    status: SimStatus::Error(reason.clone()),
+                    ..default()
+                },
+            ));
+            wiring_dirty.0 = true;
+            error!("[usd-cosim] {reason}");
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_CONFIGURATION_INVALID.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(reason),
+                timestamp: 0.0,
+            });
+            return;
+        }
+    };
+
     // A Python source is not a usable cosim participant until its interpreter
     // is available. Check at the authoritative USD bind boundary, before
     // publishing a pending load or claiming the program is bound. This keeps
@@ -849,6 +929,11 @@ fn process_usd_cosim_prim_read(
         status: SimStatus::Compiling,
         is_stepping: false,
     });
+    if let Some(communication_period_secs) = communication_period_secs {
+        commands.entity(entity).try_insert(UsdModelicaSchedule {
+            communication_period_secs,
+        });
+    }
     if let Some(asset_path) = modelica_path {
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
@@ -1020,7 +1105,7 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
 /// removes the pending marker. Stable retry behaviour: if the asset
 /// isn't ready this frame we just skip — the system runs again next
 /// frame.
-pub fn dispatch_loaded_modelica_sources(
+pub(crate) fn dispatch_loaded_modelica_sources(
     mut commands: Commands,
     mut q: Query<(
         Entity,
@@ -1028,6 +1113,7 @@ pub fn dispatch_loaded_modelica_sources(
         &UsdPrimPath,
         &mut SimComponent,
         Option<&UsdInputDefaults>,
+        Option<&UsdModelicaSchedule>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1053,9 +1139,9 @@ pub fn dispatch_loaded_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _), (_, _, b, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _), (_, _, b, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults) in pending {
+    for (entity, pending, prim_path, mut component, usd_defaults, schedule) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -1069,7 +1155,9 @@ pub fn dispatch_loaded_modelica_sources(
                 text: format!("[{}] Asset load error: {error}", component.model_name),
             });
             component.status = SimStatus::Error(error);
-            commands.entity(entity).remove::<PendingModelicaSource>();
+            commands
+                .entity(entity)
+                .try_remove::<PendingModelicaSource>();
             continue;
         }
         let Some(src) = sources.get(&pending.handle) else {
@@ -1146,6 +1234,30 @@ pub fn dispatch_loaded_modelica_sources(
         // the component, or the next tick overwrites it. Closed-channel
         // detection is `send(..).is_err()`, the same test
         // `source_roots::ensure_loaded` uses.
+        let Some(schedule) = schedule else {
+            let error = format!(
+                "Modelica source `{}` has no projected co-simulation schedule",
+                pending.asset_path
+            );
+            component.status = SimStatus::Error(error.clone());
+            commands
+                .entity(entity)
+                .try_remove::<PendingModelicaSource>();
+            error!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{}] {error}", component.model_name),
+            });
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_CONFIGURATION_INVALID.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error),
+                timestamp: 0.0,
+            });
+            continue;
+        };
+
         let parameter_overrides = usd_defaults
             .map(|defaults| {
                 defaults
@@ -1193,6 +1305,7 @@ pub fn dispatch_loaded_modelica_sources(
             source_uri: pending.asset_path.clone(),
             parameters,
             inputs,
+            communication_period_secs: schedule.communication_period_secs,
             // Durable verdict: `modelica_status` reads this first, so the
             // component reports `Error` on every subsequent tick instead of
             // reverting to `Compiling`.
@@ -1225,28 +1338,58 @@ pub fn dispatch_loaded_modelica_sources(
             });
         }
 
-        commands.entity(entity).remove::<PendingModelicaSource>();
+        commands
+            .entity(entity)
+            .try_remove::<PendingModelicaSource>();
     }
 }
 
 /// Drain `PendingPythonSource` analogously to the Modelica version.
+fn python_source_load_error(asset_path: &str) -> String {
+    format!("failed to load Python source `{asset_path}` via AssetServer")
+}
+
+fn mark_python_source_load_failed(sim: &mut SimComponent, error: &str) {
+    // The bind-time interface is still valid, but the executable source is not.
+    // This terminal state releases the binding epoch and readiness producer;
+    // leaving `Compiling` here would wait forever for a source that cannot arrive.
+    sim.status = SimStatus::Error(error.to_owned());
+}
+
 pub fn dispatch_loaded_python_sources(
     mut commands: Commands,
     q: Query<(Entity, &PendingPythonSource)>,
     sources: Res<Assets<PythonSource>>,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<ScriptRegistry>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
     // The `SimComponent` was published at BIND with the USD-declared interface;
     // dispatch reads it to seed the editor document and flips it live.
     mut sims: Query<&mut SimComponent>,
 ) {
     for (entity, pending) in q.iter() {
         if asset_server.load_state(&pending.handle).is_failed() {
-            warn!(
-                "[usd-cosim] failed to load Python source `{}` via AssetServer",
-                pending.asset_path
-            );
-            commands.entity(entity).remove::<PendingPythonSource>();
+            let error = python_source_load_error(&pending.asset_path);
+            let model_name = if let Ok(mut sim) = sims.get_mut(entity) {
+                let model_name = sim.model_name.clone();
+                mark_python_source_load_failed(&mut sim, &error);
+                model_name
+            } else {
+                format!("Python:{}", pending.asset_path)
+            };
+            warn!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{model_name}] Asset load error: {error}"),
+            });
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_DISPATCH_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error),
+                timestamp: 0.0,
+            });
+            commands.entity(entity).try_remove::<PendingPythonSource>();
             continue;
         }
         let Some(src) = sources.get(&pending.handle) else {
@@ -1316,7 +1459,7 @@ pub fn dispatch_loaded_python_sources(
             sim.status = SimStatus::Running;
         }
 
-        commands.entity(entity).remove::<PendingPythonSource>();
+        commands.entity(entity).try_remove::<PendingPythonSource>();
     }
 }
 
@@ -2442,6 +2585,125 @@ pub fn rewire_usd_connections(
     }
 }
 
+/// Whether the causal-participant projection needs to be recomputed.
+///
+/// Connections are an immutable derived cache, so additions/removals are the
+/// normal topology revision. Endpoint lifecycle transitions are included as
+/// well: a wire can become executable after a joint, wheel, or model surface
+/// is admitted. BindingRevision covers the scene epoch seal, which is the
+/// fail-closed boundary while projection is still incomplete.
+fn causal_participants_changed(
+    arrivals: Query<
+        (),
+        Or<(
+            Added<SimConnection>,
+            Changed<SimConnection>,
+            Changed<ConnectionBinding>,
+            Added<ModelicaModel>,
+            Added<lunco_core::CausalStateSink>,
+        )>,
+    >,
+    mut removed_connections: RemovedComponents<SimConnection>,
+    mut removed_bindings: RemovedComponents<ConnectionBinding>,
+    mut removed_models: RemovedComponents<ModelicaModel>,
+    mut removed_sinks: RemovedComponents<lunco_core::CausalStateSink>,
+    revision: Res<lunco_cosim::BindingRevision>,
+) -> bool {
+    !arrivals.is_empty()
+        || removed_connections.read().next().is_some()
+        || removed_bindings.read().next().is_some()
+        || removed_models.read().next().is_some()
+        || removed_sinks.read().next().is_some()
+        || revision.is_changed()
+}
+
+/// Recompute the shared-clock participant set from the resolved causal graph.
+///
+/// A Modelica model is a shared-clock participant when, following authored
+/// causal connections backwards, it can reach a stateful engine sink:
+///
+/// * an input on a backend-owned CausalStateSink endpoint.
+///
+/// The reverse closure also captures intermediate Modelica or script nodes, so
+/// a model feeding another model that eventually drives a body remains coupled.
+/// Telemetry, electrical, or supervisory outputs do not become barriers merely
+/// because those models are live.
+///
+/// The projection is fail-closed until the binding epoch is sealed and every
+/// connection has reached a terminal binding state. During that interval every
+/// live Modelica participant is treated as coupled, so an incomplete graph
+/// cannot accidentally release a causal participant.
+fn derive_causal_barrier_participants(world: &mut World) {
+    let modelica_entities: bevy::ecs::entity::EntityHashSet = world
+        .query_filtered::<Entity, With<ModelicaModel>>()
+        .iter(world)
+        .collect();
+
+    let stateful_sinks: bevy::ecs::entity::EntityHashSet = world
+        .query_filtered::<Entity, With<lunco_core::CausalStateSink>>()
+        .iter(world)
+        .collect();
+
+    let connections: Vec<(Entity, Entity, String, Option<ConnectionBinding>)> = world
+        .query_filtered::<(&SimConnection, Option<&ConnectionBinding>), With<SimConnection>>()
+        .iter(world)
+        .map(|(connection, binding)| {
+            (
+                connection.start_element,
+                connection.end_element,
+                connection.end_connector.clone(),
+                binding.cloned(),
+            )
+        })
+        .collect();
+
+    // Reverse adjacency: stateful sink <- upstream source. Only executable
+    // edges participate in the causal closure. A failed edge is terminal for
+    // binding/readiness, but it is not a live signal path and must not couple
+    // an otherwise independent participant to the shared clock.
+    let mut upstream: std::collections::HashMap<Entity, Vec<Entity>> =
+        std::collections::HashMap::new();
+    for (start, end, _, binding) in &connections {
+        if matches!(binding, Some(ConnectionBinding::Bound)) {
+            upstream.entry(*end).or_default().push(*start);
+        }
+    }
+
+    let mut causal_entities = stateful_sinks.clone();
+    let mut frontier: Vec<Entity> = stateful_sinks.into_iter().collect();
+    while let Some(sink) = frontier.pop() {
+        for source in upstream.get(&sink).into_iter().flatten().copied() {
+            if causal_entities.insert(source) {
+                frontier.push(source);
+            }
+        }
+    }
+
+    let participants: Vec<Entity> = modelica_entities
+        .iter()
+        .copied()
+        .filter(|entity| causal_entities.contains(entity))
+        .collect();
+
+    let bindings_terminal = connections.iter().all(|(_, _, _, binding)| {
+        matches!(
+            binding,
+            Some(ConnectionBinding::Bound) | Some(ConnectionBinding::Failed)
+        )
+    });
+    let topology_ready = world
+        .get_resource::<lunco_cosim::BindingRevision>()
+        .is_some_and(|revision| revision.sealed)
+        && bindings_terminal;
+
+    let mut projection = world.resource_mut::<lunco_core::SimulationBarrierParticipants>();
+    if topology_ready {
+        projection.replace(participants);
+    } else {
+        projection.topology_ready = false;
+    }
+}
+
 /// The authored constants on a prim's unconnected `inputs:` ports — a model's
 /// parameters, as USD stated them.
 ///
@@ -2731,8 +2993,10 @@ impl lunco_api::ApiQueryProvider for ReleasePortProvider {
 
 /// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
-/// state, and propagated cosim values. Lets you probe the running
-/// binary without polling logs.
+/// state, and propagated cosim values. The response also includes the
+/// authoritative synchronization projection so a rate/worker diagnosis can
+/// distinguish a causal barrier from an unrelated model still running on its
+/// worker. Lets you probe the running binary without polling logs.
 pub struct CosimStatusProvider;
 
 impl lunco_api::ApiQueryProvider for CosimStatusProvider {
@@ -2781,6 +3045,17 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
+                    "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
+                    "modelica_communication_period_secs": model.and_then(|m| {
+                        m.communication_period_secs.is_finite().then_some(m.communication_period_secs)
+                    }),
+                    "modelica_schedule_error": model.and_then(|m| {
+                        m.validated_communication_period_secs().err()
+                    }),
+                    "modelica_next_communication_time": model
+                        .map(|m| m.next_communication_time)
+                        .unwrap_or(0.0),
+                    "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
                     // The Modelica worker's durable failure verdict is the
                     // reason readiness may be holding the world. Surface it
                     // here beside timing/ports so live API diagnosis does not
@@ -2791,7 +3066,50 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                 })
             })
             .collect();
-        lunco_api::ApiResponse::ok(serde_json::json!({ "entities": entities }))
+        let barrier = world
+            .get_resource::<lunco_core::SimulationBarrier>()
+            .copied()
+            .unwrap_or_default();
+        let (topology_ready, causal_participant_count) = world
+            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .map(|participants| (participants.topology_ready, participants.entities.len()))
+            .unwrap_or((false, 0));
+        let causal_participants = world
+            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .map(|participants| {
+                participants
+                    .entities
+                    .iter()
+                    .map(|entity| {
+                        serde_json::json!({
+                            "entity": entity.to_bits(),
+                            "name": world.get::<Name>(*entity).map(Name::as_str),
+                            "usd_path": world
+                                .get::<UsdPrimPath>(*entity)
+                                .map(|path| path.path.as_str()),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let causal_sink_count = world
+            .query_filtered::<(), With<lunco_core::CausalStateSink>>()
+            .iter(world)
+            .count();
+        lunco_api::ApiResponse::ok(serde_json::json!({
+            "entities": entities,
+            "synchronization": {
+                "barrier_held": barrier.held,
+                "active_participants": barrier.active_participants,
+                "shared_clock_participants": barrier.shared_clock_participants,
+                "worst_lag_secs": barrier.worst_lag_secs,
+                "worst_entity": barrier.worst_entity.map(Entity::to_bits),
+                "topology_ready": topology_ready,
+                "causal_participant_count": causal_participant_count,
+                "causal_participants": causal_participants,
+                "causal_sink_count": causal_sink_count,
+            }
+        }))
     }
 }
 
@@ -3073,8 +3391,9 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
 /// so two accidental ECS projections of the same prim collapse to one row in
 /// `ListEntities`. This query instead enumerates the live ECS candidates by their
 /// transient entity id and reports the roles that can make a duplicate visible.
-/// It intentionally includes every Bevy camera, because a camera spawned outside
-/// the avatar path must be visible to this audit too.
+/// It intentionally includes every `SceneCamera` intent, whether or not the
+/// render host has attached Bevy's `Camera` component; unrelated render-only
+/// cameras are not viewport candidates and are excluded.
 pub struct SceneCameraAuditProvider;
 
 impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
@@ -3087,27 +3406,16 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             Entity,
             Option<&Name>,
             Option<&UsdPrimPath>,
-            &bevy::camera::Camera,
+            Option<&bevy::camera::Camera>,
             Has<SceneCamera>,
             Has<lunco_usd_bevy::camera_mount::MountedCamera>,
             Has<Avatar>,
             Has<LocalAvatar>,
-            Has<lunco_avatar::ProvisionalAvatarCamera>,
-        ), ()>();
+        ), With<SceneCamera>>();
         let mut candidates: Vec<_> = query
             .iter(world)
             .map(
-                |(
-                    entity,
-                    name,
-                    prim,
-                    camera,
-                    scene_camera,
-                    mounted,
-                    avatar,
-                    local,
-                    provisional,
-                )| {
+                |(entity, name, prim, camera, scene_camera, mounted, avatar, local)| {
                     serde_json::json!({
                         "entity": entity.to_bits(),
                         "name": name.map(|n| n.as_str()).unwrap_or_default(),
@@ -3117,8 +3425,14 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                         "mounted_camera": mounted,
                         "avatar": avatar,
                         "local_avatar": local,
-                        "provisional_avatar": provisional,
-                        "camera_active": camera.is_active,
+                        // Headless production runs intentionally omit Bevy's
+                        // render `Camera` component, but the render-free
+                        // `SceneCamera` intent is still the authoritative
+                        // viewport candidate. Keep the audit useful in both
+                        // worlds instead of making headless diagnostics report
+                        // an empty candidate set.
+                        "render_camera": camera.is_some(),
+                        "camera_active": camera.is_some_and(|camera| camera.is_active),
                     })
                 },
             )
@@ -3218,8 +3532,9 @@ fn execute_admitted_restart_scene(
     asset_server: Res<AssetServer>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
     mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
     let SceneTransitionRequest::Restart { reset_document } = &trigger.event().request else {
         return;
@@ -3230,7 +3545,12 @@ fn execute_admitted_restart_scene(
     // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
     // drop the scheme and load a *different* raw-file asset, breaking twin routing
     // (avatar/camera setup, composed runtime edits) and leaving a stale camera.
-    let Some((_, upp)) = q_usd.iter().next() else {
+    let Some((_, upp, _)) = q_usd.iter().find(|(entity, _, is_scene_root)| {
+        *is_scene_root
+            && mount_state
+                .as_deref()
+                .is_none_or(|state| state.contains_root(*entity))
+    }) else {
         warn!("[restart-scene] no scene is loaded — nothing to restart");
         coordinator.finish_noop();
         return;
@@ -3247,6 +3567,15 @@ fn execute_admitted_restart_scene(
         .unwrap_or_else(|| "restarted-scene".to_string());
     info!("[restart-scene] reloading `{}` from disk", label);
 
+    // Reject late events and deferred projections from the outgoing root while
+    // its recursive despawn is still queued.
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
+
+    // Restart is an explicit replacement transaction. Cancel the old load
+    // identity before reclaiming its parked entities.
+    commands.remove_resource::<SceneLoadInFlight>();
     let transition = SceneTransition::Restart {
         path: label.clone(),
         root_prim: String::new(),
@@ -3316,6 +3645,7 @@ fn execute_admitted_clear_scene(
     mut coordinator: ResMut<SceneTransitionCoordinator>,
     mut commands: Commands,
     scene: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
     if trigger.event().request != SceneTransitionRequest::Clear {
         return;
@@ -3323,6 +3653,9 @@ fn execute_admitted_clear_scene(
 
     info!("[clear-scene] clearing viewport");
     coordinator.start(SceneTransition::Clear);
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
     commands.trigger(lunco_core::SceneTransitionStarted {
         transition: SceneTransition::Clear,
     });
@@ -3411,11 +3744,6 @@ pub struct SceneEntities<'w, 's> {
     scene_roots: Query<'w, 's, &'static UsdPrimPath, With<UsdSceneRoot>>,
     prims: Query<'w, 's, (Entity, &'static UsdPrimPath)>,
     wires: Query<'w, 's, Entity, With<SimConnection>>,
-    /// The sandbox's code-spawned safety camera is deliberately outside the
-    /// USD subtree, so it needs explicit scene-lifecycle ownership.  Leaving it
-    /// alive while a replacement USD Avatar claims the viewport is the only
-    /// route to two local cameras after a full reload.
-    provisional_avatars: Query<'w, 's, Entity, With<lunco_avatar::ProvisionalAvatarCamera>>,
     /// Physics-created joint entities and world-anchor bodies have no USD prim
     /// path, so their explicit scene-ownership marker is the authoritative
     /// reclamation key.
@@ -3429,13 +3757,12 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // `lunco_core::SceneTeardown`.
     commands.queue(lunco_core::run_scene_teardown);
 
-    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_provisional_avatars, q_physics_owned) = (
+    let (q_grid, q_origin, q_scene_roots, q_prims, q_wires, q_physics_owned) = (
         &scene.grid,
         &scene.origin,
         &scene.scene_roots,
         &scene.prims,
         &scene.wires,
-        &scene.provisional_avatars,
         &scene.physics_owned,
     );
     let mut despawned = 0usize;
@@ -3488,14 +3815,6 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         despawned += 1;
     }
 
-    // A provisional avatar belongs to the loaded scene, even though it is
-    // spawned by the UI rather than from a USD prim.  Remove it in the same
-    // deferred batch as the old stage so it cannot render alongside the next
-    // scene's authored avatar during a reload.
-    for e in q_provisional_avatars.iter() {
-        commands.entity(e).try_despawn();
-        despawned += 1;
-    }
     for e in q_physics_owned.iter() {
         commands.entity(e).try_despawn();
         despawned += 1;
@@ -3765,9 +4084,6 @@ pub fn spawn_scene_root_world(
 /// The preview viewport (`lunco_usd::ui::viewport`) mounts its own private root
 /// the same way, so consumers that must act on the *running* scene should scope
 /// their query rather than assume a single one exists.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdSceneRoot;
-
 /// Spawn a USD scene root from an **already-built** stage handle.
 ///
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
@@ -3841,6 +4157,12 @@ pub fn spawn_scene_root_with_stage(
             ChildOf(grid),
         ))
         .id();
+    let primary = world
+        .get_resource::<SceneLoadInFlight>()
+        .is_some_and(|load| load.stage_id == new_id && load.path == asset_path);
+    if let Some(mut state) = world.get_resource_mut::<lunco_core::SceneMountState>() {
+        state.register_root(root, primary);
+    }
     info!(
         "[scene] spawned `{}` @ `{}` (entity {})",
         asset_path, root_prim, root
@@ -3919,6 +4241,15 @@ pub(crate) fn install(app: &mut App) {
     };
     use lunco_modelica::ModelicaSet;
 
+    // Script execution is part of the fixed co-simulation transaction. Its
+    // input snapshot is taken after propagation/actuation, its output becomes
+    // visible on the next tick, and the transaction completes before the
+    // Modelica master dispatches the next communication point.
+    app.configure_sets(
+        FixedUpdate,
+        lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
+    );
+
     // Scene-owned scripting state must end at the same boundary as the USD
     // entities that gave it meaning. This runs before clear_scene_entities'
     // deferred despawns, so the outgoing hook still sees the outgoing world.
@@ -3939,6 +4270,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
         .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
         .init_resource::<lunco_cosim::BindingRevision>()
+        .init_resource::<lunco_core::SimulationBarrierParticipants>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>()
         .init_resource::<BindingEpochDirty>()
@@ -4148,6 +4480,16 @@ pub(crate) fn install(app: &mut App) {
             .after(seed_usd_input_defaults)
             .in_set(CosimUpdateSet::Wiring),
     );
+    // The Modelica worker must know which entities are on the shared causal
+    // path before the next FixedUpdate. This is a graph projection, not a
+    // per-frame solver heuristic; it stays dormant until topology or endpoint
+    // lifecycle changes.
+    app.add_systems(
+        Update,
+        derive_causal_barrier_participants
+            .after(CosimUpdateSet::Wiring)
+            .run_if(causal_participants_changed),
+    );
 
     app.add_systems(
         FixedUpdate,
@@ -4160,19 +4502,31 @@ pub(crate) fn install(app: &mut App) {
             // copied into it. Cold runs happened to order the two systems the
             // other way, which made the first telemetry sample nondeterministic.
             sync_modelica_outputs
-                .before(lunco_scripting::world_bridge::tick_rhai_scenarios)
+                .before(lunco_scripting::ScriptingSet)
                 .before(PropagateCosimSet::Propagate),
-            sync_script_outputs.before(PropagateCosimSet::Propagate),
-            sync_modelica_inputs
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(ModelicaSet::SpawnRequests),
+            // Script backends consume the input snapshot and publish their
+            // output snapshot as one fixed-step transaction. Script outputs
+            // are published before the propagation phase, then the backend
+            // executes after this tick's propagated inputs. That gives the
+            // explicit one-tick causal delay required for a conservative
+            // discrete co-simulation exchange and avoids an algebraic
+            // same-tick script/physics cycle.
             sync_script_inputs
+                .after(PropagateCosimSet::Propagate)
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(lunco_scripting::ScriptingSet)
+                .before(ModelicaSet::SpawnRequests),
+            sync_script_outputs
+                .before(lunco_scripting::ScriptingSet)
+                .before(PropagateCosimSet::Propagate),
+            sync_modelica_inputs
                 .after(ApplyForcesCosimSet::ApplyForces)
                 .before(ModelicaSet::SpawnRequests),
             // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
             fire_connected_events
                 .after(sync_modelica_outputs)
-                .after(sync_script_outputs),
+                .after(sync_script_outputs)
+                .before(PropagateCosimSet::Propagate),
         ),
     );
 
@@ -4208,6 +4562,115 @@ register_commands!(on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let coupled = world.spawn(ModelicaModel::default()).id();
+        let intermediate = world.spawn_empty().id();
+        let telemetry_only = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+
+        world.spawn((
+            SimConnection {
+                start_element: coupled,
+                end_element: intermediate,
+                end_connector: "input".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Bound,
+        ));
+        world.spawn((
+            SimConnection {
+                start_element: intermediate,
+                end_element: body,
+                end_connector: "force_y".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Bound,
+        ));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(participants.topology_ready);
+        assert!(participants.entities.contains(&coupled));
+        assert!(!participants.entities.contains(&telemetry_only));
+        assert!(participants.requires_barrier(coupled));
+        assert!(!participants.requires_barrier(telemetry_only));
+    }
+
+    #[test]
+    fn unresolved_topology_keeps_the_barrier_fail_closed() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let model = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+        world.spawn((SimConnection {
+            start_element: model,
+            end_element: body,
+            end_connector: "force_y".into(),
+            ..Default::default()
+        },));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(!participants.topology_ready);
+        assert!(participants.requires_barrier(model));
+    }
+
+    #[test]
+    fn failed_edge_does_not_make_model_a_shared_clock_participant() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        let mut revision = lunco_cosim::BindingRevision::default();
+        revision.sealed = true;
+        world.insert_resource(revision);
+
+        let model = world.spawn(ModelicaModel::default()).id();
+        let body = world
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::CausalStateSink,
+            ))
+            .id();
+        world.spawn((
+            SimConnection {
+                start_element: model,
+                end_element: body,
+                end_connector: "force_y".into(),
+                ..Default::default()
+            },
+            ConnectionBinding::Failed,
+        ));
+
+        derive_causal_barrier_participants(&mut world);
+
+        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        assert!(participants.topology_ready);
+        assert!(!participants.entities.contains(&model));
+        assert!(!participants.requires_barrier(model));
+    }
 
     // ── resolve_root_prim ────────────────────────────────────────────
     //
@@ -4376,6 +4839,27 @@ mod tests {
         assert_eq!(
             modelica_status(&model),
             SimStatus::Error("singular system".into())
+        );
+    }
+
+    #[test]
+    fn failed_python_source_is_terminal_for_binding_readiness() {
+        let mut sim = SimComponent {
+            model_name: "Python:models/controller.py".into(),
+            status: SimStatus::Compiling,
+            ..default()
+        };
+
+        let error = python_source_load_error("models/controller.py");
+        let model_name = sim.model_name.clone();
+        mark_python_source_load_failed(&mut sim, &error);
+
+        assert_eq!(model_name, "Python:models/controller.py");
+        assert!(error.contains("models/controller.py"));
+        assert_eq!(sim.status, SimStatus::Error(error));
+        assert!(
+            modelica_models_terminal(std::iter::once((None, Some(&sim)))),
+            "a source that failed to load must release the binding epoch as a terminal error"
         );
     }
 

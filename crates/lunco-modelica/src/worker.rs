@@ -453,10 +453,23 @@ pub struct ModelicaChannels {
 /// in-process and never touches serde here.
 #[derive(Serialize, Deserialize)]
 pub enum ModelicaCommand {
-    /// Advance simulation by one timestep. Sent every frame from `spawn_modelica_requests`.
+    /// Advance simulation by one master-selected communication interval. Sent
+    /// from `spawn_modelica_requests` only at a fixed simulation tick when the
+    /// participant reaches its declared communication point.
     Step {
         entity: Entity,
         session_id: u64,
+        /// Monotonic communication-point sequence within this model session.
+        /// The main thread uses it to reject duplicate, reordered, or late
+        /// results instead of treating every same-session message as the next
+        /// step.
+        step_id: u64,
+        /// FMI-CS-style communication interval selected by the master.
+        /// `dt` is retained as the solver interval; these endpoints are the
+        /// authoritative transaction identity and are validated by the
+        /// worker before integration.
+        start_time: f64,
+        stop_time: f64,
         model_name: String,
         inputs: Vec<(String, f64)>,
         dt: f64,
@@ -599,6 +612,10 @@ use std::sync::Arc;
 pub struct ModelicaResult {
     pub entity: Entity,
     pub session_id: u64,
+    /// Present on every response to a `Step`, including a step error. Lifecycle
+    /// and source-root responses leave it absent.
+    #[serde(default)]
+    pub step_id: Option<u64>,
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
@@ -657,6 +674,7 @@ impl Default for ModelicaResult {
         Self {
             entity: Entity::PLACEHOLDER,
             session_id: 0,
+            step_id: None,
             new_time: 0.0,
             outputs: Vec::new(),
             detected_symbols: Vec::new(),
@@ -993,6 +1011,47 @@ pub const MAX_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * MAX_MICRO_STEPS_PER_MACRO as 
 /// `dt` would just round to a full micro-step and overshoot.
 const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
 
+/// Default communication period for a live Modelica participant.
+///
+/// Modelica is a continuous-time participant, but it is not a 60 Hz render
+/// callback.  The master algorithm samples its inputs and publishes its
+/// outputs at declared communication points; between points the last output is
+/// held.  Ten Hz is the documented semantic default for a participant that
+/// does not author a different period.  A participant that must exchange state
+/// on every physics tick authors one fixed-tick period explicitly.
+pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
+
+const COMMUNICATION_EPS: f64 = 1e-9;
+const COMMUNICATION_TIME_EPS: f64 = 1e-8;
+
+/// Validate a live Modelica communication period against the master clock.
+/// This is shared by USD projection and the runtime participant so a value
+/// cannot be accepted at load time and rejected under a different rule on the
+/// first tick.
+///
+/// The master admits at most one asynchronous transaction for a participant in
+/// one `FixedUpdate`. Communication points therefore must lie on the master
+/// fixed-tick lattice. A sub-tick period would be legal for a standalone FMI
+/// master that runs an inner loop, but this master does not have that second
+/// clock; accepting it would silently make the participant run slow.
+pub fn validate_communication_period_secs(value: f64) -> Result<f64, String> {
+    if !value.is_finite() || !(lunco_core::SECS_PER_TICK..=MAX_MACRO_STEP_DT).contains(&value) {
+        return Err(format!(
+            "invalid Modelica communication period {value:?}; expected a finite value in [{:.9}, {MAX_MACRO_STEP_DT:.9}]s",
+            lunco_core::SECS_PER_TICK
+        ));
+    }
+    let fixed_ticks = (value / lunco_core::SECS_PER_TICK).round();
+    let represented = fixed_ticks * lunco_core::SECS_PER_TICK;
+    if fixed_ticks < 1.0 || (represented - value).abs() > COMMUNICATION_EPS {
+        return Err(format!(
+            "invalid Modelica communication period {value:?}; it must be an integer multiple of the master fixed tick {:.9}s",
+            lunco_core::SECS_PER_TICK
+        ));
+    }
+    Ok(value)
+}
+
 /// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
 ///
 /// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
@@ -1024,10 +1083,51 @@ fn integrate_macro_step(
     Ok(())
 }
 
+/// Validate the worker-side FMI-CS transaction envelope before mutating solver
+/// state. The master owns the interval; a worker must not silently reinterpret
+/// a request as "whatever time happens to be next".
+#[inline]
+fn communication_times_close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= COMMUNICATION_TIME_EPS * a.abs().max(b.abs()).max(1.0)
+}
+
+fn validate_step_request(
+    actual_start: f64,
+    start_time: f64,
+    stop_time: f64,
+    dt: f64,
+) -> Result<(), String> {
+    if !start_time.is_finite()
+        || !stop_time.is_finite()
+        || !dt.is_finite()
+        || dt <= 0.0
+        || stop_time <= start_time
+        || !communication_times_close(stop_time - start_time, dt)
+        || !communication_times_close(actual_start, start_time)
+    {
+        return Err(format!(
+            "invalid Modelica communication transaction: solver at {actual_start:.12}, requested [{start_time:.12}, {stop_time:.12}] with dt={dt:.12}"
+        ));
+    }
+    Ok(())
+}
+
+#[inline]
+fn validate_step_completion(actual_end: f64, stop_time: f64) -> Result<(), String> {
+    if communication_times_close(actual_end, stop_time) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Modelica participant stopped at {actual_end:.12}, before or after requested communication point {stop_time:.12}"
+        ))
+    }
+}
+
 /// Model-vs-world lag past which the co-sim worker is visibly waiting on the
-/// coupling barrier. Surfaced as a rate-limited `warn!` + [`CosimLag`]; physics
-/// is held while the in-flight result is pending, so this is not permission to
-/// apply stale forces.
+/// coupling barrier. Surfaced as a rate-limited `warn!` + [`CosimLag`]. Every
+/// participant in the shared simulation holds the deterministic fixed clock
+/// while its result is pending; the worker itself remains off-thread so the UI
+/// and render/update schedule stay responsive.
 const LAG_WARN_SECS: f64 = 0.25;
 
 /// Fixed ticks between two lag warnings (5 s at 60 Hz) — the warn is on the
@@ -1043,8 +1143,9 @@ const LAG_WARN_COOLDOWN_TICKS: u32 = 300;
 ///
 /// `worst_secs` is the distance between the next communication point and the
 /// model's last completed state. During an in-flight step it describes the
-/// amount of simulation the main loop is waiting for; it is not a stale-force
-/// allowance because the physics clock is held by `RealtimeCoupling`.
+/// amount of simulation the participant is waiting to process; it is not
+/// permission to apply stale state because the shared simulation holds until
+/// the result lands.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct CosimLag {
     /// Worst `|model_time − world_time|` seen on the last fixed tick, seconds.
@@ -1062,6 +1163,15 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
     ModelicaResult {
         entity,
         session_id,
+        ..Default::default()
+    }
+}
+
+fn step_result_ok(entity: Entity, session_id: u64, step_id: u64) -> ModelicaResult {
+    ModelicaResult {
+        entity,
+        session_id,
+        step_id: Some(step_id),
         ..Default::default()
     }
 }
@@ -2073,12 +2183,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     ModelicaCommand::Step {
                         entity,
                         session_id,
+                        step_id,
+                        start_time,
+                        stop_time,
                         model_name,
                         inputs,
                         dt,
                     } => {
                         if session_id < *current_sessions.get(&entity).unwrap_or(&0) {
-                            let _ = tx_inner.send(result_ok(entity, session_id));
+                            let _ = tx_inner.send(step_result_ok(entity, session_id, step_id));
                             return;
                         }
 
@@ -2133,7 +2246,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                     .insert(entity, (session_id, model_name, s));
                                             }
                                             Err(e) => {
-                                                let mut r = result_ok(entity, session_id);
+                                                let mut r =
+                                                    step_result_ok(entity, session_id, step_id);
                                                 r.error = Some(format!(
                                                     "Initialization Failed: stepper init from \
                                                      cached model of `{model_name}`: {e}"
@@ -2148,7 +2262,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             }
                                         },
                                         Err(e) => {
-                                            let mut r = result_ok(entity, session_id);
+                                            let mut r = step_result_ok(entity, session_id, step_id);
                                             r.error = Some(format!(
                                                 "Initialization Failed: recompile of cached \
                                                  source of `{model_name}`: {e}"
@@ -2161,6 +2275,18 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if let Some((_, _, stepper)) = steppers.get(&entity) {
+                            if let Err(error) =
+                                validate_step_request(stepper.time(), start_time, stop_time, dt)
+                            {
+                                let mut result = step_result_ok(entity, session_id, step_id);
+                                result.error = Some(error);
+                                let _ = tx_inner.send(result);
+                                steppers.remove(&entity);
+                                return;
                             }
                         }
 
@@ -2178,10 +2304,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
                                 // as a fixed ladder of micro-steps.
-                                let step_err = integrate_macro_step(stepper, dt).err();
+                                let step_err = integrate_macro_step(stepper, dt)
+                                    .err()
+                                    .map(|error| error.to_string())
+                                    .or_else(|| {
+                                        validate_step_completion(stepper.time(), stop_time).err()
+                                    });
                                 if let Some(e) = step_err {
-                                    let mut r = result_ok(entity, session_id);
+                                    let mut r = step_result_ok(entity, session_id, step_id);
                                     r.new_time = stepper.time();
+                                    r.step_id = Some(step_id);
                                     // Runtime solver blow-up: `SimulationDiagnosticError`
                                     // Display is human-readable (the `Solver` variant
                                     // carries no source span, so it stays unlocated).
@@ -2208,6 +2340,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     let _ = tx_inner.send(ModelicaResult {
                                         entity,
                                         session_id,
+                                        step_id: Some(step_id),
                                         new_time,
                                         outputs,
                                         error: None,
@@ -2221,10 +2354,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     });
                                 }
                             } else {
-                                let _ = tx_inner.send(result_ok(entity, session_id));
+                                let _ = tx_inner.send(step_result_ok(entity, session_id, step_id));
                             }
                         } else {
-                            let mut r = result_ok(entity, session_id);
+                            let mut r = step_result_ok(entity, session_id, step_id);
                             r.error = Some(
                                 "No compiled model. Click Compile (or Run will compile + start)."
                                     .to_string(),
@@ -2550,6 +2683,9 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
         ModelicaCommand::Step {
             entity,
             session_id,
+            step_id,
+            start_time,
+            stop_time,
             model_name,
             inputs,
             dt,
@@ -2593,18 +2729,33 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 }
             }
 
+            if let Some((_, _, stepper)) = w.steppers.get(&entity) {
+                if let Err(error) = validate_step_request(stepper.time(), start_time, stop_time, dt)
+                {
+                    let mut result = step_result_ok(entity, session_id, step_id);
+                    result.error = Some(error);
+                    send(result);
+                    w.steppers.remove(&entity);
+                    return;
+                }
+            }
+
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     for (name, val) in &inputs {
                         let _ = stepper.set_input(name, *val);
                     }
                     // Same macro-step ladder as the native worker.
-                    let step_err = integrate_macro_step(stepper, dt).err();
+                    let step_err = integrate_macro_step(stepper, dt)
+                        .err()
+                        .map(|error| error.to_string())
+                        .or_else(|| validate_step_completion(stepper.time(), stop_time).err());
 
                     if let Some(e) = step_err {
                         send(ModelicaResult {
                             entity,
                             session_id,
+                            step_id: Some(step_id),
                             new_time: stepper.time(),
                             outputs: Vec::new(),
                             detected_symbols: Vec::new(),
@@ -2627,6 +2778,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         send(ModelicaResult {
                             entity,
                             session_id,
+                            step_id: Some(step_id),
                             new_time: stepper.time(),
                             outputs,
                             error: None,
@@ -2640,7 +2792,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         });
                     }
                 } else {
-                    send(result_ok(entity, session_id));
+                    send(step_result_ok(entity, session_id, step_id));
                 }
             } else {
                 // No stepper for this entity. The Bevy-side
@@ -2654,6 +2806,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 send(ModelicaResult {
                     entity,
                     session_id,
+                    step_id: Some(step_id),
                     new_time: 0.0,
                     outputs: Vec::new(),
                     detected_symbols: Vec::new(),
@@ -3067,11 +3220,19 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
     }
 }
 
+/// One master-issued Modelica communication transaction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InFlightModelicaStep {
+    pub step_id: u64,
+    pub start_time: f64,
+    pub stop_time: f64,
+}
+
 /// Component that attaches a Modelica model to an entity.
 ///
 /// Holds the model name, session ID, parameters, inputs, and observable variables.
 /// The `is_stepping` flag prevents duplicate Step commands while waiting for results.
-#[derive(Component, Reflect, Default)]
+#[derive(Component, Reflect)]
 #[reflect(Component)]
 pub struct ModelicaModel {
     pub model_name: String,
@@ -3084,11 +3245,18 @@ pub struct ModelicaModel {
     pub current_time: f64,
     /// The **world clock this model is coupled to**, in model-local seconds
     /// (0 at compile/reset). Advanced by exactly one `Time<Fixed>` delta per
-    /// unpaused FIXED TICK — never per render frame (A3). The macro step
-    /// requested each tick is `target_time − current_time`, so a model that
-    /// missed ticks (worker busy, long compile, `rate` burst) catches the time
-    /// up instead of losing it forever.
+    /// unpaused FIXED TICK — never per render frame (A3). It is compared with
+    /// `next_communication_time`; the worker is asked to integrate only at the
+    /// declared communication points, not at every fixed tick.
     pub target_time: f64,
+    /// Simulation seconds between Modelica communication points. Inputs are
+    /// sampled and outputs are published at these points; the last published
+    /// output is held between them. This is the explicit co-simulation
+    /// communication policy, not a wall-clock sleep or a render cadence.
+    pub communication_period_secs: f64,
+    /// Next communication point on the model's local clock.
+    #[reflect(ignore)]
+    pub next_communication_time: f64,
     pub last_step_time: f64,
     pub session_id: u64,
     pub paused: bool,
@@ -3129,6 +3297,13 @@ pub struct ModelicaModel {
     /// slow Modelica compile).
     #[reflect(ignore)]
     pub is_stepping: bool,
+    /// Exact communication transaction awaiting a worker result. A boolean
+    /// alone cannot fence a reordered or duplicate same-session response.
+    #[reflect(ignore)]
+    pub in_flight_step: Option<InFlightModelicaStep>,
+    /// Next communication-point sequence in the current model session.
+    #[reflect(ignore)]
+    pub next_step_id: u64,
     /// `true` while a `Compile` request is in flight to the worker.
     /// Set by the `CompileModel` observer, cleared when a compile-
     /// shaped result (`is_new_model` / `is_parameter_update`) lands.
@@ -3165,6 +3340,68 @@ pub struct ModelicaModel {
     pub resume_after_compile: bool,
 }
 
+impl ModelicaModel {
+    /// Validate the authored communication period before the master uses it.
+    ///
+    /// The schema default is installed by [`Default`] for programmatically
+    /// constructed models and by the USD projection for authored programs.
+    /// Once a value exists, an invalid value is a configuration error—not a
+    /// request to substitute another schedule. This keeps a malformed model
+    /// from producing plausible but incorrectly timed results.
+    #[inline]
+    pub fn validated_communication_period_secs(&self) -> Result<f64, String> {
+        validate_communication_period_secs(self.communication_period_secs)
+    }
+
+    /// Recompute the next communication point from the model's current clock.
+    ///
+    /// No defaulting occurs here: callers must surface the returned error and
+    /// keep the participant out of the live simulation until its authored
+    /// schedule is repaired.
+    #[inline]
+    pub fn reset_communication_schedule(&mut self) -> Result<(), String> {
+        let period = self.validated_communication_period_secs()?;
+        self.next_communication_time = self.current_time + period;
+        Ok(())
+    }
+}
+
+impl Default for ModelicaModel {
+    fn default() -> Self {
+        Self::default_fields()
+    }
+}
+
+impl ModelicaModel {
+    fn default_fields() -> Self {
+        Self {
+            model_name: String::new(),
+            source_uri: String::new(),
+            current_time: 0.0,
+            target_time: 0.0,
+            communication_period_secs: DEFAULT_COMMUNICATION_PERIOD_SECS,
+            next_communication_time: DEFAULT_COMMUNICATION_PERIOD_SECS,
+            last_step_time: 0.0,
+            session_id: 0,
+            paused: false,
+            parameters: HashMap::new(),
+            inputs: HashMap::new(),
+            compiled_input_names: BTreeSet::new(),
+            variables: HashMap::new(),
+            last_error: None,
+            document: lunco_doc::DocumentId::default(),
+            is_stepping: false,
+            in_flight_step: None,
+            next_step_id: 1,
+            is_compiling: false,
+            is_compiled: false,
+            compiled_generation: 0,
+            pending_generation: 0,
+            resume_after_compile: false,
+        }
+    }
+}
+
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
@@ -3195,9 +3432,10 @@ pub fn on_remove_modelica(
 /// Returns the `dt` to request, or `None` for "nothing to do this tick".
 ///
 /// The requested `dt` is the **whole deficit**, clamped to
-/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None` and the caller does
-/// not advance `target_time`; the next communication point is scheduled only
-/// after the previous result releases the barrier.
+/// [`MAX_MACRO_STEP_DT`]. A step in flight returns `None`. A coupled caller
+/// holds the shared target clock until the result lands; an independent caller
+/// may continue advancing its target clock while the worker runs, preserving
+/// the same communication-point semantics without stalling unrelated physics.
 ///
 /// While a step is in flight we do not dispatch another (one macro step per
 /// model at a time — the worker owns one `SimulationSession` per entity).
@@ -3227,10 +3465,11 @@ pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bo
 /// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    time: Res<Time<Fixed>>,
+    mut fixed_time: ResMut<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
     mut lag: ResMut<CosimLag>,
-    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
+    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
@@ -3239,15 +3478,40 @@ pub fn spawn_modelica_requests(
     // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
     // show up as MORE fixed ticks, never as a longer one, so accumulating it
     // per tick is exactly "one tick of world time".
-    let fixed_dt = time.delta_secs_f64();
+    let fixed_dt = fixed_time.delta_secs_f64();
 
     let mut worst_secs = 0.0_f64;
     let mut worst_entity = None;
     let mut live_models = 0usize;
+    let mut shared_clock_models = 0usize;
     let mut coupling_held = false;
     let mut faults = faults;
 
     for (entity, mut model) in q_models.iter_mut() {
+        let shared_clock_participant = participants
+            .as_deref()
+            .is_none_or(|participants| participants.requires_barrier(entity));
+
+        if let Err(error) = model.validated_communication_period_secs() {
+            let first_report = model.last_error.as_deref() != Some(error.as_str());
+            model.paused = true;
+            model.is_compiled = false;
+            model.is_stepping = false;
+            model.last_error = Some(error.clone());
+            if first_report {
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "invalid-modelica-communication-period",
+                        Some(entity),
+                        model.model_name.clone(),
+                        error.clone(),
+                    );
+                }
+                error!("[modelica] {error} for `{}`", model.model_name);
+            }
+            continue;
+        }
+
         if model.paused {
             // A paused model's clock is frozen WITH the world's: the target does
             // not advance, so unpausing does not trigger a catch-up burst for
@@ -3287,14 +3551,22 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
-        // A live Modelica step is the communication barrier for the next
-        // physics step. Do not advance target_time while the worker is busy:
-        // accumulating debt here was the source of the unbounded stale-force
-        // condition reported by the episode recording. Physics remains held
-        // until this result lands, so one slow worker step costs wall time but
-        // never turns into a multi-tick extrapolation.
+        // A live Modelica step is a barrier only when the resolved topology says
+        // this participant can affect shared state. A telemetry/electrical
+        // participant still owns an explicit communication schedule and may be
+        // in flight, but its zero-order-held outputs must not stop Avian or the
+        // controllers. The unresolved topology state is fail-closed above.
         if model.is_stepping {
-            coupling_held = true;
+            if !shared_clock_participant {
+                // The world keeps advancing while this independent participant
+                // solves. Account for that world time instead of freezing its
+                // target clock at the dispatch instant; the next communication
+                // point then represents the actual shared-world timestamp.
+                model.target_time += fixed_dt;
+            } else {
+                coupling_held = true;
+                shared_clock_models += 1;
+            }
             live_models += 1;
             let lag_secs = (model.target_time - model.current_time).abs();
             if lag_secs > worst_secs {
@@ -3309,15 +3581,29 @@ pub fn spawn_modelica_requests(
 
         // ── Lag measurement (A3.2) ─────────────────────────────────────────
         live_models += 1;
+        if shared_clock_participant {
+            shared_clock_models += 1;
+        }
         let lag_secs = (model.target_time - model.current_time).abs();
         if lag_secs > worst_secs {
             worst_secs = lag_secs;
             worst_entity = Some(entity);
         }
 
-        // ── Macro step to the communication point (A3.1) ────────────────────
-        let Some(dt) = plan_macro_step(model.target_time, model.current_time, model.is_stepping)
+        // ── Macro step to the next declared communication point ─────────────
+        // The validation at the top of this iteration established the field's
+        // invariant. Read the authored value directly so a malformed value can
+        // never be converted into a different schedule here.
+        let period = model.communication_period_secs;
+        if model.target_time + COMMUNICATION_EPS < model.next_communication_time {
+            continue;
+        }
+        let Some(dt) = plan_macro_step(model.next_communication_time, model.current_time, false)
         else {
+            // The solver can land a tiny amount past a point because its
+            // micro-step ladder is discrete. Move the schedule to the next
+            // point instead of repeatedly dispatching a sub-micro-step.
+            model.next_communication_time = model.current_time + period;
             continue;
         };
 
@@ -3327,16 +3613,47 @@ pub fn spawn_modelica_requests(
             .map(|(name, val)| (name.clone(), *val))
             .collect();
 
+        let Some(next_step_id) = model.next_step_id.checked_add(1) else {
+            let error = format!(
+                "Modelica communication-point sequence exhausted for `{}`",
+                model.model_name
+            );
+            model.paused = true;
+            model.is_compiled = false;
+            model.last_error = Some(error.clone());
+            if let Some(faults) = faults.as_deref_mut() {
+                faults.raise(
+                    "modelica-step-sequence-exhausted",
+                    Some(entity),
+                    model.model_name.clone(),
+                    error,
+                );
+            }
+            continue;
+        };
+        let step_id = model.next_step_id;
+        let start_time = model.current_time;
+        let stop_time = model.next_communication_time;
+
         let sent = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
+            step_id,
+            start_time,
+            stop_time,
             model_name: model.model_name.clone(),
             inputs,
             dt,
         });
         if sent.is_ok() {
+            model.next_step_id = next_step_id;
+            model.in_flight_step = Some(InFlightModelicaStep {
+                step_id,
+                start_time,
+                stop_time,
+            });
             model.is_stepping = true;
-            coupling_held = true;
+            coupling_held |= shared_clock_participant;
         } else {
             model.paused = true;
             model.is_compiled = false;
@@ -3361,21 +3678,43 @@ pub fn spawn_modelica_requests(
     lag.models = live_models;
 
     if let Some(mut coupling) = coupling {
-        coupling.physics_held = coupling_held;
-        coupling.active_models = live_models;
+        if faults
+            .as_deref()
+            .is_some_and(lunco_core::RuntimeFaults::active)
+        {
+            coupling_held = true;
+        }
+        coupling.held = coupling_held;
+        coupling.active_participants = live_models;
+        coupling.shared_clock_participants = shared_clock_models;
         coupling.worst_lag_secs = worst_secs;
         coupling.worst_entity = worst_entity;
     }
 
-    // Rate-limited divergence alarm. A sustained lag means the forces avian is
-    // integrating come from a model state this far in the past — the coupling is
-    // no longer a co-simulation, it's an extrapolation.
+    if coupling_held {
+        // Bevy's fixed runner may have accumulated several fixed periods for
+        // this render frame before this first solver request was dispatched.
+        // The current fixed iteration is the only valid one; discard the
+        // remaining overstep so the runner cannot execute another tick after
+        // the barrier has been raised. `advance_world_clock` pauses the virtual
+        // clock before the next frame, which then keeps every FixedUpdate
+        // consumer (SimTick, Rhai, controllers, Modelica, and Avian) stopped
+        // until the result is released in Update.
+        lunco_time::discard_fixed_overstep(&mut fixed_time);
+    }
+
+    // Rate-limited divergence alarm. A coupled participant keeps the shared
+    // simulation held while it waits; an independent participant is allowed
+    // to finish asynchronously while its last validated output remains
+    // zero-order-held. The worker is asynchronous in wall-clock execution,
+    // never a second simulation-time authority.
     if lag.cooldown > 0 {
         lag.cooldown -= 1;
     } else if worst_secs > LAG_WARN_SECS {
         warn!(
-            "[cosim] Modelica coupling is waiting {:.3}s for the fixed-step result \
-             (entity {:?}, {} live model(s)); physics remains held until it lands.",
+            "[cosim] Modelica participant is {:.3}s behind its communication point \
+             (entity {:?}, {} live model(s)); causal membership determines \
+             whether the shared simulation waits for the result.",
             worst_secs, worst_entity, live_models,
         );
         lag.cooldown = LAG_WARN_COOLDOWN_TICKS;
@@ -3389,7 +3728,7 @@ pub fn spawn_modelica_requests(
 /// UI display. On `is_new_model`, clears old data and unpauses the simulation.
 pub fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    mut q_models: Query<&mut ModelicaModel>,
+    mut q_models: Query<(Entity, &mut ModelicaModel)>,
     // `workbench_state` was the home of `compilation_error` (B.3
     // phase 4, retired). Param kept in the signature in case other
     // worker paths need it; prefix `_` silences the unused warning.
@@ -3411,10 +3750,13 @@ pub fn handle_modelica_responses(
     mut sample_stream: ResMut<crate::SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-    coupling: Option<ResMut<lunco_core::RealtimeCoupling>>,
+    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let mut compile_states = compile_states;
     let mut source_roots = source_roots;
+    let mut faults = faults;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
@@ -3484,7 +3826,7 @@ pub fn handle_modelica_responses(
         }
 
         let lifecycle_result = result.is_new_model || result.is_parameter_update || result.is_reset;
-        if let Ok(mut model) = q_models.get_mut(result.entity) {
+        if let Ok((_, mut model)) = q_models.get_mut(result.entity) {
             // ALWAYS check session ID before resetting is_stepping
             // Stale results must NOT reset the flag.
             if result.session_id < model.session_id {
@@ -3495,6 +3837,92 @@ pub fn handle_modelica_responses(
                     );
                 }
                 continue;
+            }
+            if result.session_id > model.session_id {
+                let detail = format!(
+                    "Modelica worker returned future session {} for `{}` (current session {})",
+                    result.session_id, model.model_name, model.session_id
+                );
+                warn!("[Modelica] protocol violation: {detail}");
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "modelica-session-protocol-violation",
+                        Some(result.entity),
+                        model.model_name.clone(),
+                        detail.clone(),
+                    );
+                }
+                model.in_flight_step = None;
+                model.is_stepping = false;
+                model.paused = true;
+                model.is_compiled = false;
+                model.last_error = Some(detail);
+                continue;
+            }
+
+            // A plain result is a response to exactly one master-issued Step.
+            // Validate its sequence and communication point before clearing the
+            // in-flight flag or touching the model clock. This is the local
+            // equivalent of an FMI master's `doStep` transaction fence.
+            if !lifecycle_result {
+                let Some(in_flight) = model.in_flight_step else {
+                    let detail = format!(
+                        "Modelica worker returned step {} for `{}` without an in-flight request",
+                        result
+                            .step_id
+                            .map_or_else(|| "<missing>".to_string(), |id| id.to_string()),
+                        model.model_name
+                    );
+                    warn!("[Modelica] protocol violation: {detail}");
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "modelica-step-protocol-violation",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            detail.clone(),
+                        );
+                    }
+                    model.is_stepping = false;
+                    model.paused = true;
+                    model.is_compiled = false;
+                    model.last_error = Some(detail);
+                    continue;
+                };
+                let identity_matches = result.step_id == Some(in_flight.step_id);
+                let endpoint_matches = result.error.is_some()
+                    || (result.new_time.is_finite()
+                        && communication_times_close(result.new_time, in_flight.stop_time));
+                if !identity_matches || !endpoint_matches {
+                    let detail = format!(
+                        "Modelica worker returned invalid step transaction for `{}`: step_id={:?}, expected {}, new_time={:.12}, expected_stop={:.12}",
+                        model.model_name,
+                        result.step_id,
+                        in_flight.step_id,
+                        result.new_time,
+                        in_flight.stop_time,
+                    );
+                    warn!("[Modelica] protocol violation: {detail}");
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "modelica-step-protocol-violation",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            detail.clone(),
+                        );
+                    }
+                    model.in_flight_step = None;
+                    model.is_stepping = false;
+                    model.paused = true;
+                    model.is_compiled = false;
+                    model.last_error = Some(detail);
+                    continue;
+                }
+                model.in_flight_step = None;
+            } else {
+                // A lifecycle transition supersedes any older transaction only
+                // after its session has advanced. It starts a fresh sequence.
+                model.in_flight_step = None;
+                model.next_step_id = 1;
             }
 
             if lifecycle_result {
@@ -3629,6 +4057,23 @@ pub fn handle_modelica_responses(
                     level: crate::NoticeLevel::Error,
                     text: format!("[{}] {prefix}: {err}", model.model_name),
                 });
+                // A failed in-flight solver step has no valid replacement
+                // state. It is a terminal shared-simulation fault, not a
+                // reason to release the barrier and let Avian/Rhai continue
+                // against stale Modelica outputs. Compile/reset/parameter
+                // diagnostics remain scoped to their document lifecycle; only
+                // an error on an already-running step reaches this terminal
+                // runtime boundary.
+                if !lifecycle_result {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "modelica-step-failed",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            err.clone(),
+                        );
+                    }
+                }
                 model.paused = true;
                 // A failed Compile/Step must not silently auto-play on a
                 // later, unrelated successful compile: clear the resume
@@ -3698,6 +4143,7 @@ pub fn handle_modelica_responses(
 
                 model.current_time = 0.0;
                 model.target_time = 0.0;
+                model.next_communication_time = 0.0;
                 model.last_step_time = 0.0;
 
                 info!(
@@ -3711,6 +4157,7 @@ pub fn handle_modelica_responses(
             } else if result.is_parameter_update {
                 model.current_time = 0.0;
                 model.target_time = 0.0;
+                model.next_communication_time = 0.0;
                 model.last_step_time = 0.0;
             } else if result.is_reset {
                 model.current_time = 0.0;
@@ -3718,6 +4165,7 @@ pub fn handle_modelica_responses(
                 // otherwise the fresh model would immediately owe the catch-up
                 // path every second the old one had run (A3).
                 model.target_time = 0.0;
+                model.next_communication_time = 0.0;
                 model.last_step_time = 0.0;
                 model.variables.clear();
                 // Preserve inputs and parameters
@@ -3739,6 +4187,19 @@ pub fn handle_modelica_responses(
             if result.error.is_none() && result.loaded_source_root_id.is_none() {
                 model.current_time = result.new_time;
                 model.last_step_time = result.new_time;
+                if let Err(error) = model.reset_communication_schedule() {
+                    model.paused = true;
+                    model.is_compiled = false;
+                    model.last_error = Some(error.clone());
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "invalid-modelica-communication-period",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            error,
+                        );
+                    }
+                }
             }
             let time_val = model.current_time;
 
@@ -3782,9 +4243,18 @@ pub fn handle_modelica_responses(
     // already observed this release, so the current physics step consumes only
     // the fresh output that just arrived.
     if let Some(mut coupling) = coupling {
-        coupling.physics_held = q_models
-            .iter()
-            .any(|model| !model.paused && model.is_compiled && model.is_stepping);
+        coupling.held = q_models.iter().any(|(entity, model)| {
+            let shared_clock_participant = participants
+                .as_deref()
+                .is_none_or(|participants| participants.requires_barrier(entity));
+            shared_clock_participant && !model.paused && model.is_compiled && model.is_stepping
+        });
+        if faults
+            .as_deref()
+            .is_some_and(lunco_core::RuntimeFaults::active)
+        {
+            coupling.held = true;
+        }
     }
 }
 
@@ -3958,6 +4428,9 @@ mod macro_step_tests {
         let step = |dt: f64| ModelicaCommand::Step {
             entity: e,
             session_id: 7,
+            step_id: 1,
+            start_time: 0.0,
+            stop_time: dt,
             model_name: "M".into(),
             inputs: Vec::new(),
             dt,
@@ -3978,6 +4451,66 @@ mod macro_step_tests {
             "UpdateParameters is an idempotent setpoint — it SHOULD squash"
         );
     }
+
+    #[test]
+    fn communication_schedule_default_is_valid_and_reanchors_exactly() {
+        let mut model = ModelicaModel::default();
+        model.current_time = 3.25;
+
+        assert_eq!(
+            model.validated_communication_period_secs().unwrap(),
+            DEFAULT_COMMUNICATION_PERIOD_SECS
+        );
+        model.reset_communication_schedule().unwrap();
+        assert_eq!(
+            model.next_communication_time,
+            3.25 + DEFAULT_COMMUNICATION_PERIOD_SECS
+        );
+    }
+
+    #[test]
+    fn invalid_authored_communication_schedule_is_not_defaulted() {
+        for invalid in [
+            f64::NAN,
+            f64::INFINITY,
+            0.0,
+            LIVE_MICRO_DT * 0.5,
+            LIVE_MICRO_DT,
+        ] {
+            let mut model = ModelicaModel {
+                communication_period_secs: invalid,
+                ..Default::default()
+            };
+
+            let error = model
+                .validated_communication_period_secs()
+                .expect_err("invalid authored schedule must be terminal");
+            assert!(error.contains("invalid Modelica communication period"));
+            assert!(model.reset_communication_schedule().is_err());
+            assert_eq!(
+                model.next_communication_time,
+                DEFAULT_COMMUNICATION_PERIOD_SECS
+            );
+        }
+    }
+
+    #[test]
+    fn communication_schedule_must_be_representable_and_bounded() {
+        assert!(validate_communication_period_secs(DEFAULT_COMMUNICATION_PERIOD_SECS).is_ok());
+        assert!(validate_communication_period_secs(lunco_core::SECS_PER_TICK).is_ok());
+        assert!(validate_communication_period_secs(3.0 * lunco_core::SECS_PER_TICK).is_ok());
+        assert!(validate_communication_period_secs(0.13).is_err());
+        assert!(validate_communication_period_secs(MAX_MACRO_STEP_DT + LIVE_MICRO_DT).is_err());
+    }
+
+    #[test]
+    fn communication_transaction_requires_matching_solver_endpoint() {
+        assert!(validate_step_request(0.1, 0.1, 0.2, 0.1).is_ok());
+        assert!(validate_step_request(0.1001, 0.1, 0.2, 0.1).is_err());
+        assert!(validate_step_request(0.1, 0.1, 0.2, 0.2).is_err());
+        assert!(validate_step_completion(0.2, 0.2).is_ok());
+        assert!(validate_step_completion(0.199, 0.2).is_err());
+    }
 }
 
 // ===========================================================================
@@ -3995,6 +4528,9 @@ mod lane_tests {
         ModelicaCommand::Step {
             entity: e,
             session_id: 1,
+            step_id: 1,
+            start_time: 0.0,
+            stop_time: 0.016,
             model_name: "M".into(),
             inputs: Vec::new(),
             dt: 0.016,

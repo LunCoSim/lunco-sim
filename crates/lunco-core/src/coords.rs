@@ -222,9 +222,7 @@ mod active_frame_pose_tests {
                 ChildOf(active),
             ))
             .id();
-        let entity = world
-            .spawn((Transform::default(), ChildOf(parent)))
-            .id();
+        let entity = world.spawn((Transform::default(), ChildOf(parent))).id();
         let desired = DVec3::new(125.0, -17.0, 40.0);
 
         let mut state: SystemState<(
@@ -233,19 +231,13 @@ mod active_frame_pose_tests {
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
         let (parents, grids, spatial) = state.get(&world).unwrap();
-        let (cell, local) = position_in_grid_to_parent_local(
-            entity,
-            desired,
-            active,
-            &parents,
-            &grids,
-            &spatial,
-        )
-        .expect("entity and active frame are connected");
+        let (cell, local) =
+            position_in_grid_to_parent_local(entity, desired, active, &parents, &grids, &spatial)
+                .expect("entity and active frame are connected");
 
         assert!(cell.is_none(), "plain parents do not invent BigSpace cells");
-        let expected = parent_rotation.inverse().as_dquat()
-            * (desired - DVec3::new(100.0, -20.0, 50.0));
+        let expected =
+            parent_rotation.inverse().as_dquat() * (desired - DVec3::new(100.0, -20.0, 50.0));
         assert!((local.as_dvec3() - expected).length() < 1.0e-5);
     }
 
@@ -257,14 +249,9 @@ mod active_frame_pose_tests {
             .id();
         let parent_rotation = Quat::from_rotation_y(0.8);
         let parent = world
-            .spawn((
-                Transform::from_rotation(parent_rotation),
-                ChildOf(active),
-            ))
+            .spawn((Transform::from_rotation(parent_rotation), ChildOf(active)))
             .id();
-        let entity = world
-            .spawn((Transform::default(), ChildOf(parent)))
-            .id();
+        let entity = world.spawn((Transform::default(), ChildOf(parent))).id();
         let desired = DQuat::from_rotation_x(-0.4);
 
         let mut state: SystemState<(
@@ -273,15 +260,9 @@ mod active_frame_pose_tests {
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
         let (parents, grids, spatial) = state.get(&world).unwrap();
-        let local = rotation_in_grid_to_parent_local(
-            entity,
-            desired,
-            active,
-            &parents,
-            &grids,
-            &spatial,
-        )
-        .expect("entity and active frame are connected");
+        let local =
+            rotation_in_grid_to_parent_local(entity, desired, active, &parents, &grids, &spatial)
+                .expect("entity and active frame are connected");
 
         let expected = (parent_rotation.inverse().as_dquat() * desired).normalize();
         assert!(

@@ -391,6 +391,10 @@ pub(crate) struct Ladder {
 #[derive(Resource, Default)]
 pub(crate) struct ShadowBudgetState {
     light_count: Option<usize>,
+    /// Number of currently enabled shadow casters. This changes when the
+    /// recovery ladder sheds maps and changes back when an explicit re-arm
+    /// restores them, even if the scene contains the same total lights.
+    enabled_caster_count: Option<usize>,
 }
 
 const FAILURE_QUIET_SECS: f64 = 0.5;
@@ -972,10 +976,24 @@ fn apply_integrated_shadow_budget(
     };
 
     let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
-    if light_count == 0 || state.light_count == Some(light_count) {
+    let enabled_caster_count = directionals
+        .iter()
+        .filter(|(_, light, _)| light.shadow_maps_enabled)
+        .count()
+        + points
+            .iter()
+            .filter(|(_, _, light)| light.shadow_maps_enabled)
+            .count()
+        + spots
+            .iter()
+            .filter(|(_, _, light)| light.shadow_maps_enabled)
+            .count();
+    if light_count == 0
+        || (state.light_count == Some(light_count)
+            && state.enabled_caster_count == Some(enabled_caster_count))
+    {
         return;
     }
-    state.light_count = Some(light_count);
 
     directional_shadow_map.size = directional_shadow_map
         .size
@@ -1074,6 +1092,19 @@ fn apply_integrated_shadow_budget(
             ),
         });
     }
+
+    // Cache the post-policy state, not the pre-policy observation. Otherwise a
+    // scene with five authored casters (four allowed) would cache `5`; an
+    // explicit re-arm would restore the fifth caster, still look like `5`, and
+    // incorrectly take the early-return path above. Recording the effective
+    // state makes a real re-arm visible without adding another ownership path.
+    let effective_enabled_caster_count = directional_entities
+        .len()
+        .min(INTEGRATED_DIRECTIONAL_CASTERS)
+        + point_entities.len().min(INTEGRATED_POINT_CASTERS)
+        + spot_entities.len().min(INTEGRATED_SPOT_CASTERS);
+    state.light_count = Some(light_count);
+    state.enabled_caster_count = Some(effective_enabled_caster_count);
 }
 
 /// Scene teardown is the explicit re-arm boundary for presentation recovery.
@@ -1086,13 +1117,35 @@ pub(crate) fn reset_render_recovery(
     mut budget: ResMut<ShadowBudgetState>,
     mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
+    mut directional_lights: Query<(
+        Entity,
+        &mut bevy::light::DirectionalLight,
+        &mut bevy::light::CascadeShadowConfig,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut point_lights: Query<(
+        Entity,
+        &mut bevy::light::PointLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut spot_lights: Query<(
+        Entity,
+        &mut bevy::light::SpotLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
 ) {
     if health.0.device_lost() {
         return;
     }
     health.0.reset_for_scene();
     *ladder = Ladder::default();
-    budget.light_count = None;
+    *budget = ShadowBudgetState::default();
+    restore_suppressed_shadow_maps(
+        &mut commands,
+        &mut directional_lights,
+        &mut point_lights,
+        &mut spot_lights,
+    );
     // The render schedule is gated by this extracted state, not by camera
     // activation.  Clearing only the ladder would leave a successfully
     // reloaded scene permanently headless after the previous scene gave up.
@@ -1331,6 +1384,15 @@ mod tests {
         world.insert_resource(RenderWarning {
             message: "test warning".into(),
         });
+        let light = world
+            .spawn((
+                bevy::light::PointLight {
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+                ShadowMapSuppressed { was_enabled: true },
+            ))
+            .id();
         let mut reset = Schedule::new(Update);
         reset.add_systems(reset_render_recovery);
         reset.run(&mut world);
@@ -1338,6 +1400,13 @@ mod tests {
         assert!(!health.presentation_stopped.load(Ordering::Relaxed));
         assert!(world.get_resource::<RenderGaveUp>().is_none());
         assert!(world.get_resource::<RenderWarning>().is_none());
+        assert!(
+            world
+                .get::<bevy::light::PointLight>(light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(world.get::<ShadowMapSuppressed>(light).is_none());
     }
 
     /// The original reason this module exists: a one-frame depth/color size skew
@@ -1425,6 +1494,59 @@ mod tests {
             .count();
         assert_eq!(enabled, INTEGRATED_POINT_CASTERS);
         assert!(app.world().get_resource::<RenderWarning>().is_some());
+    }
+
+    #[test]
+    fn integrated_shadow_budget_rechecks_when_a_caster_is_rearmed() {
+        let health = Arc::new(RenderHealth::default());
+        health.integrated_adapter.store(true, Ordering::Relaxed);
+
+        let mut app = App::new();
+        app.insert_resource(RenderHealthHandle(health));
+        app.init_resource::<ShadowBudgetState>();
+        app.init_resource::<bevy::light::DirectionalLightShadowMap>();
+        app.init_resource::<bevy::light::PointLightShadowMap>();
+        app.add_systems(PostUpdate, apply_integrated_shadow_budget);
+        app.world_mut().spawn((
+            bevy::camera::Camera3d::default(),
+            SceneCamera::default(),
+            GlobalTransform::default(),
+        ));
+        for index in 0..(INTEGRATED_POINT_CASTERS + 1) {
+            app.world_mut().spawn((
+                bevy::light::PointLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                GlobalTransform::from_xyz(index as f32, 0.0, 0.0),
+            ));
+        }
+
+        app.update();
+        let disabled = {
+            let mut query = app
+                .world_mut()
+                .query::<(Entity, &bevy::light::PointLight)>();
+            query
+                .iter(app.world())
+                .find_map(|(entity, light)| (!light.shadow_maps_enabled).then_some(entity))
+                .expect("budget must shed one caster")
+        };
+        app.world_mut()
+            .get_mut::<bevy::light::PointLight>(disabled)
+            .unwrap()
+            .shadow_maps_enabled = true;
+
+        app.update();
+
+        let enabled = {
+            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
+            query
+                .iter(app.world())
+                .filter(|light| light.shadow_maps_enabled)
+                .count()
+        };
+        assert_eq!(enabled, INTEGRATED_POINT_CASTERS);
     }
 
     /// The 339-fps null loop. Errors keep coming after the mitigation, so

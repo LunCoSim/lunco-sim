@@ -292,8 +292,9 @@ free:
    retained UI's invalidation boundary; do not introduce JSON hashing or a
    per-frame HTML rebuild.
 5. Mount optional surfaces lazily through visibility and gates. A hidden
-   surface marker may remain alive, but its HUI tree is not compiled until it
-   can be shown.
+   surface has no HUI presentation tree; when exposure returns, the runtime
+   creates a fresh root from the manifest so template-owned build state cannot
+   survive a hidden transition.
 6. Prefer CSS custom properties and text replacement over rebuilding the
    hierarchy. Use transitions sparingly and measure large animations.
 7. Profile the complete frame: runtime UI, egui, physics, terrain, and the

@@ -12,7 +12,7 @@
 //!   - [`SandboxCorePlugin`] — sim / physics / cosim / USD / networking / API.
 //!     Headless-safe, added unconditionally.
 //!   - [`ui::SandboxUiPlugin`] (`ui` feature) — egui workbench, picking, the
-//!     in-scene editor, materials, panels, fallback camera. Added only when
+//!     in-scene editor, materials, panels, and explicit camera controls. Added only when
 //!     running windowed.
 //!   - [`SandboxHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
 //!     cores a server needs in the UI plugin's place. Added only when headless.
@@ -64,42 +64,6 @@ pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
 /// Short source revision stamped into this build for diagnostics.
 pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
 
-/// The app-level raw-frame cap that protects the fixed loop from a render hitch.
-///
-/// `Time<Virtual>::max_delta` is applied before the transport rate, so a fixed
-/// 33 ms cap becomes a 264 ms fixed-time burst at 8x. A loaded rover scene can
-/// then spend the whole next frame draining that burst and never get back to
-/// rendering. Keep the normal 33 ms cap at low rates, but tighten the raw cap
-/// as the rate rises so one frame asks for at most this many fixed ticks.
-const BASE_VIRTUAL_MAX_DELTA: std::time::Duration = std::time::Duration::from_millis(33);
-const MAX_FIXED_STEPS_PER_FRAME: u32 = 16;
-
-fn fixed_step_raw_delta_limit(
-    rate: f64,
-    fixed_timestep: std::time::Duration,
-) -> std::time::Duration {
-    if !(rate > 0.0 && rate <= lunco_time::MAX_REALTIME_RATE) {
-        return BASE_VIRTUAL_MAX_DELTA;
-    }
-    let budget = fixed_timestep.mul_f64(MAX_FIXED_STEPS_PER_FRAME as f64 / rate);
-    budget.min(BASE_VIRTUAL_MAX_DELTA)
-}
-
-/// Keep Bevy's fixed-loop catch-up bounded when the user selects a realtime
-/// transport rate. The transport still owns the requested rate and runs at the
-/// full rate while frames fit inside the budget; a genuinely overloaded frame
-/// drops excess virtual time through Bevy's normal `max_delta` semantics instead
-/// of recursively scheduling larger fixed bursts until the window freezes.
-fn limit_fixed_step_burst(
-    transport: Res<lunco_time::TimeTransport>,
-    fixed: Res<Time<Fixed>>,
-    mut virtual_time: ResMut<Time<Virtual>>,
-) {
-    let limit = fixed_step_raw_delta_limit(transport.rate, fixed.timestep());
-    if virtual_time.max_delta() != limit {
-        virtual_time.set_max_delta(limit);
-    }
-}
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
@@ -277,28 +241,38 @@ mod startup_scene_tests {
 
 #[cfg(test)]
 mod fixed_step_budget_tests {
-    use super::{fixed_step_raw_delta_limit, BASE_VIRTUAL_MAX_DELTA, MAX_FIXED_STEPS_PER_FRAME};
     use std::time::Duration;
 
     #[test]
     fn low_rates_keep_the_normal_virtual_delta_cap() {
         assert_eq!(
-            fixed_step_raw_delta_limit(1.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(1.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
         assert_eq!(
-            fixed_step_raw_delta_limit(4.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(4.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
     }
 
     #[test]
     fn eight_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
         let fixed = Duration::from_secs_f64(1.0 / 60.0);
-        let limit = fixed_step_raw_delta_limit(8.0, fixed);
+        let limit = lunco_time::fixed_step_raw_delta_limit(8.0, fixed);
         let requested_fixed = limit.as_secs_f64() * 8.0 / fixed.as_secs_f64();
         assert!(
-            requested_fixed <= MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            requested_fixed <= lunco_time::MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
+            "raw cap requests {requested_fixed} fixed ticks"
+        );
+    }
+
+    #[test]
+    fn sixteen_x_is_bounded_to_sixteen_fixed_ticks_per_raw_frame() {
+        let fixed = Duration::from_secs_f64(1.0 / 60.0);
+        let limit = lunco_time::fixed_step_raw_delta_limit(16.0, fixed);
+        let requested_fixed = limit.as_secs_f64() * 16.0 / fixed.as_secs_f64();
+        assert!(
+            requested_fixed <= lunco_time::MAX_FIXED_STEPS_PER_FRAME as f64 + 1e-9,
             "raw cap requests {requested_fixed} fixed ticks"
         );
     }
@@ -306,8 +280,8 @@ mod fixed_step_budget_tests {
     #[test]
     fn kinematic_warp_restores_the_normal_raw_cap() {
         assert_eq!(
-            fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
-            BASE_VIRTUAL_MAX_DELTA
+            lunco_time::fixed_step_raw_delta_limit(100.0, Duration::from_secs_f64(1.0 / 60.0)),
+            lunco_time::BASE_VIRTUAL_MAX_DELTA
         );
     }
 }
@@ -412,6 +386,11 @@ PERFORMANCE:
                          HDR, bloom and MSAA. Startup-only; restart to change it.
         --no-vsync       Uncap the frame rate (present without vsync).
         --no-throttle    Keep running at full rate while unfocused.
+        --headless-max-speed
+                         With --no-ui, run the fixed simulation lattice as fast
+                         as CPU and causal participants permit. This changes
+                         wall-clock execution only; it does not fake a transport
+                         rate or bypass the co-simulation barrier.
         --log-diag       Log FPS / frame-time / physics diagnostics.
 
 SUBCOMMAND:
@@ -451,9 +430,16 @@ fn print_help_if_requested() -> bool {
 /// Printed with `println!` rather than `info!` because it must survive `RUST_LOG`
 /// filtering and precede `LogPlugin` — a build identity that a log level can suppress is
 /// exactly as useless as none.
-fn log_build_identity(headless: bool, offscreen: bool) {
+fn log_build_identity(
+    headless: bool,
+    offscreen: bool,
+    execution_mode: lunco_core::SimulationExecutionMode,
+) {
     let mode = if headless {
-        "headless"
+        match execution_mode {
+            lunco_core::SimulationExecutionMode::Realtime => "headless",
+            lunco_core::SimulationExecutionMode::MaxSpeed => "headless-max-speed",
+        }
     } else if offscreen {
         "offscreen"
     } else {
@@ -483,6 +469,18 @@ fn run_with_mode(headless: bool) -> AppExit {
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
     let args: Vec<String> = std::env::args().collect();
+    let max_speed_requested = args.iter().any(|arg| arg == "--headless-max-speed");
+    if max_speed_requested && !headless {
+        eprintln!(
+            "luncosim: --headless-max-speed requires --no-ui or the luncosim-server launcher"
+        );
+        return AppExit::error();
+    }
+    let execution_mode = if max_speed_requested {
+        lunco_core::SimulationExecutionMode::MaxSpeed
+    } else {
+        lunco_core::SimulationExecutionMode::Realtime
+    };
     let render_profile = match parse_render_profile(&args) {
         Ok(profile) => profile,
         Err(error) => {
@@ -498,7 +496,7 @@ fn run_with_mode(headless: bool) -> AppExit {
             return AppExit::error();
         }
     };
-    log_build_identity(headless, offscreen);
+    log_build_identity(headless, offscreen, execution_mode);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
     // point that runs LunCoSim — GUI `luncosim`, headless `luncosim-server` —
@@ -550,7 +548,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     }
 
     if headless {
-        app.add_plugins(SandboxHeadlessPlugin);
+        app.add_plugins(SandboxHeadlessPlugin { execution_mode });
     }
 
     // Return the AppExit so a non-zero exit (e.g. the startup-scene fail-loud
@@ -2478,17 +2476,7 @@ impl Plugin for SandboxCorePlugin {
         // custom Twin without copying it into assets/.
         let scene_path = startup_scene_arg(&args);
 
-        // Cap how much catchup `FixedUpdate` does after a slow frame. Default
-        // Bevy behaviour: a 50ms frame breeds 3 catch-up fixed ticks next frame,
-        // making that frame slow too — a self-feeding jitter cascade. The cap
-        // lives on `Time<Virtual>`; `Time<Fixed>` reads its delta from Virtual,
-        // so capping Virtual transitively caps fixed catchup. 33ms ≈ 2 ticks —
-        // residual real time is dropped instead of compounded.
-        let mut virtual_time = Time::<Virtual>::default();
-        virtual_time.set_max_delta(std::time::Duration::from_millis(33));
-
         app.insert_resource(ScenePath(scene_path))
-            .insert_resource(virtual_time)
             // Match the workbench theme's backdrop so the window's first-frame
             // clear lines up with egui's panel fill (no "left hairline" at panel
             // boundaries under non-integer DPRs). Harmless headless.
@@ -2564,14 +2552,6 @@ impl Plugin for SandboxCorePlugin {
             ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
-            // Bound rate-scaled FixedUpdate bursts before the next loop. At 8x
-            // the ordinary 33 ms raw cap requests ~16 fixed ticks; retain that
-            // complete 8x budget while preventing a slower hitch from queuing
-            // an unbounded catch-up burst.
-            .add_systems(
-                PreUpdate,
-                limit_fixed_step_burst.after(lunco_time::TimeSpineSet),
-            )
             .add_systems(
                 Update,
                 (
@@ -3479,6 +3459,7 @@ fn report_modelica_status(
     }
 }
 
+#[cfg(any(feature = "ui", test))]
 fn modelica_source_label(source_uri: &str, model_name: &str) -> String {
     source_uri
         .rsplit(['/', '\\'])
@@ -3826,10 +3807,35 @@ fn retarget_cameras_to_offscreen(
 /// which this mode skips along with the rest of the workbench. Every camera a
 /// scene brings spawns `is_active: false` by design (see the camera-ambiguity
 /// fix), so without this nothing renders and the recording is black frames.
-/// When NO camera is active, activate the first authored [`lunco_render::SceneCamera`]
-/// — the scene's own framing intent (e.g. the luncosim `WideShot`), and the same
-/// camera its cinematic paths drive. Scenes without an authored camera get a
-/// loud once-per-run warning rather than a silent black take.
+/// Offscreen recording has the same explicit camera contract as the windowed
+/// viewport. A path-driven camera, or an already active authored camera, may
+/// own the take. If neither is authored/active, all image cameras stay off and
+/// the once-per-run diagnostic explains the black recording; the recorder does
+/// not invent a primary camera by entity order.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn unique_offscreen_camera(
+    candidates: Vec<Entity>,
+    role: &str,
+    warned: &mut bool,
+    ambiguous: &mut bool,
+) -> Option<Entity> {
+    match candidates.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        _ => {
+            *ambiguous = true;
+            if !*warned {
+                *warned = true;
+                warn!(
+                    "[offscreen] {role} is ambiguous ({} authored image cameras); recording stays black until exactly one is selected",
+                    candidates.len()
+                );
+            }
+            None
+        }
+    }
+}
+
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn activate_offscreen_camera(
     mut cameras: Query<(
@@ -3844,11 +3850,9 @@ fn activate_offscreen_camera(
     mut commands: Commands,
     mut warned: Local<bool>,
 ) {
-    // The capture target has one owner.  In particular, do not preserve an
-    // arbitrary active Camera3d: the provisional avatar camera is deliberately
-    // active while the USD scene is loading, but the authored SceneCamera is the
-    // camera that the recording path drives.  Preserving the provisional camera
-    // here makes the path update one camera while the recorder renders another.
+    // The capture target has one owner. Do not preserve an arbitrary active
+    // Camera3d: the authored presentation camera must be the camera the
+    // recording path drives.
     // That is the source of the sky-only first frame and the apparent sky/ground
     // flicker in the marketing take.
     //
@@ -3857,52 +3861,59 @@ fn activate_offscreen_camera(
     // USD scene was loading: the path writer and capture owner must be the same
     // entity or the take contains alternating views. This uses the existing
     // camera-role component, not an episode-specific camera name.
-    let active_path = cameras
-        .iter()
-        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
-            c.is_active
-                && *has_pipeline
-                && *has_scene
-                && *has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    let path_driven = cameras
-        .iter()
-        .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
-            *has_pipeline
-                && *has_scene
-                && *has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    // If no cinematic path owns the presentation, preserve an explicit active
-    // authored camera before falling back to the lowest authored candidate.
-    let active_authored = cameras
-        .iter()
-        .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
-            c.is_active
-                && *has_pipeline
-                && *has_scene
-                && !*has_path
-                && matches!(target, bevy::camera::RenderTarget::Image(_))
-        })
-        .map(|(entity, ..)| entity)
-        .min();
-    let selected = active_path.or(path_driven).or(active_authored).or_else(|| {
+    let mut ambiguous = false;
+    let active_path = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+                c.is_active
+                    && *has_pipeline
+                    && *has_scene
+                    && *has_path
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "active cinematic camera",
+        &mut warned,
+        &mut ambiguous,
+    );
+    let path_driven = unique_offscreen_camera(
         cameras
             .iter()
             .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
                 *has_pipeline
                     && *has_scene
+                    && *has_path
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "cinematic camera path",
+        &mut warned,
+        &mut ambiguous,
+    );
+    // If no cinematic path owns the presentation, preserve an explicit active
+    // authored camera. There is no entity-order fallback.
+    let active_authored = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+                c.is_active
+                    && *has_pipeline
+                    && *has_scene
                     && !*has_path
                     && matches!(target, bevy::camera::RenderTarget::Image(_))
             })
             .map(|(entity, ..)| entity)
-            .min()
-    });
+            .collect(),
+        "active authored camera",
+        &mut warned,
+        &mut ambiguous,
+    );
+    let selected = (!ambiguous)
+        .then(|| active_path.or(path_driven).or(active_authored))
+        .flatten();
 
     let mut has_image_camera = false;
     for (entity, mut camera, target, has_pipeline, has_scene, _has_path, has_lod_origin) in
@@ -3915,9 +3926,9 @@ fn activate_offscreen_camera(
         }
         has_image_camera = true;
 
-        // A non-SceneCamera image target is never a capture owner.  It is
+        // A non-SceneCamera image target is never a capture owner. It is
         // explicitly deactivated even when no authored camera exists yet, so
-        // a provisional camera cannot take over again on the next frame.
+        // an unrelated render camera cannot take over on the next frame.
         let keep = has_scene && Some(entity) == selected;
         if camera.is_active != keep {
             camera.is_active = keep;
@@ -3974,10 +3985,23 @@ fn parse_record_size() -> (u32, u32) {
     (1280, 720)
 }
 
-pub struct SandboxHeadlessPlugin;
+pub struct SandboxHeadlessPlugin {
+    /// Host execution policy. Max-speed mode uses an explicit fixed duration
+    /// and a zero-wait runner; realtime mode remains wall-clock paced.
+    pub execution_mode: lunco_core::SimulationExecutionMode,
+}
+
+impl Default for SandboxHeadlessPlugin {
+    fn default() -> Self {
+        Self {
+            execution_mode: lunco_core::SimulationExecutionMode::Realtime,
+        }
+    }
+}
 
 impl Plugin for SandboxHeadlessPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(self.execution_mode);
         // A scenario's presentation intents remain valid in a headless run, but
         // there is deliberately no workbench/HUD to receive them. Acknowledge
         // the explicit presentation surface as no-ops so one scenario works in
@@ -4017,14 +4041,27 @@ impl Plugin for SandboxHeadlessPlugin {
         // the authoritative server can't simulate or replicate a drivable rover.
         app.insert_resource(lunco_usd::NoRenderVisuals);
 
-        // No winit event loop drives updates headless, so install a runner that
-        // ticks the app at the sim's fixed rate. (Windowed builds are paced by
-        // winit / vsync.)
-        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
-        ));
+        // No winit event loop drives updates headless. Realtime mode uses the
+        // fixed cadence as the server's wall-clock pacing; max-speed mode feeds
+        // one fixed duration per update and removes the wait entirely. Both
+        // modes still execute the same schedules and the same causal barrier.
+        let wait = match self.execution_mode {
+            lunco_core::SimulationExecutionMode::Realtime => {
+                std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ)
+            }
+            lunco_core::SimulationExecutionMode::MaxSpeed => {
+                app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_secs_f64(lunco_core::SECS_PER_TICK),
+                ));
+                std::time::Duration::ZERO
+            }
+        };
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(wait));
 
-        info!("[luncosim] running HEADLESS (--no-ui): no window/GPU/egui; local simulation only");
+        info!(
+            "[luncosim] running HEADLESS (--no-ui), execution={:?}: no window/GPU/egui; local simulation only",
+            self.execution_mode
+        );
     }
 }
 

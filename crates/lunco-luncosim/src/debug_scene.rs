@@ -42,7 +42,7 @@
 //!    vsync, no realtime pacing).
 //!
 //!    This is *not* the same as asking the sim to warp. Realtime warp is capped
-//!    at `MAX_REALTIME_RATE = 8`; above that the physics tick FREEZES rather
+//!    at `MAX_REALTIME_RATE = 16`; above that the physics tick FREEZES rather
 //!    than going faster. Manual stepping sidesteps the rate limiter entirely
 //!    because there is no "realtime" to be a multiple of.
 //!
@@ -707,7 +707,7 @@ pub fn run() -> u8 {
     // the ONLY divergence from `build_sim_app` is the compute-pool override below.
     let mut app =
         crate::build_sim_app_with_threads(true, false, (cli.threads > 0).then_some(cli.threads));
-    app.add_plugins(SandboxHeadlessPlugin);
+    app.add_plugins(SandboxHeadlessPlugin::default());
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //

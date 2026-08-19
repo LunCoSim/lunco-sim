@@ -370,8 +370,9 @@ pub fn refresh_dome_entity(
 /// `Skybox` and `EnvironmentMapLight` are *view* components in Bevy — they live
 /// on the camera, not on the light entity — so a dome prim can't simply carry
 /// them. Cameras also spawn late and often here (viewport switches, rover
-/// mounts, the avatar's provisional camera), which is why this reconciles every
-/// frame from current world state instead of firing once on `Add`.
+/// mounts, authored or explicitly host-created avatar cameras), which is why
+/// this reconciles every frame from current world state instead of firing once
+/// on `Add`.
 fn bind_dome_to_cameras(
     mut commands: Commands,
     domes: Query<(&UsdDomeEnvironment, &DomeCubemap, Option<&GlobalTransform>)>,

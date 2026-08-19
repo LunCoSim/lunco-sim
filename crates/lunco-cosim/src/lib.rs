@@ -94,6 +94,12 @@ fn endpoint_pending_on_add<T: Component>(
     revision.request();
 }
 
+fn mark_causal_state_sink<T: Component>(trigger: On<Add, T>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_core::CausalStateSink);
+}
+
 /// Publish Modelica endpoint transitions before the end-of-frame binding
 /// transaction. This is exclusive so a terminal compiler result is visible in
 /// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
@@ -193,7 +199,12 @@ impl Plugin for CoSimPlugin {
             .add_observer(endpoint_ready_on_add::<TorqueActuator>)
             .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
-            .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>);
+            .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>)
+            .add_observer(mark_causal_state_sink::<avian3d::prelude::RigidBody>)
+            .add_observer(mark_causal_state_sink::<avian3d::prelude::RevoluteJoint>)
+            .add_observer(mark_causal_state_sink::<avian3d::prelude::PrismaticJoint>)
+            .add_observer(mark_causal_state_sink::<ForceActuator>)
+            .add_observer(mark_causal_state_sink::<TorqueActuator>);
         app.add_systems(
             Update,
             sync_model_endpoint_lifecycle

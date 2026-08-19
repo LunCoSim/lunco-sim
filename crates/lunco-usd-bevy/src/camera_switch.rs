@@ -11,20 +11,24 @@
 //!
 //! This lives in `lunco-usd-bevy` (avatar-free, present in every windowed
 //! binary) so switching works in a static/headless world with no avatar and no
-//! input. A *switchable* camera is any [`SceneCamera`] with a window
-//! [`RenderTarget`]: every USD `def Camera`, plus whatever free/avatar camera a
-//! host adds. RTT (`Image`-target) cameras and the egui `Camera2d` are never
-//! touched.
+//! input. Camera selection is an intent-level operation: a [`SceneCamera`] can
+//! be selected before a render host has attached its [`RenderTarget`] (as in a
+//! headless run or during projection). The renderer later binds only window
+//! targets. RTT (`Image`-target) cameras and the egui `Camera2d` are never
+//! selected for the main viewport.
 //!
 //! Switch surfaces, one mechanism — all funnel through [`ActivateCamera`] →
 //! rebind [`SceneViewport::active_camera`](lunco_core::SceneViewport):
-//! - [`SetActiveCamera`] — command (API + rhai `set_camera("Name")`);
+//! - [`SetActiveCamera`] — director command (API + rhai `set_camera("Name")`);
+//! - [`SetUserCamera`] — explicit operator selection;
+//! - [`ObserveAvatar`] / [`ResumeCameraDirector`] — explicit presentation-mode
+//!   transitions;
 //! - the `KeyC` hotkey ([`cycle_active_camera`]) when a host runs with input.
 
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};
-use lunco_core::{on_command, Command, LocalAvatar, SceneViewport};
+use lunco_core::{on_command, Command, LocalAvatar, SceneViewport, TheLocalAvatar};
 use lunco_render::SceneCamera;
 
 use crate::UsdPrimPath;
@@ -33,13 +37,62 @@ use crate::UsdPrimPath;
 /// an authored camera is identified by the composed stage plus its USD path.
 #[derive(Resource, Default)]
 pub struct ViewportCameraSelection {
-    requested: Option<UsdCameraKey>,
+    requested: Option<RequestedCamera>,
+    owner: CameraSelectionOwner,
+    /// Incremented only when the operator explicitly returns control to the
+    /// authored director. Camera-track plans use it to re-emit their held cut
+    /// even when the held camera name did not change.
+    director_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RequestedCamera {
+    Authored(UsdCameraKey),
+    Entity(Entity),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UsdCameraKey {
     stage: AssetId<crate::UsdStageAsset>,
     path: String,
+}
+
+/// Who owns the current presentation selection.
+///
+/// This is deliberately separate from the selected entity. A scene can have
+/// an authored director cut and an operator can explicitly observe the avatar
+/// without either path silently taking the viewport back later.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CameraSelectionOwner {
+    #[default]
+    None,
+    Director,
+    User,
+}
+
+/// Change-gated view model for the Camera menu and no-camera presentation.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct CameraSelectionStatus {
+    /// Window-targeting USD cameras, sorted by display name.
+    pub cameras: Vec<String>,
+    pub active_name: Option<String>,
+    pub owner: CameraSelectionOwner,
+    pub avatar_available: bool,
+    pub director_available: bool,
+    /// A failed explicit request remains visible until the next successful
+    /// request or scene teardown. It is not converted into another camera.
+    pub last_error: Option<String>,
+}
+
+impl ViewportCameraSelection {
+    /// Revision observed by the authored camera-track sampler.
+    pub(crate) fn director_revision(&self) -> u64 {
+        self.director_revision
+    }
+
+    pub(crate) fn owner(&self) -> CameraSelectionOwner {
+        self.owner
+    }
 }
 
 /// Switch the viewport's active camera to the `SceneCamera` whose `Name` matches.
@@ -53,11 +106,72 @@ pub struct SetActiveCamera {
     pub name: String,
 }
 
+/// Explicit operator selection of a named authored camera.
+///
+/// Unlike [`SetActiveCamera`], this takes ownership from the authored director
+/// until [`ResumeCameraDirector`] is requested.
+#[Command(default)]
+pub struct SetUserCamera {
+    /// Camera name (full USD prim path or its leaf).
+    pub name: String,
+}
+
+/// Explicitly show the local avatar camera.
+#[Command(default)]
+pub struct ObserveAvatar {}
+
+/// Return presentation ownership to the authored camera director.
+#[Command(default)]
+pub struct ResumeCameraDirector {}
+
 /// Internal trigger: bind `.0` as the viewport's active camera. Both the
 /// name-based command and the cycle hotkey resolve to an entity and fire this,
 /// so the binding is written in exactly one observer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraActivationSource {
+    Director,
+    User,
+}
+
 #[derive(Event)]
-pub struct ActivateCamera(pub Entity);
+pub struct ActivateCamera {
+    pub target: Entity,
+    pub source: CameraActivationSource,
+}
+
+impl ActivateCamera {
+    pub fn director(target: Entity) -> Self {
+        Self {
+            target,
+            source: CameraActivationSource::Director,
+        }
+    }
+
+    pub fn user(target: Entity) -> Self {
+        Self {
+            target,
+            source: CameraActivationSource::User,
+        }
+    }
+}
+
+fn resolve_named_camera(
+    want: &str,
+    q_cams: &Query<(Entity, &Name), With<SceneCamera>>,
+) -> Option<Entity> {
+    q_cams.iter().find_map(|(entity, name)| {
+        let value = name.as_str();
+        (value == want || value.rsplit('/').next() == Some(want)).then_some(entity)
+    })
+}
+
+fn record_camera_error(status: &mut CameraSelectionStatus, message: String) {
+    status.last_error = Some(message);
+}
+
+fn is_window_render_target(target: &RenderTarget) -> bool {
+    matches!(target, RenderTarget::Window(_))
+}
 
 /// Command handler: resolve `SetActiveCamera.name` → a camera entity and fire
 /// [`ActivateCamera`]. Matches the full USD prim path *or* its leaf.
@@ -65,19 +179,120 @@ pub struct ActivateCamera(pub Entity);
 pub fn on_set_active_camera(
     trigger: On<SetActiveCamera>,
     q_cams: Query<(Entity, &Name), With<SceneCamera>>,
+    selection: Res<ViewportCameraSelection>,
+    mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
 ) {
-    let want = cmd.name.trim();
-    let hit = q_cams.iter().find(|(_, n)| {
-        let s = n.as_str();
-        s == want || s.rsplit('/').next() == Some(want)
-    });
-    match hit {
-        Some((e, _)) => {
-            commands.trigger(ActivateCamera(e));
-        }
-        None => warn!("[camera] SetActiveCamera: no camera named '{want}'"),
+    if selection.owner() == CameraSelectionOwner::User {
+        info!(
+            "[camera] director request held while operator owns the viewport; use ResumeCameraDirector to return control"
+        );
+        return;
     }
+    let want = trigger.event().name.trim();
+    match resolve_named_camera(want, &q_cams) {
+        Some(target) => commands.trigger(ActivateCamera::director(target)),
+        None => {
+            let message = format!("director camera '{want}' is not present in the scene");
+            record_camera_error(&mut status, message.clone());
+            warn!("[camera] {message}");
+        }
+    }
+}
+
+#[on_command(SetUserCamera)]
+pub fn on_set_user_camera(
+    trigger: On<SetUserCamera>,
+    q_cams: Query<(Entity, &Name), With<SceneCamera>>,
+    mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
+) {
+    let want = trigger.event().name.trim();
+    match resolve_named_camera(want, &q_cams) {
+        Some(target) => commands.trigger(ActivateCamera::user(target)),
+        None => {
+            let message = format!("operator camera '{want}' is not present in the scene");
+            record_camera_error(&mut status, message.clone());
+            warn!("[camera] {message}");
+        }
+    }
+}
+
+#[on_command(ObserveAvatar)]
+pub fn on_observe_avatar(_trigger: On<ObserveAvatar>, mut commands: Commands) {
+    commands.trigger(lunco_core::RequestLocalAvatarView);
+}
+
+/// Resolve the shared avatar-return intent. Avatar mechanics and the UI use
+/// this same path, so neither can clear the viewport and accidentally leave a
+/// director camera selected behind the scenes.
+pub fn on_request_local_avatar_view(
+    _trigger: On<lunco_core::RequestLocalAvatarView>,
+    local_avatar: Res<TheLocalAvatar>,
+    q_cameras: Query<(), With<SceneCamera>>,
+    mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
+) {
+    let target = local_avatar.0.filter(|entity| q_cameras.contains(*entity));
+    let Some(target) = target else {
+        let message = "the scene has no local avatar camera to observe".to_string();
+        record_camera_error(&mut status, message.clone());
+        warn!("[camera] {message}");
+        return;
+    };
+    commands.trigger(ActivateCamera::user(target));
+}
+
+/// Establish the authored avatar as the initial presentation view once it has
+/// been projected. Scene teardown intentionally clears the previous camera
+/// selection because its USD key belongs to the outgoing stage; the incoming
+/// avatar is the authored replacement for that default view.
+///
+/// This is change-gated rather than a reconciler fallback. An explicit
+/// director or operator request therefore remains authoritative, while a
+/// scene reload cannot leave the main viewport with no camera merely because
+/// the replacement avatar was spawned after teardown.
+pub fn request_initial_avatar_view(
+    q_avatar: Query<
+        (),
+        (
+            With<LocalAvatar>,
+            Or<(Added<LocalAvatar>, Added<SceneCamera>)>,
+        ),
+    >,
+    local_avatar: Res<TheLocalAvatar>,
+    selection: Res<ViewportCameraSelection>,
+    mut commands: Commands,
+) {
+    if selection.owner() != CameraSelectionOwner::None {
+        return;
+    }
+    if local_avatar
+        .0
+        .is_some_and(|avatar| q_avatar.contains(avatar))
+    {
+        commands.trigger(lunco_core::RequestLocalAvatarView);
+    }
+}
+
+#[on_command(ResumeCameraDirector)]
+pub fn on_resume_camera_director(
+    _trigger: On<ResumeCameraDirector>,
+    q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
+    mut selection: ResMut<ViewportCameraSelection>,
+    mut status: ResMut<CameraSelectionStatus>,
+) {
+    selection.owner = CameraSelectionOwner::Director;
+    selection.requested = None;
+    selection.director_revision = selection.director_revision.wrapping_add(1);
+    if q_tracks.is_empty() {
+        let message = "the scene has no authored CameraTrack to resume".to_string();
+        record_camera_error(&mut status, message.clone());
+        warn!("[camera] {message}");
+    } else {
+        status.last_error = None;
+    }
+    info!("[camera] presentation ownership → authored director");
 }
 
 /// `KeyC`: advance the viewport's active camera to the next window camera
@@ -112,7 +327,7 @@ pub fn cycle_active_camera(
 
     let mut cams: Vec<(Entity, &str)> = q_cams
         .iter()
-        .filter(|(_, target, _)| matches!(target, RenderTarget::Window(_)))
+        .filter(|(_, target, _)| is_window_render_target(target))
         .map(|(e, _, name)| (e, name.as_str()))
         .collect();
     if cams.len() < 2 {
@@ -124,7 +339,7 @@ pub fn cycle_active_camera(
         .and_then(|a| cams.iter().position(|(e, _)| *e == a))
         .unwrap_or(0);
     let next = cams[(cur + 1) % cams.len()].0;
-    commands.trigger(ActivateCamera(next));
+    commands.trigger(ActivateCamera::user(next));
 }
 
 /// Rebind the viewport's active camera. The reconciler actuates
@@ -132,44 +347,55 @@ pub fn cycle_active_camera(
 /// directly (single-writer discipline).
 pub fn on_activate_camera(
     trigger: On<ActivateCamera>,
-    q_cams: Query<(&RenderTarget, Option<&UsdPrimPath>), With<SceneCamera>>,
-    mut vp: ResMut<SceneViewport>,
+    q_cams: Query<(Option<&RenderTarget>, Option<&UsdPrimPath>), With<SceneCamera>>,
+    q_identity: Query<(Option<&Name>, Option<&UsdPrimPath>, Has<SceneCamera>)>,
     mut selection: ResMut<ViewportCameraSelection>,
+    mut status: ResMut<CameraSelectionStatus>,
 ) {
-    let target = trigger.event().0;
+    let event = trigger.event();
+    let target = event.target;
     match q_cams.get(target) {
-        Ok((RenderTarget::Window(_), path)) => {
-            vp.active_camera = Some(target);
-            selection.requested = path.map(|path| UsdCameraKey {
-                stage: path.stage_handle.id(),
-                path: path.path.clone(),
+        // SceneCamera is the render-free intent marker. A missing target is
+        // valid in --no-ui/headless runs and while the render host is still
+        // binding a projected camera; the reconciler will act when the
+        // window-targeted pipeline exists.
+        Ok((None, path)) | Ok((Some(RenderTarget::Window(_)), path)) => {
+            selection.requested = Some(match path {
+                Some(path) => RequestedCamera::Authored(UsdCameraKey {
+                    stage: path.stage_handle.id(),
+                    path: path.path.clone(),
+                }),
+                None => RequestedCamera::Entity(target),
             });
-            info!("[camera] viewport → {target:?}");
+            selection.owner = match event.source {
+                CameraActivationSource::Director => CameraSelectionOwner::Director,
+                CameraActivationSource::User => CameraSelectionOwner::User,
+            };
+            status.last_error = None;
+            info!(
+                "[camera] viewport → {target:?} (owner={:?})",
+                selection.owner
+            );
         }
-        Ok(_) => warn!("[camera] activate: {target:?} does not render to a window"),
-        Err(_) => warn!("[camera] activate: {target:?} is not a SceneCamera"),
-    }
-}
-
-/// The local-avatar camera claims the viewport when it appears.
-///
-/// The startup provisional camera and the USD-authored avatar takeover both add
-/// `LocalAvatar`; this makes whichever one exists the **default** view — a later
-/// `set_camera(...)` overrides it. It also ensures the player's eye wins over a
-/// non-avatar camera (e.g. a celestial observer) that happened to spawn first,
-/// which the reconciler's "keep a valid binding" rule wouldn't correct on its own.
-pub fn bind_avatar_camera_on_add(
-    add: On<Add, LocalAvatar>,
-    q: Query<&RenderTarget, With<SceneCamera>>,
-    mut vp: ResMut<SceneViewport>,
-    selection: Res<ViewportCameraSelection>,
-) {
-    if selection.requested.is_some() {
-        return;
-    }
-    let e = add.entity;
-    if let Ok(RenderTarget::Window(_)) = q.get(e) {
-        vp.active_camera = Some(e);
+        Ok((Some(_), _)) => {
+            let message = format!("camera {target:?} is not a window camera");
+            record_camera_error(&mut status, message.clone());
+            warn!("[camera] {message}");
+        }
+        Err(_) => {
+            let identity = q_identity
+                .get(target)
+                .ok()
+                .map(|(name, path, scene_camera)| {
+                    let name = name.map(Name::as_str).unwrap_or("unnamed");
+                    let path = path.map(|path| path.path.as_str()).unwrap_or("no USD path");
+                    format!("{name} ({path}, scene_camera={scene_camera})")
+                })
+                .unwrap_or_else(|| "entity no longer exists".to_string());
+            let message = format!("camera {target:?} ({identity}) is not a SceneCamera");
+            record_camera_error(&mut status, message.clone());
+            warn!("[camera] {message}");
+        }
     }
 }
 
@@ -181,10 +407,11 @@ pub fn bind_avatar_camera_on_add(
 /// Also relocates the big_space [`FloatingOrigin`] onto the active camera when
 /// it is grid-direct.
 ///
-/// Robust by construction: the binding is revalidated every frame and falls
-/// back to the local-avatar camera (else the lowest-entity window camera) when
-/// it's unset or stale — so async spawns and provisional→avatar takeover never
-/// leave zero or many active cameras.
+/// There is deliberately no implicit camera selection here. If the selection
+/// is absent, stale, or still waiting for its authored camera to finish
+/// projection, every window camera is inactive and the status view model says
+/// why. The only asynchronous behaviour is fulfilment of a previously explicit
+/// authored request after re-projection; it never chooses a different camera.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
     selection: Res<ViewportCameraSelection>,
@@ -199,12 +426,10 @@ pub fn reconcile_scene_viewport(
         ),
         With<SceneCamera>,
     >,
-    q_avatar_cam: Query<Entity, (With<SceneCamera>, With<LocalAvatar>)>,
     q_grids: Query<(), With<Grid>>,
     q_origins: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
 ) {
-    let is_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(_));
     // A camera is only ACTIVATABLE once its 3D pipeline (`Camera3d` → required
     // `Projection`) is bound by `lunco-render-bevy`. A `SceneCamera` spawns as a
     // bare `Camera` and gets that pipeline a frame or two later; if we activate it
@@ -231,38 +456,23 @@ pub fn reconcile_scene_viewport(
                        e: Entity|
      -> bool {
         q.get(e)
-            .is_ok_and(|(_, _, t, _, has_proj, _)| is_window(t) && has_proj)
+            .is_ok_and(|(_, _, t, _, has_proj, _)| is_window_render_target(t) && has_proj)
     };
 
-    // ── Resolve the bound camera (revalidate + default) ──────────────────
-    // Keep the binding if it still points at a window camera; else fall back
-    // to the local-avatar camera, else the lowest-entity window camera. This
-    // is what makes takeover + async spawn robust.
-    let requested = selection.requested.as_ref().and_then(|wanted| {
-        q_cams
-            .iter()
-            .find(|(_, _, _, _, _, path)| {
-                path.is_some_and(|path| {
-                    path.stage_handle.id() == wanted.stage && path.path == wanted.path
+    // ── Resolve only the explicit request ───────────────────────────────
+    let active = selection.requested.as_ref().and_then(|requested| {
+        let entity = match requested {
+            RequestedCamera::Entity(entity) => Some(*entity),
+            RequestedCamera::Authored(wanted) => q_cams
+                .iter()
+                .find(|(_, _, _, _, _, path)| {
+                    path.is_some_and(|path| {
+                        path.stage_handle.id() == wanted.stage && path.path == wanted.path
+                    })
                 })
-            })
-            .map(|(entity, _, _, _, _, _)| entity)
-            .filter(|entity| activatable(&q_cams, *entity))
-    });
-    let bound_valid = vp.active_camera.filter(|e| activatable(&q_cams, *e));
-    let active = requested.or(bound_valid).or_else(|| {
-        q_avatar_cam
-            .iter()
-            .find(|e| activatable(&q_cams, *e))
-            .or_else(|| {
-                let mut ws: Vec<Entity> = q_cams
-                    .iter()
-                    .filter(|(_, _, t, _, has_proj, _)| is_window(t) && *has_proj)
-                    .map(|(e, _, _, _, _, _)| e)
-                    .collect();
-                ws.sort();
-                ws.into_iter().next()
-            })
+                .map(|(entity, _, _, _, _, _)| entity),
+        }?;
+        activatable(&q_cams, entity).then_some(entity)
     });
     if vp.active_camera != active {
         vp.active_camera = active;
@@ -280,7 +490,7 @@ pub fn reconcile_scene_viewport(
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
     for (e, mut cam, target, _, _, _) in q_cams.iter_mut() {
-        if !is_window(target) {
+        if !is_window_render_target(target) {
             continue; // RTT/offscreen cameras are self-managed
         }
         // `active` is already Projection-gated, so a projectionless camera is
@@ -328,6 +538,53 @@ pub fn reconcile_scene_viewport(
     }
 }
 
+/// Rebuild the camera menu/no-camera view model from the live projection.
+/// This is the only world scan used by the menu; the menu itself reads this
+/// already-shaped resource and emits typed commands.
+pub fn update_camera_selection_status(
+    selection: Res<ViewportCameraSelection>,
+    vp: Res<SceneViewport>,
+    q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalAvatar>), With<SceneCamera>>,
+    q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
+    mut status: ResMut<CameraSelectionStatus>,
+) {
+    let mut cameras: Vec<(Entity, String, bool)> = q_cams
+        .iter()
+        .filter(|(_, _, target, _)| is_window_render_target(target))
+        .map(|(entity, name, _, avatar)| (entity, name.as_str().to_string(), avatar))
+        .collect();
+    cameras.sort_by(|a, b| a.1.cmp(&b.1));
+    let active_name = vp.active_camera.and_then(|active| {
+        cameras
+            .iter()
+            .find(|(entity, _, _)| *entity == active)
+            .map(|(_, name, _)| name.clone())
+    });
+    let next = CameraSelectionStatus {
+        cameras: cameras.iter().map(|(_, name, _)| name.clone()).collect(),
+        active_name,
+        owner: selection.owner,
+        avatar_available: cameras.iter().any(|(_, _, avatar)| *avatar),
+        director_available: !q_tracks.is_empty(),
+        last_error: status.last_error.clone(),
+    };
+    if *status != next {
+        *status = next;
+    }
+}
+
+/// Scene teardown is the ownership boundary for camera selection. A stale
+/// authored key must not select a camera from the next scene.
+pub fn reset_camera_selection(
+    mut selection: ResMut<ViewportCameraSelection>,
+    mut viewport: ResMut<SceneViewport>,
+    mut status: ResMut<CameraSelectionStatus>,
+) {
+    *selection = ViewportCameraSelection::default();
+    viewport.active_camera = None;
+    *status = CameraSelectionStatus::default();
+}
+
 /// Final guard for the window render target. Scene-camera reconciliation owns
 /// the intended camera, but a stale render pipeline can outlive its
 /// `SceneCamera` marker for one deferred-command boundary during scene reload.
@@ -342,17 +599,15 @@ pub(crate) fn enforce_one_window_camera(
         Has<Camera3d>,
     )>,
 ) {
-    let Some(active) = vp.active_camera else {
-        return;
-    };
+    let active = vp.active_camera;
     for (entity, mut camera, target, _scene_camera, has_pipeline) in &mut cameras {
-        if !matches!(target, RenderTarget::Window(_)) || !has_pipeline {
+        if !is_window_render_target(target) || !has_pipeline {
             continue;
         }
         // The active entity is filtered by the reconciler to a window camera
         // with a complete 3D pipeline. Every other window Camera3d is off,
         // including an orphan whose SceneCamera marker was just removed.
-        camera.is_active = entity == active;
+        camera.is_active = Some(entity) == active;
     }
 }
 
@@ -401,6 +656,9 @@ mod tests {
         app.world_mut()
             .resource_mut::<SceneViewport>()
             .active_camera = Some(b);
+        app.world_mut()
+            .resource_mut::<ViewportCameraSelection>()
+            .requested = Some(RequestedCamera::Entity(b));
 
         app.update();
 
@@ -426,6 +684,9 @@ mod tests {
             vp.active_camera = Some(b);
             vp.visible = false;
         }
+        app.world_mut()
+            .resource_mut::<ViewportCameraSelection>()
+            .requested = Some(RequestedCamera::Entity(b));
 
         app.update();
 
@@ -461,10 +722,10 @@ mod tests {
             .id();
         {
             let mut selection = app.world_mut().resource_mut::<ViewportCameraSelection>();
-            selection.requested = Some(UsdCameraKey {
+            selection.requested = Some(RequestedCamera::Authored(UsdCameraKey {
                 stage: stage.id(),
                 path: path.into(),
-            });
+            }));
         }
         app.world_mut().despawn(old);
         let replacement = app
@@ -486,5 +747,208 @@ mod tests {
             "the persistent USD key resolves to the reprojected entity"
         );
         assert_eq!(active_set(&mut app), vec![replacement]);
+    }
+
+    /// Selection is valid before the render host binds a target. This is the
+    /// normal representation of authored cameras in a headless simulation;
+    /// the render reconciler will consume the stable USD key if a window host
+    /// is present later.
+    #[test]
+    fn render_free_authored_camera_is_a_valid_selection_intent() {
+        let mut app = App::new();
+        app.init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera);
+        let stage = Handle::<crate::UsdStageAsset>::default();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                Name::new("Wide"),
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Scene/Wide".into(),
+                },
+            ))
+            .id();
+
+        app.world_mut().trigger(ActivateCamera::director(camera));
+
+        let selection = app.world().resource::<ViewportCameraSelection>();
+        assert_eq!(selection.owner, CameraSelectionOwner::Director);
+        assert_eq!(
+            selection.requested,
+            Some(RequestedCamera::Authored(UsdCameraKey {
+                stage: stage.id(),
+                path: "/Scene/Wide".into(),
+            }))
+        );
+        assert_eq!(
+            app.world().resource::<CameraSelectionStatus>().last_error,
+            None
+        );
+    }
+
+    #[test]
+    fn reconciler_does_not_select_a_camera_without_an_explicit_request() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .add_systems(Update, reconcile_scene_viewport);
+        let _a = app.world_mut().spawn(window_cam(true, "A")).id();
+        let _b = app.world_mut().spawn(window_cam(true, "B")).id();
+
+        app.update();
+
+        assert!(
+            active_set(&mut app).is_empty(),
+            "a camera-less presentation must remain visibly camera-less"
+        );
+        assert_eq!(app.world().resource::<SceneViewport>().active_camera, None);
+    }
+
+    #[test]
+    fn projected_local_avatar_reestablishes_initial_view_after_selection_reset() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let avatar = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            None,
+            "camera binding is reconciler-owned and waits for the render host"
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::User
+        );
+        assert!(
+            app.world()
+                .resource::<ViewportCameraSelection>()
+                .requested
+                .as_ref()
+                .is_some_and(|requested| matches!(
+                    requested,
+                    RequestedCamera::Entity(entity) if *entity == avatar
+                )),
+            "the incoming avatar must publish the existing selection intent"
+        );
+    }
+
+    #[test]
+    fn initial_avatar_view_does_not_override_explicit_director_selection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let director = app
+            .world_mut()
+            .spawn((SceneCamera::default(), Name::new("Director")))
+            .id();
+        app.world_mut().trigger(ActivateCamera::director(director));
+
+        let _ = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::Director
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(director))
+        );
+    }
+
+    #[test]
+    fn initial_avatar_view_waits_for_a_camera_added_after_the_avatar() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view)
+            .add_systems(Update, request_initial_avatar_view);
+
+        let avatar = app.world_mut().spawn(LocalAvatar).id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::None,
+            "the intent must wait until the avatar has a usable scene camera"
+        );
+
+        app.world_mut()
+            .entity_mut(avatar)
+            .insert(SceneCamera::default());
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().owner,
+            CameraSelectionOwner::User
+        );
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(avatar))
+        );
+    }
+
+    #[test]
+    fn avatar_view_request_uses_newest_claim_during_deferred_demotion() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<TheLocalAvatar>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_observer(on_request_local_avatar_view);
+
+        let old = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+        let new = app
+            .world_mut()
+            .spawn((SceneCamera::default(), LocalAvatar))
+            .id();
+
+        // The old role removal is deferred by the component hook, but the
+        // authoritative slot already names the newest claimant.
+        assert_eq!(app.world().resource::<TheLocalAvatar>().0, Some(new));
+        assert!(app.world().get::<SceneCamera>(old).is_some());
+        app.world_mut().trigger(lunco_core::RequestLocalAvatarView);
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<ViewportCameraSelection>().requested,
+            Some(RequestedCamera::Entity(new))
+        );
     }
 }

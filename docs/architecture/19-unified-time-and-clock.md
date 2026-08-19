@@ -88,8 +88,9 @@ single highest-value gap for a *lunar* sim.
 - avian `PhysicsPlugins::default()` (with `PhysicsInterpolationPlugin::interpolate_all()`,
   `SubstepCount(16)`) steps in `FixedPostUpdate`; pause = pause `Time<Virtual>`.
 - `Time<Real>` is **unused** anywhere in `crates/`.
-- `Time<Virtual>` is capped (`set_max_delta(33ms)`); `relative_speed` is set in exactly one
-  place (`luncosim/src/main.rs` slow-mo toggle) and **never** from warp.
+- `Time<Virtual>` is capped by the `lunco-time` fixed-step budget; both the cap and
+  `relative_speed` are projected by the time spine. UI/API callers only dispatch
+  `SetTimeTransport`; there is no second application-level rate path.
 
 ### 1f. Ephemeris engine (the good part)
 
@@ -310,35 +311,37 @@ whether it **integrates** and whether it **interacts**:
   *uniformly* (drives both `Time<Virtual>.relative_speed` **and** the tick), so physics + Modelica +
   epoch move together. Bounded by solver stability.
 
-  > **How Modelica actually keeps up** (finding `A3`, fixed 2026-07-12). A `rate` burst produces
-  > **more fixed ticks**, never longer ones, and the Modelica solver runs off-thread — so "moving
-  > together" cannot mean "one solver step per dispatch." It means the model's clock is driven to the
-  > fixed-step clock: `ModelicaModel.target_time` advances by exactly one `Time<Fixed>` delta per
-  > **unpaused fixed tick**, and each tick the master requests
-  > `dt = target_time − current_time` (clamped to `MAX_MACRO_STEP_DT`, then integrated as an integer
-  > ladder of `SECS_PER_TICK / 3` micro-steps). A model that misses ticks — worker busy, long compile,
-  > `rate = 10` — **catches the time up** instead of losing it.
+  > **How Modelica stays coherent** (the A3 refinement). A `rate` burst produces **more fixed ticks**,
+  > never longer ones, and the Modelica solver runs off-thread. Modelica is scheduled at its explicit
+  > `lunco:program:communicationPeriod` rather than once per render/fixed callback: inputs are sampled
+  > and outputs published at that point, with a declared zero-order hold between points. The default is
+  > 0.1 simulation seconds (10 Hz); a fixed-tick participant authors `1/60` explicitly.
+  > The worker is therefore asynchronous in wall-clock execution, while the shared simulation is
+  > synchronous at those communication points: `Time<Virtual>` is held until the result is consumed in
+  > `Update`. Rhai, controllers, connection propagation, Avian, and every other shared fixed-step
+  > participant see the same causal boundary.
   >
-  > **Model time is therefore a pure function of the fixed-step clock. It does not depend on the
-  > render frame rate, on GPU load, or on window focus.** It used to: the dispatcher skipped any tick
-  > with a step in flight and always sent `Time<Fixed>::delta`, so at most one macro step ran per
-  > RENDER FRAME — at 30 FPS the model ran at half speed, at `rate = 10` it ran 10× too slow, and the
-  > skipped time was gone for good.
+  > The requested `dt = communication_point − current_time` is clamped to `MAX_MACRO_STEP_DT`, then
+  > integrated as an integer ladder of `SECS_PER_TICK / 3` micro-steps. A slow worker costs wall time; it does not
+  > create an unbounded model-time debt or allow the world to run ahead on stale state. Any remaining
+  > same-frame fixed overstep is discarded when the barrier is raised.
   >
-  > The residual coupling delay (the model state is one in-flight macro step old) is **measured**, not
-  > assumed: `lunco_modelica::worker::CosimLag` records `|model_time − world_time|` every fixed tick
-  > and warns past 0.25 s.
+  > **Model time is therefore a pure function of admitted fixed ticks. It does not depend on render
+  > frame rate, GPU load, or window focus.** `CosimLag` records the communication gap and warns past
+  > 0.25 s. An independent model still uses this authoritative fixed simulation time and explicit
+  > communication points; its worker may be in flight without holding the shared world because its
+  > outputs do not reach a state-writing sink. It is not a second clock and it is not silently
+  > extrapolated.
 - **`KinematicWarp`** — tick **freezes** (physics and Modelica pause); only **pure** consumers
   (ephemeris, spin, lighting, sidereal) advance, as pure functions of epoch. **A `rate` above
   `MAX_REALTIME_RATE` falls into this regime** (`lunco-time/src/lib.rs`).
 
-  > **Why `MAX_REALTIME_RATE` is `8.0`, not 100.** A rate is realised as *more fixed ticks per
-  > frame*. At rate 100, one hitched frame demands ~198 fixed steps (≈2376 avian substeps) in a
-  > single frame — which makes that frame slow, which demands the same burst again next frame. It
-  > is a guaranteed death spiral: the engine cannot integrate 100× realtime physics and trying is
-  > worse than declining. Above the cap the tick is frozen and only the pure, closed-form consumers
-  > advance, which they can do at any rate. **A scenario that used to ask for physics at 20× now
-  > warps instead.**
+  > **Why `MAX_REALTIME_RATE` is `16.0`, not 100.** A rate is realised as *more fixed ticks per
+  > frame*, while the single `lunco-time` budget caps a hitch at 16 fixed steps. A rate of 100
+  > would still demand roughly 198 steps from an uncapped 33 ms frame (and thousands of solver
+  > substeps), creating a death spiral. Above the cap the tick is frozen and only pure, closed-form
+  > consumers advance, which they can do at any rate. **A scenario that asks for physics above 16×
+  > therefore enters kinematic warp instead.**
 
 **Live world vs offline run** are *different axes*. The batch/interactive runner
 (`experiments_runner.rs:1184`) owns its own loop, decoupled from Bevy. It is **not** a transport
@@ -411,9 +414,9 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
 - **Swapped accumulation → derivation:** `lunco-celestial/src/clock.rs` no longer does
   `epoch += Δt`; the spine derives `epoch = epoch0 + (tick−tick0)/86400`.
 - **Unified the speed knobs:** `advance_world_clock` sets `Time<Virtual>.relative_speed` from
-  `rate`, so one knob drives epoch+physics together. The `luncosim` slow-mo toggle writes
-  `TimeTransport.rate` directly. The `paused → physics_enabled=true` inconsistency is gone (folded
-  into the regime: paused ⇒ not running ⇒ tick+physics frozen).
+  `rate`, so one knob drives epoch+physics together. The workbench/API/UI surfaces dispatch
+  `SetTimeTransport`; only the time spine writes Bevy's clock. The `paused → physics_enabled=true`
+  inconsistency is gone (folded into the regime: paused ⇒ not running ⇒ tick+physics frozen).
 - **`CelestialClock` removed.** Once T1 was complete, the struct (`lunco-core`) and the three
   bridge systems
   (`sync_transport_from_celestial`/`sync_celestial_from_world`/`get_default_celestial_clock`) are
@@ -726,7 +729,7 @@ recomputes a clock:
 PreUpdate
   TimeSpineSet          advance_world_clock        SimTick+TimeTransport → WorldTime, Time<Virtual>
                         resolve_clocks             walk the tree once → ResolvedClocks{ t, dt }   ← after the spine
-  ClockApplySet         apply_physics_clock        celestial/physics nodes → Time<Physics> (pause/scale)
+  ClockApplySet         apply_physics_gate        readiness/holds → Time<Physics> pause only
                         write_epoch_from_celestial WorldTime.epoch_jd ← celestial clock
   CelestialEpochSet     ephemeris → body rotation → site anchor        .after(TimeSpineSet)
 FixedUpdate             SimTick advance; avian solver                   (frozen ⇒ zero delta, never runs)
@@ -815,11 +818,11 @@ construction* rather than by a guard someone has to remember to write.
 **Why the sim keeps Bevy's cadence** (all three verified in the dependency sources, not assumed):
 
 1. **Rate is sub-stepping, and must be.** `sim_secs = tick × SECS_PER_TICK` — a tick is a *fixed
-   size*, so 8× means eight ticks per wall-frame, never one tick of 8× the `dt`. avian's
-   `Time<Physics>::relative_speed` does the latter: `run_physics_schedule` computes
-   `timestep = driving_schedule.delta × relative_speed` (`avian3d/schedule/mod.rs:242`) — a 133 ms
-   solver step at 8×, and it breaks the tick↔seconds invariant. "More fixed runs per frame" IS the
-   mechanism, and that is exactly what `Time<Virtual>`'s `relative_speed` buys.
+   size*, so 16× means sixteen ticks per wall-frame, never one tick of 16× the `dt`. Writing a
+   rate directly to avian's `Time<Physics>` would do the latter: `run_physics_schedule` computes
+   `timestep = driving_schedule.delta × relative_speed` (`avian3d/schedule/mod.rs:242`) — a long
+   solver step that breaks the tick↔seconds invariant. We do not use that path. "More fixed runs
+   per frame" is the mechanism, and `Time<Virtual>`'s single spine projection supplies it.
 2. **Netcode is keyed to it.** `SimTick` is *defined* as one tick per fixed step (`lunco-core`), and
    prediction/rollback/input-recording are built on that 1:1 — as is lightyear's own tick manager.
 3. **avian's smoothing is keyed to it.** `bevy_transform_interpolation` captures start/end in

@@ -566,23 +566,6 @@ pub struct FrameBlend {
 #[reflect(Component)]
 pub struct AdaptiveNearPlane;
 
-/// Marker for a **provisional** avatar camera — a stand-in spawned so the user
-/// always has a controllable view while a scene is still loading and hasn't yet
-/// authored its own Avatar camera.
-///
-/// It is *provisional* because the authored USD Avatar is the intended
-/// perspective and **takes over** as soon as it materialises (which, on a slow
-/// web/HTTP asset load, can be many seconds after the stand-in appeared). The
-/// USD-avatar takeover despawns every entity carrying this marker in the **same
-/// command flush** that installs the authored camera, so the provisional never
-/// coexists with the real one — two simultaneous order-0 window `Camera3d`s
-/// would otherwise produce camera-order ambiguity (double scene render) and a
-/// duplicate `GizmoCamera`. A scene that authors no Avatar keeps its provisional
-/// camera indefinitely: that is the legitimate permanent-fallback case.
-#[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component)]
-pub struct ProvisionalAvatarCamera;
-
 /// Marker component: camera/rover operates in surface-relative mode.
 ///
 /// When present, camera systems use `LocalGravityField.local_up` as "up"
@@ -828,7 +811,6 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<FreeFlightCamera>()
             .register_type::<FrameBlend>()
             .register_type::<AdaptiveNearPlane>()
-            .register_type::<ProvisionalAvatarCamera>()
             .register_type::<SurfaceRelativeMode>()
             .register_type::<SurfaceCamera>()
             .register_type::<SurfaceModeThreshold>()
@@ -1198,8 +1180,8 @@ pub fn spawn_avatar_camera(
 ///
 /// Losing [`LocalAvatar`] is the one signal, and `lunco_core`'s hook is what
 /// produces it — the moment a new claimant appears, the previous holder is
-/// demoted here, wherever either of them came from (a USD `Avatar` prim, the
-/// app's fallback free-flight camera, a scene recompose handing the prim a fresh
+/// demoted here, wherever either of them came from (a USD `Avatar` prim, an
+/// explicit host-created observation camera, or a scene recompose handing the prim a fresh
 /// entity). `lunco-usd-sim` used to do this itself, in a loop it ran only on the
 /// authored-prim path, which is why the other paths left a second live avatar:
 /// two `Camera3d`s rendering the same window (the viewport flickers between
@@ -1226,21 +1208,19 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
     // RETIRE IT FROM THE VIEWPORT POOL, not merely from the avatar role.
     //
     // `SceneCamera` is what makes an entity a viewport CANDIDATE: every query that
-    // can put a camera on screen filters on it — `reconcile_scene_viewport`'s
-    // actuation loop and its lowest-entity fallback, `cycle_active_camera` (KeyC),
-    // `activate_offscreen_camera`. Deactivating without removing it left the retired
-    // camera in that pool forever, so the app accumulated one stale candidate per
-    // scene load.
+    // can put a camera on screen filters on it — the explicit viewport reconciler,
+    // `cycle_active_camera` (KeyC), and offscreen capture. Deactivating without
+    // removing it left the retired camera in that pool forever, so the app
+    // accumulated one stale candidate per scene load.
     //
-    // That is the "two cameras" bug. The app's code-spawned fallback avatar camera
+    // That is the "two cameras" bug. An explicit host-created avatar camera
     // (`spawn_avatar_camera`) is NOT a USD prim, so a scene load's `despawn` sweep
     // never touches it; when the incoming scene authored its own `lunco:avatar`
     // camera, the old one was demoted but stayed eligible. It also has a LOWER entity
     // index than anything the new scene spawns, so the moment the binding went
     // momentarily invalid — which it does every load, because the new camera's
     // `Camera3d`/`Projection` is attached later by the deferred `SceneCamera` binder
-    // and the reconciler refuses to activate a projectionless camera — the fallback
-    // picked the STALE one and re-activated it, undoing this demotion.
+    // — the old camera could remain visible, undoing this demotion.
     //
     // `Camera`/`Camera3d` are deliberately left in place: stripping `Camera` from a
     // live, already-extracted window camera orphans its render-world view and crashes
@@ -3312,7 +3292,6 @@ fn on_return_from_orbit(
     mut commands: Commands,
     mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, &OrbitViewReturn), With<Avatar>>,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
-    mut viewport: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
     let avatar = trigger.event().target;
     let Ok((mut transform, mut cell, child_of, return_state)) = q_avatar.get_mut(avatar) else {
@@ -3337,9 +3316,7 @@ fn on_return_from_orbit(
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
-    if let Some(viewport) = viewport.as_mut() {
-        viewport.active_camera = None;
-    }
+    commands.trigger(lunco_core::RequestLocalAvatarView);
     info!("ORBITAL EXIT: restored exact pre-orbit camera transaction");
 }
 
@@ -3369,7 +3346,6 @@ fn on_release_command(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     gravity: Res<LocalGravityField>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
-    mut viewport: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
     // The stick goes back to the guidance law — publish it for the UI that
     // shows WHO is flying (the overlay's AUTO/MANUAL badge).
@@ -3518,19 +3494,10 @@ fn on_release_command(
             damping: None,
         });
     }
-    // Give the VIEWPORT back to the player's own eye.
-    //
-    // Cancel means "return me to myself". A cinematic/scenario that ran
-    // `set_camera("RoverCam")` leaves the viewport bound to a scene camera; the
-    // avatar camera keeps taking WASD but renders nothing, so releasing looks
-    // like a hard lock-up: the view never moves, and pressing Backspace again
-    // changes nothing (there is nothing left to release). Clearing the binding
-    // is enough — `reconcile_scene_viewport` revalidates every frame and falls
-    // back to the `LocalAvatar` camera, so this stays a single-writer change
-    // and needs no camera lookup here.
-    if let Some(vp) = viewport.as_mut() {
-        vp.active_camera = None;
-    }
+    // Give the viewport back to the player's own eye through the shared camera
+    // intent. The camera subsystem resolves the LocalAvatar and records this as
+    // an explicit user selection; it never falls through to another camera.
+    commands.trigger(lunco_core::RequestLocalAvatarView);
     info!(
         "Released possession → camera at local {:?} (surface={})",
         local_translation, is_surface
@@ -4874,6 +4841,10 @@ mod tests {
             direction.z < -0.5,
             "Q+W must retain forward travel at a pitched view, got {direction:?}"
         );
+        assert!(
+            direction.y < -0.5,
+            "Q+W must retain downward travel at a pitched view, got {direction:?}"
+        );
     }
 
     #[test]
@@ -5620,15 +5591,16 @@ mod tests {
     /// **A retired avatar camera must leave the viewport candidate pool.**
     ///
     /// Regression for the "two cameras / the view jumps between them" report. The
-    /// app's fallback avatar camera is spawned in code (`spawn_avatar_camera`), not
-    /// from a prim, so a scene load's despawn sweep never removes it. When the
+    /// An explicit host-created avatar camera can be spawned in code
+    /// (`spawn_avatar_camera`), not from a prim, so a scene load's despawn sweep
+    /// never removes it. When the
     /// incoming scene authors its own `lunco:avatar` camera, `LocalAvatar` moves
     /// (singular by construction) and this observer demotes the old one — but it used
     /// to leave `SceneCamera` on, and `SceneCamera` is exactly what every
     /// camera-selection query filters on. The stale camera stayed eligible, kept a
-    /// lower entity index than anything the new scene spawns, and got picked by
-    /// `reconcile_scene_viewport`'s lowest-entity fallback the moment the binding went
-    /// briefly invalid — which happens on every load, since the new camera's
+    /// lower entity index than anything the new scene spawns, and used to be picked by
+    /// implicit selection the moment the binding went briefly invalid — which happens
+    /// on every load, since the new camera's
     /// `Projection` arrives with a deferred `Camera3d`.
     ///
     /// `Camera` must SURVIVE: stripping it from a live extracted window camera
@@ -5650,7 +5622,7 @@ mod tests {
             .id();
         assert!(
             app.world().get::<lunco_render::SceneCamera>(old).is_some(),
-            "precondition: the fallback camera starts as a viewport candidate"
+            "precondition: the explicit host camera starts as a viewport candidate"
         );
 
         // The scene's own avatar camera arrives and claims the role. `lunco_core`'s
@@ -5673,8 +5645,8 @@ mod tests {
         );
         assert!(
             app.world().get::<lunco_render::SceneCamera>(old).is_none(),
-            "the retired camera must leave the viewport pool, or the reconciler's \
-             fallback can put it back on screen — the two-camera bug"
+            "the retired camera must leave the viewport pool, or implicit selection \
+             can put it back on screen — the two-camera bug"
         );
         assert!(
             app.world().get::<lunco_render::SceneCamera>(new).is_some(),

@@ -42,21 +42,15 @@ impl Panel for SpawnPalette {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let Some((mantle, tokens)) = ctx
+        let Some(tokens) = ctx
             .resource::<lunco_theme::Theme>()
-            .map(|theme| (theme.colors.mantle, theme.tokens.clone()))
+            .map(|theme| theme.tokens.clone())
         else {
             return;
         };
-        // Uses the workbench's shared mantle colour so the
-        // panel body matches the colour of its tab header.
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                spawn_palette_content(self, ui, ctx, &tokens);
-            });
+        ctx.panel_content_frame().show(ui, |ui| {
+            spawn_palette_content(self, ui, ctx, &tokens);
+        });
     }
 }
 

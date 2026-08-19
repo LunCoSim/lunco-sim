@@ -196,6 +196,17 @@ fn ensure_lunar_shadow_filtering(
 /// swept, and grew without bound).
 type PbrLookCache = look_cache::LookCache<PbrLook>;
 
+/// Records whether the material currently attached to a PBR look is private.
+///
+/// `PbrLook::unshared` can change after the initial USD projection (waypoint
+/// visit tinting is one such session-only change). Without this binding state,
+/// the first transition from a cached shared material to an unshared look would
+/// mutate the shared asset in place and recolour every entity using that handle.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct PbrLookBinding {
+    private: bool,
+}
+
 impl look_cache::CachedLook for PbrLook {
     type Key = PbrLookKey;
     type Material = StandardMaterial;
@@ -327,6 +338,9 @@ fn bind_pbr_look(
     // that into a formatted error through the command error handler every frame.
     ec.try_remove::<MeshMaterial3d<ShaderMaterial>>();
     ec.try_insert(MeshMaterial3d(handle));
+    ec.try_insert(PbrLookBinding {
+        private: look.unshared,
+    });
     if look.no_shadow_cast {
         ec.try_insert(NotShadowCaster);
     }
@@ -347,20 +361,41 @@ fn bind_pbr_look(
 /// `MeshMaterial3d<StandardMaterial>` alongside the shader material and the mesh
 /// draws twice.
 fn rebind_changed_pbr_look(
-    changed: Query<(Entity, &PbrLook, Option<&MeshMaterial3d<StandardMaterial>>), Changed<PbrLook>>,
+    changed: Query<
+        (
+            Entity,
+            &PbrLook,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+            Option<&PbrLookBinding>,
+        ),
+        Changed<PbrLook>,
+    >,
     profile: Res<RenderProfile>,
     mut cache: ResMut<PbrLookCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    for (e, look, current) in &changed {
+    for (e, look, current, binding) in &changed {
         if look.unshared {
-            // Private material: overwrite the asset it already owns.
-            if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
-                *existing = standard_material(look, *profile);
-                apply_shadow_flag(&mut commands, e, look);
-                continue;
+            if binding.is_some_and(|binding| binding.private) {
+                // Private material: overwrite the asset it already owns.
+                if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
+                    *existing = standard_material(look, *profile);
+                    apply_shadow_flag(&mut commands, e, look);
+                    continue;
+                }
             }
+            // The look just became unshared. Its current handle may still be a
+            // cache-owned shared material, so allocate a fresh private asset
+            // before any tint is applied. Mutating `current` here would recolour
+            // every entity that shares the original handle.
+            let handle = material_for(look, *profile, &mut cache, &mut materials);
+            commands
+                .entity(e)
+                .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+                .try_insert((MeshMaterial3d(handle), PbrLookBinding { private: true }));
+            apply_shadow_flag(&mut commands, e, look);
+            continue;
         }
         let handle = material_for(look, *profile, &mut cache, &mut materials);
         // `try_insert`, not `insert`. The USD projector's despawns can no longer
@@ -373,7 +408,7 @@ fn rebind_changed_pbr_look(
         commands
             .entity(e)
             .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-            .try_insert(MeshMaterial3d(handle));
+            .try_insert((MeshMaterial3d(handle), PbrLookBinding { private: false }));
         apply_shadow_flag(&mut commands, e, look);
     }
 }
@@ -443,6 +478,72 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
+    }
+
+    #[test]
+    fn shared_material_is_detached_before_an_unshared_tint() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .add_plugins(LuncoRenderPlugin);
+
+        let green = PbrLook::matte(LinearRgba::rgb(0.12, 0.72, 0.34));
+        let reached = app.world_mut().spawn(green.clone()).id();
+        let unreached = app.world_mut().spawn(green).id();
+        app.update();
+
+        let shared = app
+            .world()
+            .entity(reached)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .expect("initial PBR binding")
+            .0
+            .clone();
+        assert_eq!(
+            shared,
+            app.world()
+                .entity(unreached)
+                .get::<MeshMaterial3d<StandardMaterial>>()
+                .expect("second initial PBR binding")
+                .0
+        );
+
+        let mut tinted = app.world_mut().get_mut::<PbrLook>(reached).unwrap();
+        tinted.base_color = LinearRgba::rgb(0.38, 0.38, 0.38);
+        tinted.unshared = true;
+        app.update();
+
+        let reached_handle = app
+            .world()
+            .entity(reached)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .unwrap()
+            .0
+            .clone();
+        let unreached_handle = app
+            .world()
+            .entity(unreached)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .unwrap()
+            .0
+            .clone();
+        assert_ne!(reached_handle, unreached_handle);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&unreached_handle)
+                .unwrap()
+                .base_color,
+            Color::from(LinearRgba::rgb(0.12, 0.72, 0.34))
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&reached_handle)
+                .unwrap()
+                .base_color,
+            Color::from(LinearRgba::rgb(0.38, 0.38, 0.38))
+        );
     }
 
     /// `no_shadow_cast` must reach the render world as `NotShadowCaster` — the

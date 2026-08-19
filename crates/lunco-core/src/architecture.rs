@@ -346,6 +346,17 @@ pub struct Port {
     pub value: f64,
 }
 
+/// Marks an endpoint whose input changes authoritative simulated state.
+///
+/// Engine-owned backends add this marker to their actual state-writing
+/// endpoint (a rigid body, joint, force actuator, or a wheel command port).
+/// The co-simulation master uses it as a capability when deriving shared-clock
+/// causal participants; it does not infer coupling from connector names or
+/// solver types.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct CausalStateSink;
+
 /// Marks an entity whose dynamic scene-property port surface is now present.
 ///
 /// Some engine-owned backends are installed after the USD entity itself is

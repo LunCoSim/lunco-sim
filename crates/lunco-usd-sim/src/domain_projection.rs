@@ -1488,6 +1488,7 @@ pub fn project_domain_islands(
             model_name: compiled_name.clone(),
             parameters: interface.parameters,
             inputs: interface.inputs,
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             session_id,
             is_stepping: true,
             is_compiling: true,

@@ -533,13 +533,12 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
         assert!(tree.center_in_solar(Center::Ssb).is_none());
-        assert!(
-            tree.center_in_solar(Center::Site {
+        assert!(tree
+            .center_in_solar(Center::Site {
                 body: crate::ephemeris_id::MOON,
                 id: 7,
             })
-            .is_none()
-        );
+            .is_none());
     }
 
     #[test]
@@ -593,14 +592,12 @@ mod tests {
             "Mars is not in the stub"
         );
         // …and an L-point needs BOTH bodies: half a pair is not a point.
-        assert!(
-            tree.libration_in_solar(crate::ephemeris_id::EARTH, 499, LPoint::L1)
-                .is_none()
-        );
-        assert!(
-            tree.libration_in_solar(499, crate::ephemeris_id::MOON, LPoint::L2)
-                .is_none()
-        );
+        assert!(tree
+            .libration_in_solar(crate::ephemeris_id::EARTH, 499, LPoint::L1)
+            .is_none());
+        assert!(tree
+            .libration_in_solar(499, crate::ephemeris_id::MOON, LPoint::L2)
+            .is_none());
     }
 
     /// **Earth–Moon L1 sits between the two, ~61,300 km from the Moon.**

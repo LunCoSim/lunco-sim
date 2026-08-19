@@ -50,6 +50,16 @@ pub trait Perspective: Send + Sync + 'static {
     fn restores_cached_layout(&self) -> bool {
         true
     }
+
+    /// Revision of the authored default layout.
+    ///
+    /// Increment this when a perspective's canonical slot arrangement changes.
+    /// Persisted snapshots from an older revision are ignored once, allowing
+    /// the new default to take effect without disabling user layout persistence
+    /// after that first rebuild.
+    fn layout_revision(&self) -> u32 {
+        0
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -61,12 +71,22 @@ impl WorkbenchLayout {
     /// the side browser from the current workspace's preset.
     pub fn set_side_browser(&mut self, id: Option<PanelId>) {
         self.side_browser = id.into_iter().collect();
+        self.side_browser_bottom.clear();
         self.rebuild_dock();
     }
 
     /// Dock multiple panels in the side browser as tabs (in order).
     pub fn set_side_browser_tabs(&mut self, ids: Vec<PanelId>) {
         self.side_browser = ids;
+        self.side_browser_bottom.clear();
+        self.rebuild_dock();
+    }
+
+    /// Dock a top and optional bottom panel group in the side browser.
+    /// Panels within each group remain tabs; the two groups are stacked.
+    pub fn set_side_browser_stacked(&mut self, top: Vec<PanelId>, bottom: Vec<PanelId>) {
+        self.side_browser = top;
+        self.side_browser_bottom = bottom;
         self.rebuild_dock();
     }
 
@@ -109,12 +129,22 @@ impl WorkbenchLayout {
     /// Dock a single panel in the right inspector. `None` removes it.
     pub fn set_right_inspector(&mut self, id: Option<PanelId>) {
         self.right_inspector = id.into_iter().collect();
+        self.right_inspector_bottom.clear();
         self.rebuild_dock();
     }
 
     /// Dock multiple panels in the right inspector as tabs (in order).
     pub fn set_right_inspector_tabs(&mut self, ids: Vec<PanelId>) {
         self.right_inspector = ids;
+        self.right_inspector_bottom.clear();
+        self.rebuild_dock();
+    }
+
+    /// Dock a top and optional bottom panel group in the right inspector.
+    /// Panels within each group remain tabs; the two groups are stacked.
+    pub fn set_right_inspector_stacked(&mut self, top: Vec<PanelId>, bottom: Vec<PanelId>) {
+        self.right_inspector = top;
+        self.right_inspector_bottom = bottom;
         self.rebuild_dock();
     }
 

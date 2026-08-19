@@ -295,6 +295,30 @@ pub struct TerrainGenStatus {
 /// cancels the actual job and reports it, so the two stories agree.
 const GEN_STATUS_MAX_SECS: f32 = 60.0;
 
+/// Cancel generation owned by the scene being replaced. A build task and its
+/// status are scene state; allowing either to survive the teardown boundary
+/// makes the next scene inherit an old progress overlay (and, on native, keeps
+/// the worker future alive until its old entity is eventually removed).
+fn cancel_terrain_generation_on_scene_teardown(
+    mut commands: Commands,
+    requests: Query<
+        Entity,
+        Or<(
+            With<DemTerrainRequest>,
+            With<DemBuildTask>,
+            With<DemWorkerJob>,
+        )>,
+    >,
+    mut status: ResMut<TerrainGenStatus>,
+) {
+    for entity in &requests {
+        commands
+            .entity(entity)
+            .try_remove::<(DemTerrainRequest, DemBuildTask, DemWorkerJob)>();
+    }
+    *status = TerrainGenStatus::default();
+}
+
 /// Derive [`TerrainGenStatus`] from the terrain build components each frame. A
 /// tile is "generating" while it carries a [`DemTerrainRequest`] (queued or
 /// mid-native-bake) or a [`DemWorkerJob`] (web worker decode/stream, after the
@@ -2689,6 +2713,10 @@ pub(crate) fn register(app: &mut App) {
         .add_observer(on_remove_terrain_layer_dirty)
         .add_observer(on_obstacle_spec_dirty)
         .add_systems(
+            lunco_core::SceneTeardown,
+            cancel_terrain_generation_on_scene_teardown,
+        )
+        .add_systems(
             Update,
             (
                 start_dem_builds,
@@ -2738,5 +2766,40 @@ mod visual_product_tests {
     #[test]
     fn bounded_height_refresh_preserves_scatter_sink_offset() {
         assert_eq!(scatter_y_after_height_change(-0.25, 10.0, 12.5), 2.25);
+    }
+
+    #[test]
+    fn scene_teardown_cancels_generation_and_clears_status() {
+        let mut app = App::new();
+        app.init_resource::<TerrainGenStatus>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            cancel_terrain_generation_on_scene_teardown,
+        );
+        app.world_mut().resource_mut::<TerrainGenStatus>().active = true;
+        app.world_mut().resource_mut::<TerrainGenStatus>().site = "apollo15".into();
+        let entity = app
+            .world_mut()
+            .spawn(DemTerrainRequest {
+                uri: "terrain/apollo15".into(),
+                half_window: 10.0,
+                target_res: 0,
+                lod_viz: false,
+                collider_ring: false,
+                with_default_material: false,
+            })
+            .id();
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert!(app.world().get_entity(entity).is_ok());
+        assert!(app
+            .world()
+            .get_entity(entity)
+            .is_ok_and(|entity| !entity.contains::<DemTerrainRequest>()));
+        let status = app.world().resource::<TerrainGenStatus>();
+        assert!(!status.active);
+        assert!(status.site.is_empty());
+        assert!(!status.user_dismissed);
     }
 }

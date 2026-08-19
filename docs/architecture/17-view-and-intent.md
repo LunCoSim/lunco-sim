@@ -115,30 +115,38 @@ Omniverse Viewport, which owns an active `camera`):
 
 | Field | Meaning | Written by |
 | :--- | :--- | :--- |
-| `active_camera: Option<Entity>` | resolved camera entity that renders | reconciler |
+| `active_camera: Option<Entity>` | resolved camera entity that renders; `None` is an intentional no-camera state | `reconcile_scene_viewport` |
 | `visible: bool` | whether 3D renders at all | the workbench (layout perspective) |
 | `rect: Option<(UVec2, UVec2)>` | window sub-rect, or full-window | the workbench |
 
 An authored selection is retained as `(stage, USD prim path)` and re-resolved
-after re-projection; the ECS entity is only the current realization. Exactly
-**one** system writes window-camera `is_active` / `viewport`:
+after re-projection; the ECS entity is only the current realization. A command,
+camera track, or the authored local-avatar marker for an otherwise unclaimed
+scene changes the selection intent, while exactly **one** system writes
+`SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
 `lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
-(`is_active = bound-camera && visible`), relocates the big_space
-`FloatingOrigin` onto the active camera, and self-heals (revalidates the
-binding, defaulting to the local-avatar camera) so async spawns and
-provisional→avatar takeover never leave zero or many active cameras. **No other
-system touches `is_active`** — this is what eliminated the two-writer conflict
-that previously double-rendered and jammed camera switching (the workbench's
-`apply_workbench_viewport` used to force-activate every window camera).
+(`is_active = bound-camera && visible`) and relocates the big_space
+`FloatingOrigin` onto the active camera. A missing, stale, or projectionless
+explicit request produces no active camera and a visible status diagnostic; it
+never selects the first camera as a repair or silently substitutes a different
+authored camera.
 
 ### 6.3 Switching
 
-Three surfaces, one mechanism — all rebind `SceneViewport.active_camera`:
-- **`SetActiveCamera { name }`** command (API + rhai `set_camera("Name")`); the
-  name matches the full USD prim path *or* its leaf.
-- the **`KeyC`** hotkey cycles window cameras.
-- (cutscenes) a rhai script calling `set_camera(...)` on a timeline; a USD-animated
-  `def Camera` supplies moving shots.
+The viewport has explicit presentation ownership:
+
+- **Director:** `SetActiveCamera { name }` (API + Rhai `set_camera("Name")`) and
+  `CameraTrack` cuts select authored cameras. Director requests are held while
+  the operator owns the viewport.
+- **Operator:** `SetUserCamera { name }`, `ObserveAvatar`, or `KeyC` explicitly
+  selects a camera and takes ownership. A newly projected authored local avatar
+  publishes the same avatar-view intent only when the scene has no existing
+  director/operator selection, providing the normal initial view after reload.
+  `ResumeCameraDirector` returns control to the authored track.
+
+Names match a full USD prim path or its leaf. A scene with no authored window
+camera remains a deliberate no-camera scene; it does not silently create or
+borrow one.
 
 ### 6.4 Rover-mounted cameras
 

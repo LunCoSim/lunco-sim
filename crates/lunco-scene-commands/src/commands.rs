@@ -26,7 +26,7 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -325,7 +325,7 @@ pub fn on_spawn_entity_command(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
-    q_scene_root: Query<(Entity, &UsdPrimPath), With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -464,7 +464,7 @@ pub fn apply_replicated_spawns(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    q_scene_root: Query<Entity, With<UsdSceneRoot>>,
 ) {
     if pending.0.is_empty() {
         return;

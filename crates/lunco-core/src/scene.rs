@@ -5,28 +5,7 @@
 //! command handler mounts the stage; the owner publishes lifecycle edges from
 //! the same command boundary that performs teardown and mounting.
 
-use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
-
-/// Runs once while an outgoing scene still exists and before its replacement is
-/// projected.
-///
-/// Scene-owned entities are despawned by the scene owner. Subsystems register
-/// resource resets and derived-entity retirement here, beside the state they
-/// own. Keeping this label in `lunco-core` lets lower-level domains participate
-/// in the transaction without depending on the USD projection layer.
-#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SceneTeardown;
-
-/// Execute the one scene-teardown transaction.
-///
-/// This is an exclusive-world command so the schedule, its deferred writes,
-/// and the following entity reclamation are one ordered command-queue phase.
-pub fn run_scene_teardown(world: &mut World) {
-    if world.try_run_schedule(SceneTeardown).is_err() {
-        debug!("[clear-scene] no SceneTeardown schedule registered");
-    }
-}
 
 /// The complete identity of a scene transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,48 +261,6 @@ pub struct SceneTransitionFailed {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Resource, Clone, PartialEq, Debug)]
-    struct SceneOnly(u32);
-
-    #[derive(Resource, Clone, PartialEq, Debug)]
-    struct AppOwned(u32);
-
-    #[test]
-    fn teardown_removes_scene_state_and_restores_app_state() {
-        let mut app = App::new();
-        app.add_systems(SceneTeardown, |mut commands: Commands| {
-            commands.remove_resource::<SceneOnly>();
-            commands.insert_resource(AppOwned(1));
-        });
-        app.insert_resource(SceneOnly(42));
-        app.insert_resource(AppOwned(99));
-
-        run_scene_teardown(app.world_mut());
-
-        assert!(app.world().get_resource::<SceneOnly>().is_none());
-        assert_eq!(app.world().get_resource::<AppOwned>(), Some(&AppOwned(1)));
-    }
-
-    #[test]
-    fn teardown_is_repeatable() {
-        let mut app = App::new();
-        app.add_systems(SceneTeardown, |mut commands: Commands| {
-            commands.remove_resource::<SceneOnly>();
-        });
-
-        for value in [1u32, 2, 3] {
-            app.insert_resource(SceneOnly(value));
-            run_scene_teardown(app.world_mut());
-            assert!(app.world().get_resource::<SceneOnly>().is_none());
-        }
-    }
-
-    #[test]
-    fn missing_schedule_is_a_valid_empty_transaction() {
-        let mut app = App::new();
-        run_scene_teardown(app.world_mut());
-    }
 
     #[test]
     fn scene_transitions_are_serialized_at_terminal_edges() {

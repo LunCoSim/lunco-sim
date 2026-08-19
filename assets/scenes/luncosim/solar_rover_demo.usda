@@ -3,6 +3,7 @@
     defaultPrim = "SolarRoverTest"
     upAxis = "Y"
     metersPerUnit = 1
+    timeCodesPerSecond = 1
 )
 
 # ── Cinematic demo: solar rover co-simulation scenario ────────────────────────
@@ -98,6 +99,19 @@ def Xform "SolarRoverTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 28.0
         float2 clippingRange = (0.1, 200000.0)
+    }
+
+    # Fixed-time presentation cuts are authored as scene data. The director
+    # script retains only event-dependent cuts (battery warning/resume and the
+    # mission-complete shot), so one camera-selection mechanism owns each beat.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "WideTrack",
+            5: "RoverCam",
+        }
     }
 
     # ── The Solar Powered Rover ──────────────────────────────────────────────

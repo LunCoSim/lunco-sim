@@ -104,11 +104,13 @@ mod wasm {
     fn synth_panic_result(
         entity: bevy::prelude::Entity,
         session_id: u64,
+        step_id: Option<u64>,
         msg: &str,
     ) -> ModelicaResult {
         ModelicaResult {
             entity,
             session_id,
+            step_id,
             new_time: 0.0,
             outputs: Vec::new(),
             detected_symbols: Vec::new(),
@@ -457,6 +459,10 @@ mod wasm {
                     // panic logging on the error path so a step that
                     // crashes still shows up.
                     let is_hot_path = matches!(cmd, ModelicaCommand::Step { .. });
+                    let step_id = match &cmd {
+                        ModelicaCommand::Step { step_id, .. } => Some(*step_id),
+                        _ => None,
+                    };
                     if !is_hot_path {
                         post_log(&scope, format!("recv: {label}"));
                     }
@@ -519,7 +525,10 @@ mod wasm {
                             // stays in "Compiling…" forever after a
                             // rumoca panic (the Balloon example
                             // reproduces this).
-                            post_result(&scope, synth_panic_result(entity, session_id, msg));
+                            post_result(
+                                &scope,
+                                synth_panic_result(entity, session_id, step_id, msg),
+                            );
                             // Reset state — a panic mid-dispatch likely
                             // left the per-entity steppers / compiler
                             // in an inconsistent state. Better to lose

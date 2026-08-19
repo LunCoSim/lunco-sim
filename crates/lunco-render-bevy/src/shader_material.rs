@@ -650,10 +650,13 @@ pub(crate) fn wgsl_source(shader: &Shader) -> Option<&str> {
 pub fn reflect_shader_schemas(
     mut ev: MessageReader<AssetEvent<Shader>>,
     mut mat_ev: MessageReader<AssetEvent<ShaderMaterial>>,
-    shaders: Res<Assets<Shader>>,
+    shaders: Option<Res<Assets<Shader>>>,
     mut cache: ResMut<ShaderSchemas>,
-    mut mats: ResMut<Assets<ShaderMaterial>>,
+    mats: Option<ResMut<Assets<ShaderMaterial>>>,
 ) {
+    let (Some(shaders), Some(mut mats)) = (shaders, mats) else {
+        return;
+    };
     let mut cache_changed = false;
     for e in ev.read() {
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {

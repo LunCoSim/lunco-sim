@@ -33,6 +33,8 @@ pub mod programs;
 pub mod reconcile;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
 pub mod scene;
+/// Shared scene teardown schedule for all scene-owned subsystems.
+pub mod scene_lifecycle;
 /// Always-on networking **authority** substrate (no wire dependency):
 /// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
@@ -57,6 +59,7 @@ pub mod mobility;
 pub mod tools;
 
 pub mod pacing;
+pub mod paths;
 
 /// Run-condition effectiveness — see [`gate::tracked`].
 pub mod gate;
@@ -67,7 +70,9 @@ pub use faults::{RuntimeFault, RuntimeFaults};
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
-pub use pacing::{KeepAwake, RealtimeCoupling};
+pub use pacing::{
+    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+};
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
@@ -88,10 +93,11 @@ pub use markers::{
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
-    run_scene_teardown, SceneTeardown, SceneTransition, SceneTransitionAdmission,
-    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
-    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest, SceneTransitionStarted,
+    SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
+    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
+    SceneTransitionRequest, SceneTransitionStarted,
 };
+pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
 pub use session::{
     authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,
     BufferedClientInputs, InputFrame, LocalDriveInput, LocalSession, NetConnectRequest,
@@ -240,10 +246,10 @@ pub struct Avatar;
 ///
 /// It used to be a convention, repaired after the fact by whichever spawner
 /// noticed: `lunco-usd-sim` stripped the role off prior holders when a scene
-/// authored a new `Avatar` prim. That covered ONE of the ways an avatar comes
-/// into being — a USD scene's prim, the app's fallback free-flight camera, a
-/// scene reload that re-composes the prim — so the others produced two live
-/// avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
+/// authored a new `Avatar` prim. That covered only one of the ways an avatar
+/// comes into being — a USD scene's prim, an explicit host-created observation
+/// camera, or a scene reload that re-composes the prim — so the others produced
+/// two live avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
 /// visibly flickers between them) and split the input path: a click binds the
 /// chase camera on one while the window renders the other, keyboard drives every
 /// avatar's linked vessel at once, and release fires twice.
@@ -343,7 +349,7 @@ fn remote_avatar_claimed(
 /// bespoke "view" concept.
 ///
 /// Contributors write DATA here and NEVER touch `Camera::is_active` themselves:
-/// - the camera switch (`set_camera(name)` / `KeyC`) rebinds [`active_camera`];
+/// - an explicit camera presentation request rebinds [`active_camera`];
 /// - the workbench sets [`visible`] + [`rect`] from its layout perspective.
 ///
 /// [`active_camera`]: SceneViewport::active_camera
@@ -352,8 +358,8 @@ fn remote_avatar_claimed(
 #[derive(Resource, Debug, Clone)]
 pub struct SceneViewport {
     /// The bound (active) camera — which window `Camera3d` renders. Revalidated
-    /// each frame by the reconciler; falls back to the local avatar camera
-    /// (else any window camera) when unset or stale.
+    /// each frame by the reconciler. `None` is an intentional no-camera state;
+    /// it is never replaced by an implicit avatar or first-camera choice.
     pub active_camera: Option<Entity>,
     /// Whether the 3D scene renders at all (the workbench Design perspective
     /// sets this `false`). Defaults `true` so tooling/headless binaries with no
@@ -363,6 +369,13 @@ pub struct SceneViewport {
     /// window, or `None` for the full window (the current default).
     pub rect: Option<(UVec2, UVec2)>,
 }
+
+/// Presentation intent emitted by avatar workflows that explicitly return the
+/// operator to the local avatar. The camera subsystem owns resolution and
+/// activation; this event keeps avatar mechanics independent of USD camera
+/// projection details.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct RequestLocalAvatarView;
 
 impl Default for SceneViewport {
     fn default() -> Self {
@@ -896,6 +909,10 @@ impl Plugin for LunCoCorePlugin {
         // because the invariant is the engine's, not any app's — an app that
         // spawns an avatar must not have to remember to install its bookkeeping.
         app.init_resource::<TheLocalAvatar>();
+        // Scene projection has an ownership fence independent of the USD
+        // plugins.  Load/restart/clear invalidate it synchronously, while the
+        // deferred root spawner registers the replacement after creation.
+        app.init_resource::<SceneMountState>();
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
             .register_type::<NeedsGroundSettle>()
@@ -912,6 +929,7 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<UserIntent>()
             .register_type::<IntentAnalogState>()
             .register_type::<Port>()
+            .register_type::<CausalStateSink>()
             .register_type::<PhysicalProperties>()
             .register_type::<CelestialBody>()
             .register_type::<Spacecraft>()
@@ -967,6 +985,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // switch and workbench write it. Core-guaranteed so every windowed
         // binary has it without ordering worries.
         .init_resource::<SceneViewport>()
+        .init_resource::<SceneMountState>()
         .init_resource::<session::NetworkRole>()
         .init_resource::<session::LocalSession>()
         .init_resource::<session::SyncApplyGuard>()
@@ -996,7 +1015,8 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<exposure::EngineExposures>()
         .init_resource::<exposure::ExposureRefresh>()
         .init_resource::<RuntimeFaults>()
-        .init_resource::<pacing::RealtimeCoupling>();
+        .init_resource::<pacing::SimulationBarrier>()
+        .init_resource::<pacing::SimulationBarrierParticipants>();
 }
 
 /// HOST: re-key the input-ack watermarks against the authoritative ownership

@@ -57,6 +57,7 @@ use egui_dock::{
     widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
 use lunco_core::{on_command, register_commands, Command};
+use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
@@ -468,8 +469,10 @@ fn drain_pending_layout_requests(
             }
             LayoutRequest::RemoveSingleton(id) => {
                 layout.side_browser.retain(|panel| *panel != id);
+                layout.side_browser_bottom.retain(|panel| *panel != id);
                 layout.center.retain(|panel| *panel != id);
                 layout.right_inspector.retain(|panel| *panel != id);
+                layout.right_inspector_bottom.retain(|panel| *panel != id);
                 layout.bottom.retain(|panel| *panel != id);
                 layout.remove_panel_from_dock(id);
             }
@@ -693,6 +696,53 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
     theme.colors.mantle
 }
 
+/// Persisted workbench appearance preferences.
+///
+/// This is shell-level presentation state rather than a panel preference: the
+/// workbench owns the dock body, while `PanelCtx` exposes the same decision to
+/// panel-owned content cards. Keeping the decision here prevents one tab from
+/// accidentally becoming transparent while another still paints an opaque
+/// rectangle over the scene.
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+pub struct WorkbenchAppearanceSettings {
+    /// Let the scene show through every dock/tab content body and its standard
+    /// panel surface. The default keeps the themed mantle surface everywhere.
+    #[serde(default)]
+    pub transparent_tab_content: bool,
+}
+
+impl Default for WorkbenchAppearanceSettings {
+    fn default() -> Self {
+        Self {
+            transparent_tab_content: false,
+        }
+    }
+}
+
+impl SettingsSection for WorkbenchAppearanceSettings {
+    const KEY: &'static str = "workbench_appearance";
+}
+
+/// Whether the current panel body should reveal the scene below the workbench.
+///
+/// The main scene viewport is always transparent because it is the scene host;
+/// ordinary panels follow the global appearance setting. The declared panel
+/// value remains the fallback for standalone panel harnesses that do not install
+/// the workbench settings resource.
+fn panel_body_is_transparent(
+    world: &World,
+    declared_transparent: bool,
+    is_main_scene: bool,
+) -> bool {
+    if is_main_scene {
+        return true;
+    }
+    world
+        .get_resource::<WorkbenchAppearanceSettings>()
+        .map(|settings| settings.transparent_tab_content)
+        .unwrap_or(declared_transparent)
+}
+
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
 /// Auto-adds [`bevy_egui::EguiPlugin`] if the host hasn't (so apps
@@ -728,10 +778,13 @@ impl Plugin for WorkbenchPlugin {
         app.add_plugins(screenshot::ScreenshotPlugin);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin {
-                // Runtime-authored HUI surfaces may be anchored to an egui-dock
-                // tab. They must paint above that tab to be a real replacement /
-                // customization surface rather than an invisible underlay.
-                ui_render_order: bevy_egui::UiRenderOrder::BevyUiAboveEgui,
+                // egui owns the workbench chrome and its transient surfaces:
+                // menus, status history, dialogs, and tooltips. Runtime-authored
+                // HUI is the scene HUD and must remain underneath those surfaces;
+                // otherwise a HUD can paint over an egui popup even when the
+                // popup is in egui's Foreground layer. The scene viewport remains
+                // below both UI systems, so this changes only UI-vs-UI ordering.
+                ui_render_order: bevy_egui::UiRenderOrder::EguiAboveBevyUi,
                 ..Default::default()
             });
         }
@@ -739,10 +792,9 @@ impl Plugin for WorkbenchPlugin {
             EguiPrimaryContextPass,
             render_robustness::draw_render_recovery_banner,
         );
-        // Egui host + viewport-rect sync + invariant sentinels.
-        // See `viewport.rs` doc-comment for the architecture (why we
-        // confine the 3D camera to the panel rect instead of letting it
-        // own the full window). Auto-added so hosts don't have to
+        // Egui host + viewport-geometry sync + invariant sentinels.
+        // See `viewport.rs` doc-comment for the layered full-window scene
+        // architecture. Auto-added so hosts don't have to
         // remember to wire it up.
         if !app.is_plugin_added::<viewport::WorkbenchViewportPlugin>() {
             app.add_plugins(viewport::WorkbenchViewportPlugin);
@@ -750,6 +802,7 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
+        app.register_settings_section::<WorkbenchAppearanceSettings>();
         // The mission-time spine (doc 19): `TimeTransport` is the single
         // play/pause + rate authority and `WorldTime` the derived view. Guarded so
         // contexts that also add it via `CelestialPlugin` / `UsdBevyPlugin` are
@@ -914,7 +967,13 @@ impl Plugin for WorkbenchPlugin {
             (maintain_dock_widths, drain_pending_panel_focus),
         )
         .add_systems(bevy::prelude::Update, drain_browser_navigation)
-        .add_systems(Startup, register_graphics_settings_menu);
+        .add_systems(
+            Startup,
+            (
+                register_graphics_settings_menu,
+                register_workbench_appearance_settings_menu,
+            ),
+        );
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -971,11 +1030,14 @@ pub struct WorkbenchLayout {
     // Slot intent — kept so perspectives can rebuild the dock when activated.
     // User drags after that mutate `dock` directly; intent goes stale until
     // the next perspective activation. Each side slot is a Vec so multiple
-    // panels can be tabbed in the same dock region.
+    // panels can be tabbed in the same dock region. The secondary vectors
+    // describe the optional lower leaf used by the split Build layout.
     pub(crate) side_browser: Vec<PanelId>,
+    pub(crate) side_browser_bottom: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
     pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 
     /// App-wide Settings menu contributions. Domain plugins push a
@@ -1065,9 +1127,11 @@ pub struct WorkbenchLayout {
 pub(crate) struct PerspectiveDockSlot {
     pub(crate) dock: DockState<TabId>,
     pub(crate) side_browser: Vec<PanelId>,
+    pub(crate) side_browser_bottom: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
     pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
 }
 
@@ -1117,9 +1181,11 @@ impl Default for WorkbenchLayout {
             active_perspective: None,
             activity_bar: false,
             side_browser: Vec::new(),
+            side_browser_bottom: Vec::new(),
             center: Vec::new(),
             active_center_tab: 0,
             right_inspector: Vec::new(),
+            right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
             settings_menu: Vec::new(),
             settings_submenus: Vec::new(),
@@ -1140,28 +1206,40 @@ impl WorkbenchLayout {
     pub fn register<P: Panel + 'static>(&mut self, panel: P) {
         let id = panel.id();
         let slot = panel.default_slot();
-        match slot {
-            PanelSlot::SideBrowser => {
-                if !self.side_browser.contains(&id) {
-                    self.side_browser.push(id);
+        // A perspective may declare a panel before the domain plugin registers
+        // its renderer. In that case the declared slot is authoritative: do
+        // not append the panel to its authored default as well, or a stacked
+        // Build preset silently turns back into one tab strip.
+        let declared = self.side_browser.contains(&id)
+            || self.side_browser_bottom.contains(&id)
+            || self.center.contains(&id)
+            || self.right_inspector.contains(&id)
+            || self.right_inspector_bottom.contains(&id)
+            || self.bottom.contains(&id);
+        if !declared {
+            match slot {
+                PanelSlot::SideBrowser => {
+                    if !self.side_browser.contains(&id) {
+                        self.side_browser.push(id);
+                    }
                 }
-            }
-            PanelSlot::Center => {
-                if !self.center.contains(&id) {
-                    self.center.push(id);
+                PanelSlot::Center => {
+                    if !self.center.contains(&id) {
+                        self.center.push(id);
+                    }
                 }
-            }
-            PanelSlot::RightInspector => {
-                if !self.right_inspector.contains(&id) {
-                    self.right_inspector.push(id);
+                PanelSlot::RightInspector => {
+                    if !self.right_inspector.contains(&id) {
+                        self.right_inspector.push(id);
+                    }
                 }
-            }
-            PanelSlot::Bottom => {
-                if !self.bottom.contains(&id) {
-                    self.bottom.push(id);
+                PanelSlot::Bottom => {
+                    if !self.bottom.contains(&id) {
+                        self.bottom.push(id);
+                    }
                 }
+                PanelSlot::Hidden => { /* registered, intentionally not docked */ }
             }
-            PanelSlot::Hidden => { /* registered, intentionally not docked */ }
         }
         self.panels.insert(id, Box::new(panel));
         self.rebuild_dock();
@@ -1709,9 +1787,11 @@ impl WorkbenchLayout {
             PerspectiveDockSlot {
                 dock: self.dock.clone(),
                 side_browser: self.side_browser.clone(),
+                side_browser_bottom: self.side_browser_bottom.clone(),
                 center: self.center.clone(),
                 active_center_tab: self.active_center_tab,
                 right_inspector: self.right_inspector.clone(),
+                right_inspector_bottom: self.right_inspector_bottom.clone(),
                 bottom: self.bottom.clone(),
             },
         );
@@ -1725,16 +1805,20 @@ impl WorkbenchLayout {
         let PerspectiveDockSlot {
             dock,
             side_browser,
+            side_browser_bottom,
             center,
             active_center_tab,
             right_inspector,
+            right_inspector_bottom,
             bottom,
         } = slot;
         self.dock = dock;
         self.side_browser = side_browser;
+        self.side_browser_bottom = side_browser_bottom;
         self.center = center;
         self.active_center_tab = active_center_tab;
         self.right_inspector = right_inspector;
+        self.right_inspector_bottom = right_inspector_bottom;
         self.bottom = bottom;
     }
 
@@ -2022,8 +2106,10 @@ impl WorkbenchLayout {
             if !self.chrome_complete(
                 &slot.dock,
                 &slot.side_browser,
+                &slot.side_browser_bottom,
                 &slot.center,
                 &slot.right_inspector,
+                &slot.right_inspector_bottom,
                 &slot.bottom,
             ) {
                 continue;
@@ -2034,11 +2120,14 @@ impl WorkbenchLayout {
             out.insert(
                 id.as_str().to_string(),
                 PerspectiveDockSnapshot {
+                    layout_revision: self.perspective_layout_revision(*id),
                     dock,
                     side_browser: slot.side_browser.clone(),
+                    side_browser_bottom: slot.side_browser_bottom.clone(),
                     center: slot.center.clone(),
                     active_center_tab: slot.active_center_tab,
                     right_inspector: slot.right_inspector.clone(),
+                    right_inspector_bottom: slot.right_inspector_bottom.clone(),
                     bottom: slot.bottom.clone(),
                 },
             );
@@ -2049,11 +2138,14 @@ impl WorkbenchLayout {
                     out.insert(
                         id.as_str().to_string(),
                         PerspectiveDockSnapshot {
+                            layout_revision: self.perspective_layout_revision(id),
                             dock,
                             side_browser: self.side_browser.clone(),
+                            side_browser_bottom: self.side_browser_bottom.clone(),
                             center: self.center.clone(),
                             active_center_tab: self.active_center_tab,
                             right_inspector: self.right_inspector.clone(),
+                            right_inspector_bottom: self.right_inspector_bottom.clone(),
                             bottom: self.bottom.clone(),
                         },
                     );
@@ -2082,7 +2174,9 @@ impl WorkbenchLayout {
 
         // Active perspective: reconcile into the LIVE dock + heal chrome.
         if let Some(active) = active_str.as_deref() {
-            if let Some(snap) = docks.get(active) {
+            if let Some(snap) = docks.get(active).filter(|snap| {
+                snap.layout_revision == self.perspective_layout_revision_by_str(active)
+            }) {
                 if self.set_dock_from_json(snap.dock.clone(), id_map) {
                     self.ensure_chrome_present();
                 }
@@ -2104,6 +2198,9 @@ impl WorkbenchLayout {
             else {
                 continue; // not registered in this app — skip
             };
+            if snap.layout_revision != self.perspective_layout_revision(pid) {
+                continue;
+            }
             let Some(slot) = self.reconcile_dock_slot(snap, id_map) else {
                 continue;
             };
@@ -2112,6 +2209,22 @@ impl WorkbenchLayout {
         for (pid, slot) in seeded {
             self.dock_cache.insert(pid, slot);
         }
+    }
+
+    /// Return the registered preset revision for a perspective.
+    fn perspective_layout_revision(&self, id: PerspectiveId) -> u32 {
+        self.perspectives
+            .iter()
+            .find(|perspective| perspective.id() == id)
+            .map_or(0, |perspective| perspective.layout_revision())
+    }
+
+    /// String-keyed companion used while restoring persisted state.
+    fn perspective_layout_revision_by_str(&self, id: &str) -> u32 {
+        self.perspectives
+            .iter()
+            .find(|perspective| perspective.id().as_str() == id)
+            .map_or(0, |perspective| perspective.layout_revision())
     }
 
     /// Reconcile a [`PerspectiveDockSnapshot`] into a live
@@ -2128,9 +2241,11 @@ impl WorkbenchLayout {
         Some(PerspectiveDockSlot {
             dock,
             side_browser: snap.side_browser.clone(),
+            side_browser_bottom: snap.side_browser_bottom.clone(),
             center: snap.center.clone(),
             active_center_tab: snap.active_center_tab,
             right_inspector: snap.right_inspector.clone(),
+            right_inspector_bottom: snap.right_inspector_bottom.clone(),
             bottom: snap.bottom.clone(),
         })
     }
@@ -2317,7 +2432,9 @@ impl WorkbenchLayout {
                 .collect()
         };
         let side_browser_tabs = known(&self.side_browser);
+        let side_browser_bottom_tabs = known(&self.side_browser_bottom);
         let right_inspector_tabs = known(&self.right_inspector);
+        let right_inspector_bottom_tabs = known(&self.right_inspector_bottom);
         let bottom_tabs = known(&self.bottom);
         let center_tabs: Vec<TabId> = self
             .center
@@ -2430,8 +2547,11 @@ impl WorkbenchLayout {
         //   Centre after compounding = 0.765 × (1 - 0.15) = 0.650 ✓
         if !right_inspector_tabs.is_empty() {
             let main = dock.main_surface_mut();
-            let [_old_root, _right] =
+            let [_old_root, right] =
                 main.split_right(NodeIndex::root(), 0.765, right_inspector_tabs);
+            if !right_inspector_bottom_tabs.is_empty() {
+                let [_top, _bottom] = main.split_below(right, 0.5, right_inspector_bottom_tabs);
+            }
         }
 
         if !side_browser_tabs.is_empty() {
@@ -2440,7 +2560,10 @@ impl WorkbenchLayout {
             // the table in the doc above. Bumped from 0.15 → 0.22 so
             // the Twin Browser shows full library names ("Modelica
             // Standard Library") without truncation at default zoom.
-            let [_old_root, _left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
+            let [_old_root, left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
+            if !side_browser_bottom_tabs.is_empty() {
+                let [_top, _bottom] = main.split_below(left, 0.5, side_browser_bottom_tabs);
+            }
         }
 
         let _ = central;
@@ -2510,8 +2633,10 @@ impl WorkbenchLayout {
         self.chrome_complete(
             &self.dock,
             &self.side_browser,
+            &self.side_browser_bottom,
             &self.center,
             &self.right_inspector,
+            &self.right_inspector_bottom,
             &self.bottom,
         )
     }
@@ -2530,8 +2655,10 @@ impl WorkbenchLayout {
         &self,
         dock: &DockState<TabId>,
         side_browser: &[PanelId],
+        side_browser_bottom: &[PanelId],
         center: &[PanelId],
         right_inspector: &[PanelId],
+        right_inspector_bottom: &[PanelId],
         bottom: &[PanelId],
     ) -> bool {
         let is_centre_driven = center.iter().any(|id| self.panels.contains_key(id));
@@ -2550,7 +2677,9 @@ impl WorkbenchLayout {
             .collect();
         side_browser
             .iter()
+            .chain(side_browser_bottom.iter())
             .chain(right_inspector.iter())
+            .chain(right_inspector_bottom.iter())
             .chain(bottom.iter())
             .chain(center.iter())
             .filter(|id| self.panels.contains_key(id))
@@ -2897,7 +3026,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // after paint (WP-8 structural prevention).
                     let is_main_scene =
                         panel.scene_target() == Some(viewport::SceneTarget::MainViewport);
-                    let transparent = panel.transparent_background();
+                    let transparent = panel_body_is_transparent(
+                        self.world,
+                        panel.transparent_background(),
+                        is_main_scene,
+                    );
                     // Full leaf body (egui_dock clips the tab-content ui to the
                     // whole leaf area, below the tab bar) — NOT `max_rect()`, which
                     // only spans the growable content and misses the transparent
@@ -2930,7 +3063,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // Instance tabs are always chrome — no `InstancePanel` hosts a
                     // live scene (the scene viewport and the USD preview are both
                     // singleton `Panel`s).
-                    let transparent = panel.transparent_background();
+                    let transparent = panel_body_is_transparent(
+                        self.world,
+                        panel.transparent_background(),
+                        false,
+                    );
                     let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx, instance);
@@ -2970,14 +3107,24 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 
     fn clear_background(&self, tab: &Self::Tab) -> bool {
         match *tab {
-            TabId::Singleton(id) => match self.panels.get(&id) {
-                Some(panel) => !panel.transparent_background(),
-                None => true,
-            },
-            TabId::Instance { kind, .. } => match self.instance_panels.get(&kind) {
-                Some(panel) => !panel.transparent_background(),
-                None => true,
-            },
+            TabId::Singleton(id) => {
+                let Some(panel) = self.panels.get(&id) else {
+                    return true;
+                };
+                let is_main_scene =
+                    panel.scene_target() == Some(viewport::SceneTarget::MainViewport);
+                !panel_body_is_transparent(
+                    self.world,
+                    panel.transparent_background(),
+                    is_main_scene,
+                )
+            }
+            TabId::Instance { kind, .. } => {
+                let Some(panel) = self.instance_panels.get(&kind) else {
+                    return true;
+                };
+                !panel_body_is_transparent(self.world, panel.transparent_background(), false)
+            }
         }
     }
 
@@ -3324,12 +3471,16 @@ fn render_layout(
         // menu bar bumped to 30px the buttons would stick to the top
         // edge. Explicit `Align::Center` keeps them vertically centred
         // in the bar.
-        egui::MenuBar::new()
-            .config(
-                egui::menu::MenuConfig::new()
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
-            )
-            .ui(ui, |ui| {
+        // MenuBar creates its own compact horizontal child. Put that child
+        // inside the full-height title-bar layout so the row is centred in
+        // the 30px bar rather than starting at its top edge.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            egui::MenuBar::new()
+                .config(
+                    egui::menu::MenuConfig::new()
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                )
+                .ui(ui, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             // Collected screen-rects of the menu buttons + transport
             // controls. Published to `HelpAnchors` after this layout
@@ -4060,7 +4211,7 @@ fn render_layout(
                 // moves. That is a sky-viewing tool, not a fast-forward, so it stays
                 // in the celestial/mission-control panels.
                 ui.horizontal(|ui| {
-                    for m in [1.0_f64, 2.0, 4.0, 8.0] {
+                    for &m in lunco_time::REALTIME_RATE_OPTIONS {
                         let on = !paused && (rate - m).abs() < f64::EPSILON;
                         if ui
                             .selectable_label(on, format!("{m:.0}x"))
@@ -4171,7 +4322,7 @@ fn render_layout(
                     .collect();
                 // TODO: re-enable the perspective switcher once more
                 // than one perspective is registered. With a single
-                // perspective (Lunica ships only "📐 Design" today) the
+                // perspective (Lunica ships only "⚙ Lunica" today) the
                 // lone tab is just noise — hide it, but keep the render
                 // logic intact for when "Build" / "Simulate" / etc. land.
                 if tabs.len() > 1 {
@@ -4196,7 +4347,8 @@ fn render_layout(
                 }
             }
                 });
-            });
+        });
+    });
     });
 
     // ── Status bar ──────────────────────────────────────────────────
@@ -4246,6 +4398,9 @@ fn render_layout(
     let has_dock_tabs = !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
+        let transparent_tab_content = world
+            .resource::<WorkbenchAppearanceSettings>()
+            .transparent_tab_content;
         let WorkbenchLayout {
             panels,
             instance_panels,
@@ -4269,14 +4424,10 @@ fn render_layout(
         // Drop the per-tab body border (the rectangle around every
         // panel content area). This is the "border when unfolded".
         style.tab.tab_body.stroke = egui::Stroke::NONE;
-        // Tab body fill is set further below alongside the
-        // per-state tab colours so the body matches the active tab.
-        // Always opaque, in every app. Transparency on the bar made
-        // the Modelica workbench look broken, and the luncosim's
-        // centre is a transparent `ViewportPanel` anyway — a dark
-        // strip above its invisible header just looks like the top
-        // edge of the viewport tile, which is fine.
-        style.tab_bar.bg_fill = get_panel_backdrop(theme);
+        // The tab strip is distinct chrome, so it uses the theme's crust while
+        // ordinary tab bodies use mantle. The dedicated ViewportPanel remains
+        // transparent because it hosts the full-window scene camera.
+        style.tab_bar.bg_fill = theme.colors.crust;
         // Drop the hairline under the active tab name too — same
         // visual-noise reason as the tab body stroke.
         style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
@@ -4286,31 +4437,31 @@ fn render_layout(
         // washed out and active tabs lose contrast against the bar.
         // Bind every interaction state to the theme so tabs read
         // consistently in both modes.
-        // Bar = `mantle`. Active tab = `surface0` so it visually
-        // joins the body area (which we also paint `surface0` below
-        // for the same reason). Inactive tab = `crust` (a step away
-        // from the bar) so the strip is legible in both modes —
-        // using `mantle` for inactive made every tab vanish into the
-        // bar in Light mode where mantle/bar contrast is minimal.
+        // The tab labels themselves remain transparent: the selected state is
+        // communicated by text colour, not by a black rectangle.
         let palette = &theme.colors;
-        style.tab.tab_body.bg_fill = palette.surface0;
-        style.tab.active.bg_fill = palette.surface0;
+        style.tab.tab_body.bg_fill = if transparent_tab_content {
+            egui::Color32::TRANSPARENT
+        } else {
+            palette.mantle
+        };
+        style.tab.active.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.active.text_color = palette.text;
         style.tab.active.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive.bg_fill = palette.crust;
+        style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.inactive.text_color = palette.subtext1;
         style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.hovered.bg_fill = palette.surface1;
+        style.tab.hovered.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.hovered.text_color = palette.text;
         style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.focused.bg_fill = palette.surface0;
+        style.tab.focused.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.focused.text_color = palette.mauve;
         style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
-        style.tab.inactive_with_kb_focus.bg_fill = palette.crust;
+        style.tab.inactive_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.inactive_with_kb_focus.text_color = palette.text;
-        style.tab.active_with_kb_focus.bg_fill = palette.surface0;
+        style.tab.active_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.active_with_kb_focus.text_color = palette.mauve;
-        style.tab.focused_with_kb_focus.bg_fill = palette.surface0;
+        style.tab.focused_with_kb_focus.bg_fill = egui::Color32::TRANSPARENT;
         style.tab.focused_with_kb_focus.text_color = palette.mauve;
         // TODO(egui_dock 0.18 bug — remove when fixed/updated upstream):
         // egui_dock writes a NaN split fraction into the tree from inside its
@@ -4394,12 +4545,24 @@ fn render_layout(
         let right_default = (screen.width() * 0.10).max(140.0);
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
+        let side_panel_fill = if world
+            .resource::<WorkbenchAppearanceSettings>()
+            .transparent_tab_content
+        {
+            egui::Color32::TRANSPARENT
+        } else {
+            theme.colors.mantle
+        };
+
         if let Some(id) = layout.side_browser.first().copied() {
             let r = egui::Panel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
                 .default_size(side_default)
                 .min_size(120.0)
                 .max_size(screen.width() * 0.3)
+                .frame(
+                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
+                )
                 .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
@@ -4414,6 +4577,9 @@ fn render_layout(
                 .default_size(right_default)
                 .min_size(140.0)
                 .max_size(screen.width() * 0.3)
+                .frame(
+                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
+                )
                 .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
@@ -4427,6 +4593,9 @@ fn render_layout(
                 .resizable(true)
                 .default_size(bottom_default)
                 .min_size(60.0)
+                .frame(
+                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
+                )
                 .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
@@ -4888,6 +5057,40 @@ fn render_panel_solo(
     }
 }
 
+fn register_workbench_appearance_settings_menu(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings_submenu("Appearance", |ui, ctx| {
+        let Some(mut settings) = ctx
+            .resource::<WorkbenchAppearanceSettings>()
+            .copied()
+        else {
+            return;
+        };
+        let original = settings;
+        ui.checkbox(
+            &mut settings.transparent_tab_content,
+            "Transparent tab content",
+        )
+        .on_hover_text(
+            "Show the 3D scene through every tab body and its standard panel surface. "
+                .to_string(),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Off uses the same themed background in every tab; on reveals the scene behind all tabs.",
+            )
+            .weak()
+            .small(),
+        );
+        if settings != original {
+            ctx.set_resource(settings);
+        }
+    });
+}
+
 fn register_graphics_settings_menu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
@@ -4958,6 +5161,33 @@ fn register_graphics_settings_menu(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_content_setting_has_uniform_default_and_transparent_override() {
+        let mut world = World::new();
+
+        // Standalone panel harnesses retain the panel declaration when the
+        // workbench appearance resource is not installed.
+        assert!(panel_body_is_transparent(&world, true, false));
+
+        world.insert_resource(WorkbenchAppearanceSettings::default());
+        // The application default is one opaque mantle surface for every tab,
+        // including panels that historically opted into transparency.
+        assert!(!panel_body_is_transparent(&world, true, false));
+
+        world
+            .resource_mut::<WorkbenchAppearanceSettings>()
+            .transparent_tab_content = true;
+        assert!(panel_body_is_transparent(&world, false, false));
+        // The scene host is always transparent, independent of the preference.
+        assert!(panel_body_is_transparent(&world, false, true));
+    }
+
+    #[test]
+    fn tab_content_setting_deserializes_older_empty_section() {
+        let settings: WorkbenchAppearanceSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings, WorkbenchAppearanceSettings::default());
+    }
 
     #[test]
     fn build_identity_formats_the_shared_version_label() {
@@ -5032,6 +5262,75 @@ mod tests {
             .iter_all_tabs()
             .any(|(_, tab)| *tab == TabId::Singleton(PanelId("focus_fixture"))));
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
+    }
+
+    struct DockPanel(PanelId);
+
+    impl Panel for DockPanel {
+        fn id(&self) -> PanelId {
+            self.0
+        }
+
+        fn title(&self) -> String {
+            self.0 .0.to_string()
+        }
+
+        fn default_slot(&self) -> PanelSlot {
+            PanelSlot::Center
+        }
+
+        fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+    }
+
+    #[test]
+    fn stacked_side_slots_build_independent_top_and_bottom_leaves() {
+        let mut layout = WorkbenchLayout::default();
+        for id in ["entities", "telemetry", "viewport", "inspector", "spawn"] {
+            layout.register(DockPanel(PanelId(id)));
+        }
+
+        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
+        layout.set_center(vec![PanelId("viewport")]);
+        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+
+        let leaves: Vec<Vec<TabId>> = layout
+            .dock
+            .main_surface()
+            .iter()
+            .filter_map(|node| match node {
+                egui_dock::Node::Leaf(leaf) => Some(leaf.tabs.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(leaves.len(), 5, "center plus two stacked side regions");
+        for id in ["entities", "telemetry", "viewport", "inspector", "spawn"] {
+            assert!(
+                leaves
+                    .iter()
+                    .any(|tabs| tabs.contains(&TabId::Singleton(PanelId(id)))),
+                "missing dock panel {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn registering_a_predeclared_stacked_panel_keeps_its_declared_slot() {
+        let mut layout = WorkbenchLayout::default();
+        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
+        layout.set_center(vec![PanelId("viewport")]);
+        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+
+        layout.register(DockPanel(PanelId("entities")));
+        layout.register(DockPanel(PanelId("telemetry")));
+        layout.register(DockPanel(PanelId("viewport")));
+        layout.register(DockPanel(PanelId("inspector")));
+        layout.register(DockPanel(PanelId("spawn")));
+
+        assert_eq!(layout.side_browser, [PanelId("entities")]);
+        assert_eq!(layout.side_browser_bottom, [PanelId("telemetry")]);
+        assert_eq!(layout.right_inspector, [PanelId("inspector")]);
+        assert_eq!(layout.right_inspector_bottom, [PanelId("spawn")]);
+        assert!(layout.bottom.is_empty());
     }
 
     struct TestPerspective {

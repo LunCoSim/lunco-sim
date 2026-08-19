@@ -948,19 +948,14 @@ impl Panel for Inspector {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                // The Inspector stacks many sections (Environment, Transform,
-                // Physics, Wheel, Shader, Material, Modelica) and can exceed the
-                // panel height — scroll so the lower sections stay reachable.
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| inspector_content(self, ui, ctx));
-            });
+        ctx.panel_content_frame().show(ui, |ui| {
+            // The Inspector stacks many sections (Environment, Transform,
+            // Physics, Wheel, Shader, Material, Modelica) and can exceed the
+            // panel height — scroll so the lower sections stay reachable.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| inspector_content(self, ui, ctx));
+        });
     }
 }
 
@@ -985,16 +980,11 @@ impl Panel for EnvironmentPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| environment_panel_content(self, ui, ctx));
-            });
+        ctx.panel_content_frame().show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| environment_panel_content(self, ui, ctx));
+        });
     }
 }
 

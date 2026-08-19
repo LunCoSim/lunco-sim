@@ -3,8 +3,9 @@
 > Status: Active · Audience: contributors wiring simulation engines together
 >
 > Connects multiple simulation engines (Modelica, FMU, GMAT, Avian) in a
-> single Bevy world via explicit `SimConnection`s between named ports.
-> Implements the FMI/SSP pattern.
+> single Bevy world via explicit `SimConnection`s between named ports. Its
+> master-side transaction is FMI/SSP-shaped; the current Modelica backend is not
+> itself an FMI implementation.
 
 This architecture doc summarizes the high-level model. For in-depth
 engineering docs (system ordering, panel registration, convention details),
@@ -82,46 +83,131 @@ The ordering above is *within* a tick. The other half of an FMI-CS master is the
 for whom. Stating it explicitly (finding `A3` — it was previously unstated, and
 the code did not implement any coherent version of it):
 
-**1. The communication grid is the FIXED-STEP clock.** Every model carries
-`target_time` — the next world communication point, in model-local seconds.
-It advances by exactly one `Time<Fixed>` delta when no step for that model is in
-flight. Not per render frame. A `TimeTransport.rate` burst yields *more ticks*,
-so it yields proportionally more model time, automatically.
+**1. Communication points are explicit and sub-rated.** Every model carries a
+`communication_period_secs` and `next_communication_time`. The world still
+advances on the fixed 60 Hz clock, but a Modelica participant is not a 60 Hz
+render callback. Inputs are sampled and outputs are published only at the next
+declared point; the last validated output is held between points. The USD
+`LunCoProgramAPI` property `lunco:program:communicationPeriod` is the source of
+truth. When the property is omitted, the schema's documented 0.1 s (10 Hz)
+value is used. An authored non-finite, sub-tick, over-sized, or non-lattice
+value is a terminal model-configuration error and is never replaced by that
+semantic default. The live Rumoca participant accepts communication periods
+from one master fixed tick through `MAX_MACRO_STEP_DT`, in integer master-tick
+units. This master admits at most one asynchronous participant transaction per
+fixed tick, so a sub-tick period is rejected instead of being silently
+undersampled. A model that needs every physics tick authors one fixed-tick
+period explicitly.
 
-**2. The macro step is `target_time − current_time`, clamped.** `current_time` is
-the model's own clock (`stepper.time()`), reported back by the worker. The
-requested `dt` is therefore the model's whole **deficit**, capped at
-`MAX_MACRO_STEP_DT` (~0.18 s) so one long gap cannot hand the solver a ten-second
-step. A model that missed ticks — a slow solver, a long compile, a hitched frame
-— **catches the time back up over the following ticks**. Nothing is dropped.
-Consequently: **model time is a pure function of the fixed-step clock**, not of
-frame rate, GPU load, or window focus.
+**2. The macro step is `communication_point − current_time`, bounded by the
+participant contract.**
+`current_time` is the model's own clock (`stepper.time()`), reported back by the
+worker. A `TimeTransport.rate` burst therefore produces more Avian/Rhai fixed
+ticks and proportionally more *declared* Modelica communication points, rather
+than multiplying worker callbacks at the render cadence. The requested `dt` is
+capped at `MAX_MACRO_STEP_DT` (~0.18 s) for catch-up, so one explicit time jump
+cannot hand the solver a ten-second step. Normal authored communication points
+are validated to fit that bound and the fixed master-tick lattice; the worker
+receives the master's sequence number and `[start_time, stop_time]`, validates
+both against its own solver clock, and the main thread accepts only the exact
+in-flight response at that endpoint. A worker result is still required before
+the shared world crosses the communication point, so no stale value crosses a
+causal boundary.
 
-**3. The coupling is explicit and back-pressured.** The `Step` dispatched at
-tick *N* is executed on the worker thread. While its result is pending,
-`RealtimeCoupling` holds Avian's physics clock and the master does not advance
-that model's `target_time`. The result is consumed in `Update`; the next fixed
-tick then propagates the fresh outputs, applies forces once, and dispatches the
-next step. A slow solver costs wall time, never a burst of stale-force physics
-or an unbounded target-time debt.
+**3. The communication barrier follows the causal topology; worker execution is asynchronous.**
+The `Step` dispatched at tick *N* is executed on the worker thread. The
+simulation waits before crossing the communication point only for participants
+in the graph-derived reverse causal closure of a stateful engine sink. A
+telemetry, electrical, or supervisory model with no path to shared physics may
+remain in flight while Avian and the rest of the shared world continue using
+its last validated output. This is synchronous semantics for causal paths,
+with non-blocking implementation for independent paths:
+
+* `SimulationBarrier` is raised at a coupled participant's communication point
+  and projected by the time spine onto `Time<Virtual>`. Therefore `SimTick`, Rhai,
+  controllers, connection propagation, Modelica inputs, and Avian stop only at
+  a real causal exchange boundary. Between boundaries they continue using the
+  declared zero-order hold. A result is consumed in `Update`; the next fixed
+  tick then reads the fresh output, propagates it, applies forces/motors once,
+  and schedules the next point.
+* For a coupled request, the current fixed tick is the only tick admitted after
+  the request is sent; any remaining same-frame fixed overstep is discarded. A
+  slow solver costs wall time, but cannot create stale-force bursts, unbounded
+  simulated-time debt, or a Rhai/controller tick that runs ahead of the state
+  it observes. An independent request does not raise this barrier and its last
+  validated output remains held until its next completed communication point.
+* Membership is computed from the composed wiring projection by walking
+  backwards from backend-owned `CausalStateSink` capabilities. Avian, joint,
+  hardware, and wheel backends mark the actual endpoint that writes state;
+  future FMU or other backends join the same rule by marking their own
+  state-writing endpoint. This captures intermediate participant chains and
+  feedback without classifying every Modelica model as global. While the
+  binding epoch or any edge is unresolved, membership remains fail-closed and
+  all live Modelica participants retain the barrier.
+
+**4. Script participants use the same fixed-step transaction boundary.**
+`sync_script_inputs` runs after causal propagation and physics actuation, then
+the public `lunco_scripting::ScriptingSet` executes each Python/Rhai participant
+once. Its output is published before the next propagation phase, so the output
+is consumed on the following fixed tick. This explicit one-tick delay is the
+conservative discrete co-simulation rule; it prevents a script/physics
+algebraic cycle from depending on Bevy system insertion order. Modelica input
+sampling and script input sampling therefore occur at named schedule edges,
+not as unsynchronised per-frame callbacks.
 
 Because the wait is real, it is **surfaced**: `lunco_modelica::worker::CosimLag`
-records the communication gap for every live model every fixed tick, and
-`warn!`s (rate-limited) past 0.25 s. The warning means the main loop is waiting;
-the physics barrier is already closed, so it is not a stale-force fallback.
+records the communication gap for every live participant every fixed tick, and
+`warn!`s (rate-limited) past 0.25 s. An off-thread worker is not a second
+simulation clock. An independent model still uses the same authoritative world
+time and explicit communication points; it is simply not allowed to stall the
+world when its outputs are not on a shared-state causal path.
 
-**4. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
+**5. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
 The worker's command-squashing (which correctly collapses redundant
 `UpdateParameters`/`Compile`) explicitly does **not** apply to `Step`: dropping
 one would delete `dt` of simulated time and ack it as a success. If back-pressure
 is ever needed there, `dt`s must be **summed**, never dropped.
 
-**5. The live solver is not the batch solver.** The interactive path integrates a
+**6. The live solver is not the batch solver.** The interactive path integrates a
 fixed ladder of `SECS_PER_TICK / 3` micro-steps with an explicit-family solver;
 the batch/Fast-Run path keeps its adaptive-implicit BDF. See
 [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a — that
 doc also states, honestly, how far short of true Tier-A determinism this still
 falls.
+
+## FMI boundary and conformance claim
+
+The contract above is deliberately an **FMI-CS-shaped master algorithm**, not a
+claim that the current Modelica worker is already an FMI implementation. The
+current code has the right master-side invariants for a future FMU backend:
+
+* one authoritative simulation time and explicit communication points;
+* input snapshots at a communication point;
+* a positive, bounded communication step;
+* zero-order hold of the last validated outputs between points;
+* conservative waiting only for participants whose outputs can reach a
+  state-writing sink; and
+* explicit faulting instead of releasing a failed coupled step as if it had
+  completed.
+
+An FMU importer still has to be implemented at the participant boundary. It
+must load and validate `modelDescription.xml`, preserve FMI value references
+and declared types/units, perform the FMI 2.0 or 3.0 lifecycle, call the
+version-appropriate co-simulation step function, and handle every returned
+status and early-return/event request. FMI 3.0 specifically permits
+`fmi3DoStep` to return before the requested communication point and adds Event
+Mode and Intermediate Update Mode; an importer that ignores those results is
+not robust FMI support. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
+
+The FMU adapter must be a backend participant, not a second clock or a second
+wire fabric. It maps FMI variables to the existing port/connection boundary,
+marks a state-writing endpoint with `CausalStateSink` when appropriate, and
+uses the same conservative scheduler. FMI for Model Exchange is a separate
+integration: the FMU does not own the solver step, so it cannot be treated as
+an FMI-CS participant. The current generic port currency is scalar `f64`, so
+the first adapter scope is FMI Real ports; Boolean, integer, enumeration,
+string, arrays, clocks, and typed units require an explicit typed FMI boundary
+before claiming broad FMI compatibility.
 
 ## Where the master loop fits
 

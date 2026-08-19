@@ -21,6 +21,27 @@
 
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::prelude::*;
+use std::borrow::Cow;
+
+/// Normalize text accepted at the Modelica source boundary.
+///
+/// Windows editors commonly write a UTF-8 byte-order mark. It is metadata,
+/// not Modelica syntax, and Rumoca does not treat it as whitespace before the
+/// first token. Replace it with three ASCII spaces instead of removing it:
+/// the UTF-8 BOM occupies three bytes, so source spans and diagnostics keep
+/// the same offsets. CRLF is intentionally left unchanged; the Modelica
+/// lexer handles it and changing line endings would alter authored source
+/// coordinates.
+pub fn normalize_modelica_source(source: &str) -> Cow<'_, str> {
+    let Some(rest) = source.strip_prefix('\u{feff}') else {
+        return Cow::Borrowed(source);
+    };
+
+    let mut normalized = String::with_capacity(source.len());
+    normalized.push_str("   ");
+    normalized.push_str(rest);
+    Cow::Owned(normalized)
+}
 
 /// The text contents of a `.mo` file, surfaced as an asset.
 ///
@@ -51,7 +72,7 @@ impl AssetLoader for ModelicaSourceLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let text = String::from_utf8(bytes)?;
+        let text = normalize_modelica_source(std::str::from_utf8(&bytes)?).into_owned();
         Ok(ModelicaSource { text })
     }
 
@@ -71,7 +92,9 @@ impl AssetLoader for ModelicaSourceLoader {
 pub fn read_text_sync(path: &std::path::Path) -> Result<String, String> {
     let bytes = lunco_storage::read_file_sync(path)
         .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
-    String::from_utf8(bytes).map_err(|e| format!("non-utf8 text `{}`: {e}", path.display()))
+    let text =
+        String::from_utf8(bytes).map_err(|e| format!("non-utf8 text `{}`: {e}", path.display()))?;
+    Ok(normalize_modelica_source(&text).into_owned())
 }
 
 /// Write UTF-8 text to a path through the platform-portable storage backend.

@@ -37,6 +37,12 @@ GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
 | `luncosim` | The windowed GUI app |
 | `luncosim test` | The headless runner for authored USD + Rhai scene tests (`scripts/run_scene_tests.sh`) |
 
+For a long-running, render-free host, use `luncosim-server`. Add
+`--headless-max-speed` to run that same production simulation loop without a
+wall-clock wait; it advances one fixed simulation duration per update and still
+honours the co-simulation barrier. The deterministic `luncosim test` runner is
+already manually clocked and runs at the speed the CPU permits.
+
 ## Project Hierarchy
 
 `lunco-luncosim` serves as an **Integration Layer** (Level 5) in the project hierarchy.

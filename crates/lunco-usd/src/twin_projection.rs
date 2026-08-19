@@ -48,7 +48,9 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSourceText, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::{
+    UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText, UsdStageAsset, UsdVisualSynced,
+};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::document::UsdOp;
@@ -408,8 +410,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // despawn and the new one's spawn. Project nothing rather than everything:
     // the incoming scene resumes on the tick its root appears.
     let mounted: Option<AssetId<UsdStageAsset>> = {
-        let mut q =
-            world.query_filtered::<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>();
+        let mut q = world.query_filtered::<&UsdPrimPath, With<UsdSceneRoot>>();
         q.iter(world).next().map(|p| p.stage_handle.id())
     };
     let active_doc: Option<DocumentId> = mounted.and_then(|id| {
@@ -1270,7 +1271,7 @@ fn author_structural_edit(
 }
 
 /// Re-read the whole live scene from the (now-authored) stage. Only an explicit
-/// [`UsdSceneRoot`](lunco_usd_sim::cosim::UsdSceneRoot) may seed this rebuild.
+/// [`UsdSceneRoot`](lunco_usd_bevy::UsdSceneRoot) may seed this rebuild.
 /// Before rebuilding, retire every other projection entity for that stage.
 ///
 /// This stage-scoped retirement is essential: a mounted USD camera is
@@ -1292,7 +1293,7 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
         // to `UsdSceneRoot` silently despawned the preview subtree, leaving no
         // entity to re-instantiate after a material edit.
         let mut q = world.query_filtered::<(Entity, &UsdPrimPath), Or<(
-            With<lunco_usd_sim::cosim::UsdSceneRoot>,
+            With<UsdSceneRoot>,
             With<lunco_usd_bevy::UsdPreviewOnly>,
         )>>();
         q.iter(world)
@@ -1706,7 +1707,7 @@ mod tests {
         let stage = Handle::<UsdStageAsset>::default();
         let root = world
             .spawn((
-                lunco_usd_sim::cosim::UsdSceneRoot,
+                UsdSceneRoot,
                 UsdPrimPath {
                     stage_handle: stage.clone(),
                     path: "/Traverse".into(),

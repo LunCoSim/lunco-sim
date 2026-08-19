@@ -57,7 +57,7 @@ use lunco_core::coords::GridPos;
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
     read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
-    UsdVisualSynced,
+    UsdSceneRoot, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -1097,6 +1097,10 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 fn process_usd_avian_prims(
     trigger: On<Add, UsdVisualSynced>,
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
+    q_child_of: Query<&ChildOf>,
+    q_entities: Query<Entity>,
+    q_scene_root: Query<(), With<UsdSceneRoot>>,
+    mount_state: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut group_tables: ResMut<CollisionGroupTables>,
@@ -1106,6 +1110,27 @@ fn process_usd_avian_prims(
     let Ok(prim_path) = query.get(entity) else {
         return;
     };
+    if let Some(mount_state) = mount_state {
+        let stale_mount = match lunco_usd_bevy::scene_root_ancestor(
+            entity,
+            &q_scene_root,
+            &q_child_of,
+            &q_entities,
+        ) {
+            Ok(Some(root)) => !mount_state.contains_root(root),
+            Ok(None) => false,
+            Err(()) => true,
+        };
+        if stale_mount {
+            // `UsdVisualSynced` can be applied from a command buffer that was
+            // filled before a scene replacement request.  Do not let this
+            // observer admit a collider/body into a root whose teardown is
+            // already owned by the newer transaction; Avian's collider
+            // observer would otherwise enqueue a non-fallible AncestorMarker
+            // insert and panic when the old root is applied away.
+            return;
+        }
+    }
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
         return;
     };

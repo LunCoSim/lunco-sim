@@ -1483,6 +1483,18 @@ pub fn settle_grounded_assemblies(
     // owner is anchored at the grid origin cell). Wait for it if not built yet —
     // the marker persists.
     let Some((terrain, hf, ring)) = terrains.iter().next() else {
+        // `NeedsGroundSettle` is raised at USD/Avian admission because a
+        // physical wheel may need the one-time placement transaction supplied
+        // by a DEM collider ring.  A flat authored ground (or a static DEM
+        // without a collider ring) has no terrain-owned placement transaction
+        // to perform.  Leaving the marker armed here would make the application
+        // hold `GROUND_ACTIVATION` forever even though the only applicable
+        // collider is already in the ordinary physics world.
+        for entity in &q_needs {
+            commands
+                .entity(entity)
+                .try_remove::<lunco_core::NeedsGroundSettle>();
+        }
         return;
     };
     let half = hf.0.half_extent() as f64;

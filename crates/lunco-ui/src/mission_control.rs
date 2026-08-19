@@ -139,15 +139,7 @@ impl Panel for MissionControl {
         let mut set_speed: Option<f64> = None;
         let mut set_policy: Option<lunco_core::PossessionPolicy> = None;
 
-        let frame = egui::Frame::new()
-            .fill(
-                theme
-                    .as_ref()
-                    .map(|t| t.colors.mantle)
-                    .unwrap_or(egui::Color32::TRANSPARENT),
-            )
-            .inner_margin(8.0)
-            .corner_radius(4);
+        let frame = ctx.panel_content_frame();
 
         frame.show(ui, |ui| {
             // ── Time Control ──
@@ -177,7 +169,7 @@ impl Panel for MissionControl {
                     .num_columns(4)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        for (i, &m) in [1.0, 2.0, 4.0, 8.0].iter().enumerate() {
+                        for (i, &m) in lunco_time::REALTIME_RATE_OPTIONS.iter().enumerate() {
                             if ui
                                 .selectable_label(speed == m, format!("{}x", m))
                                 .on_hover_text("Physics runs at this rate")
@@ -199,7 +191,7 @@ impl Panel for MissionControl {
                     .num_columns(4)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        for (i, &m) in [100.0, 1000.0, 10000.0, 100000.0].iter().enumerate() {
+                        for (i, &m) in lunco_time::KINEMATIC_WARP_RATE_OPTIONS.iter().enumerate() {
                             if ui
                                 .selectable_label(speed == m, format!("{}x", m))
                                 .on_hover_text(

@@ -358,11 +358,7 @@ impl Panel for EntityList {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
+        ctx.panel_content_frame()
             .show(ui, |ui| entity_list_content(ui, ctx));
     }
 }

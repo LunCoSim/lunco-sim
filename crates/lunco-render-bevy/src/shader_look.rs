@@ -462,12 +462,17 @@ pub(crate) fn build(app: &mut App) {
 /// have completed for the new source; otherwise a reload can expose a zeroed
 /// uniform block for exactly one frame and create a black terrain tile.
 fn invalidate_shader_look_ready(
-    mut shader_events: MessageReader<AssetEvent<Shader>>,
-    mut image_events: MessageReader<AssetEvent<Image>>,
+    mut shader_events: Option<MessageReader<AssetEvent<Shader>>>,
+    mut image_events: Option<MessageReader<AssetEvent<Image>>>,
     q: Query<(Entity, &MeshMaterial3d<ShaderMaterial>), With<ShaderLookReady>>,
-    materials: Res<Assets<ShaderMaterial>>,
+    materials: Option<Res<Assets<ShaderMaterial>>>,
     mut commands: Commands,
 ) {
+    let (Some(shader_events), Some(image_events), Some(materials)) =
+        (shader_events.as_mut(), image_events.as_mut(), materials)
+    else {
+        return;
+    };
     let changed_shaders: HashSet<AssetId<Shader>> = shader_events
         .read()
         .filter_map(|event| match event {
@@ -544,11 +549,14 @@ fn mark_shader_look_ready(
         (Entity, &MeshMaterial3d<ShaderMaterial>),
         (With<ShaderLook>, Without<ShaderLookReady>),
     >,
-    materials: Res<Assets<ShaderMaterial>>,
-    shaders: Res<Assets<Shader>>,
-    images: Res<Assets<Image>>,
+    materials: Option<Res<Assets<ShaderMaterial>>>,
+    shaders: Option<Res<Assets<Shader>>>,
+    images: Option<Res<Assets<Image>>>,
     schemas: Option<Res<crate::ShaderSchemas>>,
 ) {
+    let (Some(materials), Some(shaders), Some(images)) = (materials, shaders, images) else {
+        return;
+    };
     let Some(schemas) = schemas.as_deref() else {
         return;
     };
@@ -594,6 +602,7 @@ mod tests {
     #[test]
     fn shader_material_readiness_includes_declared_images() {
         let mut app = App::new();
+        app.add_plugins(AssetPlugin::default());
         app.init_asset::<Image>();
         let image = app
             .world_mut()

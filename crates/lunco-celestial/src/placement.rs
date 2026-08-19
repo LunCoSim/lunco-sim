@@ -25,8 +25,8 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use lunco_time::WorldTime;
 
 use crate::geo::{
-    GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
-    geodetic_to_body_fixed,
+    body_rotation, equatorial_frame, geodetic_to_body_fixed, GeodeticAnchor, LocalTangentFrame,
+    SiteAnchor,
 };
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
@@ -691,7 +691,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::{Geodetic, solar_tangent_frame};
+    use crate::geo::{solar_tangent_frame, Geodetic};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]

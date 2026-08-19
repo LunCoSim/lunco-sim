@@ -7579,6 +7579,7 @@ dependencies = [
  "lunco-signal",
  "lunco-storage",
  "lunco-theme",
+ "lunco-time",
  "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",

@@ -78,16 +78,13 @@ impl Panel for ModelsPalette {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let Some((mantle, tokens)) = ctx
+        let Some(tokens) = ctx
             .resource::<lunco_theme::Theme>()
-            .map(|t| (t.colors.mantle, t.tokens.clone()))
+            .map(|t| t.tokens.clone())
         else {
             return;
         };
-        egui::Frame::new()
-            .fill(mantle)
-            .inner_margin(8.0)
-            .corner_radius(4)
+        ctx.panel_content_frame()
             .show(ui, |ui| models_palette_content(ui, ctx, &tokens));
     }
 }

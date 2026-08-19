@@ -534,10 +534,9 @@ fn rendered_and_analytical_orbit_use_the_same_typed_frame_transform() {
 }
 
 /// Scene reload must tear the sky down **completely** — by architecture, not a
-/// maintained despawn list. When the declarations disappear (a scene without bodies is
-/// loaded) every celestial-derived entity must be gone: no orbiting ghost bodies, no
-/// stale orbit lines, no globe tiles. This is what fixes "reload without sun/earth and
-/// it still moves".
+/// maintained despawn list. The replacement may be body-less or may declare a
+/// different sky; either way, the outgoing derived entities and active physics
+/// grid must be cleared at the scene boundary before the replacement integrates.
 #[test]
 fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     let mut app = celestial_test_app(); // declares Sun/Earth/Moon

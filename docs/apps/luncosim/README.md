@@ -89,6 +89,7 @@ actually parses, so prefer it if this table and the binary ever disagree.
 |---|---|
 | `-h`, `--help` | Print usage and exit, without launching the simulator. |
 | `--no-ui` | Run headless — no window, no GPU. Also via `LUNCO_NO_UI=1`. |
+| `--headless-max-speed` | With `--no-ui` (or the headless server launcher), run the fixed simulation lattice as fast as the CPU and causal participants permit. This removes wall-clock pacing; it does not bypass the co-simulation barrier. |
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
 | `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/` (or may be workspace-relative/absolute). Without it, luncosim starts with an empty persistent world shell. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |

@@ -27,8 +27,8 @@ use lunco_render::SceneCamera;
 use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
 use lunco_terrain_globe::{
-    GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch, TerrainTile, TileCoord,
-    create_quadsphere_tile_mesh,
+    create_quadsphere_tile_mesh, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch,
+    TerrainTile, TileCoord,
 };
 use lunco_terrain_surface::SurfaceOracle;
 

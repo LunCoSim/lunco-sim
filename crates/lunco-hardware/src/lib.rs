@@ -141,19 +141,41 @@ impl Plugin for LunCoHardwarePlugin {
 
 /// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
 /// [`MotorActuator`] — the velocity motor is now the sole owner of `motor`.
-fn mark_actuator_driven_motor(trigger: On<Add, MotorActuator>, mut commands: Commands) {
+fn mark_actuator_driven_motor(
+    trigger: On<Add, MotorActuator>,
+    query: Query<&MotorActuator>,
+    mut commands: Commands,
+) {
     commands
         .entity(trigger.entity)
         .try_insert(lunco_core::ActuatorDrivenJoint);
+    if let Ok(motor) = query.get(trigger.entity) {
+        if motor.port_entity != Entity::PLACEHOLDER {
+            commands
+                .entity(motor.port_entity)
+                .try_insert(lunco_core::CausalStateSink);
+        }
+    }
 }
 
 /// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
 /// [`SteeringActuator`] — the frame-steer owns `motor`/frame, not the cosim
 /// position-hold. (Front wheels carry both actuators; `try_insert` is idempotent.)
-fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: Commands) {
+fn mark_actuator_driven_steer(
+    trigger: On<Add, SteeringActuator>,
+    query: Query<&SteeringActuator>,
+    mut commands: Commands,
+) {
     commands
         .entity(trigger.entity)
         .try_insert(lunco_core::ActuatorDrivenJoint);
+    if let Ok(steering) = query.get(trigger.entity) {
+        if steering.port_entity != Entity::PLACEHOLDER {
+            commands
+                .entity(steering.port_entity)
+                .try_insert(lunco_core::CausalStateSink);
+        }
+    }
 }
 
 /// THE motor torque–speed law, on the axle. Signed, four-quadrant, one definition.

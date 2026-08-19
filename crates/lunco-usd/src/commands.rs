@@ -42,7 +42,7 @@ use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
 // document/file command surface below is headless-safe. Gate only this.
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::{TwinAdded, WorkspaceResource};
@@ -519,11 +519,7 @@ fn execute_admitted_load_scene(
     trigger: On<lunco_core::SceneTransitionAdmitted>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
-    q_usd: Query<(
-        Entity,
-        &UsdPrimPath,
-        Has<lunco_usd_sim::cosim::UsdSceneRoot>,
-    )>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
     // A real scene is mounting — clear any empty-viewport reason recorded by a
@@ -533,6 +529,7 @@ fn execute_admitted_load_scene(
     // entities from the scene being cleared (their despawn is deferred, so the
     // query would still read non-empty and clobber the reason mid-open).
     mut empty_reason: ResMut<EmptyViewportReason>,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
     let lunco_core::SceneTransitionRequest::Load { path, root_prim } = &trigger.event().request
     else {
@@ -571,8 +568,15 @@ fn execute_admitted_load_scene(
         .load::<lunco_usd_bevy::UsdStageAsset>(&path)
         .id();
     let stage_already_loaded = asset_server.load_state(new_id).is_loaded();
-    if q_usd.iter().any(|(_, upp, is_scene_root)| {
+    if q_usd.iter().any(|(entity, upp, is_scene_root)| {
+        let current_mount_is_live = mount_state.as_deref().is_none_or(|state| {
+            // A replacement invalidates the old root synchronously, while its
+            // deferred despawn is still visible to this query. Never let that
+            // stale entity satisfy the idempotent-load guard.
+            state.contains_root(entity)
+        });
         upp.stage_handle.id() == new_id
+            && current_mount_is_live
             && if root_prim.is_empty() {
                 is_scene_root
             } else {
@@ -589,9 +593,14 @@ fn execute_admitted_load_scene(
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
 
-    // Record the asset/projection phase of the admitted transaction. A later
-    // request remains pending in the coordinator until this phase publishes a
-    // terminal lifecycle edge.
+    // Invalidate outgoing roots NOW, before Bevy applies the deferred
+    // despawns below.  The visual sync system may still query those entities
+    // during this boundary frame; the mount state is its authoritative
+    // ownership fence.
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
+
     commands.insert_resource(SceneLoadInFlight {
         path: path.clone(),
         stage_id: new_id,
@@ -670,7 +679,7 @@ register_commands!(
 fn on_restart_scene_refresh_active_document(
     trigger: On<lunco_core::SceneTransitionStarted>,
     asset_server: Option<Res<AssetServer>>,
-    q_usd: Query<(&UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
+    q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -1387,7 +1396,7 @@ fn on_set_dome_light(
     trigger: On<SetDomeLight>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
     asset_server: Res<AssetServer>,
-    roots: Query<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();

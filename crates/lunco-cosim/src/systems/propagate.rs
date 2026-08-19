@@ -73,7 +73,11 @@ pub enum CosimSet {
 /// `Or<(With<OwnedLocally>, With<PredictedDynamic>)>`), plus the
 /// never-replicated case those seams get for free by only ever iterating
 /// replicated gids.
-fn peer_simulates(world: &World, target: Entity, is_client: bool) -> bool {
+pub(crate) fn peer_simulates(world: &World, target: Entity) -> bool {
+    let is_client = matches!(
+        world.get_resource::<lunco_core::NetworkRole>().copied(),
+        Some(lunco_core::NetworkRole::Client)
+    );
     if !is_client {
         return true; // host / standalone: authoritative over everything
     }
@@ -629,10 +633,6 @@ pub fn propagate_connections(
 
     // Phase 4: write each target once, by resolved handle where available.
     // Gated per target (see `peer_simulates`), never by process role.
-    let is_client = matches!(
-        world.get_resource::<lunco_core::NetworkRole>().copied(),
-        Some(lunco_core::NetworkRole::Client)
-    );
     // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
     // current fabric (see `CosimDiagnostics`).
     let mut broken: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
@@ -659,7 +659,7 @@ pub fn propagate_connections(
             _ => Default::default(),
         };
     for (i, t) in compiled.targets.iter().enumerate() {
-        if !peer_simulates(world, t.entity, is_client) {
+        if !peer_simulates(world, t.entity) {
             continue;
         }
         // A HELD port is not driven by its wire. Without this, a `SetPort` on a
