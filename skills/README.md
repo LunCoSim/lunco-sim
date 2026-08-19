@@ -16,6 +16,7 @@ one directly when doing that kind of task by hand.
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 | [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
+| [**coordinate-frames**](coordinate-frames/SKILL.md) | Diagnose or implement BigSpace, reference-frame, camera, terrain, trajectory, or physics pose changes without raw-f32 or repair logic |
 
 ## Author the world & its behaviour
 

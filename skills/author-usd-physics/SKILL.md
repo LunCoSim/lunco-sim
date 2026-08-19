@@ -343,7 +343,7 @@ Add a reset system beside the code that writes the state:
 
 ```rust
 app.add_systems(
-    lunco_core::scene_lifecycle::SceneTeardown,
+    lunco_core::SceneTeardown,
     |mut commands: Commands| commands.remove_resource::<MySceneCache>(),
 );
 ```

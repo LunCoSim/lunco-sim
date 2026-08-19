@@ -1,165 +1,85 @@
-# 44 — Surface & Orbital Views: Local Space / Celestial Space Split
+# 44 — Surface and orbital reference frames
 
-> Status: Design · Audience: contributors on the surface/celestial space split
->
-> The target architecture — doc [45](45-big-space-correct-usage.md) §2.1
-> establishes why, and cites the two-space split here as the correct target.
+> Status: Active · Audience: contributors implementing views, trajectories,
+> terrain, or body-relative vehicles.
 
-The earlier site-pinned solar hierarchy was the failure baseline for this
-document. The current implementation has removed that writer: the Solar Grid
-remains inertial, and site content is attached under the matching body-fixed
-surface Grid. This document retains the longer-term render-snapshot proposal,
-but its historical failure description must not be read as the current
-ownership model.
+Surface and orbital views are camera projections of the same semantic frame
+tree. They are not separate ad-hoc coordinate systems and they do not move the
+world root to follow the camera.
 
-## 1. The as-built design and its systemic failure mode
+## Frame selection
 
-The historical implementation rendered the sky by making the ENTIRE solar
-hierarchy a rigid subtree of the scene's `WorldGrid`, re-pinned every epoch
-tick so the geodetic site coincided with the scene origin. Scene content and
-physics stayed near the origin; Earth/Sun stood in the correct sky.
+The runtime uses named `ReferenceFrame` values:
 
-That single decision — *a 10¹¹-metre transform subtree, re-posed every tick,
-inside the same tree every gameplay system walks* — produced an entire class
-of bugs, each fixed individually but all sharing one root:
+- surface work belongs to `BodyFixed { body }`;
+- body-centred orbital work belongs to `EclipticJ2000 { center: body }`;
+- solar-system work belongs to the inertial solar/barycentric frame;
+- scene-only work belongs to `World` until an authored physical anchor selects
+  a celestial frame.
 
-| Symptom | Mechanism |
-|---|---|
-| Whole-frame white/black strobe | two `GlobalTransform` propagators raced over the re-pinned subtree |
-| Ground pitch-black | the Sun body mesh (on the light axis) pancaked into every shadow cascade |
-| Surface jitter | gravity field read transforms **mid-chain**, between the ephemeris write and the anchor re-pin |
-| Earth blinking / missing | change-gated GT propagation froze tiles at the pose of their unlucky spawn frame |
-| Click Earth → teleported 10¹¹ m | a command observer mixed two GT conventions captured mid-propagation |
+The `ReferenceFrameIndex` maps each semantic frame to one concrete BigSpace
+grid. The index fails closed for missing or duplicate declarations. User-facing
+commands name a target/frame; they do not name a grid or write a cell.
 
-The invariant that keeps a unified tree correct is brutal: **no system may
-read two spatially-related transforms at different points of the frame, and
-no transient multi-writer state may ever be observable.** Bevy's parallel
-executor, change detection, command observers, and third-party plugins
-(Avian, big_space's compat pass) all violate this by default. Every new
-consumer of celestial state re-exposes the disease.
+## BigSpace hierarchy
 
-## 2. Target architecture: two spaces, one bridge
+The persistent root is one `BigSpace + Grid` hierarchy:
 
-Split what is *simulated and touched* from what is only *seen at a distance* —
-the classic local-space/scaled-space split (KSP, Star Citizen, Outer Wilds all
-converge here).
-
-### 2.1 Local Space (unchanged)
-
-`WorldRoot → WorldGrid` — scene content, terrain patch, physics, avatar,
-FloatingOrigin. Metres-scale f32. **Nothing in local space is re-posed by the
-epoch tick.** Avian sees a conventional transform tree (root keeps its
-`Transform`). The DEM terrain within the streaming radius (~10–100 km) lives
-here, georeferenced to the site once at load.
-
-### 2.2 Celestial Space (new)
-
-Everything beyond local range — Earth, Sun, Moon globe (far side), satellites,
-trajectories — leaves the `WorldGrid` tree entirely and renders through a
-dedicated **celestial pass**:
-
-- A separate `RenderLayer` + camera that **only rotates** with the main
-  camera (never translates). Depth-wise it draws behind local space.
-- Bodies are placed on a **normalized celestial sphere**: direction from the
-  observer (f64, straight from the ephemeris + site frame) × a fixed rig
-  radius (e.g. 10⁵ m), with radii scaled to preserve angular size. For a
-  surface observer the parallax error vs. true placement is exactly zero for
-  the Sun and < 0.01 px for Earth: direction and angular size are the *only*
-  observables at those distances.
-- Positions are recomputed **every frame from the ephemeris as pure math**
-  (`CelestialSnapshot` resource, one writer, f64). No 10¹¹-magnitude value
-  ever enters a `Transform`, so there is nothing for propagation, physics,
-  or observers to race over — the entire bug class of §1 becomes
-  *unrepresentable*.
-
-### 2.3 The snapshot is the single source of truth
-
-```rust
-/// One writer (PreUpdate, in CelestialEpochSet). Everyone else reads this —
-/// never the transform tree.
-struct CelestialSnapshot {
-    epoch_jd: f64,
-    /// Per body: observer-relative direction (unit, f64), true distance (m),
-    /// body radius (m), body orientation (DQuat).
-    bodies: Vec<BodyState>,
-    /// Site frame: geodetic origin, ENU basis in ecliptic axes.
-    site: SiteFrame,
-}
+```text
+WorldRoot
+└── Solar inertial grid
+    ├── body inertial grid
+    │   └── spacecraft / inertial trajectories
+    └── body-fixed grid
+        └── surface grid
+            └── terrain, rovers, surface camera, surface trajectories
 ```
 
-Gravity, comms LOS, focus commands, sun-light steering, the celestial render
-rig, shader params — all consume the snapshot. A consumer can run in any
-schedule at any time: the snapshot is immutable for the frame. (This
-formalizes what the Jul-07 fixes did ad hoc with `CelestialEpochSet`
-ordering and the never-zero Solar Grid rule.)
+The body-fixed grid is the object that rotates. The body entity itself stays
+identity-relative to that grid. An inertial sibling provides a stable frame for
+star-fixed views and trajectories. A surface grid is a precision child of the
+body-fixed frame; it does not introduce a second semantic identity.
 
-### 2.4 Orbital view = swap which space is primary
+## Switching views
 
-Surface⇄orbital is an explicit **mode switch**, not a continuous crawl of one
-camera across 8 orders of magnitude:
+1. A view command publishes a target and a semantic frame.
+2. The camera system resolves the frame and computes the complete f64 pose.
+3. The camera is attached to the destination grid with the atomic BigSpace
+   mount operation.
+4. `FloatingOrigin` ownership moves with the camera; no parent grid is
+   re-posed and no next-frame correction is scheduled.
 
-- **Surface mode**: camera in local space; celestial pass draws the sky.
-- **Orbital mode** (focus a body / zoom past ~100 km): the camera *becomes*
-  a celestial-space camera. Local space collapses to a site marker on the
-  body. Bodies use real (scaled) geometry: globe LOD tiles keyed to the
-  celestial rig, at rig-scale coordinates (10⁵–10⁷ m — comfortably f32).
-- The **transition** is a camera crossfade at the threshold altitude, driven
-  by one system that owns both cameras (extends `reconcile_scene_viewport`'s
-  single-authority pattern). Focus commands only ever say "make body X the
-  view target at distance D" — spatial math happens inside the owning system
-  at a fixed schedule point (the `PendingFocus`/First-schedule pattern,
-  already shipped).
+Surface orientation is derived from the local gravity/up direction and the
+selected frame. Orbital orientation is derived from the inertial frame. This
+keeps the ground below the view while preserving the Moon/Earth orientation
+when the camera changes mode.
 
-### 2.5 What big_space is still for
+## Trajectories and links
 
-big_space keeps earning its place in local space (large local worlds, rover
-traverses, multi-kilometre bases) and for **true orbital flight** of piloted
-vessels around one body (vessel physics in that body's grid). What it stops
-doing is *carrying the whole solar system as one rigid pose tree*.
+Trajectory data carries an explicit semantic reference frame. Samples are
+converted through the f64 frame transform and then emitted as grid-local,
+cell-anchored render geometry. Line endpoints, labels, and connection beams
+must use the same frame conversion as their source entities; never combine a
+camera-relative `GlobalTransform` with a grid-absolute position.
 
-## 3. Current hardening rules (native nested-grid tree)
+## Physics and terrain
 
-The current unified tree follows these invariants:
+The active surface physics partition is selected through
+`ActivePhysicsFrame`. Avian receives f64 poses through
+`BigSpacePhysicsBridgePlugin`; celestial parent motion does not become rover
+motion. Terrain colliders and rover roots must share the active body-fixed
+surface grid. A streamed tile is attached once to its owning grid, not repaired
+by a per-frame offset.
 
-1. **The Solar Grid has no site-pin writer.** It is one inertial BigSpace Grid
-   under the canonical `WorldGrid`. `ephemeris_update_system` writes only the
-   relative poses owned by its reference-frame children; site content is
-   migrated once to the body's rotating surface Grid.
-2. Everything reading celestial transforms in `PreUpdate` orders
-   `.after(CelestialEpochSet)`.
-3. Celestial `Transform`s are change-touched every frame
-   (`touch_celestial_transforms`) so change-gated propagation can never
-   serve a stale pose.
-4. big_space's high-precision propagation is explicitly ordered after the
-   bevy-compat plain pass (`WorldShellPlugin::configure_sets`); the root
-   keeps its `Transform` (Avian requires the standard convention).
-5. **No spatial math in command observers.** Observers record intent;
-   a system at a fixed schedule point (First) applies it on
-   frame-consistent transforms, and always via same-instant GT *deltas*.
-6. Distances/positions for UI/API read providers are heliocentric-absolute;
-   scene-frame consumers must convert via the site frame, never mix.
+## Extension rule
 
-## 4. Migration slices
+To add a new reference frame:
 
-1. **`CelestialSnapshot` resource** — add the single writer; port gravity,
-   sun steering, comms LOS, and `apply_pending_focus` to read it. Transform
-   tree becomes render-only. (Small, immediately de-risks new consumers.)
-2. **Celestial render rig** — normalized-sphere pass for Sun/Earth/satellites
-   in surface mode; remove those bodies from the WorldGrid subtree; delete
-   the per-tick Solar Grid re-pin (the site frame lives in the snapshot).
-3. **Orbital mode** — celestial-rig camera + crossfade; globe LOD keyed to
-   the rig; `FocusEntityById` targets rig coordinates.
-4. **Cleanup** — retire the remaining render-tree consumers when the snapshot
-   rig lands; the current site pin itself is already retired.
+1. define its semantic identity and f64 transform in `lunco-celestial`;
+2. add one concrete grid declaration and register it in the frame index;
+3. route placement/camera/trajectory/physics consumers through the existing
+   frame conversion and atomic mount APIs;
+4. add a missing/duplicate-frame test and an end-to-end pose round-trip test.
 
-## 5. Regression scenes & tests
-
-- `scenes/test/site_anchor_minimal.usda` — a bare pad + site anchor + epoch,
-  no vehicles: the smallest scene that exercises anchoring, lighting, and the
-  celestial pass. Screenshot-burst byte-uniformity = the flicker regression
-  test (the Jul-07 method, automatable via `--api` + `CaptureScreenshot`).
-- Headless assertion: Earth body pose stable (< 1 px angular drift) across
-  200 frames in a site-anchored scene; focus command lands the camera within
-  `distance ± 1%` of the target.
-- Keep `shackleton_sun_stays_grazing_and_gets_lit_epochs`
-  (lunco-celestial-ephemeris) as the frame-convention canary.
+Do not add a new camera-specific grid, raw coordinate field, fallback parent,
+manual Euler correction, or per-frame repair loop.

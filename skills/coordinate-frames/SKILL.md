@@ -1,0 +1,76 @@
+---
+name: coordinate-frames
+description: >
+  Use when a rover, camera, terrain tile, trajectory, planet, or link jitters,
+  moves in the wrong direction, changes altitude while stationary, loses its
+  orientation after a view switch, or when adding a new orbital/body-fixed
+  reference frame. Also use for BigSpace, CellCoord, FloatingOrigin,
+  ActivePhysicsFrame, or frame-conversion work.
+---
+
+# Coordinate frames and BigSpace
+
+Use this runbook for coordinate changes. The concise design contract is
+[`docs/architecture/45-big-space-correct-usage.md`](../../docs/architecture/45-big-space-correct-usage.md).
+
+## Find the semantic owner first
+
+Every astronomical or surface pose has a semantic `ReferenceFrame`:
+
+- `World` for the persistent scene frame;
+- `EclipticJ2000 { center }` for non-rotating body-centred work;
+- `BodyFixed { body }` for a rotating surface frame.
+
+Resolve it through `ReferenceFrameIndex`. Never select the first `Grid`, walk
+an arbitrary parent, or add a second frame marker to a precision sub-grid.
+Missing and duplicate declarations must remain errors (`None`).
+
+## Use the existing conversion path
+
+1. Read the authoritative f64 pose from USD, ephemeris, Modelica, or Avian.
+2. Convert source → target semantic frame with the existing f64 frame helpers.
+3. Resolve the target `Grid` from `ReferenceFrameIndex`.
+4. Split once with `Grid::translation_to_grid`.
+5. Attach/migrate atomically with `lunco_core::attach::migrate_to_grid`.
+
+`CellCoord`, `Transform`, and `GlobalTransform` are private projection state.
+They never cross a user/API/network/model boundary and never become the
+authoritative source of an astronomical or physics value.
+
+For a camera, use the camera-mount operation and transfer the one
+`FloatingOrigin`. For a physical entity, keep it under `ActivePhysicsFrame`
+and let `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a
+trajectory or connection line, convert both endpoints into one semantic frame
+before generating cell-local geometry.
+
+## Do not patch symptoms
+
+Do not add a per-frame position correction, a fallback frame, a guessed parent,
+an epoch-specific offset, a raw f32 absolute position, or a second transform
+writer. Those hide the ownership error and will reappear at a grid boundary or
+view transition.
+
+## Required tests
+
+Add the smallest real regression at the owning boundary:
+
+- frame index rejects missing and duplicate semantic grids;
+- f64 pose conversion round-trips position and rotation;
+- atomic migration preserves the pose across a cell boundary;
+- the Avian bridge is invariant to BigSpace re-splitting and celestial-parent
+  rotation;
+- surface ↔ inertial camera transfer preserves target pose and up direction.
+
+Run focused checks first:
+
+```sh
+RUSTC_WRAPPER= cargo test -p lunco-core --lib -j 8
+RUSTC_WRAPPER= cargo test -p lunco-celestial --tests -j 8
+RUSTC_WRAPPER= cargo test -p lunco-usd-avian --tests -j 8
+RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
+```
+
+For visual acceptance, launch the built production binary head-full with an
+explicit free API port, inspect surface and inertial views, then send the API
+`Exit` command and verify the process and port are gone. Use `--no-ui` only for
+headless deterministic checks.

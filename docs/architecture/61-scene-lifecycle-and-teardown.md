@@ -27,6 +27,11 @@ needing to know what a celestial scene contains.
 `clear_scene_entities` (`lunco-usd-sim::cosim`) drives this, and is shared by
 `LoadScene` (clear-before-reload) and `ClearScene` (clear-to-empty).
 
+`SceneMountState` records the roots admitted by the current transaction. A
+replacement clears that set before deferred despawns; projection systems use
+the set to reject late work from the outgoing root. Additive preview mounts
+remain explicit and do not become the active running scene.
+
 ## One transition boundary
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.

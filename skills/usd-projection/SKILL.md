@@ -83,7 +83,7 @@ To author a new top-level prim you need the target document *and* the parent
 path. Both come from the scene root:
 
 ```rust
-roots: Query<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>
+roots: Query<&UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>
 let doc = scene_document_for(&backed, &asset_server, root.stage_handle.id())?;
 let parent = &root.path;            // "/SandboxScene", "/World", …
 ```

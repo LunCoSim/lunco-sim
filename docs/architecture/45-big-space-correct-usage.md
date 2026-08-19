@@ -1,330 +1,117 @@
-# 45 — big_space: Contract Audit & Corrective Plan
+# 45 — BigSpace and reference-frame contract
 
-> Status: Active · Audience: anyone touching `big_space`, grids, or world-scale precision
->
-> A decision record. Companion to doc 44. The implementation uses upstream
-> `big_space` 0.13 from its Bevy 0.19 branch, pinned by `Cargo.lock`. The
-> historical diagnosis below was established against 0.12; the same root,
-> cell-splitting, nested-grid, and floating-origin contracts remain in 0.13.
+> Status: Active · Audience: contributors touching coordinates, cameras,
+> physics, celestial placement, or terrain.
 
-> ## Current state of the three violations
->
-> | | Status |
-> |---|---|
-> | **V1** — `Transform` on the `BigSpace` root | **resolved.** The root is `BigSpace + Grid + GlobalTransform` with **no `Transform`** — big_space's canonical root shape. See the correction sections at the end of this doc. |
-> | **V2** — cell binning disabled | **resolved.** `WorldGridConfig::switching_threshold` is **`100.0`** (it was `1e10`). |
-> | **V3** — per-frame re-posing of the Solar Grid | **resolved.** The Solar Grid stays inertial, the floating origin travels with the observer, and site content is mounted under the body's surface Grid. |
->
-> **`switching_threshold` is a PRECISION knob, not an extent knob.** big_space derives
-> `maximum_distance_from_origin = cell_edge/2 + switching_threshold`, and
-> `translation_to_grid` *short-circuits below it* — returning cell `(0,0,0)` and the
-> whole position as a raw **f32** `Transform`. So a large threshold does not "make the
-> world bigger": it **disables cell binning outright**, leaving f32 ULP alone to bound
-> precision — **32 m at Earth–Moon distance** at the old `1e10`. Cells are `i64`, so a
-> small threshold costs nothing (1 AU / 2 km ≈ 7.5×10⁷ cells). The same rule governs
-> `cell_edge_length`, and the coarsest grid in a chain sets the precision floor for its
-> entire subtree — see doc [46](46-bigspace-deep-analysis.md)'s correction box.
->
-> The diagnosis below is kept because it is what a future change would have to
-> re-derive to justify raising either knob again. **Do not raise them.**
+This is the as-built contract for the Bevy 0.19 `big_space` branch pinned in
+`Cargo.lock`. `big_space` is the precision representation; it is not the
+semantic reference-frame model.
 
-## Current coordinate contract
+## Semantic frames
 
-- `big_space` is the precision representation, not the semantic reference-frame
-  model. Semantic positions remain typed `f64` values (`Solar`,
-  `BodyInertial`, `BodyFixed`, `Synodic`, `SiteEnu`) and convert through the
-  epoch-dependent `FrameTree` hub. Undefined transforms return `None`; they do
-  not substitute a body centre, the Sun, or identity axes.
-- There is one canonical `BigSpace + Grid` world root and exactly one
-  `FloatingOrigin`. The active camera carries that origin and may migrate
-  atomically between explicit body-fixed and inertial nested grids.
-- Every astronomical absolute position is computed in `f64`, then split with
-  `Grid::translation_to_grid` into `(CellCoord, cell-local Transform)`. The
-  `f32` transform is render-local currency, never authoritative ephemeris or
-  physics state.
-- Body-fixed and body-centred inertial frames are distinct sibling Grid
-  entities. Surface terrain, vehicles, and surface cameras inherit the
-  body-fixed grid; orbit cameras, inertial spacecraft, and inertial trajectories
-  inherit the non-spinning sibling.
-- Each semantic Grid has exactly one `ReferenceFrame` identity (`World`,
-  body-centred Ecliptic J2000, or body-fixed). Precision sub-grids inherit that
-  identity and never duplicate it. `ReferenceFrameIndex` resolves only unique
-  declarations; missing or duplicate frames fail closed instead of selecting an
-  archetype-order parent.
-- User-facing models author physical facts — `GeodeticAnchor`, `KeplerOrbit`,
-  `LibrationAnchor`, and trajectory frame intent. They never author a Grid,
-  `CellCoord`, or reparent operation. Placement, SOI handover, camera transfer,
-  networking, and the Avian bridge resolve and convert frames automatically.
-- Avian is compiled in `f64` and integrates in the explicitly selected
-  `ActivePhysicsFrame`, normally the loaded site's body-fixed surface grid.
-  Celestial translation/rotation above that frame cannot be mistaken for a
-  body teleport. The bridge owns the `f64 Position/Rotation` to BigSpace split;
-  Avian and rendering never share `GlobalTransform` as simulation truth.
-- A frame migration is one atomic `(ChildOf, CellCoord, Transform)` write via
-  `lunco_core::attach::migrate_to_grid`. There is no pose-preserving reparent,
-  raw-f32 placement fallback, or next-frame repair path.
-- Network physics snapshots and perspective/AOI messages carry f64 state plus
-  a semantic `ReferenceFrame`. Capture converts from the sender's private
-  `ActivePhysicsFrame`; apply converts into the receiver's private active frame.
-  A private cell/local split never becomes wire or user state.
+`lunco-celestial::ReferenceFrame` is the only semantic frame tag used by the
+runtime:
 
-## 1. The crate's model (what we signed up for)
+- `World` — the persistent scene/world frame.
+- `EclipticJ2000 { center }` — non-rotating axes centred on a named NAIF body.
+- `BodyFixed { body }` — IAU/WGCCRE rotating axes for a named body.
 
-- **Truth = integer `CellCoord` + small f32 `Transform`** relative to the cell
-  center. `GlobalTransform` is the only derived, lossy value: recomputed in
-  f64, downcast to f32, **relative to the floating origin's cell** — so it is
-  small near the camera by construction.
-- **`recenter_large_transforms` is the heart of the crate**: whenever an
-  entity's translation exceeds `cell_edge/2 + switching_threshold`, magnitude
-  moves into the integer cell and the f32 translation shrinks back to
-  cell-size (`grid/cell.rs:80-111`). The docs are explicit: this "prevents
-  Transforms from ever becoming larger than a single grid cell and thus
-  prevents floating point precision artifacts" (`lib.rs:93-95`).
-- `switching_threshold` is a small **hysteresis band** (examples use 0–100 m).
-  It does not add precision; it only delays recentering.
-- **The root carries `BigSpace + Grid + GlobalTransform` and must NOT have a
-  `Transform`** — enforced by the crate's own debug validator
-  (`validation.rs:224-238`).
-- **`FloatingOrigin` sits on the moving observer** (the camera) in every
-  example; the world is *not* re-posed to keep a point of interest at the
-  world origin.
-- Bodies at astronomical positions are placed by writing `cell + translation`
-  (`grid.translation_to_grid(DVec3)`), moved by relative deltas; the shipped
-  `BigSpaceCameraController` integrates velocity in f64 and splits deltas into
-  cell + f32 every frame (`camera.rs:266-314`).
-- Relative poses for gameplay: `CellTransform*` world queries (`b - a`), or
-  `Grid::grid_position_double` + the `Grids` system param — **not** ad-hoc
-  Transform-chain sums and **not** mid-frame `GlobalTransform` reads. Any
-  `GlobalTransform` consumer must run `.after(TransformSystems::Propagate)`.
-- Physics: no supported "one global f32 world" mode. The changelog's intent is
-  a **32-bit physics sim per partition/grid** inside the big space — i.e. run
-  Avian in the local frame of one grid whose contents stay near that grid's
-  origin.
+`ReferenceFrameIndex` resolves each declaration to exactly one `Grid`. Missing
+or duplicate declarations return `None`; callers never choose the first grid,
+infer a frame from entity order, or silently substitute identity.
 
-## 2. LunCo's three contract violations
+Analytical conversions use the typed f64 frame tree. Projection between live
+BigSpace grids uses `transform_pose_between_reference_frames`. The caller
+declares source and target semantics; it never handles `CellCoord` directly.
 
-| # | Violation | Where | Consequence (observed) |
-|---|-----------|-------|------------------------|
-| V1 | `Transform` on the `BigSpace` root (added for Avian) | `lunco-core/src/world.rs` | The root matches bevy-compat's *plain* propagation root query (`bevy_compat.rs:11-23`), which then walks the ENTIRE high-precision tree with f32 math, racing `propagate_high_precision` (no mutual ordering in the crate). The whole-frame strobe. Our `configure_sets` ordering makes the race deterministic, but the plain pass still rewrites every GT every frame — wasted work and a standing trap for anything reading GTs mid-frame. |
-| V2 | `switching_threshold = 1e10` (WorldGrid — **the historical value; it is `100.0` now**), effectively `∞` elsewhere | `WorldGridConfig` | Recentering never fires; `translation_to_grid` early-returns cell (0,0,0) below 1e10 m. The app is a **raw f32 absolute-coordinate world** wearing big_space as a costume. At 4×10⁸ m the ULP is 32–64 m → orbital-view jitter of camera, lines, and content; at 1e9+ it is worse. The user's diagnosis — "wrong usage of big_space coordinates" — is exactly right. |
-| V3 | Per-frame re-posing of the Solar Grid to pin the site at the world origin | Historical `lunco-celestial/src/placement.rs` implementation; removed | Inverted the crate's model (the floating origin is supposed to ride the camera; the world is not re-posed around a point). The current placement path is `attach_site_scene_to_surface_grid`; it performs one structural frame migration and leaves the inertial hierarchy untouched. |
+## One precision hierarchy
 
-Secondary effects of V2: because the app has *never* run with a moving origin
-cell, code and content accumulated origin-absolute assumptions. Splitting just
-the orbit camera into real cells (tried 2026-07-07) immediately exposed them —
-plain-propagated geometry (the scene `Ground` cube) rendered in the wrong
-convention whenever the camera cell ≠ 0 ("a plane emerges").
+`lunco_core::ensure_world_root` creates or returns the one persistent shell:
 
-Not a big_space issue, but found in the same investigation:
-`lunco_core::coords::world_position_seeded` sums nested grid translations
-**without grid rotations** — under the site-anchored (rotated) Solar Grid it
-resolves positions in a rotated-away direction. The crate-native replacements
-are `CellTransform*` / `grid_position_double` / `Grids::parent_grid`, or a
-same-instant `GlobalTransform` **delta** (origin cancels; its *length* is
-convention-independent).
+```text
+WorldRoot (BigSpace + Grid)
+└── WorldGrid (canonical scene mount)
+    └── OriginAnchor (the one FloatingOrigin when no camera owns it)
+```
 
-## 2.1 The Avian constraint (verified in avian3d 0.6.1 source; workspace is now 0.7 — re-verify before relying on the exact system names)
+Celestial projection adds named nested grids under that shell. A body-fixed
+grid rotates with its body; its body entity remains an identity child. The
+matching inertial grid is a sibling and does not spin. Surface terrain,
+rovers, and surface cameras are children of the body-fixed surface grid.
+Inertial cameras and inertial trajectories use the non-rotating grid.
 
-`PhysicsTransformPlugin` runs Bevy's own `mark_dirty_trees →
-propagate_parent_transforms → sync_simple_transforms` **inside the physics
-schedule** (`propagate_before_physics: true`), then `transform_to_position`
-copies `Position = GlobalTransform.translation` for every body the user
-didn't move (`physics_transform/mod.rs:95-110, 187-235`). Two hard
-consequences:
+There is one `FloatingOrigin` per `BigSpace` root. Camera ownership changes by
+moving that component through the canonical camera-mount operation; the world
+root is not re-posed around the current camera or site.
 
-- **Avian needs a propagation root WITH a `Transform`** to reach our tree in
-  its pre-step pass — that is the real reason `WorldRoot` carries one (and
-  with it, violation V1). Removing it without restructuring starves physics
-  of fresh `GlobalTransform`s (bodies free-fell in the 2026-07-07 bisect).
-- **Avian's `Position` is `GlobalTransform`-derived, and big_space `GT`s are
-  floating-origin-relative.** If the floating origin ever changes cells, every
-  GT shifts by the cell delta and Avian re-reads all bodies as "teleported"
-  into observer-relative coordinates. Physics is only correct while the
-  origin's cell NEVER changes.
+The world-grid precision parameters are set before the shell is created:
+`WorldGridConfig::cell_edge_length` and `switching_threshold`. The latter is
+a precision/hysteresis value, not a world-extent setting. A configuration
+change does not mutate an existing `Grid`; restart the world shell to apply a
+different grid definition.
 
-So the single-cell convention (V2) is not an accident — it is **load-bearing
-for physics**. A bare `switching_threshold` flip is UNSAFE: the moment the
-camera-origin recenters, physics breaks. Enabling real cells requires first
-decoupling physics from observer-relative `GlobalTransform`s.
+## Precision boundary
 
-## 3. Corrective architecture
+All authoritative positions, velocities, rotations, frame transforms, and
+physics values are f64. The only final representation step is:
 
-With 2.1 established, the correct target is doc 44's **two-space split**, for
-which big_space has native support: *"Your world can have multiple BigSpaces,
-and they will remain completely independent. Each big space uses the floating
-origin contained within it"* (`floating_origins.rs:30-34`).
+```text
+semantic f64 pose → target Grid::translation_to_grid → (CellCoord, Transform)
+```
 
-1. **Local space** (physics + scene): its floating origin stays pinned at the
-   site anchor — GTs are site-frame-stable forever, so Avian is correct *by
-   construction*, and the root-Transform hack can be retired by giving the
-   local tree its own conventional root. Everything here is metre-scale;
-   single-cell is fine and intended.
-2. **Celestial space** (sky + orbital view): separate rendering pass — a
-   second `BigSpace` whose floating origin rides the orbital camera, or doc
-   44's normalized celestial sphere (no large coordinate ever reaches an f32).
-   Surface⇄orbital is the camera mode switch of doc 44 §2.4.
-3. **Crate-native relative math** everywhere: retire
-   `world_position_seeded`; use `CellTransform*` / `grid_position_double` /
-   `Grids`, GT deltas sampled in `First`, or the future `CelestialSnapshot`.
-4. **Validator on** (`BigSpaceValidationPlugin`, debug builds) once each
-   space's hierarchy is canonical — the regression guard for all of this.
+`Transform` is cell-local render/bridge state. `GlobalTransform` is derived
+and camera-relative; it is never an ephemeris, telemetry, network, or physics
+source of truth. Use `ActiveFramePoseQuery`, `grid_relative_pose`, or the
+typed frame conversion helpers for reads.
 
-Interim invariants that hold the current single-space world together (do not
-break in review): the floating origin's cell must stay (0,0,0) — no entity
-may split the camera or scene content into cells; the compat→hp→low
-propagation ordering (`WorldShellPlugin::configure_sets`) stands as long as
-the root carries a `Transform`; f32 vertex/transform magnitudes above ~1e6 m
-in anything the camera can approach must be cell-anchored (see the trajectory
-anchor pattern in `trajectories.rs`).
+An entity migration is one atomic `(ChildOf, CellCoord, Transform)` operation
+through `lunco_core::attach::migrate_to_grid`. Compute the complete f64 pose in
+the destination frame first, then write the destination representation. Do
+not reparent first and repair the pose next frame.
 
-## 4. Issues that are NOT big_space (verified separately)
+## Physics boundary
 
-- **Trajectory/orbit polylines** (`lunco-celestial/src/trajectories.rs`) are
-  single `LineStrip` meshes with f32 vertices up to 4×10⁸ m under the Earth
-  frame: model-view cancellation ≈ 64 m of per-frame wobble, visible only at
-  close range ("orbits flicker", "moon offset from its orbit"). Fix: chunk the
-  polyline into cell-anchored segments (vertices local to a `CellCoord`d
-  chunk origin), or move lines to the doc-44 celestial render rig.
-- **`comms_demo.usda` has a 400×400 m flat `Ground` cube at y=0** — it
-  z-fights/occludes the DEM (georeferenced to the same height) and *is* the
-  flat gray "lunar surface" seen in recent captures. The DEM makes it
-  redundant; it should be removed (or sunk) once rover spawn placement on the
-  DEM colliders is re-verified.
+`ActivePhysicsFrame` identifies the single local frame used by Avian for the
+currently mounted physical scene. `BigSpacePhysicsBridgePlugin` owns the f64
+`Position`/`Rotation` ↔ BigSpace representation and collider propagation.
+Avian must not derive authority from camera-relative `GlobalTransform`.
 
-## ⚠ Correction (2026-07-10, Phase 6 landing): ordering did NOT fully resolve V1
+Celestial ancestors may translate or rotate while the rover remains stable:
+the bridge converts into the active body-fixed frame before physics and writes
+the solved pose back through the same frame. Every physical body and collider
+must belong to that active frame or be rejected by the bridge.
 
-§2's claim that the V1 race is "resolved by ordering" holds only for
-GlobalTransforms the high-precision pass **also writes**. Verified in
-big_space 0.12 source (`grid/propagation.rs`), HP propagation never writes:
+## Placement and view rules
 
-1. **a root's GT unless `Grid` and `BigSpace` are on the SAME entity**
-   (the root branch queries `(&Grid, &mut GlobalTransform), With<BigSpace>`), and
-2. **a cell-entity whose direct parent is not a `Grid`**
-   (the cell branch does `grids.get(parent.parent())` and silently skips).
+- A scene author supplies a geodetic/body anchor or another physical placement
+  fact. The engine resolves the body-fixed frame and performs the mount.
+- A camera request names a target and semantic frame. The camera system resolves
+  the target grid and uses the atomic mount operation.
+- A trajectory declares its reference frame. Its samples are converted once
+  into the selected grid and rendered from cell-local segments.
+- Surface mode uses the body-fixed frame and gravity-derived up. Moon/Earth
+  view uses the corresponding inertial frame. Switching modes changes the
+  camera's frame; it does not rotate or translate the entire world hierarchy.
 
-Our shell split them — `WorldRoot` = `BigSpace` only, `WorldGrid` = `Grid`
-only — so **both the root's and the `WorldGrid`'s GlobalTransforms were
-written exclusively by the f32 compat pass, as identity, forever.** That is
-accidentally correct while the floating origin's cell is (0,0,0) — the
-world-pin era, and §3's "interim invariant" above — and wrong by the full
-camera distance once the origin travels (Phase 6 orbital view): every
-Transform-only entity composing off the root/`WorldGrid` renders in surface
-convention and stands still while the HP-owned world moves — "planets jump
-around when I rotate". The §3 interim invariant (origin cell must stay 0) is
-hereby RETIRED: with the fix below, the origin may travel.
+## Invariants enforced in review and tests
 
-**Fix (landed):** `WorldRoot` now carries `Grid::new(cell_edge, 100.0)`
-alongside `BigSpace` (`lunco-core/src/world.rs`), making it a legal big_space
-root; `WorldGrid` becomes an ordinary cell-entity under a real grid, so HP
-owns both GTs. The Avian root `Transform` stays (compat still re-walks the
-tree, but now loses everywhere by ordering). Regression test:
-`lunco-core/tests/world_shell_origin_tracking.rs`.
+1. No second `BigSpace` root or guessed `Grid` parent.
+2. No raw f32 astronomical or physics position.
+3. No site-pinning writer on the inertial solar hierarchy.
+4. No duplicate semantic frame declaration.
+5. No direct `GlobalTransform` read for authoritative state.
+6. No per-frame repair, fallback frame, or next-frame reparent correction.
+7. No physical entity outside `ActivePhysicsFrame`.
+8. Scene replacement invalidates old roots before deferred despawns.
 
-Class 2 remains for `BodyFixed` trajectory views parented to body entities
-(today only the invisible `Artemis 2 Moon-Relative`): a cell-entity under a
-non-grid parent is rendered by the compat pass only. Any future visible
-BodyFixed view must parent to a grid, or drop its `CellCoord`.
+Focused regression coverage lives beside the owning crates, notably
+`lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
+`lunco-core` world/lifecycle tests. The production check is:
 
-## ⚠ Addendum (2026-07-11): the strobe's writer is AVIAN's propagation, not (only) the compat pass
+```sh
+RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 8
+target/debug/luncosim --api 4101
+```
 
-The measured "~1 frame in 5–9 renders plain-f32 GTs for anything
-`touch_celestial_transforms` doesn't force-dirty" (3 385 jump events/15 s
-when the touch list was deleted) finally has a mechanism. There are THREE
-plain-f32 whole-tree GlobalTransform writers in the app:
-
-1. big_space's bevy-compat `propagate_parent_transforms` (PostUpdate) —
-   ordered before `PropagateHighPrecision` by `WorldShellPlugin` ✓;
-2. **avian's `propagate_before_physics`** (`avian3d
-   physics_transform/mod.rs:99-104`, default ON) — registers *bevy's own*
-   `propagate_parent_transforms` + `sync_simple_transforms` **inside the
-   `PhysicsSchedule`**, i.e. it rewrites every GT reachable from the
-   root-`Transform` `WorldRoot` in absolute convention on every 60 Hz physics
-   tick. In PostUpdate, big_space's change-gated HP pass rewrites only
-   changed/origin-moved entities and SKIPS the rest — so on tick frames
-   avian's plain values survive to the renderer. 60 Hz vs a ~300 fps
-   uncapped renderer = 1 frame in ~5. **This system was never ordered
-   against big_space and cannot be — it runs in a different schedule.**
-3. `sync_simple_transforms` (both registrations) — parentless entities only.
-
-Corollaries:
-- Physics is CORRECT under the traveling origin *because of* writer 2:
-  inside the `PhysicsSchedule`, GTs are avian-propagated absolute, so
-  `transform_to_position` (which reads `GlobalTransform`,
-  `physics_transform/mod.rs:188`) never sees big_space's origin-relative
-  values. Do NOT flip `propagate_before_physics: false` in isolation —
-  physics would then read origin-relative render GTs and break.
-- `touch_celestial_transforms` is the de-facto reconciler between writer 2
-  and the HP pass; it stays until physics gets its own transform domain.
-- This is the precise, mechanical statement of why Phase 5 (doc 47) /
-  the §3 two-space split is the real fix: physics must stop sharing
-  `GlobalTransform` with the render world.
-
-### Phase 5 landed (2026-07-11): the physics transform domain
-
-`BigSpacePhysicsBridgePlugin` (`lunco-usd-avian/src/big_space_bridge.rs`,
-registered in the luncosim after `PhysicsPlugins`) disables all three of
-avian's f32 sync systems — `propagate_before_physics` (writer 2 above),
-`transform_to_position`, `position_to_transform`; all runtime `run_if`
-gates on `PhysicsTransformConfig` — and owns the sync in the f64 cell
-chain:
-
-- **READ** (`pose_to_position`, Prepare): a body re-reads
-  `Position`/`Rotation` from `world_pose_seeded` ONLY when its own
-  `(CellCoord, Transform)` differs from the `BridgeShadow` copy captured at
-  the bridge's last write — i.e. when an external writer (spawn, teleport,
-  gizmo, USD animation, anchor system, big_space recentring) moved it. A
-  fired body re-reads all descendant bodies too (chassis teleport carries
-  jointed wheels). Standalone no-body colliders (sensor zones) are covered;
-  body-attached child colliders keep avian's `ColliderTransform` path.
-- **WRITEBACK** (`position_to_pose`, Writeback): Dynamic bodies only; the
-  solved world pose is written to `Transform` relative to the parent frame
-  (nearest ancestor body's fresh solve, else the ancestor grid's chain
-  pose) and the CURRENT cell. Cells are never written — big_space's
-  `recenter_large_transforms` owns the re-split, which round-trips through
-  the READ rule. Jointed sub-bodies without `CellCoord` (rover wheels) get
-  their local transform against the chassis' solved pose.
-- The 2026-07-09 `narrow_phase` island panic (`islands/mod.rs:547`) was the
-  FIRST bridge dirtying every static's `Position` every tick — whole-world
-  contact churn corrupted avian's island bookkeeping. The shadow gate is
-  the fix: statics at rest are never touched.
-- `Position` is in the explicit **`ActivePhysicsFrame`**, not the BigSpace root
-  and not the observer-relative render frame. Cell offsets are honoured and
-  sibling branches are transformed into that frame in `f64`. For a lunar
-  surface scene, the active frame is the body-fixed surface grid; rotating the
-  celestial ancestors therefore does not change local Avian pose or velocity.
-- With writer 2 gone, render GTs are big_space-owned exclusively; the
-  strobe writer no longer exists. `touch_celestial_transforms` stays until
-  its removal is re-measured under the bridge (`LUNCO_JUMP_PROBE=1`) — do
-  not delete the two together.
-
-### Canonicalization follow-up (same day) — LANDED on the second attempt
-
-- **First attempt (reverted within the hour):** removing WorldRoot's
-  `Transform` sank every live rover at damping-terminal ~17 m/s. Avian's
-  `propagate_collider_transforms` (ColliderTransformPlugin — NOT among the
-  three syncs Phase 5 disables) only descends from tree roots WITH a
-  `Transform`; with it frozen, `update_collider_scale`'s child branch read a
-  stale `ColliderTransform`, and the luncosim Ground — a UNIT cube with
-  `xformOp:scale = (4000, 0.2, 4000)` — collapsed to a ~1 m collider. The
-  camera-relative jump probe stayed SILENT throughout (the chase cam falls
-  with its rover): co-falling is invisible to relative probes; absolute API
-  position checks caught it.
-- **Second attempt (landed):** the bridge now owns collider transforms.
-  `propagate_collider_transforms_rootless` (bridge module, same
-  `PhysicsTransformSystems::Propagate` set) recomputes every collider's
-  `ColliderTransform` from its `ColliderOf` chain — plain nodes compose
-  translation/rotation/scale, rigid-body nodes reset translation/rotation
-  and keep the running scale, faithful to avian's recursion — with NO tree
-  root involved. avian's own pass still runs and no-ops on rootless trees.
-  With that in place: **WorldRoot is `Transform`-free (big_space-canonical)
-  and `BigSpaceValidationPlugin` is re-enabled** in luncosim debug builds.
-  Pinned by `bridge_physics.rs::
-  scaled_child_collider_ground_settles_without_root_transform` and the
-  structural ABSENCE assert in `world_shell_origin_tracking.rs`.
-  Consequence: any app that spawns the world shell AND Avian physics must
-  register `BigSpacePhysicsBridgePlugin` (the production `luncosim` does;
-  presentation/workbench apps without physics do not need it).
-- **Trajectory views only carry `CellCoord` under their declared Grid frame.**
-  Body-fixed paths mount under `ReferenceFrame::BodyFixed`; inertial paths mount
-  under `ReferenceFrame::EclipticJ2000`. Missing frames leave the view unresolved;
-  there is no plain-body or unparented fallback.
+Use the API `Exit` command and verify the port is released before another
+session is started.
