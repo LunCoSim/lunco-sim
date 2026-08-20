@@ -43,7 +43,9 @@ def Xform "LandingLocationMarker" (
     # existing child name preserves ordinary USD overrides while changing the
     # reusable visual from a misleading flame-like hemisphere to a flat target.
     # Purely visual — no collider.
-    def Cylinder "Dome"
+    def Cylinder "Dome" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         custom string lunco:interaction:left = "pass_through"
         custom string lunco:interaction:right = "context"

@@ -64,7 +64,7 @@ def Xform "SlopeTest" (
 
     # Flat approach plot, ±60 m.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -79,7 +79,7 @@ def Xform "SlopeTest" (
     # Broad ~18° grade rising to +X (tilt about Z raises the +X edge). 40 m wide in
     # Z so there is room to (mistakenly) steer across the fall-line.
     def Cube "Ramp" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

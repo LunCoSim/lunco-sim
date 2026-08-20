@@ -32,7 +32,7 @@ def Xform "AutopilotHoldTest" (
     # authority and friction as well as on the autopilot's setpoint; here the
     # only thing that can move a rover is drive.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

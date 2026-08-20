@@ -69,7 +69,7 @@ def Xform "RoverComparison" (
     }
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -114,7 +114,7 @@ def Xform "RoverComparison" (
         uniform token[] xformOpOrder = ["xformOp:scale"]
         # Rounded ridges: a row of modest cylinders that checks wheel rotation,
         # contact retention, and suspension response without a vertical wall.
-        def Cylinder "Ridge_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cylinder "Ridge_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             uniform token axis = "X"
             double radius = 0.18
@@ -125,7 +125,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cylinder "Ridge_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cylinder "Ridge_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             uniform token axis = "X"
             double radius = 0.18
@@ -136,7 +136,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cylinder "Ridge_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cylinder "Ridge_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             uniform token axis = "X"
             double radius = 0.18
@@ -150,7 +150,7 @@ def Xform "RoverComparison" (
 
         # Increasing discrete obstacles test clearance and rocker/bogie travel.
         # They are staggered in Z so no wheel pair meets a vertical edge together.
-        def Cube "BlockLow_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockLow_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (-10, 0.12, 9)
@@ -160,7 +160,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "BlockLow_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockLow_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (0, 0.12, 9)
@@ -170,7 +170,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "BlockLow_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockLow_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (10, 0.12, 9)
@@ -180,7 +180,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "BlockHigh_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockHigh_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (-10, 0.22, 3)
@@ -190,7 +190,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "BlockHigh_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockHigh_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (0, 0.22, 3)
@@ -200,7 +200,7 @@ def Xform "RoverComparison" (
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Cube "BlockHigh_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        def Cube "BlockHigh_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"])
         {
             double size = 1.0
             double3 xformOp:translate = (10, 0.22, 3)
@@ -218,7 +218,7 @@ def Xform "RoverComparison" (
         # high-grade envelope. Each berm has a closed rise/crest/fall profile, so
         # its descending side returns the rover to the ground without a geometric
         # drop at the far edge.
-        def Mesh "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -230,7 +230,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp6_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp6_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -242,7 +242,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp6_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp6_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.42, -2), (3, 0.42, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -254,7 +254,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp12_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp12_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -266,7 +266,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp12_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp12_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -278,7 +278,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp12_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp12_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 0.85, -2), (3, 0.85, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -290,7 +290,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp18_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp18_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -302,7 +302,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp18_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp18_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -314,7 +314,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp18_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp18_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.30, -2), (3, 1.30, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -326,7 +326,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp40Pct_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp40Pct_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -338,7 +338,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp40Pct_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp40Pct_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]
@@ -350,7 +350,7 @@ def Xform "RoverComparison" (
             color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }
-        def Mesh "Ramp40Pct_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"])
+        def Mesh "Ramp40Pct_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"])
         {
             point3f[] points = [(-3, -0.1, 5), (3, -0.1, 5), (-3, -0.1, 2), (3, -0.1, 2), (-3, -0.1, -2), (3, -0.1, -2), (-3, -0.1, -6), (3, -0.1, -6), (-3, 0, 5), (3, 0, 5), (-3, 0, 2), (3, 0, 2), (-3, 1.6, -2), (3, 1.6, -2), (-3, 0, -6), (3, 0, -6)]
             int[] faceVertexCounts = [8, 4, 4, 8, 8, 4, 4, 4]

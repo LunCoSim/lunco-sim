@@ -72,7 +72,9 @@ def Xform "Headlight"
     }
 
     # Glowing lens of the headlight
-    def Cylinder "Lens"
+    def Cylinder "Lens" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Z"
         double radius = 0.09

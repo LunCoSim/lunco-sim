@@ -20,7 +20,7 @@
 # See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Tire" (
-    prepend apiSchemas = ["PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI"]
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "PhysicsMaterialAPI", "LunCoTireAPI", "MaterialBindingAPI"]
     kind = "component"
 )
 {

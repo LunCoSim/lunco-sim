@@ -37,7 +37,7 @@ def Xform "SandboxIntro" (
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

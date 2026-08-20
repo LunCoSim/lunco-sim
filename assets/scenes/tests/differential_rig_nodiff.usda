@@ -18,7 +18,7 @@ def Xform "DiffRigTest" (
 
     uniform bool lunco:spawnable = false
 
-    def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"])
+    def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"])
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)

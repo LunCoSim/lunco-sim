@@ -22,7 +22,7 @@ def Xform "RockerBogieTest" (
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -35,7 +35,7 @@ def Xform "RockerBogieTest" (
     }
 
     def Cube "Step" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

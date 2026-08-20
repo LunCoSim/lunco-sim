@@ -152,7 +152,9 @@ def Xform "HdriTest" (
         }
     }
 
-    def Sphere "Chrome"
+    def Sphere "Chrome" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/Chrome>
@@ -160,7 +162,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "BrushedMetal"
+    def Sphere "BrushedMetal" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/BrushedMetal>
@@ -168,7 +172,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "Diffuse"
+    def Sphere "Diffuse" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/Diffuse>
@@ -176,7 +182,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Cube "Ground"
+    def Cube "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double size = 1.0
         rel material:binding = </HdriTest/Looks/Regolith>

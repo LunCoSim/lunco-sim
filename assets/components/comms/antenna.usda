@@ -225,7 +225,9 @@ def Xform "CommsAntenna" (
                         }
                     }
 
-                    def Sphere "CommsIndicator"
+                    def Sphere "CommsIndicator" (
+                        prepend apiSchemas = ["MaterialBindingAPI"]
+                    )
                     {
                 double radius = 0.055
                 double3 xformOp:translate = (0.0, 0.085, 0.035)

@@ -54,7 +54,7 @@ def Xform "PartsAttached" (
     # Flat and level: a slope would make the rovers slide and turn the radial
     # measurement into a gradeability test.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

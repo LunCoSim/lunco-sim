@@ -52,7 +52,7 @@ def Xform "DrivetrainParity" (
     # do not fight gravity through the same path), turning a parity test into a
     # gradeability test.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

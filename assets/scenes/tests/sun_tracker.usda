@@ -57,7 +57,7 @@ def Xform "SunTrackerTest" (
     }
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -143,7 +143,9 @@ def Xform "SunTrackerTest" (
             float physics:mass = 50.0
 
             # Vertical PV panel — thin cube on edge, solar_panel shader.
-            def Cube "Panel"
+            def Cube "Panel" (
+                prepend apiSchemas = ["MaterialBindingAPI"]
+            )
             {
                 double size = 1.0
                 double3 xformOp:translate = (0, 1.5, 0)

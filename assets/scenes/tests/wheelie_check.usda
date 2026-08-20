@@ -34,7 +34,7 @@ def Xform "WheelieCheck" (
     # Deliberately FLAT and deliberately LONG: the rover accelerates down +Z from
     # the origin and must not run out of ground inside the drive phase.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

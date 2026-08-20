@@ -98,7 +98,7 @@ def Xform "SolarDomainNestedRef" (
     # exists only to put current through the bus — but a rover that drops off the
     # pad stops drawing, and a zero reading would be blamed on the island.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

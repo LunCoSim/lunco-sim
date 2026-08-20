@@ -52,7 +52,7 @@ def Xform "ModelicaDriveLaw" (
     # One ground prim, not two pads: the surface must be bit-identical under both
     # rovers or a mixing comparison becomes a terrain comparison.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

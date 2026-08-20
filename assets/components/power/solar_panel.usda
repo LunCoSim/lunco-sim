@@ -102,7 +102,7 @@ def Xform "SolarPanel" (
 
     # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
