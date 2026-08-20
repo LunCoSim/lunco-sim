@@ -40,29 +40,34 @@ fn on_start(me) {
     this.height_min = ();
     this.height_max = ();
     this.max_tilt = 0.0;
+    this.pose_wait_ticks = 0;
     this.done = false;
 
     print("[rb-high-speed] full-throttle flat-ground regression started");
 }
 
-fn finish_failure(message) {
-    this.done = true;
+fn finish_failure(state, message) {
+    state.done = true;
     fail_fast(message, "ROCKER BOGIE HIGH SPEED", "ROCKER_BOGIE_HIGH_SPEED");
 }
 
 fn on_tick(me) {
     if this.done { return; }
     if this.rover == () || this.rover < 0 {
-        finish_failure("rocker-bogie rover was not composed");
+        finish_failure(this, "rocker-bogie rover was not composed");
         return;
     }
 
     this.t += dt();
     let p = world_pos(this.rover);
     if p == () {
-        finish_failure("rocker-bogie chassis lost its world pose");
+        this.pose_wait_ticks += 1;
+        if this.pose_wait_ticks > 120 {
+            finish_failure(this, "rocker-bogie chassis never published a world pose");
+        }
         return;
     }
+    this.pose_wait_ticks = 0;
 
     if this.phase == "settle" {
         brake(this.rover);
