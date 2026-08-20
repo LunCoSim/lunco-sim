@@ -43,7 +43,7 @@ use bevy::prelude::*;
 /// [`Exposure`](bevy::camera::Exposure) read it, so illuminance (lux) and
 /// exposure (EV100) always move together. A scene that dims the sun therefore
 /// cannot leave a camera over-/under-exposed — that exact mismatch produced a
-/// black viewport (a 10 klx sandbox sun under a 128 klx-tuned EV15 camera).
+/// black viewport (a 10 klx sandbox sun under a 128 klx-tuned EV16 camera).
 /// [`Default`] is the canonical lunar calibration; a non-lunar scene (the
 /// sandbox) `insert_resource`s its own studio values before plugins are added.
 #[derive(Debug, Clone, Copy, PartialEq, Resource)]
@@ -63,7 +63,7 @@ pub struct LunarSun {
     /// Bevy renders physically (final pixel ≈ luminance ÷ 2^ev100), so exposure
     /// and key-light lux **must move together** — that is why the matched value
     /// is stored alongside the lux rather than hard-coded at each camera. ev100
-    /// 15 (≈ `Exposure::SUNLIGHT`) lands 0.13-albedo regolith at mid-gray under
+    /// 16 lands 0.13-albedo regolith at mid-gray under
     /// the ~128 k lx Sun; raise it to darken the image, lower it to brighten.
     pub exposure_ev100: f32,
 }

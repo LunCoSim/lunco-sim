@@ -2497,7 +2497,7 @@ impl Plugin for SandboxCorePlugin {
                 commands.insert_resource(SANDBOX_GRAVITY)
             })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
-            // calibrated lunar surface (the canonical 128 klx / EV15 `LunarSun`
+            // calibrated lunar surface (the canonical 128 klx / EV16 `LunarSun`
             // crushes the dark blueprint ground to black). Inserted BEFORE
             // `EnvironmentPlugin` so its `init_resource` keeps these. The sun
             // spawn AND every camera's exposure read this one resource, so lux

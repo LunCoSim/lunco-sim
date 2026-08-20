@@ -59,11 +59,11 @@ leave a camera under-exposed, because the two move together.
 |---|---|---|---|---|
 | Studio / editor default | 12 000 lx | 9.7 | 14.4 | legible, intended |
 | Studio "corrected" to lunar illuminance only | 128 000 lx | 9.7 | 153.9 | blown white |
-| Lunar EV with studio illuminance | 12 000 lx | 15.4 | 0.277 | 3.4 stops under |
-| **Calibrated lunar pair** | **128 000 lx** | **15.4** | **2.96** | correct |
+| Lunar EV with studio illuminance | 12 000 lx | 16 | 0.183 | 4.1 stops under |
+| **Calibrated lunar pair** | **128 000 lx** | **16** | **1.95** | correct |
 
-`LunarSun::default()` is the canonical lunar calibration (128 000 lx / EV 15 / 0.53°
-angular diameter); EV 15 ≈ `Exposure::SUNLIGHT` lands 0.13-albedo regolith at mid-gray.
+`LunarSun::default()` is the canonical lunar calibration (128 000 lx / EV 16 / 0.53°
+angular diameter); EV 16 lands 0.13-albedo regolith at mid-gray.
 **Raise EV100 to darken the image, lower it to brighten.**
 
 > A non-lunar scene (the luncosim) deliberately `insert_resource`s its own **studio** values
@@ -73,7 +73,7 @@ angular diameter); EV 15 ≈ `Exposure::SUNLIGHT` lands 0.13-albedo regolith at 
 > override on the light prim, not in the shared asset.
 
 The exact mismatch above produced a black viewport in practice: a 10 klx luncosim sun under
-a 128 klx-tuned EV15 camera.
+a 128 klx-tuned EV16 camera.
 
 ### Uniform ambient is the SUM of authored untextured `DomeLight` prims
 

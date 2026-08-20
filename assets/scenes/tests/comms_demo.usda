@@ -72,7 +72,7 @@ def Xform "CommsDemoScene" (
         # Exposure matched to grazing polar light: at the authored epoch the sun
         # sits ~2.6° above the Malapert horizon, so flat ground receives
         # 128k·sin(2.6°) ≈ 5.8k lux (luminance ≈ 740 cd/m² at regolith
-        # albedo) → EV100 ≈ 12.5. The full-daylight default (~15) renders the
+        # albedo) → EV100 ≈ 12.5. The full-daylight default (EV16) renders the
         # scene nearly black.
         float lunco:env:exposureEv100 = 12.5
     }

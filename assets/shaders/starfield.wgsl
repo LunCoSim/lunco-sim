@@ -83,7 +83,7 @@
 //! target, so it bypasses `view.exposure` and is tonemapped as-is. That is the
 //! honest arrangement for this sky, because the sky is NOT radiometric. A real
 //! photograph taken on the lunar surface in daylight has a pure black sky with no
-//! stars in it — sunlit regolith sits around EV 15 and the brightest stars around
+//! stars in it — sunlit regolith sits around EV 16 and the brightest stars around
 //! EV -3, and no single exposure holds both. We render them anyway.
 //!
 //! Bright stars are deliberately allowed to exceed 1.0 rather than being clamped,

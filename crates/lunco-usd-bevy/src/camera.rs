@@ -140,7 +140,7 @@ pub(crate) fn instantiate_camera_prim(
     //
     // `SceneCamera::agx()` (AgX tonemapping) + a calibrated `Exposure` mirror
     // the avatar camera's filmic look so a switch doesn't jump the grade. The
-    // exposure is the shared `LUNAR_SUN_EXPOSURE_EV100` (EV 15) — the SAME
+    // exposure is the shared `LUNAR_SUN_EXPOSURE_EV100` (EV 16) — the SAME
     // number `lunco_environment::LunarSun` defaults to and the celestial sun is
     // calibrated against — so the camera is exposed for the real ~131 klx sun
     // from frame one. Spawning at Bevy's `Exposure::default()` (EV 9.7) instead

@@ -332,7 +332,7 @@ pub fn update_sun_light_system(
             light_tf.look_to(dir, up);
         }
 
-        // 1/r² illuminance. `LunarSun`'s calibrated pair (~128 klx / EV 15)
+        // 1/r² illuminance. `LunarSun`'s calibrated pair (~128 klx / EV 16)
         // is the 1 AU value; ephemeris positions are AU, so the live scale is
         // 1/r². At the Moon this breathes ±3% over the year (Earth-orbit
         // eccentricity); a site on a body elsewhere gets its real solar
