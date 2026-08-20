@@ -217,7 +217,13 @@ pub fn compute_local_gravity(
         if existing.is_some() && !gravity_changed && !tf.is_changed() {
             continue;
         }
-        let g_world = match gravity.as_ref() {
+        let g = match gravity.as_ref() {
+            // A flat field is authored by UsdPhysicsScene in the stage's
+            // physics frame. The scene mount makes that frame the active
+            // Avian frame, so its direction is already expressed in the
+            // coordinate system consumed by the body solver. Converting it
+            // through the active-frame rotation would apply the site pose a
+            // second time and create a spurious horizontal acceleration.
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
                 let Some(body_link) = gravity_body else {
@@ -241,10 +247,13 @@ pub fn compute_local_gravity(
                 };
                 let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
                 let acceleration = provider.model.acceleration(relative_body);
-                body_rotation.0 * acceleration
+                let g_world = body_rotation.0 * acceleration;
+                // Surface gravity is evaluated in the celestial body's
+                // body-fixed frame and therefore needs the one explicit
+                // conversion into the active Avian frame.
+                frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world)
             }
         };
-        let g = frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world);
         // Don't re-insert (and re-trigger change detection) when the value is
         // unchanged — e.g. a `gravity_changed` pass that recomputes the same g.
         if let Some(LocalGravity(prev)) = existing {
@@ -727,5 +736,45 @@ impl Plugin for EnvironmentPlugin {
         // render-free now — its `bloom_intensity` field is applied by a second
         // observer over in `lunco-render-bevy`.
         register_all_commands(app);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use big_space::prelude::Grid;
+
+    #[test]
+    fn flat_gravity_stays_in_the_active_physics_frame() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformPlugin));
+        app.insert_resource(Gravity::flat(1.62, DVec3::NEG_Y));
+        app.add_systems(Update, compute_local_gravity);
+
+        let frame = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                Transform::from_rotation(Quat::from_rotation_z(0.8)),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(frame),
+            ))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+
+        app.update();
+
+        let LocalGravity(actual) = *app
+            .world()
+            .get::<LocalGravity>(body)
+            .expect("gravity is projected onto every spatial entity");
+        assert!(actual.abs_diff_eq(DVec3::new(0.0, -1.62, 0.0), 1.0e-12));
     }
 }
