@@ -23,7 +23,6 @@ use avian3d::prelude::{
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
     RigidBody, Rotation, Sensor, WriteRigidBodyForces,
 };
-use avian3d::schedule::PhysicsTime;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
