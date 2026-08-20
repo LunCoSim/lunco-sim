@@ -859,7 +859,11 @@ impl Default for TelemetryBrowserPanel {
             catalog: Catalog::default(),
             selected: None,
             preview: None,
-            focus_only: true,
+            // The browser is an inspection surface, so opening it must show the
+            // whole live registry. Selection scoping remains available as an
+            // explicit filter; making it implicit hid valid subsystem channels
+            // whenever a generated model published them on a sibling boundary.
+            focus_only: false,
             show_model_internals: true,
         }
     }
