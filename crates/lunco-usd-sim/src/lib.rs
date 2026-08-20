@@ -444,6 +444,96 @@ mod runtime_safety_tests {
     }
 }
 
+#[cfg(test)]
+mod wheel_wiring_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn spawn_wiring_fixture(
+        world: &mut World,
+        actuator_names: &[&str],
+        steer_name: Option<&str>,
+    ) -> Entity {
+        let stage = Handle::<UsdStageAsset>::default();
+        let drive_port = world.spawn_empty().id();
+        let mut actuators = HashMap::new();
+        for name in actuator_names {
+            actuators.insert((*name).to_owned(), drive_port);
+        }
+        world.spawn((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/World/Rover".into(),
+            },
+            lunco_core::ActuatorPorts::new(actuators),
+        ));
+        world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/World/Rover/Wheel".into(),
+                },
+                PendingWheelWiring {
+                    p_drive: drive_port,
+                    p_steer: drive_port,
+                    drive_port_name: "drive_left".to_owned(),
+                    steer_port_name: steer_name.map(str::to_owned),
+                },
+            ))
+            .id()
+    }
+
+    #[test]
+    fn missing_authored_drive_port_is_a_terminal_fault_and_not_ready_wiring() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &[], None);
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        let fault = world.resource::<lunco_core::RuntimeFaults>().first.as_ref();
+        assert_eq!(
+            fault.map(|fault| fault.kind),
+            Some("vehicle-port-wiring-invalid")
+        );
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn missing_authored_steer_port_is_a_terminal_fault_without_partial_drive_edge() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &["drive_left"], Some("steer"));
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        let fault = world.resource::<lunco_core::RuntimeFaults>().first.as_ref();
+        assert_eq!(
+            fault.map(|fault| fault.kind),
+            Some("vehicle-port-wiring-invalid")
+        );
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn authored_drive_and_steer_ports_create_both_edges() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &["drive_left", "steer"], Some("steer"));
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 2);
+    }
+}
+
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         crate::shader_ports::build(app);
@@ -3314,6 +3404,7 @@ fn try_wire_wheel(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
@@ -3325,58 +3416,86 @@ fn try_wire_wheel(
         });
 
         if let Some((_, _, actuators)) = vehicle_root {
+            // Resolve every authored endpoint before creating any edge. A
+            // partially wired vehicle is unsafe: one wheel receiving drive while
+            // another authored endpoint is absent must be a terminal scene fault,
+            // not a warning followed by a ready API response.
+            let drive_port_name = pending.drive_port_name.as_str();
+            let Some(d_port) = actuators.get(drive_port_name) else {
+                let detail = format!(
+                    "wheel {} requires actuator output '{}' but the vehicle authored no such output",
+                    prim_path.path, drive_port_name
+                );
+                error!("{detail}");
+                faults.raise(
+                    "vehicle-port-wiring-invalid",
+                    Some(ent),
+                    prim_path.path.as_str(),
+                    detail,
+                );
+                commands.entity(ent).remove::<PendingWheelWiring>();
+                continue;
+            };
+
+            let steer_port = match pending.steer_port_name.as_deref() {
+                None => None,
+                Some(name) => match actuators.get(name) {
+                    Some(port) => Some(port),
+                    None => {
+                        let detail = format!(
+                            "wheel {} requires actuator output '{}' but the vehicle authored no such output",
+                            prim_path.path, name
+                        );
+                        error!("{detail}");
+                        faults.raise(
+                            "vehicle-port-wiring-invalid",
+                            Some(ent),
+                            prim_path.path.as_str(),
+                            detail,
+                        );
+                        commands.entity(ent).remove::<PendingWheelWiring>();
+                        continue;
+                    }
+                },
+            };
+
             // Drive is an authored USD connection. No inferred mapping.
-            let drive_port_name = pending.drive_port_name.clone();
-            if let Some(d_port) = actuators.get(&drive_port_name) {
-                // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
-                // on scene swap — the same general lifecycle contract the ports/joint use.
-                commands.spawn((
-                    SimConnection {
-                        start_element: d_port,
-                        start_connector: PORT_NAME.to_string(),
-                        end_element: pending.p_drive,
-                        end_connector: PORT_NAME.to_string(),
-                        ..Default::default()
-                    },
-                    Name::new(format!("Conn_Drive_{}", drive_port_name)),
-                    ChildOf(ent),
-                ));
-                debug!(
-                    "Wired wheel {} drive to FSW port {}",
-                    prim_path.path, drive_port_name
-                );
-            } else {
-                warn!(
-                    "Wheel {} drive port '{}' not in rover ActuatorPorts; skipping",
-                    prim_path.path, drive_port_name
-                );
-            }
+            // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
+            // on scene swap — the same general lifecycle contract the ports/joint use.
+            commands.spawn((
+                SimConnection {
+                    start_element: d_port,
+                    start_connector: PORT_NAME.to_string(),
+                    end_element: pending.p_drive,
+                    end_connector: PORT_NAME.to_string(),
+                    ..Default::default()
+                },
+                Name::new(format!("Conn_Drive_{drive_port_name}")),
+                ChildOf(ent),
+            ));
+            debug!(
+                "Wired wheel {} drive to FSW port {}",
+                prim_path.path, drive_port_name
+            );
 
             // Steering is optional, but if present it is also an authored USD
             // connection. An unsteered wheel has no steering endpoint.
-            if let Some(name) = pending.steer_port_name.clone() {
-                if let Some(s_port) = actuators.get(&name) {
-                    commands.spawn((
-                        SimConnection {
-                            start_element: s_port,
-                            start_connector: PORT_NAME.to_string(),
-                            end_element: pending.p_steer,
-                            end_connector: PORT_NAME.to_string(),
-                            ..Default::default()
-                        },
-                        Name::new(format!("Conn_Steer_{}", name)),
-                        ChildOf(ent),
-                    ));
-                    info!(
-                        "Wired wheel {} steering to FSW port {}",
-                        prim_path.path, name
-                    );
-                } else {
-                    warn!(
-                        "Wheel {} steer port '{}' not in rover ActuatorPorts; skipping",
-                        prim_path.path, name
-                    );
-                }
+            if let (Some(name), Some(s_port)) = (pending.steer_port_name.as_deref(), steer_port) {
+                commands.spawn((
+                    SimConnection {
+                        start_element: s_port,
+                        start_connector: PORT_NAME.to_string(),
+                        end_element: pending.p_steer,
+                        end_connector: PORT_NAME.to_string(),
+                        ..Default::default()
+                    },
+                    Name::new(format!("Conn_Steer_{name}")),
+                    ChildOf(ent),
+                ));
+                info!(
+                    "Wired wheel {} steering to FSW port {}",
+                    prim_path.path, name
+                );
             }
             commands.entity(ent).remove::<PendingWheelWiring>();
         } else {
