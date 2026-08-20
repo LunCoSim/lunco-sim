@@ -291,14 +291,27 @@ impl ControlBinding {
     /// walking a vessel's `Controls` scope — each child prim's NAME is the intent
     /// (`parse_user_intent`), with `string lunco:port` + `double lunco:factor`.
     /// Unknown intents are skipped with a warning; returns `None` when nothing
-    /// valid parsed, so the caller can fall back to a topology default.
+    /// valid parsed, so the endpoint has no keyboard adapter. There is no
+    /// topology fallback: an omitted or invalid authored binding remains
+    /// unavailable rather than silently inventing a control surface.
     pub fn from_intent_entries(entries: &[(String, String, f64)]) -> Option<ControlBinding> {
         let mut binds = Vec::new();
         for (intent, port, scale) in entries {
-            match parse_user_intent(intent) {
-                Some(i) => binds.push((i, port.clone(), *scale)),
-                None => warn!("[ControlBinding] unknown control intent '{intent}' (skipped)"),
+            let Some(i) = parse_user_intent(intent) else {
+                warn!("[ControlBinding] unknown control intent '{intent}' (skipped)");
+                continue;
+            };
+            if port.trim().is_empty() {
+                warn!("[ControlBinding] empty input port for intent '{intent}' (skipped)");
+                continue;
             }
+            if !scale.is_finite() {
+                warn!(
+                    "[ControlBinding] non-finite factor for intent '{intent}' and port '{port}' (skipped)"
+                );
+                continue;
+            }
+            binds.push((i, port.clone(), *scale));
         }
         (!binds.is_empty()).then_some(ControlBinding { binds })
     }
@@ -330,18 +343,26 @@ impl ControlBinding {
     /// input writes 0 and clears the setpoint. `active(intent)` is the sole input
     /// — shared by the keyboard path and any internal (rhai/mission/AI) driver.
     pub fn resolve(&self, active: impl Fn(UserIntent) -> bool) -> Vec<(String, f64)> {
-        let mut values: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        // Keep the first authored occurrence order. HashMap iteration would make
+        // the serialized SetPorts order vary between processes.
+        let mut values: Vec<(String, f64)> = Vec::new();
         for (_intent, port, _s) in &self.binds {
-            values.entry(port.clone()).or_insert(0.0);
+            if !values.iter().any(|(name, _)| name == port) {
+                values.push((port.clone(), 0.0));
+            }
         }
         for (intent, port, s) in &self.binds {
             if active(*intent) {
-                *values.get_mut(port).unwrap() += *s;
+                values
+                    .iter_mut()
+                    .find(|(name, _)| name == port)
+                    .expect("resolve seeds every binding port")
+                    .1 += *s;
             }
         }
         values
             .into_iter()
-            .map(|(name, v)| (name, v.clamp(-1.0, 1.0)))
+            .map(|(name, value)| (name, value.clamp(-1.0, 1.0)))
             .collect()
     }
 }
@@ -781,5 +802,31 @@ mod tests {
             ControlBinding::from_intent_entries(&[("release".into(), "release".into(), 1.0)])
                 .expect("lander profile has an authored release control");
         assert!(lander.has_intent(UserIntent::Release));
+    }
+
+    #[test]
+    fn control_binding_resolve_preserves_authored_port_order_and_sums() {
+        let binding = ControlBinding::from_intent_entries(&[
+            ("right".into(), "steer".into(), 0.25),
+            ("forward".into(), "throttle".into(), 2.0),
+            ("backward".into(), "throttle".into(), -1.0),
+            ("left".into(), "steer".into(), 0.5),
+        ])
+        .expect("valid authored controls");
+
+        assert_eq!(
+            binding.resolve(|_| true),
+            vec![("steer".into(), 0.75), ("throttle".into(), 1.0)]
+        );
+    }
+
+    #[test]
+    fn control_binding_rejects_malformed_authored_entries() {
+        assert!(ControlBinding::from_intent_entries(&[
+            ("forward".into(), " ".into(), 1.0),
+            ("backward".into(), "throttle".into(), f64::NAN),
+            ("not_an_intent".into(), "throttle".into(), 1.0),
+        ])
+        .is_none());
     }
 }
