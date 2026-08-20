@@ -803,6 +803,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(lunco_theme::ThemePlugin);
         }
         app.register_settings_section::<WorkbenchAppearanceSettings>();
+        app.register_settings_section::<lunco_render::CommunicationLineSettings>();
         // The mission-time spine (doc 19): `TimeTransport` is the single
         // play/pause + rate authority and `WorldTime` the derived view. Guarded so
         // contexts that also add it via `CelestialPlugin` / `UsdBevyPlugin` are
@@ -4720,54 +4721,59 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             .is_some_and(|event| event.level == StatusLevel::Attention);
         let mut attention_clicked = false;
         let response = ui
-            .scope(|ui| {
-                ui.set_height(18.0);
-                ui.set_max_width(status_width);
-                if let Some(l) = latest.as_ref() {
-                    let dot_color = match l.level {
-                        StatusLevel::Error => theme.tokens.error,
-                        StatusLevel::Attention => theme.tokens.error,
-                        StatusLevel::Warn => theme.tokens.warning,
-                        StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
-                    };
-                    let attention = l.level == StatusLevel::Attention;
-                    if attention {
-                        attention_clicked = ui
-                            .add(egui::Button::new(
-                                egui::RichText::new(&l.message)
-                                    .small()
-                                    .strong()
-                                    .color(theme.tokens.error),
-                            ))
-                            .on_hover_text("Click to continue")
-                            .clicked();
-                    } else {
-                        // Painted circle instead of `●` so we don't depend
-                        // on a font that ships U+25CF (the wasm build's
-                        // egui font fallback chain doesn't, hence "tofu"
-                        // boxes for that glyph).
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                        ui.label(egui::RichText::new(l.source).small().strong());
-                        let text = egui::RichText::new(&l.message).small();
-                        ui.add(egui::Label::new(text).truncate());
-                        if l.level == StatusLevel::Progress {
-                            if let Some(pct) = l.progress_pct {
-                                ui.add(
-                                    egui::ProgressBar::new((pct as f32) / 100.0)
-                                        .desired_width(120.0)
-                                        .desired_height(6.0),
-                                );
-                            } else {
-                                ui.spinner();
+            .allocate_ui_with_layout(
+                egui::vec2(status_width, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if let Some(l) = latest.as_ref() {
+                        let dot_color = match l.level {
+                            StatusLevel::Error => theme.tokens.error,
+                            StatusLevel::Attention => theme.tokens.error,
+                            StatusLevel::Warn => theme.tokens.warning,
+                            StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
+                        };
+                        let attention = l.level == StatusLevel::Attention;
+                        if attention {
+                            attention_clicked = ui
+                                .add_sized(
+                                    [ui.available_width(), 18.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(&l.message)
+                                            .small()
+                                            .strong()
+                                            .color(theme.tokens.error),
+                                    ),
+                                )
+                                .on_hover_text("Click to continue")
+                                .clicked();
+                        } else {
+                            // Painted circle instead of `●` so we don't depend
+                            // on a font that ships U+25CF (the wasm build's
+                            // egui font fallback chain doesn't, hence "tofu"
+                            // boxes for that glyph).
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                            ui.label(egui::RichText::new(l.source).small().strong());
+                            let text = egui::RichText::new(&l.message).small();
+                            ui.add(egui::Label::new(text).truncate());
+                            if l.level == StatusLevel::Progress {
+                                if let Some(pct) = l.progress_pct {
+                                    ui.add(
+                                        egui::ProgressBar::new((pct as f32) / 100.0)
+                                            .desired_width(120.0)
+                                            .desired_height(6.0),
+                                    );
+                                } else {
+                                    ui.spinner();
+                                }
                             }
                         }
+                    } else {
+                        ui.label(egui::RichText::new("ready").small().weak());
                     }
-                } else {
-                    ui.label(egui::RichText::new("ready").small().weak());
-                }
-            })
+                },
+            )
             .response;
 
         if attention_clicked {
@@ -4792,7 +4798,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         if !tutorial_title.is_empty() {
             ui.separator();
             ui.label(
-                egui::RichText::new(format!("🎓 {tutorial_title}"))
+                egui::RichText::new(format!("Tutorial: {tutorial_title}"))
                     .small()
                     .strong(),
             );
@@ -4802,7 +4808,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             ui.separator();
             let scene_response = ui
                 .add(
-                    egui::Label::new(egui::RichText::new(format!("🎬 {}", scene_name)).small())
+                    egui::Label::new(egui::RichText::new(format!("Scene: {}", scene_name)).small())
                         .sense(egui::Sense::click()),
                 )
                 .on_hover_text("Click to show the full path of the loaded USD file");
@@ -5118,6 +5124,19 @@ fn register_graphics_settings_menu(world: &mut World) {
                 .weak()
                 .small(),
             );
+        }
+
+        ui.separator();
+        if let Some(current) = ctx.resource::<lunco_render::CommunicationLineSettings>() {
+            let mut settings = *current;
+            ui.checkbox(&mut settings.show, "Show communication lines")
+                .on_hover_text(
+                    "Display runtime connectivity beams between communication endpoints. \
+                     Off by default; the setting affects only this viewer.",
+                );
+            if settings != *current {
+                ctx.set_resource(settings);
+            }
         }
 
         ui.separator();

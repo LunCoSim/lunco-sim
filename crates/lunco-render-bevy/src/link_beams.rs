@@ -33,7 +33,7 @@ use lunco_celestial::link::LinkState;
 use lunco_core::coords::{world_pose, GridPos};
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_core::{GlobalEntityId, ScriptParams};
-use lunco_render::SceneCamera;
+use lunco_render::{CommunicationLineSettings, SceneCamera};
 
 /// The `info:id` the beam part authors.
 const DRIVER_ID: &str = "link_beams";
@@ -179,6 +179,7 @@ pub(crate) fn build(app: &mut App) {
 /// pre-existing entities as `Changed`.
 fn link_topology_changed(
     mut first: Local<bool>,
+    settings: Res<CommunicationLineSettings>,
     q_state: Query<(), Changed<LinkState>>,
     q_templates: Query<(), Or<(Changed<ProgramDriverId>, Changed<ScriptParams>)>>,
     mut rm_state: RemovedComponents<LinkState>,
@@ -186,7 +187,11 @@ fn link_topology_changed(
     // Drain unconditionally — `fold`, not `any`, which would short-circuit and
     // leave the buffer to accumulate.
     let removed = rm_state.read().fold(false, |acc, _| acc | true);
-    let run = !*first || removed || !q_state.is_empty() || !q_templates.is_empty();
+    let run = !*first
+        || settings.is_changed()
+        || removed
+        || !q_state.is_empty()
+        || !q_templates.is_empty();
     *first = true;
     run
 }
@@ -270,6 +275,7 @@ fn node_of<F: bevy::ecs::query::QueryData>(
 #[allow(clippy::too_many_arguments)]
 fn reconcile_link_beams(
     mut commands: Commands,
+    settings: Res<CommunicationLineSettings>,
     // Each template IS a `ProgramDriverId` prim (an authored `Cylinder`): mesh + bound
     // material + params. There are two per node — `Up` and `Down`.
     q_templates: Query<(
@@ -291,6 +297,13 @@ fn reconcile_link_beams(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_cam: Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
 ) {
+    if !settings.show {
+        for (beam, _, _) in &q_beams {
+            commands.entity(beam).try_despawn();
+        }
+        return;
+    }
+
     // GID → entity, so a peer (named by identity in `LinkState`) resolves to something
     // `world_pose` can place.
     let ent_of: HashMap<u64, Entity> = q_ids.iter().map(|(e, g)| (g.get(), e)).collect();
