@@ -77,27 +77,11 @@ pub(crate) async fn fetch_layer_closure(
                 .await
             {
                 Ok(fetched) => fetched,
-                // A sublayer that cannot be fetched is NOT fatal to the stage.
-                //
-                // USD semantics: an unresolvable arc posts an error and
-                // composition continues with what did resolve. Aborting the
-                // whole closure instead meant one missing environment layer
-                // cost a tester the entire session — no scene and no authored
-                // camera, with the viewport correctly remaining inactive.
-                // A rover with no ground under it is a far more useful bug
-                // report than a blank window.
-                //
-                // Skipping is all that is needed to get there: the id never
-                // enters `bytes`, so `LuncoUsdResolver::resolve` answers `None`
-                // for it — the same "unresolvable" signal openusd handles by
-                // composing the rest.
                 Err(e) => {
-                    bevy::log::error!(
-                        "[usd] sublayer `{child_id}` of `{id}` could not be fetched ({e}). \
-                         The stage will compose WITHOUT it — expect missing content \
-                         rather than a missing scene."
-                    );
-                    continue;
+                    return Err(anyhow!(
+                        "USD composition dependency `{child_id}` referenced by `{id}` could not \
+                         be fetched: {e}"
+                    ));
                 }
             };
             bytes.insert(child_id.clone(), fetched);
