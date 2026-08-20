@@ -51,14 +51,15 @@
 //! set is what makes "same defaults for both variants" true.
 
 use avian3d::prelude::{
-    AngularMotor, Collider, ColliderDensity, MotorModel, Position, RevoluteJoint, Rotation,
+    AngularMotor, Collider, ColliderDensity, Friction, MotorModel, Position, RevoluteJoint,
+    Rotation,
 };
 use bevy::asset::AssetId;
 use bevy::log::{info, warn};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
 use lunco_hardware::{MotorActuator, SteeringActuator};
-use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_mobility::{JointedWheelTire, Suspension, WheelRaycast};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -884,6 +885,17 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);
             }
+            if let (Some(susp), Some(mut ray)) = (
+                u.params.suspension,
+                world.get_mut::<avian3d::prelude::RayCaster>(u.entity),
+            ) {
+                ray.origin = DVec3::new(
+                    0.0,
+                    lunco_mobility::strut_offset(susp.rest_length, u.params.radius),
+                    0.0,
+                );
+                ray.max_distance = susp.rest_length;
+            }
             if let (Some(lock), Some(mut steer)) = (
                 u.max_steer_angle,
                 world.get_mut::<SteeringActuator>(u.entity),
@@ -905,6 +917,20 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
         if let Some(mut density) = world.get_mut::<ColliderDensity>(u.entity) {
             density.0 = u.params.wheel_density();
+        }
+        if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
+            friction.dynamic_coefficient = u.params.friction_mu;
+            friction.static_coefficient = u.params.friction_mu;
+        }
+        if let Some(mut tire) = world.get_mut::<JointedWheelTire>(u.entity) {
+            tire.radius = u.params.radius;
+            tire.axle_inertia = u.params.axle_inertia();
+            tire.slip_stiffness = u.params.slip_stiffness;
+            tire.cornering_stiffness = u.params.cornering_stiffness;
+            tire.min_validated_speed = u.params.min_validated_speed;
+            tire.friction_mu = u.params.friction_mu;
+            tire.bearing_damping = u.params.bearing_damping;
+            tire.axle_axis_local = u.params.axle_axis;
         }
         // Keep the physical wheel's tensor in lock-step with the composed
         // standard MOI and motor reflected inertia.  Updating only density
