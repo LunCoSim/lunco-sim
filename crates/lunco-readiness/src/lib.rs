@@ -205,7 +205,7 @@ impl Action {
     /// [`Self::DEADLINE_TICKS`] expressed in seconds of fixed-clock time, for
     /// policy and for reporting. Equal to wall-clock seconds only when the fixed
     /// clock is keeping up; the tick count is the authority.
-    pub const DEADLINE_S: f64 = Self::DEADLINE_TICKS as f64 / 60.0;
+    pub const DEADLINE_S: f64 = Self::DEADLINE_TICKS as f64 / lunco_core::FIXED_HZ;
 }
 
 /// Handle to one declared wait. Returned by [`ReadinessRegistry::begin`] and
@@ -582,7 +582,10 @@ mod tests {
     #[test]
     fn the_deadline_states_one_bound_in_two_units() {
         assert_eq!(Action::DEADLINE_TICKS, 3_600);
-        assert!((Action::DEADLINE_S - 60.0).abs() < 1e-9);
+        assert!(
+            (Action::DEADLINE_S - Action::DEADLINE_TICKS as f64 / lunco_core::FIXED_HZ).abs()
+                < 1e-9
+        );
     }
 
     /// Ages come from fixed ticks, so a wait's reported seconds are a multiple of
