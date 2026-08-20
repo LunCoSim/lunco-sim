@@ -289,9 +289,26 @@ def Xform "AckermannRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
-            # Nothing motor-side here: motors name their WHEELS unconditionally above.
-            # This variant only adds the articulation root and the `Wheel_*_Hinge`
-            # joints the loader reaches by following wheel → joint.
+            # Physical wheels are rigid axles. Replace the compliant raycast
+            # suspension arc with the explicit rigid-mount component; leaving the
+            # standard arc composed would make the physical projection claim a
+            # spring it does not integrate.
+            over "Wheel_FL" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_FR" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_RL" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_RR" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
         }
     }
 
