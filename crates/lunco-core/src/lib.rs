@@ -86,10 +86,10 @@ pub use identity::Provenance;
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use log::*;
 pub use markers::{
-    ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, PhysicsPoseAuthoritative,
-    ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
-    CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
+    ActuatorDrivenJoint, CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath,
+    EmbeddedScenarioSource, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
+    PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter,
+    TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{

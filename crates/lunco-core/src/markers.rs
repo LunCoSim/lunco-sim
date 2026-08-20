@@ -54,6 +54,16 @@ pub struct FlightAuthority {
 #[reflect(Component)]
 pub struct Callsign(pub String);
 
+/// Stable catalog identity for a runtime-spawned asset.
+///
+/// This is the content identity (`solar_tower`, `habitat_fsh`, ...), not the
+/// display [`Name`] and not a USD prim path. Spawn commands author or attach it
+/// to the instance root so scripts and UI can distinguish two catalog entries
+/// with similar human-readable names without substring matching.
+#[derive(Component, Debug, Clone, Reflect, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct CatalogEntryId(pub String);
+
 /// Marker: this camera's **pose is owned by an authored cinematic driver** (a
 /// USD camera path), not by the interactive camera stack.
 ///

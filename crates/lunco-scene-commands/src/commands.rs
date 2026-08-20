@@ -291,6 +291,13 @@ fn runtime_spawn_ops(
             type_name: None,
             reference: Some(asset_path.to_string()),
         },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: prim_path.clone(),
+            name: "lunco:catalogId".to_string(),
+            type_name: "string".to_string(),
+            value: entry_id.to_string(),
+        },
         UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
             path: prim_path.clone(),
@@ -4017,7 +4024,7 @@ mod tests {
             DVec3::new(2.0, 0.0, 7.0),
             DQuat::IDENTITY,
         );
-        assert_eq!(ops.len(), 3, "spawn lowers to one complete change set");
+        assert_eq!(ops.len(), 4, "spawn lowers to one complete change set");
         app.world_mut().trigger(ApplyUsdOps {
             doc,
             label: "Spawn Test Rover".into(),
@@ -4045,6 +4052,12 @@ mod tests {
                 .prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
             Some([2.0, 0.0, 7.0]),
             "spawn drop position recorded in runtime layer"
+        );
+        assert_eq!(
+            docu.runtime_data()
+                .prim_attribute_value::<String>(&prim, "lunco:catalogId"),
+            Some("test_rover".to_string()),
+            "spawn catalog identity must be authored with the runtime prim"
         );
         // ...rides into the composed view as a resolvable reference...
         let composed = docu.composed_source();

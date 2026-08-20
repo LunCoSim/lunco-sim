@@ -122,8 +122,8 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     (
         "list_entities",
         "list_entities()",
-        "[#{ id, name, type, pos }]",
-        "Every registered entity with name/type/pos — filter/score/select in-script.",
+        "[#{ id, name, type, pos, catalog_id }]",
+        "Every registered entity with display metadata and exact catalog identity; `catalog_id` is empty when the entity was not catalog-spawned.",
     ),
     (
         "add",

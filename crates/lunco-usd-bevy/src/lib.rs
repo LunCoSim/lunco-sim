@@ -1652,6 +1652,14 @@ fn instantiate_usd_prim_from_stage(
                     .entity(child_entity)
                     .try_insert(lunco_core::SelectableRoot);
             }
+            if let Some(entry_id) = reader
+                .text(&child_path, "lunco:catalogId")
+                .filter(|id| !id.trim().is_empty())
+            {
+                commands
+                    .entity(child_entity)
+                    .try_insert(lunco_core::CatalogEntryId(entry_id));
+            }
         }
     }
 }

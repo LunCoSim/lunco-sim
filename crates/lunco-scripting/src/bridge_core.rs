@@ -1033,7 +1033,9 @@ pub fn despawn_entity(gid: u64) -> Result<(), String> {
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
-/// `list_entities()` — `[{ id, name, type, pos }]` for every registered entity.
+/// `list_entities()` — `[{ id, name, type, pos, catalog_id }]` for every
+/// registered entity. `catalog_id` is empty for entities that were not created
+/// from the spawn catalog; it is never inferred from the display name.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         let pairs = world.resource::<ApiEntityRegistry>().entities();
@@ -1045,14 +1047,15 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,
                 Option<&CelestialBody>,
+                Option<&lunco_core::CatalogEntryId>,
             )>,
         )> = SystemState::new(world);
         let (poses, q_meta) = state.get(world).expect("read-only queries always validate");
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, body) =
-                    q_meta.get(entity).unwrap_or((None, false, None));
+                let (name, accepts_commands, body, catalog_id) =
+                    q_meta.get(entity).unwrap_or((None, false, None, None));
                 // NOTE: the reported kind string is deliberately unchanged — a lander
                 // accepts commands and has always reported as "rover" here.
                 let kind = if accepts_commands {
@@ -1073,6 +1076,10 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                         b.string(name.map(|n| n.as_str()).unwrap_or("")),
                     ),
                     ("type".to_string(), b.string(kind)),
+                    (
+                        "catalog_id".to_string(),
+                        b.string(catalog_id.map(|id| id.0.as_str()).unwrap_or("")),
+                    ),
                     ("pos".to_string(), pos),
                 ])
             })
