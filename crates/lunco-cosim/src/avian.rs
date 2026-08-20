@@ -232,12 +232,11 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
 /// reads the same native contact fact; it does not re-derive it, or the two
 /// answers could drift.
 ///
-/// The force is `Σ normal impulse / (solver passes × physics_dt)`. Avian's
-/// documented `normal_impulse` is accumulated across the substeps, but Avian
-/// 0.7 records the accumulated normal impulse once in each of its two contact
-/// passes (bias and relaxation). This boundary converts that solver accounting
-/// into the physical impulse delivered during the complete physics interval.
-/// The divisor is the full physics interval, not a solver substep interval.
+/// The shared physics boundary converts Avian's solver-phase accounting into a
+/// physical load over the master interval. It accounts for Avian's biased and
+/// relaxation phases once, and never divides by the internal substep count.
+/// This keeps Modelica touchdown signals and vehicle tire loads on the same
+/// contract.
 ///
 /// `contact_pairs_with` yields every pair whose AABBs overlap, INCLUDING pairs
 /// that are not yet touching, so `is_touching` is not optional: without it a leg
@@ -258,12 +257,6 @@ fn contact_of_filtered(
     entity: Entity,
     is_sensor: impl Fn(Entity) -> bool,
 ) -> (bool, f64) {
-    // Avian 0.7 runs the normal contact constraint twice per substep: once
-    // with penetration bias and once without it. `normal_impulse` is the
-    // solver's documented accumulated field, but its implementation adds the
-    // accumulated value in both passes. Keep this conversion here, at the
-    // native contact boundary, so every consumer receives a physical load.
-    const CONTACT_SOLVER_PASSES: f64 = 2.0;
     let mut normal_impulse = 0.0;
     let mut touching = false;
     for pair in graph.contact_pairs_with(entity) {
@@ -287,7 +280,7 @@ fn contact_of_filtered(
     }
     (
         touching,
-        normal_impulse / (CONTACT_SOLVER_PASSES * physics_dt.max(1e-9)),
+        lunco_physics::contact_force_from_impulse(normal_impulse, physics_dt),
     )
 }
 

@@ -15,13 +15,6 @@ use lunco_hardware::{commanded_motor_torque, MotorActuator};
 
 use crate::{contact_plane_basis, longitudinal_tire_step, tire_patch_force};
 
-// Avian stores `ContactNormalPart::total_impulse`, which accumulates the
-// normal solve's bias and relax passes. The native physics schedule runs those
-// two passes once per substep; divide them out before converting the measured
-// frame impulse to a force. This is a solver-contract relationship, not a tire
-// calibration coefficient.
-const CONTACT_NORMAL_SOLVER_PASSES: f64 = 2.0;
-
 /// Authored tire parameters and topology for one Avian-backed wheel body.
 ///
 /// This component is a runtime projection of the composed USD wheel/tire and
@@ -111,6 +104,11 @@ fn body_state(
 /// wheel against the aggregate load, then its force is distributed over the
 /// contact points by load share.  This avoids solving the motor torque once per
 /// manifold point while retaining each point's normal and slip angle.
+///
+/// This is one master-tick exchange. Avian's `PhysicsSchedule`, which runs
+/// after the co-simulation actuation boundary, distributes the resulting force
+/// over its internal solver substeps. This system must not run a second
+/// substep loop or advance a Modelica participant inside one.
 pub fn apply_jointed_tire_forces(
     mut bodies: ParamSet<(
         Query<Forces>,
@@ -128,13 +126,10 @@ pub fn apply_jointed_tire_forces(
     q_inputs: Query<&InputPorts>,
     q_child_of: Query<&ChildOf>,
     collisions: Collisions,
-    physics_time: Res<Time<Physics>>,
     fixed_time: Res<Time<Fixed>>,
-    substeps: Res<SubstepCount>,
 ) {
     let full_dt = fixed_time.delta_secs_f64();
-    let substep_dt = physics_time.delta_secs_f64() / substeps.0.max(1) as f64;
-    if full_dt <= 0.0 || substep_dt <= 0.0 {
+    if full_dt <= 0.0 {
         return;
     }
 
@@ -209,8 +204,10 @@ pub fn apply_jointed_tire_forces(
                     };
                     let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
                     for point in &manifold.points {
-                        let normal_force =
-                            point.normal_impulse / (full_dt * CONTACT_NORMAL_SOLVER_PASSES);
+                        let normal_force = lunco_physics::contact_force_from_impulse(
+                            point.normal_impulse,
+                            full_dt,
+                        );
                         if normal_force <= 0.0 {
                             continue;
                         }
