@@ -873,10 +873,8 @@ pub fn apply_pending_forces(
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
 ) {
-    let physics_live = !physics_time.is_paused()
-        && !virtual_time.is_paused()
-        && virtual_time.relative_speed_f64() > 0.0
-        && !faults.as_deref().is_some_and(|state| state.active());
+    let physics_live =
+        lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref());
     for (e, mut pf) in &mut q_pending {
         if !pf.f.is_finite() || !pf.f_local.is_finite() || !pf.torque.is_finite() {
             let detail = format!(

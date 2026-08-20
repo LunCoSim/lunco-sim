@@ -7704,6 +7704,7 @@ name = "lunco-readiness"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-hooks",
  "lunco-settings",
  "serde",
