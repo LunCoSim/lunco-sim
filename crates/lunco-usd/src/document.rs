@@ -81,7 +81,7 @@
 use std::collections::VecDeque;
 
 use bevy::log::warn;
-use bevy::math::{DVec3, EulerRot, Quat};
+use bevy::math::DVec3;
 use bevy::reflect::Reflect;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 use lunco_usd_bevy::author::{
@@ -264,7 +264,8 @@ pub enum UsdOp {
         edit_target: LayerId,
         /// Absolute USD path of the prim whose translate to set.
         path: String,
-        /// `[x, y, z]` in stage units.
+        /// `[x, y, z]` in canonical metres and Y-up coordinates. The document
+        /// authoring boundary converts it to the target stage convention.
         value: [f64; 3],
     },
     /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
@@ -1083,47 +1084,6 @@ fn scale_scalar_value(v: sdf::Value, f: impl Fn(f64) -> f64) -> sdf::Value {
     }
 }
 
-/// A canonical `xformOp:rotateXYZ` Euler triple (degrees) in the STAGE's frame.
-///
-/// A Euler triple has no axis remap of its own — the remap is defined on the
-/// rotation it denotes — so the value round-trips through a quaternion. That
-/// costs `f32` precision, which is why callers skip this entirely when the
-/// conversion is the identity.
-///
-/// `EulerRot::XYZ` matches `UsdGeomXformable`'s `rotateXYZ`: rotate about X, then
-/// Y, then Z. The same pairing the read path uses for this op token.
-fn rotate_xyz_to(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
-    let q = Quat::from_euler(
-        EulerRot::XYZ,
-        (deg[0] as f32).to_radians(),
-        (deg[1] as f32).to_radians(),
-        (deg[2] as f32).to_radians(),
-    );
-    let (x, y, z) = conv.stage_rotation(q).to_euler(EulerRot::XYZ);
-    [
-        x.to_degrees() as f64,
-        y.to_degrees() as f64,
-        z.to_degrees() as f64,
-    ]
-}
-
-/// The inverse of [`rotate_xyz_to`]: a stage-frame `rotateXYZ` triple back to
-/// canonical, for the value an undo op carries.
-fn rotate_xyz_from(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
-    let q = Quat::from_euler(
-        EulerRot::XYZ,
-        (deg[0] as f32).to_radians(),
-        (deg[1] as f32).to_radians(),
-        (deg[2] as f32).to_radians(),
-    );
-    let (x, y, z) = conv.rotation(q).to_euler(EulerRot::XYZ);
-    [
-        x.to_degrees() as f64,
-        y.to_degrees() as f64,
-        z.to_degrees() as f64,
-    ]
-}
-
 fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
     let Ok(attr) = prim.append_property("xformOpOrder") else {
         return Vec::new();
@@ -1409,11 +1369,7 @@ impl Document for UsdDocument {
                 // non-canonical stages pay the precision of the remap they need.
                 let conv =
                     ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
-                let authored = if conv.is_identity() {
-                    value
-                } else {
-                    rotate_xyz_to(&conv, value)
-                };
+                let authored = conv.stage_euler_xyz_deg(value);
                 stage
                     .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
                     .map_err(author_err)?
@@ -1436,11 +1392,7 @@ impl Document for UsdDocument {
                         .map(|old| UsdOp::SetRotate {
                             edit_target: id.clone(),
                             path: path.clone(),
-                            value: if conv.is_identity() {
-                                old
-                            } else {
-                                rotate_xyz_from(&conv, old)
-                            },
+                            value: conv.canonical_euler_xyz_deg(old),
                         })
                         .unwrap_or_else(|| self.coarse_inverse(target, &id))
                 } else {
@@ -1514,7 +1466,7 @@ impl Document for UsdDocument {
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let conv =
                     ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
-                let val = conv.stage_value(&type_name, val);
+                let val = conv.stage_xform_value(&name, &type_name, val);
 
                 // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
                 // `double`, so the fact that it scales with `metersPerUnit` lives in
@@ -1559,7 +1511,7 @@ impl Document for UsdDocument {
                     // straight out of the layer, so it is in the stage's frame, and a
                     // `SetAttribute` carries canonical values.
                     prior
-                        .map(|old| conv.canonical_value(&type_name, old))
+                        .map(|old| conv.canonical_xform_value(&name, &type_name, old))
                         .map(|old| match linear {
                             crate::schema::LinearUnit::Length {
                                 stage_units_per_unit,
@@ -1626,7 +1578,7 @@ impl Document for UsdDocument {
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 let conv =
                     ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
-                let val = conv.stage_value(&type_name, val);
+                let val = conv.stage_xform_value(&name, &type_name, val);
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
                     crate::schema::LinearUnit::Length {
@@ -1657,7 +1609,7 @@ impl Document for UsdDocument {
                         _ => None,
                     })
                     .map(|old| {
-                        let old = conv.canonical_value(&type_name, old);
+                        let old = conv.canonical_xform_value(&name, &type_name, old);
                         match linear {
                             crate::schema::LinearUnit::Length {
                                 stage_units_per_unit,
@@ -1733,7 +1685,7 @@ impl Document for UsdDocument {
                     ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
-                    let old = conv.canonical_value(&ty, old);
+                    let old = conv.canonical_xform_value(&name, &ty, old);
                     let old = match linear {
                         crate::schema::LinearUnit::Length {
                             stage_units_per_unit,
@@ -3483,7 +3435,7 @@ mod tests {
     fn set_time_sample_authors_keyframes_and_interpolates() {
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(14),
-            "#usda 1.0\ndef Xform \"Mover\"\n{\n}\n",
+            "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Mover\"\n{\n}\n",
             DocumentOrigin::writable_file("/tmp/anim.usda"),
         );
         // Two keyframes of the translate, authored as time samples. Each fresh

@@ -170,6 +170,9 @@ impl CanonicalStage {
     /// stays the durable/serialized truth).
     pub(crate) fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .stage_point_d(bevy::math::DVec3::from_array(value))
+            .to_array();
         self.stage
             .create_attribute(format!("{}.xformOp:translate", path.as_str()), "double3")
             .map_err(|e| anyhow!("author translate at {path}: {e}"))?
@@ -186,6 +189,7 @@ impl CanonicalStage {
     /// already listed (extends a stack, never clobbers it).
     pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view()).stage_euler_xyz_deg(value);
         self.stage
             .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
             .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
@@ -497,6 +501,7 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view()).stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author attribute {prim}.{name} ({type_name}): {e}"))?
@@ -523,6 +528,7 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view()).stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author time sample {prim}.{name} ({type_name}): {e}"))?
@@ -1007,6 +1013,38 @@ mod authoring_tests {
         assert!(
             !cs.view().has_prim(&r2),
             "the removed prim is gone from the stage"
+        );
+    }
+
+    #[test]
+    fn live_authoring_converts_canonical_values_to_stage_metrics() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+        let recipe = StageRecipe::from_source("noncanonical.usda", scene);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build non-canonical stage");
+        let rover = SdfPath::new("/World/Rover").unwrap();
+
+        cs.author_translate(&rover, [0.0, 1.0, 0.0])
+            .expect("author canonical metre position");
+        let stage_translation =
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate").expect("stage translate");
+        assert!(
+            stage_translation
+                .iter()
+                .zip([0.0, 0.0, 100.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical +Y metre must be authored as +Z stage centimetres: {stage_translation:?}"
+        );
+
+        cs.author_rotate(&rover, [0.0, 90.0, 0.0])
+            .expect("author canonical local rotation");
+        let stage_rotation =
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:rotateXYZ").expect("stage rotateXYZ");
+        assert!(
+            stage_rotation
+                .iter()
+                .zip([0.0, 0.0, 90.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical rotation must be expressed in the Z-up stage basis: {stage_rotation:?}"
         );
     }
 

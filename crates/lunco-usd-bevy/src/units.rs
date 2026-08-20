@@ -59,7 +59,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::log::{error_once, warn_once};
-use bevy::math::{DQuat, DVec3, Quat, Vec3};
+use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 
 use crate::read::UsdRead;
@@ -577,6 +577,234 @@ impl ConventionTransform {
     pub fn stage_scale_vec(&self, s: Vec3) -> Vec3 {
         let s = self.rot.inverse() * s;
         Vec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// A canonical local scale in `f64` → the stage's axis order. USD xform
+    /// attributes are commonly `double3`; keeping this path in `f64` avoids
+    /// narrowing an edit merely because the live authoring API received a
+    /// double-valued USD op.
+    pub fn stage_scale_vec_d(&self, s: DVec3) -> DVec3 {
+        let s = self.rot.as_dquat().inverse() * s;
+        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// A stage-local scale in `f64` → canonical axis order.
+    pub fn scale_vec_d(&self, s: DVec3) -> DVec3 {
+        let s = self.rot.as_dquat() * s;
+        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// Convert a canonical `xformOp:rotateXYZ` Euler triple to the stage's
+    /// basis. Euler angles do not have an independent axis remap; the
+    /// represented rotation must be remapped as a quaternion and decomposed
+    /// again in the same USD extrinsic order used by the reader.
+    pub fn stage_euler_xyz_deg(&self, deg: [f64; 3]) -> [f64; 3] {
+        if self.is_identity() {
+            return deg;
+        }
+        let q = Quat::from_euler(
+            EulerRot::XYZEx,
+            (deg[0] as f32).to_radians(),
+            (deg[1] as f32).to_radians(),
+            (deg[2] as f32).to_radians(),
+        );
+        let (x, y, z) = self.stage_rotation(q).to_euler(EulerRot::XYZEx);
+        [
+            x.to_degrees() as f64,
+            y.to_degrees() as f64,
+            z.to_degrees() as f64,
+        ]
+    }
+
+    /// Convert a stage-local `xformOp:rotateXYZ` Euler triple to canonical
+    /// degrees. This is the exact inverse of [`stage_euler_xyz_deg`].
+    pub fn canonical_euler_xyz_deg(&self, deg: [f64; 3]) -> [f64; 3] {
+        if self.is_identity() {
+            return deg;
+        }
+        let q = Quat::from_euler(
+            EulerRot::XYZEx,
+            (deg[0] as f32).to_radians(),
+            (deg[1] as f32).to_radians(),
+            (deg[2] as f32).to_radians(),
+        );
+        let (x, y, z) = self.rotation(q).to_euler(EulerRot::XYZEx);
+        [
+            x.to_degrees() as f64,
+            y.to_degrees() as f64,
+            z.to_degrees() as f64,
+        ]
+    }
+
+    /// Convert a canonical value for a standard USD xform attribute to the
+    /// stage representation. Standard xform roles are not expressible by the
+    /// generic USD type name (`double3` is used for both points and scales), so
+    /// this is the single owner of that narrowly-defined distinction. Unknown
+    /// attributes still use [`stage_value`] and are never guessed by name.
+    pub fn stage_xform_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("xformOp:translate", "float3", V::Vec3f(a)) => {
+                let r = self.stage_point(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:translate", "double3", V::Vec3d(a)) => {
+                let r = self.stage_point_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:rotateXYZ", "float3", V::Vec3f(a)) => {
+                let r = self.stage_euler_xyz_deg([a.x as f64, a.y as f64, a.z as f64]);
+                V::Vec3f(gf::Vec3f {
+                    x: r[0] as f32,
+                    y: r[1] as f32,
+                    z: r[2] as f32,
+                })
+            }
+            ("xformOp:rotateXYZ", "double3", V::Vec3d(a)) => {
+                let r = self.stage_euler_xyz_deg([a.x, a.y, a.z]);
+                V::Vec3d(gf::Vec3d {
+                    x: r[0],
+                    y: r[1],
+                    z: r[2],
+                })
+            }
+            ("xformOp:scale", "float3", V::Vec3f(a)) => {
+                let r = self.stage_scale_vec(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:scale", "double3", V::Vec3d(a)) => {
+                let r = self.stage_scale_vec_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatf", V::Quatf(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatd", V::Quatd(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.stage_value(type_name, value),
+        }
+    }
+
+    /// The inverse of [`stage_xform_value`], for a composed stage value read
+    /// back into the canonical op representation.
+    pub fn canonical_xform_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("xformOp:translate", "float3", V::Vec3f(a)) => {
+                let r = self.point(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:translate", "double3", V::Vec3d(a)) => {
+                let r = self.point_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:rotateXYZ", "float3", V::Vec3f(a)) => {
+                let r = self.canonical_euler_xyz_deg([a.x as f64, a.y as f64, a.z as f64]);
+                V::Vec3f(gf::Vec3f {
+                    x: r[0] as f32,
+                    y: r[1] as f32,
+                    z: r[2] as f32,
+                })
+            }
+            ("xformOp:rotateXYZ", "double3", V::Vec3d(a)) => {
+                let r = self.canonical_euler_xyz_deg([a.x, a.y, a.z]);
+                V::Vec3d(gf::Vec3d {
+                    x: r[0],
+                    y: r[1],
+                    z: r[2],
+                })
+            }
+            ("xformOp:scale", "float3", V::Vec3f(a)) => {
+                let r = self.scale_vec(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:scale", "double3", V::Vec3d(a)) => {
+                let r = self.scale_vec_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatf", V::Quatf(q)) => {
+                let r = self.rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatd", V::Quatd(q)) => {
+                let r = self.rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.canonical_value(type_name, value),
+        }
     }
 
     /// De-conjugate a prim's **local** transform back to the stage's frame:
