@@ -1,4 +1,4 @@
-// Full-throttle straight-line regression for the physical rocker-bogie.
+// Full-throttle straight-line regression for the articulated rocker-bogie.
 //
 // This deliberately measures the chassis pose, not only distance. A rover can
 // keep making forward progress while the solver alternates wheel contact and

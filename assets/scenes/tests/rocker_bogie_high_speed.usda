@@ -5,7 +5,7 @@
     metersPerUnit = 1
 )
 
-# Full-throttle straight-line regression for the physical rocker-bogie. The
+# Full-throttle straight-line regression for the articulated rocker-bogie. The
 # ground is flat so any height/pose oscillation is drivetrain or suspension
 # behavior, not terrain geometry.
 def Xform "RockerBogieHighSpeed" (

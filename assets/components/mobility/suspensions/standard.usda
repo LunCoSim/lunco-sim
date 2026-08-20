@@ -25,10 +25,10 @@
 # (`physxVehicleSuspension:springStrength` / `:springDamperRate`), so a spring rate
 # means the same thing here as in any other PhysX vehicle. `restLength` has no PhysX
 # equivalent — PhysX models travel as `travelDistance` + `sprungMass` — so LunCo's
-# raycast rest-length is authored under the lunco: namespace. Both wheel
-# implementations read exactly these: the raycast wheel integrates the spring
-# analytically, the joint wheel realises it as a real prismatic spring-damper. Same
-# authored data, two constructions.
+# raycast rest-length is authored under the lunco: namespace. The raycast wheel
+# integrates this spring analytically. A joint-based wheel requires an explicitly
+# authored carrier body and prismatic joint; it must not claim this visual/compliance
+# arc while silently running as a rigid axle.
 #
 # WHERE IT TRAVELS FROM. The wheel prim is THE AXLE, in both realizations. The raycast
 # wheel therefore casts not from the prim but from the STRUT TOP, `restLength − radius`
