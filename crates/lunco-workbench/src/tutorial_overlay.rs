@@ -198,7 +198,9 @@ register_commands!(
 // ── Rendering ─────────────────────────────────────────────────────────────
 
 /// Draw the persistent objectives/hint card, top-left, below the menu bar.
-/// Non-interactive (foreground layer) so it never eats clicks.
+/// Non-interactive and in the foreground layer so it stays visible across
+/// perspectives without eating clicks. Tooltip-order popups and the menu bar
+/// remain higher in the egui hierarchy.
 fn draw_tutorial_hud(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,
@@ -208,8 +210,9 @@ fn draw_tutorial_hud(
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    // The viewport rect is the full egui viewport. The background layer keeps
-    // this non-interactive HUD behind the workbench chrome.
+    // The viewport rect is the full egui viewport. The foreground layer keeps
+    // this non-interactive HUD above ordinary panels while popup surfaces can
+    // still take precedence.
     let screen = ctx.viewport_rect();
     let theme = theme
         .map(|t| t.clone())
@@ -217,13 +220,13 @@ fn draw_tutorial_hud(
     let accent = theme.tokens.accent;
 
     egui::Area::new(egui::Id::new("lunco_tutorial_hud"))
-        .order(egui::Order::Background)
+        .order(egui::Order::Foreground)
         .interactable(false)
         .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
         .show(ctx, |ui| {
             ui.set_max_width(320.0);
             egui::Frame::new()
-                .fill(theme.tokens.overlay_backdrop)
+                .fill(theme.tokens.surface_raised)
                 .corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
                 .inner_margin(egui::Margin::symmetric(12, 10))
@@ -895,9 +898,17 @@ impl Plugin for TutorialOverlayPlugin {
             .mark_client_local::<ClearSpotlight>()
             .mark_client_local::<SetTourStep>()
             .mark_client_local::<ClearTour>();
+        // The persistent objectives card is view-independent: it remains
+        // visible when the user changes perspective. Spotlight/tour content
+        // still follows the host's perspective policy because its anchors are
+        // view-local.
         app.add_systems(
             EguiPrimaryContextPass,
-            (draw_tutorial_hud, draw_spotlight, draw_tour)
+            draw_tutorial_hud.after(crate::WorkbenchRenderSet),
+        );
+        app.add_systems(
+            EguiPrimaryContextPass,
+            (draw_spotlight, draw_tour)
                 .after(crate::WorkbenchRenderSet)
                 .run_if(tutorial_overlay_visible),
         );

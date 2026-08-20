@@ -1849,6 +1849,21 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Reset the entire workbench presentation to its first-registered
+    /// perspective and its authored slot preset. This is stronger than
+    /// [`Self::reset_to_default_layout`]: opening a guided tutorial must not
+    /// inherit the user's current perspective or any cached per-perspective
+    /// tabs and splits.
+    pub fn reset_to_default_perspective(&mut self) {
+        let Some(id) = self.perspectives.first().map(|p| p.id()) else {
+            return;
+        };
+        self.dock_cache.clear();
+        self.dock = DockState::new(Vec::new());
+        self.active_perspective = None;
+        self.activate_perspective(id);
+    }
+
     /// The `instance` discriminant of the currently *focused* tab, when
     /// it's a multi-instance tab. Document tabs open with their
     /// `DocumentId.raw()` as the instance (see `open_instance` callers),
@@ -5499,6 +5514,37 @@ mod tests {
             !layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
             "reset restored the cached tab instead of a clean preset"
         );
+        assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
+    }
+
+    #[test]
+    fn reset_to_default_perspective_discards_current_view_and_all_caches() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
+            title: "A",
+            marker: PanelId("panel_a"),
+        });
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("b"),
+            title: "B",
+            marker: PanelId("panel_b"),
+        });
+
+        layout.activate_perspective(PerspectiveId("b"));
+        layout.dock = DockState::new(vec![TabId::Singleton(PanelId("stale"))]);
+        layout.activate_perspective(PerspectiveId("a"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert!(layout.dock_cache.contains_key(&PerspectiveId("b")));
+
+        layout.reset_to_default_perspective();
+
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert!(layout.dock_cache.is_empty());
+        assert!(!layout
+            .dock
+            .iter_all_tabs()
+            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
