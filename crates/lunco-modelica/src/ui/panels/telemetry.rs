@@ -1,4 +1,4 @@
-//! Telemetry panel — model parameters, inputs, and variable plotting toggles.
+//! Model inspector — live model parameters, inputs, and state exploration.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -75,7 +75,7 @@ fn resizable_v_section<R>(
     result
 }
 
-/// Telemetry panel — model parameters, inputs, and variable plotting toggles.
+/// Model inspector — the complete live Modelica state surface.
 pub struct TelemetryPanel;
 
 impl Panel for TelemetryPanel {
@@ -83,7 +83,7 @@ impl Panel for TelemetryPanel {
         PanelId("modelica_inspector")
     }
     fn title(&self) -> String {
-        "📊 Telemetry".into()
+        "🔎 Model Inspector".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
@@ -285,7 +285,10 @@ impl Panel for TelemetryPanel {
             );
         }
 
-        // Variables (Toggle to Plot).
+        // Live state exploration. This list is a view over the model's runtime
+        // state, not a telemetry catalog. Selecting a row creates recording
+        // intent for a plot; unselected state remains inspectable without
+        // creating a history channel.
         //
         // Checkboxes write to TWO things in lockstep so this is the
         // single place to pick variables for plotting:
@@ -301,8 +304,8 @@ impl Panel for TelemetryPanel {
         // collapsing-headers per top-level component group keep the
         // panel scannable.
         ui.horizontal(|ui| {
-            ui.label("Variables");
-            ui.weak("(toggle to plot)");
+            ui.label("State and variables");
+            ui.weak("(select to record)");
         });
 
         // Filter input lives on ExperimentVisibility — same resource

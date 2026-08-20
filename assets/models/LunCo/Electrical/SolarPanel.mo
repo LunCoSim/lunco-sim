@@ -21,7 +21,8 @@ model SolarPanel
   input Real panel_normal_z "Panel illuminated-face normal in the electrical assembly frame";
 
   Pin p;
-  output Real power_out "Electrical power delivered to the bus, W";
+  output Real power_out(unit="W") "Electrical power delivered to the bus after bus loading";
+  output Real available_power_w(unit="W") "Electrical power available from incident sunlight before bus loading";
   output Real cos_incidence "Live clamped cosine of solar incidence, 0..1";
   output Real terminal_voltage_v(unit="V") "Electrical bus voltage at the solar-panel terminals";
   output Real generated_current_a(unit="A") "Current delivered from the panel to the electrical bus";
@@ -46,7 +47,8 @@ equation
   // whole operating range — that is the defining characteristic of a
   // photovoltaic device, and it is why panels are rated by short-circuit current.
   // `p.i` is negative because current LEAVES the panel into the node.
-  p.i = -(area * efficiency * irradiance * cos_incidence) / v_mp;
+  available_power_w = area * efficiency * irradiance * cos_incidence;
+  p.i = -available_power_w / v_mp;
 
   // Delivered power FOLLOWS from the current and the bus voltage it actually
   // meets, so droop still shows up here — it is an output, not a driver.

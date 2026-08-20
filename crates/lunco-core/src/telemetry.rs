@@ -206,7 +206,8 @@ pub struct Parameter {
     /// author is on.
     pub enabled: bool,
     /// Emit only when the value has moved by at least this much since the last
-    /// *emitted* sample (absolute epsilon). `None` ⇒ emit every due sample.
+    /// *emitted* sample (absolute epsilon). `None` ⇒ use the shared
+    /// `TelemetrySettings::default_deadband` policy.
     ///
     /// The single biggest bandwidth win available: a value that isn't moving costs
     /// nothing. Applies to numeric values only; `Bool`/`String` always emit when due.

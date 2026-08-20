@@ -21,8 +21,8 @@ model DCMotor
   // nothing else, so a bare `Real` is computed every step and readable by no one.
   // A reported quantity is not a causal claim — `p.i` and `p.v` are still solved
   // acausally by the connection set; this only says the number leaves the model.
-  output Real electrical_power "Electrical power drawn, W";
-  output Real heat "Electrical loss delivered to the thermal network, W";
+  output Real electrical_power(unit="W") "Electrical power drawn by the motor drive";
+  output Real heat(unit="W") "Electrical loss delivered to the thermal network";
   output Real terminal_voltage_v(unit="V") "Voltage supplied to the motor drive";
   output Real terminal_current_a(unit="A") "Current drawn by the motor drive";
   output Real mechanical_power_w(unit="W") "Estimated mechanical power available after electrical losses";

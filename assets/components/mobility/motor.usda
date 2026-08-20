@@ -248,6 +248,11 @@ def Xform "Motor" (
     # observable of the DCMotor facet, so generated electrical islands expose it
     # through their canonical member-output boundary alongside `heat`.
     float outputs:electrical_power
+    # Instantaneous electrical measurements from the same solved terminal. These
+    # are public component outputs, not values reconstructed by the drivetrain.
+    float outputs:terminal_voltage_v
+    float outputs:terminal_current_a
+    float outputs:mechanical_power_w
 
     # --- Telemetry ---
     # Drive command as a RETAINED channel, so "was this motor actually being
@@ -268,11 +273,10 @@ def Xform "Motor" (
     # the component that owns the value); until that exists, this channel states
     # what is true.
     #
-    # `Parameter` is a Component — ONE channel per prim — so this names the one
-    # quantity worth a mnemonic and a unit. Everything else the model exposes
-    # (`heat`, `electrical_power`, and every INTERNAL Modelica variable) is published wholesale under
-    # the `sim.` namespace by `lunco_cosim::telemetry`, which is why there is no
-    # temptation here to invent a channel prim per variable.
+    # The enclosing generated electrical domain admits the authored motor output
+    # ports (`heat`, electrical power, terminal measurements) and presents them
+    # back on this physical Motor prim. Solver-only connector values and wrapper
+    # aliases remain execution data, not operator telemetry.
     #
     # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
     # no dimension. The browser renders that as a blank unit cell rather than a

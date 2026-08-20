@@ -21,7 +21,7 @@ use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
 use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
-use lunco_cosim::{CosimOutputMetadata, SimComponent};
+use lunco_cosim::SimComponent;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
@@ -374,10 +374,10 @@ fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf
 
 fn resolve_energy(
     vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<EnergyInfo> {
-    for (ent, sim, _) in q_sim.iter() {
+    for (ent, sim) in q_sim.iter() {
         if !is_owned_by_vessel(ent, vessel, q_parents) {
             continue;
         }
@@ -421,10 +421,10 @@ fn capacity_wh(sim: &SimComponent) -> Option<f32> {
 
 fn resolve_thermal(
     vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<ThermalInfo> {
-    for (ent, sim, _) in q_sim.iter() {
+    for (ent, sim) in q_sim.iter() {
         if !is_owned_by_vessel(ent, vessel, q_parents) {
             continue;
         }
@@ -464,7 +464,7 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
-    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     surface_pose: &lunco_celestial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
@@ -799,15 +799,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     ids: Query<'w, 's, (Entity, &'static GlobalEntityId)>,
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
-    sim: Query<
-        'w,
-        's,
-        (
-            Entity,
-            &'static SimComponent,
-            Option<&'static CosimOutputMetadata>,
-        ),
-    >,
+    sim: Query<'w, 's, (Entity, &'static SimComponent)>,
     usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
 }
 
@@ -1209,7 +1201,7 @@ fn publish_control_exposures(
     exposures: &mut EngineExposures,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
-    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
@@ -1360,7 +1352,7 @@ fn publish_selected_control_exposure(
     root: Option<Entity>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
-    q_sim: &Query<(Entity, &SimComponent, Option<&CosimOutputMetadata>)>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
@@ -1428,22 +1420,15 @@ fn publish_selected_control_exposure(
     let mut outputs = std::collections::HashMap::<String, f64>::new();
     let mut max_valve = 0.0_f64;
     let mut touchdown = 0.0_f64;
-    for (entity, sim, metadata) in q_sim.iter() {
+    for (entity, sim) in q_sim.iter() {
         if !is_owned_by_vessel(entity, root, q_parents) {
             continue;
         }
         let authored_outputs = authored_output_names(entity, q_paths, canonical);
         for (name, &value) in &sim.outputs {
-            // A generated network also publishes member implementation values
-            // on its solver entity.  The control card consumes only the
-            // composed prim's authored `outputs:*` boundary (or, for a
-            // non-USD provider, its declared output metadata).  This prevents
-            // an internal signal with the same short name from winning by ECS
-            // iteration order.
-            let is_public = authored_outputs.as_ref().map_or_else(
-                || metadata.is_none_or(|declared| declared.outputs.contains_key(name)),
-                |authored| authored.contains(name),
-            );
+            let is_public = authored_outputs
+                .as_ref()
+                .is_none_or(|authored| authored.contains(name));
             if !is_public {
                 continue;
             }

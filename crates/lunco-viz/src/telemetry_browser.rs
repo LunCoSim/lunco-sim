@@ -245,7 +245,6 @@ struct Row {
     description: Option<String>,
     provenance: Option<String>,
     in_focus: bool,
-    model_internal: bool,
     active: bool,
 }
 
@@ -321,16 +320,12 @@ fn build_tree(
     for (sig, _hist) in reg.iter_scalar() {
         let meta = reg.meta(sig);
         let provenance = meta.and_then(|m| m.provenance.clone());
-        let model_internal = provenance.as_deref() == Some("cosim")
-            || sig.path.starts_with("sim.")
-            || sig.path.contains("_x2f_");
         let row = Row {
             sig: sig.clone(),
             unit: meta.and_then(|m| m.unit.clone()),
             description: meta.and_then(|m| m.description.clone()),
             provenance,
             in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
-            model_internal,
             active: reg.is_active(sig),
         };
 
@@ -542,9 +537,8 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn row_visible(row: &Row, scoped: bool, show_internals: bool, filter: &str, label: &str) -> bool {
+fn row_visible(row: &Row, scoped: bool, filter: &str, label: &str) -> bool {
     (!scoped || row.in_focus)
-        && (show_internals || !row.model_internal)
         && filter_match(filter, label, &row.sig.path, row.description.as_deref())
 }
 
@@ -556,15 +550,15 @@ fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> boo
             .any(|child| tree_any_row(child, predicate))
 }
 
-fn visible_count(node: &TreeNode, scoped: bool, show_internals: bool, filter: &str) -> usize {
+fn visible_count(node: &TreeNode, scoped: bool, filter: &str) -> usize {
     node.rows
         .iter()
-        .filter(|r| row_visible(r, scoped, show_internals, filter, &node.label))
+        .filter(|r| row_visible(r, scoped, filter, &node.label))
         .count()
         + node
             .children
             .values()
-            .map(|c| visible_count(c, scoped, show_internals, filter))
+            .map(|c| visible_count(c, scoped, filter))
             .sum::<usize>()
 }
 
@@ -585,13 +579,12 @@ fn render_tree_node(
     registry: &SignalRegistry,
     theme: &lunco_theme::Theme,
     scoped: bool,
-    show_internals: bool,
     filter: &str,
     selected: Option<&SignalRef>,
     depth: usize,
     clicked: &mut Option<SignalRef>,
 ) {
-    let visible = visible_count(node, scoped, show_internals, filter);
+    let visible = visible_count(node, scoped, filter);
     if visible == 0 {
         return;
     }
@@ -608,7 +601,6 @@ fn render_tree_node(
                 registry,
                 theme,
                 scoped,
-                show_internals,
                 filter,
                 selected,
                 depth + 1,
@@ -623,7 +615,7 @@ fn render_tree_node(
                 for row in node
                     .rows
                     .iter()
-                    .filter(|r| row_visible(r, scoped, show_internals, filter, &node.label))
+                    .filter(|r| row_visible(r, scoped, filter, &node.label))
                 {
                     let latest = registry
                         .scalar_history(&row.sig)
@@ -847,9 +839,6 @@ pub struct TelemetryBrowserPanel {
     /// checkbox disabled) while nothing is selected, so the panel never goes blank
     /// just because the user hasn't clicked anything yet.
     focus_only: bool,
-    /// Generated model variables are part of the vessel's observable state.
-    /// Keep them visible by default; users can hide them for a mission-only view.
-    show_model_internals: bool,
 }
 
 impl Default for TelemetryBrowserPanel {
@@ -860,7 +849,6 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
-            show_model_internals: true,
         }
     }
 }
@@ -942,9 +930,6 @@ impl Panel for TelemetryBrowserPanel {
                         .color(subdued),
                 );
             }
-            ui.checkbox(&mut self.show_model_internals, "Model variables")
-                .on_hover_text(
-                    "Show state published by Modelica and other co-simulation models. \n                     Turn this off for an explicitly authored mission-only view.");
         });
         ui.separator();
 
@@ -1046,7 +1031,6 @@ impl Panel for TelemetryBrowserPanel {
                         registry,
                         &theme,
                         scoped,
-                        self.show_model_internals,
                         &self.filter,
                         self.selected.as_ref(),
                         0,

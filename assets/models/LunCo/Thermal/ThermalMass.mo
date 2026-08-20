@@ -8,7 +8,7 @@ model ThermalMass
 
   HeatPort port;
   Real T(start = T_init) "Component temperature, K";
-  output Real temp_k "Temperature output for telemetry, K";
+  output Real temp_k(unit="K") "Temperature output for telemetry";
   output Real heat_flow_w(unit="W") "Net heat flow into the thermal mass; positive warms the component";
 equation
   port.T = T;

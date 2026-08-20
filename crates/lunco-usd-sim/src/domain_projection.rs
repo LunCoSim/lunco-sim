@@ -60,10 +60,6 @@ pub struct GeneratedModelicaSource {
     /// `(prim path, source asset, instantiated class)` per member — the
     /// attribution a `generated://` compile error needs.
     pub members: Vec<(String, String, String)>,
-    /// Projection-time ownership groups resolved through authored USD wires.
-    pub member_groups: Vec<(String, String)>,
-    /// Public wrapper outputs mapped to their authored producer groups.
-    pub output_groups: Vec<(String, String)>,
     /// Causal outputs of generated members promoted to the wrapper boundary.
     /// Each tuple is `(member USD path, member output, wrapper output)`.
     ///
@@ -1049,12 +1045,7 @@ fn emit_modelica_with_classes(
         .collect();
     let unit_instances: BTreeMap<_, _> = units
         .iter()
-        .map(|unit| {
-            (
-                unit.name.as_str(),
-                modelica_identifier(&format!("instance_{}", unit.name)),
-            )
-        })
+        .map(|unit| (unit.name.as_str(), unit_instance_identifier(&unit.name)))
         .collect();
     let unit_for_component: BTreeMap<_, _> = units
         .iter()
@@ -1439,8 +1430,6 @@ pub fn project_domain_islands(
                         source: String::new(),
                         component_paths: Vec::new(),
                         members: Vec::new(),
-                        member_groups: Vec::new(),
-                        output_groups: Vec::new(),
                         member_output_aliases: Vec::new(),
                         units: Vec::new(),
                     },
@@ -1538,21 +1527,9 @@ pub fn project_domain_islands(
             source: source_for_diagnostics,
             component_paths: synthesized.component_paths,
             members: synthesized.members,
-            member_groups: Vec::new(),
-            output_groups: wrapper_output_groups(&view, &prim.path),
             member_output_aliases,
             units: synthesized.units,
         };
-        let member_groups = generated_source
-            .members
-            .iter()
-            .map(|(path, _, _)| (path.clone(), telemetry_presentation_path(&view, path)))
-            .collect();
-        let generated_source = GeneratedModelicaSource {
-            member_groups,
-            ..generated_source
-        };
-        let output_metadata = generated_output_metadata(&generated_source, &classes, &view);
         // A changed wrapper may expose a different port interface. Rebuild the
         // derived co-sim projection instead of retaining values and port names
         // from the previous compiled topology.
@@ -1566,11 +1543,6 @@ pub fn project_domain_islands(
             // wrapper's port surface instead of classifying the interval as a
             // missing authored port.
             lunco_core::PortSurfacePending,
-            // The generated wrapper owns execution and signal lifecycle; this
-            // metadata preserves the composed USD presentation topology.
-            lunco_cosim::CosimOutputMetadata {
-                outputs: output_metadata,
-            },
             // The same USD-declares / compiler-confirms contract the per-prim
             // program path has carried all along: the network's boundary is an
             // authored promise, and `validate_usd_modelica_port_contracts` is
@@ -1690,8 +1662,6 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                             "prim": prim, "source_asset": asset, "class": class,
                         }))
                         .collect::<Vec<_>>(),
-                    "member_groups": generated.member_groups,
-                    "output_groups": generated.output_groups,
                     "units": generated
                         .units
                         .iter()
@@ -2208,109 +2178,8 @@ fn instance_identifier(root: &str, path: &str) -> String {
     modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
 }
 
-/// Map a variable emitted by a generated wrapper back to its authored USD
-/// component. Wrapper instance names are deterministic, so this is an
-/// identity transform, not a heuristic over model or variable spelling.
-pub(crate) fn canonical_generated_signal(
-    source: &GeneratedModelicaSource,
-    emitted: &str,
-) -> Option<String> {
-    // Wrapper boundary outputs already use authored USD names (`soc`,
-    // `motor_temp_left`, ...), so they need no member lookup.
-    let Some((instance, variable)) = emitted.split_once('.') else {
-        return Some(emitted.to_string());
-    };
-    source.members.iter().find_map(|(path, _, _)| {
-        (instance_identifier(&source.network_root, path) == instance).then(|| {
-            let relative = path
-                .strip_prefix(&source.network_root)
-                .unwrap_or(path)
-                .trim_matches('/');
-            format!("{relative}.{variable}")
-        })
-    })
-}
-
-pub(crate) fn generated_signal_group(
-    source: &GeneratedModelicaSource,
-    emitted: &str,
-) -> Option<String> {
-    if let Some((instance, _)) = emitted.split_once('.') {
-        if let Some(group) = source.member_groups.iter().find_map(|(path, group)| {
-            (instance_identifier(&source.network_root, path) == instance).then(|| group.clone())
-        }) {
-            return Some(group);
-        }
-    }
-    source
-        .output_groups
-        .iter()
-        .find_map(|(name, group)| (name == emitted).then(|| group.clone()))
-}
-
-/// Build authored metadata for variables in generated member instances. This
-/// runs when the wrapper is projected, not in the fixed-step hot path.
-pub(crate) fn generated_output_metadata(
-    source: &GeneratedModelicaSource,
-    classes: &MemberClasses,
-    view: &impl UsdRead,
-) -> HashMap<String, lunco_cosim::CosimOutputDescriptor> {
-    let mut outputs = HashMap::new();
-    for (path, asset, _) in &source.members {
-        let Some(metadata) = classes.variable_metadata(asset) else {
-            continue;
-        };
-        let instance = instance_identifier(&source.network_root, path);
-        let relative = path
-            .strip_prefix(&source.network_root)
-            .unwrap_or(path)
-            .trim_matches('/');
-        let group_path = telemetry_presentation_path(view, path);
-        for (variable, value) in metadata {
-            outputs.insert(
-                format!("{instance}.{variable}"),
-                lunco_cosim::CosimOutputDescriptor {
-                    description: value.description.clone(),
-                    unit: value.unit.clone(),
-                    provenance: "modelica".to_string(),
-                    canonical_name: Some(format!("{relative}.{variable}")),
-                    group_path: Some(group_path.clone()),
-                },
-            );
-        }
-    }
-    outputs
-}
-
-/// The composed USD object that presents a generated component's telemetry.
-///
-/// A component owns its own variables by default.  A bridge whose variables
-/// describe another physical object authors `lunco:telemetry:owner` as a USD
-/// relationship.  This preserves the scene's explicit topology; following an
-/// arbitrary input edge would reparent a motor to its command source.
-fn telemetry_presentation_path(view: &impl UsdRead, member: &str) -> String {
-    SdfPath::new(member)
-        .ok()
-        .and_then(|prim| view.rel_target(&prim, "lunco:telemetry:owner"))
-        .unwrap_or_else(|| member.to_string())
-}
-
-fn wrapper_output_groups(view: &impl UsdRead, root: &str) -> Vec<(String, String)> {
-    let Ok(prim) = SdfPath::new(root) else {
-        return Vec::new();
-    };
-    view.attr_names(&prim)
-        .into_iter()
-        .filter_map(|attr| {
-            let name = attr.strip_prefix("outputs:")?;
-            let source = view.connection_source(&prim, &attr)?;
-            let owner = source
-                .rsplit_once('.')
-                .map(|(path, _)| path)
-                .unwrap_or(&source);
-            Some((name.to_string(), telemetry_presentation_path(view, owner)))
-        })
-        .collect()
+fn unit_instance_identifier(unit_name: &str) -> String {
+    modelica_identifier(&format!("instance_{unit_name}"))
 }
 
 /// Resolve the generated wrapper names for member outputs that are actually
@@ -2383,8 +2252,6 @@ const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 #[derive(Resource, Default)]
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
-    metadata:
-        HashMap<String, HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
     outputs: HashMap<String, BTreeSet<String>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
 }
@@ -2402,13 +2269,6 @@ impl MemberClasses {
     pub fn reject(&mut self, asset: impl Into<String>, message: impl Into<String>) {
         self.known
             .insert(asset.into(), MemberClass::Invalid(message.into()));
-    }
-
-    pub fn variable_metadata(
-        &self,
-        asset: &str,
-    ) -> Option<&HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>> {
-        self.metadata.get(asset)
     }
 
     /// Causal outputs declared by the resolved Modelica class. `None` means
@@ -2513,12 +2373,7 @@ pub fn resolve_member_classes(
     if classes.pending.is_empty() {
         return;
     }
-    let settled: Vec<(
-        String,
-        Option<String>,
-        Option<HashMap<String, lunco_modelica::ast_extract::ModelicaVariableMetadata>>,
-        Option<BTreeSet<String>>,
-    )> = classes
+    let settled: Vec<(String, Option<String>, Option<BTreeSet<String>>)> = classes
         .pending
         .iter()
         .filter_map(|(asset, (handle, expires))| {
@@ -2528,26 +2383,18 @@ pub fn resolve_member_classes(
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
                 });
-                return Some((
-                    asset.clone(),
-                    class,
-                    Some(interface.variable_metadata),
-                    Some(interface.outputs),
-                ));
+                return Some((asset.clone(), class, Some(interface.outputs)));
             }
             if asset_server.load_state(handle).is_failed() || now >= *expires {
-                return Some((asset.clone(), None, None, None));
+                return Some((asset.clone(), None, None));
             }
             None
         })
         .collect();
-    for (asset, class, metadata, outputs) in settled {
+    for (asset, class, outputs) in settled {
         classes.pending.remove(&asset);
         match class {
             Some(class) => {
-                if let Some(metadata) = metadata {
-                    classes.metadata.insert(asset.clone(), metadata);
-                }
                 if let Some(outputs) = outputs {
                     classes.outputs.insert(asset.clone(), outputs);
                 }
@@ -2876,8 +2723,6 @@ mod tests {
                     source: "model Electrical end Electrical;".into(),
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
-                    member_groups: Vec::new(),
-                    output_groups: Vec::new(),
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
                 },
@@ -2895,29 +2740,6 @@ mod tests {
                 .get::<lunco_cosim::SimComponent>(entity)
                 .is_none(),
             "a changed or rejected projection must not retain solved values from its previous topology"
-        );
-    }
-
-    #[test]
-    fn generated_variable_maps_back_to_authored_component_path() {
-        let source = GeneratedModelicaSource {
-            network_root: "/Rover/Electrical".into(),
-            doc_uri: "generated://Rover_Electrical.mo".into(),
-            source: String::new(),
-            component_paths: vec!["/Rover/Electrical/Battery".into()],
-            members: vec![(
-                "/Rover/Electrical/Battery".into(),
-                "battery.usda".into(),
-                "LunCo.Electrical.Battery".into(),
-            )],
-            member_groups: Vec::new(),
-            output_groups: Vec::new(),
-            member_output_aliases: Vec::new(),
-            units: Vec::new(),
-        };
-        assert_eq!(
-            canonical_generated_signal(&source, "Battery.soc_out"),
-            Some("Battery.soc_out".into())
         );
     }
 

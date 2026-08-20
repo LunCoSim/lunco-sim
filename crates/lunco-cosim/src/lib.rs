@@ -49,7 +49,6 @@ pub mod joint;
 pub mod ports;
 pub mod suggestion;
 pub mod systems;
-pub mod telemetry;
 
 pub use avian::*;
 pub use binding::*;
@@ -180,11 +179,6 @@ impl Plugin for CoSimPlugin {
             // Co-sim retains every `SimComponent` output itself, with source
             // metadata. Mark it at lifecycle time so generic port telemetry does
             // not create a second, ungrouped history for the same values.
-            .add_observer(|trigger: On<Add, SimComponent>, mut commands: Commands| {
-                commands
-                    .entity(trigger.entity)
-                    .try_insert(lunco_signal::WholesaleSignalSource);
-            })
             .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
             .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
             .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
@@ -366,14 +360,6 @@ impl Plugin for CoSimPlugin {
         // rest of the frame sees, never the previous tick's. See `telemetry.rs`
         // for the namespace that keeps it out of authored channels' buffers and
         // for the rate/retention/memory arithmetic.
-        app.init_resource::<telemetry::CosimTelemetrySettings>();
-        app.init_resource::<telemetry::CosimTelemetryClock>();
-        app.init_resource::<lunco_signal::SignalRegistry>();
-        app.add_systems(
-            FixedUpdate,
-            telemetry::publish_cosim_variables.after(systems::propagate::CosimSet::Propagate),
-        );
-
         // Register the typed command observers generated below (the
         // `register_commands!` list turns into `register_all_commands(app)`).
         register_all_commands(app);

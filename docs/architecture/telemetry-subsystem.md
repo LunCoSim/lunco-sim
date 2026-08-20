@@ -150,23 +150,22 @@ Three lanes, and they are not interchangeable:
    String channels belong here, not in the ring buffer. *(This asymmetry is real and must be
    stated, not papered over: a `String` channel has no plot.)*
 
-### 5b. Co-sim variables are published wholesale — authored channels are not the only producer
+### 5b. Model state is inspected live; history is recorded explicitly
 
-An authored channel (`Parameter`, `lunco:telemetry`) is a Component, so a prim carries **one**.
-A Modelica model has dozens of observable variables, and the internal ones are exactly what a
-plot is wanted for. `lunco_cosim::telemetry::publish_cosim_variables` therefore publishes every
-`SimComponent` output — which is the whole of `ModelicaModel::variables`, internals included —
-straight into `SignalRegistry`, at `CosimTelemetrySettings` rate/retention, tagged
-`provenance = "cosim"`.
+Modelica state is not an implicit telemetry source. `ModelicaModel::parameters`, `inputs`, and
+`variables` are the live model-inspector surface, and `CosimStatus`/`SnapshotVariables` expose
+the same state to agents and API clients. This keeps the complete runtime state available without
+creating a history channel for every internal variable or duplicating it under another hierarchy.
 
-Two producers, one registry, and they must never share a buffer: auto-published variables are
-namespaced `sim.<var>`, authored channels keep their bare mnemonic. Without that, a motor prim
-carrying both a `torque` channel and a `torque` model variable would interleave two cadences into
-one history and the plot would show a signal that never existed.
+History begins only when a user or agent selects a model variable for a visualization, or authors
+an explicit `Parameter`/`lunco:telemetry` channel. The selected visualization bindings are the
+recording plan; model samples not in that plan are not retained. Explicit USD channels remain
+mission-semantic signals and are not bulk enumeration of model internals.
 
-**Rate and depth are chosen together.** Defaults are 5 Hz × 1500 samples = a 5-minute window that
-does not wrap; one sample is 16 B, so a variable costs ~24 KB and a rover (~7 models × ~20 vars)
-~3.4 MB. Raising the rate alone does not cost memory — it silently shortens the window.
+The model inspector and telemetry browser therefore have different jobs: the inspector answers
+"what is the model doing now?", while the browser answers "what history or authored signal did I
+choose to record?". Both use the shared telemetry deadband to suppress numerical jitter, with
+non-finite transitions always retained.
 
 ---
 

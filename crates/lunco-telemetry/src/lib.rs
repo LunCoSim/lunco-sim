@@ -55,10 +55,11 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortDirection, PortRegistry, ResolvedPort};
+use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
+use lunco_signal::TelemetryDeadband;
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +89,11 @@ pub struct TelemetrySettings {
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
+    /// Default numeric visibility policy for channels without an explicit
+    /// `Parameter::deadband`.  This is deliberately separate from Modelica's
+    /// solver tolerances: it governs operator-facing samples, not convergence.
+    #[serde(default)]
+    pub default_deadband: TelemetryDeadband,
 }
 
 impl Default for TelemetrySettings {
@@ -103,6 +109,7 @@ impl Default for TelemetrySettings {
             max_channels: 2048,
             default_retention: 1500,
             enabled: true,
+            default_deadband: TelemetryDeadband::default(),
         }
     }
 }
@@ -147,6 +154,13 @@ pub struct ControlTelemetry {
     pub enabled: Option<bool>,
     pub rate_hz: Option<f64>,
     pub retention: Option<usize>,
+    /// Absolute tolerance for the subsystem default numeric deadband. Applies
+    /// only when `channel` is `None`; a named channel uses `deadband` as its
+    /// explicit absolute override.
+    pub atol: Option<f64>,
+    /// Relative tolerance for the subsystem default numeric deadband. Applies
+    /// only when `channel` is `None`.
+    pub rtol: Option<f64>,
     pub deadband: Option<f64>,
 }
 
@@ -218,6 +232,26 @@ fn on_control_telemetry(
         }
         if let Some(retention) = cmd.retention {
             settings.default_retention = retention;
+        }
+        if let Some(atol) = cmd.atol {
+            if atol.is_finite() && atol >= 0.0 {
+                settings.default_deadband.atol = atol;
+            } else {
+                warn!(
+                    atol,
+                    "telemetry: ignoring invalid default absolute tolerance"
+                );
+            }
+        }
+        if let Some(rtol) = cmd.rtol {
+            if rtol.is_finite() && rtol >= 0.0 {
+                settings.default_deadband.rtol = rtol;
+            } else {
+                warn!(
+                    rtol,
+                    "telemetry: ignoring invalid default relative tolerance"
+                );
+            }
         }
         return;
     };
@@ -335,45 +369,26 @@ struct SamplingPlan {
 /// retained registry uses that pair as its key; sampling the same key twice
 /// only duplicates work and makes the channel cap lie about useful data.
 ///
-/// Authored/API declarations win over runtime-discovered declarations.  The
-/// latter are only an automatic projection, while an explicit `Parameter` is
-/// the authoritative policy for rate, retention, metadata, and source.
+/// Every channel is an explicit recording declaration. Its `Parameter` owns
+/// rate, retention, metadata, and source policy.
 fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan) -> usize {
-    let mut selected = std::collections::HashMap::<(Entity, String), (bool, u64, Entity)>::new();
+    let mut selected = std::collections::HashMap::<(Entity, String), Entity>::new();
     let mut candidates = 0usize;
 
-    for (entity, parameter, runtime) in world
-        .query::<(Entity, &Parameter, Option<&RuntimePortChannel>)>()
-        .iter(world)
-    {
+    for (entity, parameter) in world.query::<(Entity, &Parameter)>().iter(world) {
         if !parameter.enabled || parameter.name.is_empty() {
             continue;
         }
         candidates += 1;
         let measured = parameter.target.unwrap_or(entity);
         let key = (measured, parameter.name.clone());
-        let candidate = (runtime.is_some(), entity.to_bits(), entity);
-        let replace = selected
-            .get(&key)
-            .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1));
-        if replace {
-            selected.insert(key, candidate);
-        }
+        selected.entry(key).or_insert(entity);
     }
 
-    plan.channels = selected
-        .into_values()
-        .map(|(_, _, entity)| entity)
-        .collect();
+    plan.channels = selected.into_values().collect();
     plan.channels.sort_by_key(|entity| entity.to_bits());
     candidates.saturating_sub(plan.channels.len())
 }
-
-/// Marks a channel generated from a live public output.  It carries no authored
-/// data: the port backend remains the source for existence and value, while the
-/// normal [`Parameter`] sampler supplies cadence, retention, API, and history.
-#[derive(Component, Debug, Clone)]
-struct RuntimePortChannel;
 
 /// Last metadata applied to a retained signal by a telemetry channel.
 ///
@@ -385,114 +400,6 @@ struct RuntimePortChannel;
 struct RetainedSignalMeta {
     description: Option<String>,
     unit: String,
-}
-
-/// Bounded discovery cadence. Port values sample at the fixed telemetry rate;
-/// topology need only be rediscovered shortly after a spawn/despawn, not every
-/// fixed step. At 64 Hz this is a quarter-second maximum attach delay.
-#[derive(Resource, Default)]
-struct RuntimePortDiscovery {
-    ticks_until_scan: u8,
-}
-
-/// Discover every currently readable public output and materialize its sampling
-/// channel.  This is deliberately runtime-only: spawned systems begin exposing
-/// telemetry on the next fixed step and no USD scene needs a telemetry tag.
-///
-/// A dedicated channel entity lets one physical component expose every output
-/// despite `Parameter` itself being a one-per-entity component.  Existing
-/// explicitly-created channels win by `(target, port)` so API users retain a
-/// deliberate rate/retention override without duplicated samples.
-fn discover_runtime_port_channels(world: &mut World) {
-    let due = {
-        let mut discovery = world.resource_mut::<RuntimePortDiscovery>();
-        if discovery.ticks_until_scan > 0 {
-            discovery.ticks_until_scan -= 1;
-            false
-        } else {
-            discovery.ticks_until_scan = 15;
-            true
-        }
-    };
-    if !due {
-        return;
-    }
-    let Some(ports) = world.get_resource::<PortRegistry>().cloned() else {
-        return;
-    };
-    let existing: std::collections::HashSet<(Entity, String)> = world
-        .query::<&Parameter>()
-        .iter(world)
-        .filter_map(|p| match (&p.target, &p.source) {
-            (Some(target), ChannelSource::Port(port)) => Some((*target, port.clone())),
-            _ => None,
-        })
-        .collect();
-    let entities: Vec<Entity> = world.query::<Entity>().iter(world).collect();
-    let mut discovered = Vec::new();
-    for entity in entities {
-        // Streamed terrain tiles, collider rings, and scatter are implementation
-        // detail. Publishing every internal output makes their lifecycle look like
-        // user telemetry and turns LOD churn into a growing sampling plan. An
-        // authored or explicitly-created `Parameter` remains available when a
-        // caller genuinely wants to observe a system-owned entity.
-        if world.get::<lunco_core::SystemManaged>(entity).is_some()
-            // Model outputs are already retained by `lunco-cosim`, which is the
-            // producer that holds their composed USD metadata. Sampling them
-            // again through the generic port surface would produce an ungrouped
-            // duplicate, not another observable.
-            || world
-                .get::<lunco_signal::WholesaleSignalSource>(entity)
-                .is_some()
-        {
-            continue;
-        }
-        for port in ports.entity_ports(world, entity) {
-            if !matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-                || existing.contains(&(entity, port.name.clone()))
-            {
-                continue;
-            }
-            discovered.push((entity, port.name));
-        }
-    }
-    for (target, port) in discovered {
-        // Source lifecycle owns the telemetry lifecycle, regardless of where
-        // this dedicated sampling entity lives.
-        if let Ok(mut source) = world.get_entity_mut(target) {
-            source.insert(lunco_signal::SignalSource);
-        }
-        world.spawn((
-            RuntimePortChannel,
-            Name::new(format!("telemetry:{port}")),
-            Parameter {
-                name: port.clone(),
-                unit: String::new(),
-                description: None,
-                source: ChannelSource::Port(port),
-                target: Some(target),
-                rate_hz: None,
-                enabled: true,
-                deadband: None,
-                retention: None,
-            },
-        ));
-    }
-}
-
-/// Runtime-discovered channels belong to the entity whose port they sample.  Retire those
-/// channel entities at the source lifecycle boundary so a scene reload cannot leave a
-/// channel pointing at a recycled or despawned entity.
-fn despawn_runtime_channels_for_removed_source(
-    trigger: On<Remove, lunco_signal::SignalSource>,
-    channels: Query<(Entity, &Parameter), With<RuntimePortChannel>>,
-    mut commands: Commands,
-) {
-    for (channel, parameter) in &channels {
-        if parameter.target == Some(trigger.entity) {
-            commands.entity(channel).try_despawn();
-        }
-    }
 }
 
 /// Cheap change detector in front of the exclusive sampler: any added/changed/
@@ -531,9 +438,7 @@ impl Plugin for LunCoTelemetryPlugin {
         // render-free intent, written by whichever app owns selection and read by
         // whatever displays channels. Empty here in a headless run — nothing selects.
         app.init_resource::<lunco_signal::TelemetryFocus>();
-        app.init_resource::<RuntimePortDiscovery>();
         app.add_observer(retain_sample);
-        app.add_observer(despawn_runtime_channels_for_removed_source);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
         register_all_commands(app);
@@ -556,7 +461,6 @@ impl Plugin for LunCoTelemetryPlugin {
             // machine, a flood on an uncapped headless loop) and replay would diverge.
             FixedUpdate,
             (
-                discover_runtime_port_channels,
                 // Change-driven plan maintenance — the sampler itself never scans
                 // the channel set; it walks the cached plan.
                 mark_sampling_plan_dirty,
@@ -776,10 +680,12 @@ pub fn sample_parameters(world: &mut World) {
             continue;
         };
 
-        // Deadband: numeric values that haven't moved don't get sent.
+        // An authored absolute deadband is an explicit per-channel override;
+        // otherwise use the subsystem's shared absolute/relative policy.
         let numeric = numeric_of(&value);
         let suppressed = match (param.deadband, numeric, clock.last_emitted) {
-            (Some(db), Some(v), Some(last)) => (v - last).abs() < db,
+            (Some(db), Some(v), Some(last)) => (v - last).abs() <= db,
+            (None, Some(v), Some(last)) => !settings.default_deadband.changed(last, v),
             _ => false,
         };
 
@@ -1013,6 +919,15 @@ mod tests {
     #[derive(Component)]
     struct TestDeclaredOutput;
 
+    #[derive(Component)]
+    struct AdvancesPerFixedStep;
+
+    fn advance_test_ports(mut ports: Query<&mut Port, With<AdvancesPerFixedStep>>) {
+        for mut port in &mut ports {
+            port.value += 1.0;
+        }
+    }
+
     fn list_test_output(world: &World, entity: Entity, out: &mut Vec<lunco_core::ports::PortRef>) {
         if let Some(source) = world.get::<TestOutput>(entity) {
             out.push(lunco_core::ports::PortRef {
@@ -1088,6 +1003,7 @@ mod tests {
         // `~/.lunco/settings.json`. Asserted belt-and-braces: the master-switch test below
         // writes `enabled: false`, and that once escaped into the real config.
         app.insert_resource(TelemetrySettings::default());
+        app.add_systems(FixedUpdate, advance_test_ports);
         app
     }
 
@@ -1174,6 +1090,17 @@ mod tests {
         let value = serde_json::to_value(TelemetrySettings::default()).unwrap();
         assert!(value.get("schema_version").is_none());
         assert!(serde_json::from_value::<TelemetrySettings>(value).is_ok());
+
+        let legacy_without_the_optional_deadband = serde_json::json!({
+            "default_rate_hz": 5.0,
+            "max_channels": 2048,
+            "default_retention": 1500,
+            "enabled": true
+        });
+        let settings =
+            serde_json::from_value::<TelemetrySettings>(legacy_without_the_optional_deadband)
+                .expect("an omitted setting uses its documented semantic default");
+        assert_eq!(settings.default_deadband, TelemetryDeadband::default());
     }
 
     #[test]
@@ -1186,27 +1113,6 @@ mod tests {
             "schema_version": 1
         });
         assert!(serde_json::from_value::<TelemetrySettings>(value).is_err());
-    }
-
-    #[test]
-    fn a_live_port_is_discovered_without_a_usd_channel_declaration() {
-        let mut app = app();
-        app.init_resource::<PortRegistry>();
-        app.world_mut()
-            .resource_mut::<PortRegistry>()
-            .register(TEST_OUTPUT_BACKEND);
-        let source = app.world_mut().spawn(TestOutput(7.5)).id();
-        // Discovery runs before the normal cached sampler in the same fixed
-        // schedule; a plain runtime port becomes observable without Parameter
-        // or USD telemetry data on the source entity.
-        step_fixed(&mut app, 2);
-        let signal = lunco_signal::SignalRef::new(source, "value".to_string());
-        let history = app
-            .world()
-            .resource::<lunco_signal::SignalRegistry>()
-            .scalar_history(&signal)
-            .expect("runtime port telemetry must exist");
-        assert_eq!(history.samples.back().unwrap().value, 7.5);
     }
 
     #[test]
@@ -1253,7 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn discovered_port_channels_follow_source_lifecycle() {
+    fn no_implicit_port_is_recorded() {
         let mut app = app();
         app.init_resource::<PortRegistry>();
         app.world_mut()
@@ -1263,73 +1169,31 @@ mod tests {
 
         step_fixed(&mut app, 2);
 
-        let channel = {
-            let mut channels = app
-                .world_mut()
-                .query::<(Entity, &Parameter, &RuntimePortChannel)>();
-            channels
-                .iter(app.world())
-                .find(|(_, parameter, _)| parameter.target == Some(source))
-                .map(|(entity, _, _)| entity)
-                .expect("runtime discovery must create a channel for the source")
-        };
-        assert!(app.world().get_entity(channel).is_ok());
-
-        app.world_mut().despawn(source);
-        app.update();
-
+        let signal = lunco_signal::SignalRef::new(source, "value");
         assert!(
-            app.world().get_entity(channel).is_err(),
-            "a scene source must not leave its runtime channel behind"
-        );
-    }
-
-    /// Runtime discovery is for the user-facing simulation surface, not the
-    /// thousands of transient terrain/collider implementation entities. Those
-    /// entities remain observable when an author deliberately adds a
-    /// `Parameter`, but must not silently grow the global sampling plan.
-    #[test]
-    fn system_managed_ports_are_not_auto_discovered_as_telemetry() {
-        let mut app = app();
-        app.init_resource::<PortRegistry>();
-        app.world_mut()
-            .resource_mut::<PortRegistry>()
-            .register(TEST_OUTPUT_BACKEND);
-        app.world_mut()
-            .spawn((TestOutput(7.5), lunco_core::SystemManaged));
-
-        step_fixed(&mut app, 2);
-
-        let mut channels = app.world_mut().query::<&RuntimePortChannel>();
-        assert_eq!(
-            channels.iter(app.world()).count(),
-            0,
-            "system-managed entities must not become implicit telemetry channels"
+            app.world()
+                .resource::<lunco_signal::SignalRegistry>()
+                .scalar_history(&signal)
+                .is_none(),
+            "a port becomes telemetry only after an explicit channel is requested"
         );
     }
 
     #[test]
-    fn duplicate_declarations_for_one_model_signal_use_the_explicit_channel() {
+    fn duplicate_channel_declarations_are_collapsed() {
         let mut world = World::new();
         let model = world.spawn_empty().id();
-        let runtime = world
-            .spawn((
-                RuntimePortChannel,
-                Parameter {
-                    name: "soc".into(),
-                    target: Some(model),
-                    ..Default::default()
-                },
-            ))
-            .id();
-        let authored = world
-            .spawn(Parameter {
-                name: "soc".into(),
-                target: Some(model),
-                rate_hz: Some(2.0),
-                ..Default::default()
-            })
-            .id();
+        world.spawn(Parameter {
+            name: "soc".into(),
+            target: Some(model),
+            ..Default::default()
+        });
+        world.spawn(Parameter {
+            name: "soc".into(),
+            target: Some(model),
+            rate_hz: Some(2.0),
+            ..Default::default()
+        });
         let mut plan = SamplingPlan {
             dirty: true,
             ..Default::default()
@@ -1338,8 +1202,7 @@ mod tests {
         let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
 
         assert_eq!(duplicates, 1);
-        assert_eq!(plan.channels, vec![authored]);
-        assert_ne!(plan.channels, vec![runtime]);
+        assert_eq!(plan.channels.len(), 1);
     }
 
     #[test]
@@ -1435,6 +1298,7 @@ mod tests {
 
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..reflect_channel("fast")
@@ -1442,6 +1306,7 @@ mod tests {
         ));
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(6.0),
                 ..reflect_channel("slow")
@@ -1569,6 +1434,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_default_deadband_suppresses_small_numeric_jitter() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let e = app
+            .world_mut()
+            .spawn((
+                Port { value: 100.0 },
+                Parameter {
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..reflect_channel("acceleration")
+                },
+            ))
+            .id();
+
+        step_fixed(&mut app, 4);
+        let baseline = seen.lock().unwrap().len();
+
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 100.05;
+        step_fixed(&mut app, 4);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            baseline,
+            "the shared default must suppress sub-threshold jitter"
+        );
+
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 100.2;
+        step_fixed(&mut app, 4);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            baseline + 1,
+            "the shared default must retain a meaningful change"
+        );
+    }
+
     /// PHASE 2: samples land in the `SignalRegistry` ring buffer — the same store every
     /// plot surface already reads. Retention and plotting come from one wire-up.
     #[test]
@@ -1578,6 +1486,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 3.0 },
+                AdvancesPerFixedStep,
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     ..reflect_channel("retained")
@@ -1596,7 +1505,10 @@ mod tests {
             hist.len() >= 2,
             "several fixed steps ⇒ several retained samples"
         );
-        assert_eq!(hist.iter().next().unwrap().value, 3.0);
+        assert!(
+            hist.iter().next().unwrap().value >= 3.0,
+            "the advancing test source must retain its initial value range"
+        );
         // Unit metadata rides along so a plot can label its axis.
         assert_eq!(signals.meta(&sig).unwrap().unit.as_deref(), Some("A"));
     }
@@ -1610,6 +1522,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 1.0 },
+                AdvancesPerFixedStep,
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     retention: Some(3),
@@ -1715,6 +1628,22 @@ mod tests {
         let s = app.world().resource::<TelemetrySettings>();
         assert!(!s.enabled);
         assert_eq!(s.default_rate_hz, 4.0);
+    }
+
+    #[test]
+    fn control_telemetry_can_set_the_shared_deadband_defaults() {
+        let mut app = app();
+        app.world_mut().trigger(ControlTelemetry {
+            channel: None,
+            atol: Some(0.01),
+            rtol: Some(0.02),
+            ..Default::default()
+        });
+        app.update();
+
+        let settings = app.world().resource::<TelemetrySettings>();
+        assert_eq!(settings.default_deadband.atol, 0.01);
+        assert_eq!(settings.default_deadband.rtol, 0.02);
     }
 
     /// The master switch actually stops sampling — not just a flag nobody reads.
@@ -2003,6 +1932,7 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..reflect_channel("t")

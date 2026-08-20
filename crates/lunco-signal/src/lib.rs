@@ -33,15 +33,48 @@ pub use sim::{SimId, SimRegistry, SimSample, SimSnapshot, SimStream, VarHistory}
 /// Mirrors `WorkbenchState.max_history`.
 pub const DEFAULT_CAPACITY: usize = 2000;
 
-/// Marks an entity whose complete output surface is retained directly by its
-/// owning signal producer. Generic port discovery must not create a second
-/// sampler for these outputs: it would duplicate histories and discard the
-/// producer's authored provenance and USD presentation path.
+/// Numeric tolerance used to decide whether a telemetry sample is meaningful.
 ///
-/// This is lifecycle metadata only. It does not publish, sample, or classify a
-/// signal; the owning producer remains the single source of samples.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct WholesaleSignalSource;
+/// `atol` is expressed in the signal's native unit and `rtol` is a fraction of
+/// the larger magnitude.  The comparison is intentionally a telemetry policy,
+/// not a Modelica solver setting: solver tolerances control convergence, while
+/// this controls what an operator sees and what the recorder retains.
+///
+/// The default is a 1e-4 native-unit floor plus 0.1% relative tolerance.  That
+/// removes ordinary floating-point/physics jitter around zero while preserving
+/// changes that are meaningful at the signal's current scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TelemetryDeadband {
+    /// Absolute tolerance in the signal's native unit.
+    pub atol: f64,
+    /// Relative tolerance as a fraction (0.001 = 0.1%).
+    pub rtol: f64,
+}
+
+impl Default for TelemetryDeadband {
+    fn default() -> Self {
+        Self {
+            atol: 1e-4,
+            rtol: 1e-3,
+        }
+    }
+}
+
+impl TelemetryDeadband {
+    /// Whether `current` is far enough from `previous` to retain a sample.
+    ///
+    /// Non-finite values always count as changed.  This prevents a numerical
+    /// fault from being hidden by a tolerance and lets the producer decide how
+    /// to represent that fault.
+    pub fn changed(self, previous: f64, current: f64) -> bool {
+        if !previous.is_finite() || !current.is_finite() {
+            return true;
+        }
+
+        let tolerance = self.atol.max(self.rtol * previous.abs().max(current.abs()));
+        (current - previous).abs() > tolerance
+    }
+}
 
 /// Stable identity for a signal across frames **within one session**.
 ///
@@ -465,6 +498,26 @@ pub fn drop_signals_of_removed_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_deadband_combines_absolute_and_relative_tolerance() {
+        let deadband = TelemetryDeadband {
+            atol: 1e-4,
+            rtol: 1e-3,
+        };
+
+        assert!(!deadband.changed(0.0, 5e-5));
+        assert!(deadband.changed(0.0, 2e-4));
+        assert!(!deadband.changed(100.0, 100.05));
+        assert!(deadband.changed(100.0, 100.2));
+    }
+
+    #[test]
+    fn telemetry_deadband_does_not_hide_non_finite_values() {
+        let deadband = TelemetryDeadband::default();
+        assert!(deadband.changed(1.0, f64::NAN));
+        assert!(deadband.changed(f64::INFINITY, 1.0));
+    }
 
     #[test]
     fn a_full_history_drops_the_oldest_sample() {
