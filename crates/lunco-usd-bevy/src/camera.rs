@@ -25,7 +25,7 @@
 //! - orthographic apertures are **tenths of scene units** →
 //!   `aperture / 10 × metersPerUnit` world units; mapped to
 //!   `ScalingMode::AutoMin` so neither authored aperture is ever cropped.
-//! - `clippingRange` (float2) → near / far.
+//! - `clippingRange` (float2, in stage units) → near / far in canonical metres.
 //! - `projection` token (`perspective` | `orthographic`) → `Projection` variant.
 //!
 //! The prim's transform + visibility come from the shared path in
@@ -37,6 +37,7 @@ use bevy::prelude::*;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read::UsdRead;
+use crate::units::StageMetrics;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -279,13 +280,19 @@ pub(crate) fn instantiate_camera_prim(
 /// the caller conforms the vertical FOV against it (expandAperture).
 fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection, Option<f32>) {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
-    let [near, far] = reader
+    let meters_per_unit = StageMetrics::from_reader(reader).meters_per_unit as f32;
+    let authored_clipping = reader
         .scalar::<[f32; 2]>(path, "clippingRange")
         .or_else(|| {
             reader
                 .scalar::<[f64; 2]>(path, "clippingRange")
                 .map(|[n, f]| [n as f32, f as f32])
-        })
+        });
+    // USD stores this range in world units. Bevy's projection consumes the
+    // canonical metre frame, so only an authored range is scaled; our explicit
+    // engine defaults are already canonical metres.
+    let [near, far] = authored_clipping
+        .map(|[near, far]| [near * meters_per_unit, far * meters_per_unit])
         .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR]);
 
     let is_ortho = reader
@@ -304,10 +311,6 @@ fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection
         let v_aperture = reader
             .real_f32(path, "verticalAperture")
             .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
-        let meters_per_unit = reader
-            .stage_meters_per_unit()
-            .filter(|m| m.is_finite() && *m > 0.0)
-            .unwrap_or(1.0) as f32;
         (
             Projection::Orthographic(OrthographicProjection {
                 near,
@@ -407,6 +410,22 @@ mod tests {
             panic!("ortho aperture must map to AutoMin");
         };
         assert!((min_height - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn authored_clipping_range_converts_from_stage_units_to_metres() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        let (projection, _) = read_projection(&stage.view(), &path);
+        let Projection::Perspective(perspective) = projection else {
+            panic!("camera defaults to perspective");
+        };
+        assert!((perspective.near - 0.1).abs() < 1e-6);
+        assert!((perspective.far - 10.0).abs() < 1e-5);
     }
 
     #[test]
