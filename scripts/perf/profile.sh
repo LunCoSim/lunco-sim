@@ -37,7 +37,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-BIN_NAME=sandbox       # any cargo bin (sandbox, lunica, …)
+BIN_NAME=luncosim      # any cargo bin (luncosim, lunica, …)
 DURATION=20            # seconds of profiling after warmup
 WARMUP=8               # seconds to let the window open + scene load
 PORT=3001              # test port (4101 is the user's own session default)
