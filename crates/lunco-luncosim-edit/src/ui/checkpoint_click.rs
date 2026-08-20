@@ -1539,7 +1539,7 @@ pub fn manual_input_disengages_autopilot(
         return; // typing in a panel is not driving
     }
     use lunco_core::UserIntent::*;
-    const DRIVE: [lunco_core::UserIntent; 7] = [
+    const DRIVE: [lunco_core::UserIntent; 8] = [
         MoveForward,
         MoveBackward,
         MoveLeft,
@@ -1547,6 +1547,7 @@ pub fn manual_input_disengages_autopilot(
         MoveUp,
         MoveDown,
         Thrust,
+        Brake,
     ];
 
     for (link, intents) in q_ctrl.iter() {
