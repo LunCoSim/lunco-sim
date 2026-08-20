@@ -13,6 +13,7 @@ model Battery
   Pin p;
   Real soc(unit="1", start = soc_init) "State of charge, 0..1";
   output Real soc_out(unit="1") "State of charge, 0..1";
+  output Real capacity_ah(unit="Ah") "Authored total battery capacity";
   output Real charge_remaining_ah(unit="Ah") "Charge currently available";
   output Real terminal_voltage_v(unit="V") "Battery terminal voltage on the electrical bus";
   output Real terminal_current_a(unit="A") "Current into the battery; positive charges, negative discharges";
@@ -22,6 +23,7 @@ equation
   p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;
   der(soc) = p.i / (capacity * 3600.0);
   soc_out = soc;
+  capacity_ah = capacity;
   charge_remaining_ah = capacity * soc;
   terminal_voltage_v = p.v;
   terminal_current_a = p.i;

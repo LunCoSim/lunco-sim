@@ -7,6 +7,7 @@
 //! checkpoint domain.
 
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::usd_tree::{compile_behavior_xml, BehaviorXml, TargetBindings};
 use lunco_autopilot::{AutopilotBehaviorSpec, BehaviorSpec};
 
@@ -25,15 +26,34 @@ const XML: &str = r#"
 fn app() -> App {
     let mut app = App::new();
     app.add_systems(Update, compile_behavior_xml);
+    let world = app
+        .world_mut()
+        .spawn(
+            Transform::from_xyz(10_000.0, 400.0, -8_000.0)
+                .with_rotation(Quat::from_rotation_y(0.7)),
+        )
+        .id();
+    let frame = app
+        .world_mut()
+        .spawn((
+            Grid::new(2_000.0, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+            ChildOf(world),
+        ))
+        .id();
+    app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
     app
 }
 
 /// Spawn a vessel carrying the tree, and a waypoint pin at `pin_pos` bound to the
 /// path the tree names. Returns (vessel, pin).
 fn scene(app: &mut App, pin_pos: Vec3) -> (Entity, Entity) {
+    let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
     let pin = app
         .world_mut()
         .spawn((
+            ChildOf(frame),
             Transform::from_translation(pin_pos),
             GlobalTransform::from_translation(pin_pos),
         ))

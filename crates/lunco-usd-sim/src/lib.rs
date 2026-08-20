@@ -68,6 +68,7 @@ use lunco_avatar::{AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, SpringArmCa
 use lunco_controller::get_avatar_input_map;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
+use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
     avian_queries::RaycastObservation, joint::PassivePrismaticSuspension, ports::PORT_NAME,
@@ -2861,7 +2862,7 @@ fn setup_physical_wheel(
         friction_mu: params.friction_mu,
         bearing_damping: params.bearing_damping,
         axle_axis_local: params.axle_axis,
-        heading_local: existing_tf.rotation.as_dquat() * DVec3::NEG_Z,
+        heading_local: VehicleFrame::forward(GridRot(existing_tf.rotation.as_dquat())),
     });
 
     // The constraint itself goes through the ONE door every joint in the
@@ -3041,7 +3042,7 @@ fn animate_proxy_physical_wheels(
     // The wheel's `ChildOf` parent is its chassis. `Without<NetReplicate>`: replicated
     // wheels carry their own spin via the body's world rotation, so skip them (see docstring).
     mut q_wheels: Query<
-        (&mut PhysicalWheel, &GlobalTransform, &ChildOf),
+        (&mut PhysicalWheel, &Rotation, &ChildOf),
         Without<lunco_core::NetReplicate>,
     >,
     q_chassis: Query<
@@ -3067,7 +3068,7 @@ fn animate_proxy_physical_wheels(
         return;
     }
 
-    for (mut wheel, gtf, child_of) in q_wheels.iter_mut() {
+    for (mut wheel, wheel_rot, child_of) in q_wheels.iter_mut() {
         let Ok((body, pos, rot, motion)) = q_chassis.get(child_of.parent()) else {
             continue;
         };
@@ -3084,19 +3085,18 @@ fn animate_proxy_physical_wheels(
         // Reconstruct the hub in the AVIAN cell-local frame from the chassis pose +
         // the authored `mount_local` offset (the rigid axle), exactly as
         // `proxy_wheel_pose`/`reconstruct_proxy_wheels` do. The old code read
-        // `gtf.translation()` (big_space render frame) against `pos.0` (avian) — the
-        // same CQ-201 frame-mix as the raycast spin integrator, which drifted the
-        // rolling rate once the proxy drove ~km from the floating origin. Rotation is
-        // frame-safe, so `forward` keeps using `gtf` (it already carries the steer).
-        let chassis_pos = lunco_core::coords::GridPos(pos.0);
+        // `GlobalTransform` (big_space render frame) in this physics calculation.
+        // The wheel's Avian rotation is authoritative and already includes proxy
+        // steering, so no render projection crosses this boundary.
+        let chassis_pos = GridPos(pos.0);
         let (hub_pos, _) = wheel_hub_pose(
             chassis_pos,
-            lunco_core::coords::GridRot(rot.0),
+            GridRot(rot.0),
             wheel.mount_local.as_dvec3(),
             DQuat::IDENTITY,
         );
         let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, chassis_pos);
-        let forward = gtf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
+        let forward = VehicleFrame::forward(GridRot(wheel_rot.0));
         let r = (wheel.wheel_radius as f64).max(1e-3);
         let w = wheel_roll_rate(hub_vel, forward, r);
 
@@ -3953,6 +3953,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::IDENTITY,
+            Rotation::default(),
             ChildOf(chassis),
         ));
 
@@ -4037,6 +4038,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::IDENTITY,
+            Rotation::default(),
             ChildOf(chassis),
             // The discriminator under test: a per-link-replicated wheel.
             lunco_core::NetReplicate,
@@ -4112,6 +4114,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
+            Rotation::default(),
             ChildOf(chassis),
         ));
 

@@ -35,7 +35,7 @@ use lunco_behavior::{
     Action, BoxNode, Force, Invert, Node, Parallel, ParallelPolicy, ReactiveSelector,
     ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
 };
-use lunco_core::coords::GridPos;
+use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
@@ -1647,7 +1647,7 @@ pub struct PrevTargets {
 
 /// Fixed-tick driver: every engaged autopilot that still **owns** its vessel emits
 /// one `SetPorts`. If it has an [`AutopilotBehavior`] tree, tick it against the
-/// vessel's world pose to get the setpoint (glue in the tree, math in the Rust
+/// vessel's authoritative active-frame pose to get the setpoint (glue in the tree, math in the Rust
 /// leaves); otherwise use the constant setpoints. Losing ownership makes `owns`
 /// false, so it stops writing with no disengage polling — the symmetric self-gate
 /// to the human's yield in `drive_from_bindings`.
@@ -1661,19 +1661,12 @@ pub fn drive_autopilots(
         Option<&mut AutopilotExecutionState>,
     )>,
     q_gid: Query<&GlobalEntityId>,
-    // ORIENTATION only. A rotation is the same in the render frame and the root
-    // frame (big_space rebases the origin, it does not spin it), so `forward()`
-    // is safe to read here — unlike `translation()`, see `pose` below.
-    q_xf: Query<&GlobalTransform>,
+    // The pose boundary selects Avian's authoritative position/rotation for a
+    // physical vessel and the composed hierarchy for non-physical targets.
+    // Navigation must not combine a physics rotation with a render-frame
+    // position: that silently turns a local waypoint into a far-away bearing.
+    pose: lunco_physics::SimulationPoseQuery,
     q_targets: Query<(Entity, &GlobalEntityId)>,
-    // POSITIONS are typed [`GridPos`] (BigSpace ROOT frame, off the cell chain).
-    // NOT `GlobalTransform`: that is the RENDER frame, origin-relative and rebased
-    // by big_space — the two only coincide in the origin cell, which is why a
-    // render-frame tick worked in the sandbox and chased phantom points at the
-    // moonbase. The type now carries that rule.
-    q_parents: Query<&ChildOf>,
-    q_grids_only: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     // The mirrored source spec on the VESSEL (see [`AutopilotBehaviorSpec`]) —
     // read here to learn which gids the tree's tracking leaves reference.
     q_specs: Query<&AutopilotBehaviorSpec>,
@@ -1711,13 +1704,7 @@ pub fn drive_autopilots(
     let states: TargetStates = q_targets
         .iter()
         .filter(|(_, gid)| need_all || needed.contains(&gid.get()))
-        .filter_map(|(e, gid)| {
-            // Root-frame, from the cell chain. A waypoint pin is a plain prim with
-            // no physics body, so this (not avian's `Position`) is what resolves
-            // every target uniformly.
-            let pos = lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial)?;
-            Some((gid, pos))
-        })
+        .filter_map(|(e, gid)| pose.position(e).map(|position| (gid, position)))
         .map(|(gid, pos)| {
             let vel = if dt > 1e-6 {
                 prev.poses
@@ -1744,70 +1731,64 @@ pub fn drive_autopilots(
             continue; // lost the vessel → stop driving (one writer per tick)
         }
 
-        let (throttle, steer, brake, mut fired) =
-            match (behavior.as_deref_mut(), q_xf.get(ap.vessel).ok()) {
-                (Some(tree), Some(xf)) => {
-                    let clearance = clearances
-                        .as_ref()
-                        .and_then(|c| c.0.get(&ap.vessel).copied())
-                        .unwrap_or_default();
-                    let Some(self_pos) = lunco_core::coords::world_position(
-                        ap.vessel,
-                        &q_parents,
-                        &q_grids_only,
-                        &q_spatial,
-                    ) else {
-                        continue; // no spatial components → nothing to navigate from
-                    };
-                    let mut ctx = DriveCtx {
-                        self_gid: gid.get(),
-                        // Root frame, matching `targets` above and the authored world
-                        // coordinates the leaves compare against.
-                        pos: self_pos,
-                        fwd: xf.forward().as_vec3(),
-                        now,
-                        // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
-                        // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
-                        // it every active tick, so the only ticks that keep this default are
-                        // ones where no leaf drives — an empty/completed route (every waypoint
-                        // consumed), or a `forever(sequence[])` restart. Those must STOP, not
-                        // creep forward. Seeding `ap.throttle` here made a finished patrol
-                        // drive straight ahead ("autopilot moves forward instead of following"),
-                        // because a route whose legs were all marked passed compiles to an
-                        // empty sequence that never writes the setpoint. The genuine "no tree,
-                        // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
-                        //
-                        // Brake, not merely zero throttle: neutral only removes drive, and a
-                        // rover parked on a lunar slope with no route then ROLLS. "Stop" has
-                        // to be actively held, the same triple `Hold`/`Wait` write.
-                        out: (0.0, 0.0, 1.0),
-                        targets: targets.clone(),
-                        clearance,
-                        fired: Vec::new(),
-                    };
-                    if let Some(state) = execution.as_deref_mut() {
-                        tree.tick_hosted(state, &mut ctx);
-                    } else {
-                        let mut state = AutopilotExecutionState::Running;
-                        tree.tick_hosted(&mut state, &mut ctx);
-                        if state.terminal() {
-                            commands.entity(actor).try_insert(state);
-                        }
+        // A physical body that has not been seeded is not navigable yet;
+        // `SimulationPoseQuery` returns no presentation-transform substitute.
+        let self_pose = pose.pose(ap.vessel);
+        let (throttle, steer, brake, mut fired) = match (behavior.as_deref_mut(), self_pose) {
+            (Some(tree), Some((self_pos, self_rotation))) => {
+                let clearance = clearances
+                    .as_ref()
+                    .and_then(|c| c.0.get(&ap.vessel).copied())
+                    .unwrap_or_default();
+                let mut ctx = DriveCtx {
+                    self_gid: gid.get(),
+                    // Active physics frame, matching `targets` above and the
+                    // authored coordinates the leaves compare against.
+                    pos: self_pos,
+                    fwd: VehicleFrame::yaw_forward(self_rotation).as_vec3(),
+                    now,
+                    // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
+                    // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
+                    // it every active tick, so the only ticks that keep this default are
+                    // ones where no leaf drives — an empty/completed route (every waypoint
+                    // consumed), or a `forever(sequence[])` restart. Those must STOP, not
+                    // creep forward. Seeding `ap.throttle` here made a finished patrol
+                    // drive straight ahead ("autopilot moves forward instead of following"),
+                    // because a route whose legs were all marked passed compiles to an
+                    // empty sequence that never writes the setpoint. The genuine "no tree,
+                    // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
+                    //
+                    // Brake, not merely zero throttle: neutral only removes drive, and a
+                    // rover parked on a lunar slope with no route then ROLLS. "Stop" has
+                    // to be actively held, the same triple `Hold`/`Wait` write.
+                    out: (0.0, 0.0, 1.0),
+                    targets: targets.clone(),
+                    clearance,
+                    fired: Vec::new(),
+                };
+                if let Some(state) = execution.as_deref_mut() {
+                    tree.tick_hosted(state, &mut ctx);
+                } else {
+                    let mut state = AutopilotExecutionState::Running;
+                    tree.tick_hosted(&mut state, &mut ctx);
+                    if state.terminal() {
+                        commands.entity(actor).try_insert(state);
                     }
-                    (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
                 }
-                // No behaviour tree: the explicit constant-cruise autopilot. A zero
-                // throttle here is not "coast" but "hold" — an engaged autopilot with
-                // nothing to drive keeps the vessel where it is.
-                _ => {
-                    let brake = if ap.throttle == 0.0 && ap.steer == 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    (ap.throttle, ap.steer, brake, Vec::new())
-                }
-            };
+                (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
+            }
+            // No behaviour tree: the explicit constant-cruise autopilot. A zero
+            // throttle here is not "coast" but "hold" — an engaged autopilot with
+            // nothing to drive keeps the vessel where it is.
+            _ => {
+                let brake = if ap.throttle == 0.0 && ap.steer == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                (ap.throttle, ap.steer, brake, Vec::new())
+            }
+        };
 
         commands.trigger(SetPorts {
             target: ap.vessel,
@@ -1939,8 +1920,7 @@ pub fn sense_clearance(
         }
         // Level forward: drop the pitch so the probe skims a horizontal plane instead
         // of aiming into the ground (downhill) or the sky (uphill).
-        let f = (rot.0 * bevy::math::DVec3::NEG_Z).as_vec3();
-        let fwd = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
+        let fwd = VehicleFrame::yaw_forward(GridRot(rot.0)).as_vec3();
         if fwd == Vec3::ZERO {
             continue;
         }

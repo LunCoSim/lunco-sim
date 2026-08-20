@@ -54,8 +54,9 @@
 //!
 //! ## Resolution happens at COMPILE time, not tick time
 //!
-//! [`compile_behavior_xml`] resolves each `target` prim path to that prim's live
-//! `GlobalTransform` and bakes the coordinates into the compiled tree — then
+//! [`compile_behavior_xml`] resolves each `target` prim path through the
+//! authoritative active-frame pose boundary and bakes the coordinates into the
+//! compiled tree — then
 //! recompiles whenever a referenced prim MOVES. So dragging a pin in the viewport
 //! re-routes the rover, and the hot path (`drive_autopilots`) stays a plain
 //! coordinate chase with no per-tick lookups.
@@ -642,19 +643,16 @@ fn expand_editor_route_in_place(v: &mut Value) {
     }
 }
 
-/// Replace every prim-path `target` with the prim's live world position. Returns the
+/// Replace every prim-path `target` with the prim's live active-frame position. Returns the
 /// paths that could not be resolved — a tree naming a deleted waypoint must not
 /// compile (it would drive to the origin).
 ///
-/// Everything here is the BigSpace **root frame** — the frame `drive_autopilots`
-/// ticks in, avian's `Position` uses, and an authored `x;y;z` waypoint already
-/// means. This used to bake into the RENDER frame instead (prim positions read
-/// from `GlobalTransform`, literal waypoints actively converted world→render via
-/// the grid's floating offset). That frame is origin-relative, so every baked
-/// coordinate silently expired whenever big_space moved the origin, and a JSON
-/// `target: [x,y,z]` — which this never rewrites — was left in world coordinates
-/// to be compared against render ones. In the sandbox the origin cell makes the
-/// two frames equal, which is why only the moonbase broke.
+/// The target frame is the active physics frame — the same frame
+/// `drive_autopilots` ticks in and Avian's `Position` uses. This used to bake
+/// through a root-frame reader while runtime navigation used the active frame,
+/// so a celestial parent could leave the compiled target in a different frame
+/// from the rover. Literal `x;y;z` coordinates already use this same authored
+/// active-frame contract and remain unchanged.
 fn bake_targets(
     v: &mut Value,
     bindings: &TargetBindings,
@@ -742,14 +740,14 @@ fn new_spec_is_append_only(old: &BehaviorSpec, new: &BehaviorSpec) -> bool {
     }
 }
 
-/// Compile each vessel's XML tree — resolving its prim-path targets to live world
-/// positions — into the derived [`AutopilotBehaviorSpec`], and hot-swap the running
+/// Compile each vessel's XML tree — resolving its prim-path targets to live
+/// active-frame positions — into the derived [`AutopilotBehaviorSpec`], and hot-swap the running
 /// [`AutopilotBehavior`] so an edit takes effect immediately.
 ///
 /// Change-gated (§7): recompiles when the XML changes, when the bindings change, or
 /// when any entity MOVES — the last is what makes dragging a waypoint pin re-route
-/// the rover. The move gate is deliberately coarse (`Changed<GlobalTransform>` over
-/// all entities) but cheap: it only costs a rebuild for vessels that actually carry a
+/// the rover. The move gate is deliberately coarse over authoritative `Transform`
+/// `CellCoord` changes: it only costs a rebuild for vessels that actually carry a
 /// tree, and a moving *vessel* re-baking its own static targets is idempotent.
 ///
 /// The derived spec is compared against the LAST DERIVED spec (per-vessel memory in
@@ -774,25 +772,18 @@ pub fn compile_behavior_xml(
         Or<(
             Changed<BehaviorXml>,
             Changed<TargetBindings>,
-            Changed<GlobalTransform>,
+            Changed<Transform>,
+            Changed<big_space::grid::cell::CellCoord>,
             Changed<ReachedWaypoints>,
         )>,
     >,
-    q_grids_only: Query<&big_space::prelude::Grid>,
-    q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    pose: lunco_physics::SimulationPoseQuery,
     mut last_derived: Local<bevy::ecs::entity::EntityHashMap<BehaviorSpec>>,
     mut commands: Commands,
 ) {
     if q_vessels.is_empty() || moved.is_empty() {
         return;
     }
-    // Root-frame position of any prim, straight off the cell chain — no grid
-    // offset to subtract and no floating origin to chase, because the bake no
-    // longer targets the render frame.
-    let pose =
-        |e: Entity| lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial);
-
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty = TargetBindings::default();
         let bindings = bindings.unwrap_or(&empty);
@@ -820,7 +811,12 @@ pub fn compile_behavior_xml(
         // points drop out of the curve) and BEFORE bake (legs are still
         // `target="x;y;z"` strings that the resampler parses).
         expand_editor_route_in_place(&mut value);
-        bake_targets(&mut value, bindings, &pose, &mut missing);
+        bake_targets(
+            &mut value,
+            bindings,
+            &|entity| pose.position(entity),
+            &mut missing,
+        );
         if !missing.is_empty() {
             // Dangling reference: a waypoint prim the tree names has been deleted (or
             // has not spawned yet). Keep the last good tree — compiling this one would
@@ -843,7 +839,8 @@ pub fn compile_behavior_xml(
         // Only touch anything when the DERIVED spec actually differs from the last
         // one THIS system derived for the vessel (see the doc comment above — the
         // installed spec is not the reference, a runtime command may own it). This
-        // system is gated on `Changed<GlobalTransform>` over ALL entities, so it
+        // system is gated on authoritative `Transform`/`CellCoord` changes over
+        // ALL entities, so it
         // re-runs every frame the rover moves; rebuilding the tree unconditionally
         // would hand the actor a FRESH `AutopilotBehavior` each tick and reset all
         // behaviour state with it — the sequence would snap back to leg 0 and,
@@ -918,19 +915,16 @@ pub fn compile_behavior_xml(
 #[cfg(test)]
 mod bake_frame_tests {
     //! The bake's frame contract. Every coordinate a compiled tree carries is in
-    //! the BigSpace ROOT frame — the frame `drive_autopilots` ticks in and avian's
-    //! `Position` uses. The bake used to target the RENDER frame instead, which is
-    //! origin-relative: every baked coordinate expired whenever big_space moved the
-    //! origin, and an authored waypoint got actively converted into it. The sandbox
-    //! sits in the origin cell, where the two frames are equal — so only the
-    //! moonbase, whose origin is cells away, showed it.
+    //! the active physics frame — the frame `drive_autopilots` ticks in and Avian's
+    //! `Position` uses. Prim targets resolve through the same active-frame pose
+    //! boundary as the rover; authored coordinates already use this contract.
     use super::*;
 
     fn drive_to(target: &str) -> Value {
         serde_json::json!({ "kind": "drive_to", "target": target })
     }
 
-    /// An authored `x;y;z` waypoint is ALREADY root-frame; the bake must pass it
+    /// An authored `x;y;z` waypoint is ALREADY active-frame; the bake must pass it
     /// through untouched rather than rebasing it onto the floating origin.
     #[test]
     fn a_literal_waypoint_bakes_verbatim() {
@@ -945,10 +939,10 @@ mod bake_frame_tests {
         assert!(missing.is_empty());
     }
 
-    /// A prim target resolves through the cell chain — the same root frame, so a
-    /// pin two cells out bakes to its true position, not a render-frame shadow.
+    /// A prim target resolves through the active-frame pose boundary, so a pin
+    /// two cells out bakes to its true position, not a render-frame shadow.
     #[test]
-    fn a_prim_waypoint_bakes_its_root_frame_position() {
+    fn a_prim_waypoint_bakes_its_active_frame_position() {
         let mut world = World::new();
         let pin = world.spawn_empty().id();
         let mut bindings = TargetBindings::default();
