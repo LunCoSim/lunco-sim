@@ -172,14 +172,14 @@ impl WheelParams {
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
         powertrain: Option<&crate::powertrain::PowertrainParams>,
-    ) -> Result<WheelParams, Vec<&'static str>> {
-        let mut missing: Vec<&'static str> = Vec::new();
+    ) -> Result<WheelParams, Vec<String>> {
+        let mut missing = Vec::new();
         let axle_axis = match reader.text(wheel, "axis").as_deref() {
             Some("X") => DVec3::X,
             Some("Y") => DVec3::Y,
             Some("Z") => DVec3::Z,
             _ => {
-                missing.push("axis");
+                missing.push("axis".to_owned());
                 DVec3::X
             }
         };
@@ -187,7 +187,7 @@ impl WheelParams {
             match reader.real(wheel, name) {
                 Some(v) => v,
                 None => {
-                    missing.push(name);
+                    missing.push(name.to_owned());
                     0.0
                 }
             }
@@ -230,11 +230,30 @@ impl WheelParams {
         {
             Some(v) => DVec3::new(v[0], v[1], v[2]),
             None => {
-                missing.push("lunco:wheel:steerAxis");
+                missing.push("lunco:wheel:steerAxis".to_owned());
                 DVec3::Y
             }
         };
 
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+
+        validate_wheel_values(
+            &mut missing,
+            radius,
+            width,
+            mass,
+            moment_of_inertia,
+            bearing_damping,
+            brake_torque_max,
+            slip_stiffness,
+            cornering_stiffness,
+            min_validated_speed,
+            friction_mu,
+            steer_axis,
+            drive_damping,
+        );
         if !missing.is_empty() {
             return Err(missing);
         }
@@ -249,9 +268,15 @@ impl WheelParams {
         .then_some(wheel);
         let suspension_prim = attachment_suspension.or(direct_suspension);
         let suspension = match suspension_prim {
-            Some(susp) => read_suspension_attrs(reader, susp),
+            Some(susp) => match read_suspension_attrs(reader, susp) {
+                Ok(params) => Some(params),
+                Err(errors) => {
+                    missing.extend(errors);
+                    None
+                }
+            },
             None => {
-                missing.push("PhysxVehicleWheelAttachmentAPI");
+                missing.push("PhysxVehicleWheelAttachmentAPI".to_owned());
                 None
             }
         };
@@ -419,12 +444,231 @@ pub(crate) fn attachment_suspension_path(
 fn read_suspension_attrs(
     reader: &lunco_usd_bevy::StageView<'_>,
     prim: &SdfPath,
-) -> Option<SuspensionParams> {
-    Some(SuspensionParams {
-        rest_length: reader.real(prim, "lunco:suspension:restLength")?,
-        spring_k: reader.real(prim, "physxVehicleSuspension:springStrength")?,
-        damping_c: reader.real(prim, "physxVehicleSuspension:springDamperRate")?,
+) -> Result<SuspensionParams, Vec<String>> {
+    let mut missing = Vec::new();
+    let read = |name: &str, missing: &mut Vec<String>| {
+        reader.real(prim, name).or_else(|| {
+            missing.push(name.to_owned());
+            None
+        })
+    };
+    let rest_length = read("lunco:suspension:restLength", &mut missing);
+    let spring_k = read("physxVehicleSuspension:springStrength", &mut missing);
+    let damping_c = read("physxVehicleSuspension:springDamperRate", &mut missing);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+
+    let (Some(rest_length), Some(spring_k), Some(damping_c)) = (rest_length, spring_k, damping_c)
+    else {
+        unreachable!("missing suspension values were rejected above")
+    };
+    let mut invalid = Vec::new();
+    validate_suspension_values(&mut invalid, rest_length, spring_k, damping_c);
+    if !invalid.is_empty() {
+        return Err(invalid);
+    }
+
+    Ok(SuspensionParams {
+        rest_length,
+        spring_k,
+        damping_c,
     })
+}
+
+fn validate_suspension_values(
+    errors: &mut Vec<String>,
+    rest_length: f64,
+    spring_k: f64,
+    damping_c: f64,
+) {
+    validate_range(
+        errors,
+        "lunco:suspension:restLength",
+        rest_length,
+        0.05,
+        2.0,
+    );
+    validate_range(
+        errors,
+        "physxVehicleSuspension:springStrength",
+        spring_k,
+        0.0,
+        100_000.0,
+    );
+    validate_range(
+        errors,
+        "physxVehicleSuspension:springDamperRate",
+        damping_c,
+        0.0,
+        20_000.0,
+    );
+}
+
+fn validate_wheel_values(
+    errors: &mut Vec<String>,
+    radius: f64,
+    width: f64,
+    mass: f64,
+    moment_of_inertia: f64,
+    bearing_damping: f64,
+    brake_torque_max: f64,
+    slip_stiffness: f64,
+    cornering_stiffness: f64,
+    min_validated_speed: f64,
+    friction_mu: f64,
+    steer_axis: DVec3,
+    drive_damping: f64,
+) {
+    validate_range(errors, "physxVehicleWheel:radius", radius, 0.05, 3.0);
+    validate_positive(errors, "physxVehicleWheel:width", width);
+    validate_positive(errors, "physxVehicleWheel:mass", mass);
+    validate_range(
+        errors,
+        "physxVehicleWheel:moi",
+        moment_of_inertia,
+        0.0,
+        50.0,
+    );
+    validate_range(
+        errors,
+        "physxVehicleWheel:dampingRate",
+        bearing_damping,
+        0.0,
+        50.0,
+    );
+    validate_range(
+        errors,
+        "physxVehicleWheel:maxBrakeTorque",
+        brake_torque_max,
+        0.0,
+        5_000.0,
+    );
+    validate_range(
+        errors,
+        "physxVehicleTire:longitudinalStiffness",
+        slip_stiffness,
+        0.0,
+        30_000.0,
+    );
+    validate_nonnegative(
+        errors,
+        "physxVehicleTire:lateralStiffness",
+        cornering_stiffness,
+    );
+    validate_range(
+        errors,
+        "lunco:tire:minValidatedSpeed",
+        min_validated_speed,
+        0.0,
+        10.0,
+    );
+    validate_nonnegative(errors, "physics:dynamicFriction", friction_mu);
+    validate_nonnegative(errors, "lunco:wheel:driveDamping", drive_damping);
+    if !(steer_axis.is_finite() && steer_axis.length_squared() > 0.0) {
+        errors.push(format!(
+            "lunco:wheel:steerAxis must be finite and non-zero, got {steer_axis:?}"
+        ));
+    }
+}
+
+fn validate_positive(errors: &mut Vec<String>, name: &str, value: f64) {
+    if !(value.is_finite() && value > 0.0) {
+        errors.push(format!("{name} must be finite and > 0, got {value}"));
+    }
+}
+
+fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
+    if !(value.is_finite() && value >= 0.0) {
+        errors.push(format!("{name} must be finite and >= 0, got {value}"));
+    }
+}
+
+fn validate_range(errors: &mut Vec<String>, name: &str, value: f64, min: f64, max: f64) {
+    if !(value.is_finite() && (min..=max).contains(&value)) {
+        errors.push(format!(
+            "{name} must be finite and in [{min}, {max}], got {value}"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_suspension_values, validate_wheel_values};
+    use bevy::math::DVec3;
+
+    #[test]
+    fn authored_wheel_values_accept_the_documented_contract() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            0.3,
+            0.2,
+            12.0,
+            0.54,
+            0.5,
+            120.0,
+            14_000.0,
+            8_000.0,
+            0.0,
+            1.5,
+            DVec3::Y,
+            30.0,
+        );
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn authored_wheel_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            f64::NAN,
+            0.0,
+            f64::INFINITY,
+            51.0,
+            -1.0,
+            5_001.0,
+            30_001.0,
+            -1.0,
+            11.0,
+            -0.1,
+            DVec3::ZERO,
+            -1.0,
+        );
+        for name in [
+            "physxVehicleWheel:radius",
+            "physxVehicleWheel:width",
+            "physxVehicleWheel:mass",
+            "physxVehicleWheel:moi",
+            "physxVehicleWheel:dampingRate",
+            "physxVehicleWheel:maxBrakeTorque",
+            "physxVehicleTire:longitudinalStiffness",
+            "physxVehicleTire:lateralStiffness",
+            "lunco:tire:minValidatedSpeed",
+            "physics:dynamicFriction",
+            "lunco:wheel:driveDamping",
+            "lunco:wheel:steerAxis",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.starts_with(name)),
+                "missing validation error for {name}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, 0.01, f64::NAN, 20_001.0);
+        assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
+        assert!(errors[0].starts_with("lunco:suspension:restLength"));
+        assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
+        assert!(errors[2].starts_with("physxVehicleSuspension:springDamperRate"));
+    }
 }
 
 // ---------------------------------------------------------------------------
