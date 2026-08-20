@@ -24,7 +24,7 @@ use bevy::light::{
 };
 use bevy::prelude::Color;
 
-use crate::RenderingQuality;
+use crate::{RenderQualityProfile, RenderingQuality};
 
 /// Camera EV100 matched to the ~128 klx lunar sun — the value
 /// `lunco_environment::LunarSun` defaults to and that the celestial sun
@@ -141,8 +141,13 @@ impl LunarSunShadow {
     /// near/far split after this constructor returns. Resolution and cascade
     /// count remain renderer policy and therefore come from the setting.
     pub fn for_quality(quality: RenderingQuality) -> Self {
+        Self::for_profile(quality.profile())
+    }
+
+    /// Build the canonical sun-shadow spec from the authoritative graphics
+    /// settings, including custom edits made after a preset was applied.
+    pub fn for_profile(profile: RenderQualityProfile) -> Self {
         let mut sun = Self::default();
-        let profile = quality.profile();
         sun.shadow_map_size = profile.directional_shadow_map_size;
         sun.num_cascades = profile.directional_cascades;
         sun

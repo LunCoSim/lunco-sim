@@ -234,7 +234,6 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
     quality: Option<Res<lunco_render::RenderingQualitySettings>>,
-    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
     grid_config: Option<Res<lunco_core::WorldGridConfig>>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
@@ -432,17 +431,11 @@ pub fn setup_big_space_hierarchy(
     // sun frozen at its authored rotation.
     //
     // Physical/render lighting STATE is established here; the LIGHT is not.
-    let requested_quality = quality
-        .as_deref()
-        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
-            settings.quality
-        });
-    let budget_bytes = shadow_budget.as_deref().map_or_else(
-        || lunco_render::GpuShadowBudget::default().limit_bytes,
-        |budget| budget.limit_bytes,
+    let sun_profile = quality.as_deref().map_or_else(
+        || lunco_render::RenderingQuality::Balanced.profile(),
+        |settings| settings.profile(),
     );
-    let sun_quality = requested_quality.effective_for_shadow_budget(budget_bytes, 1);
-    let sun = lunco_render::LunarSunShadow::for_quality(sun_quality);
+    let sun = lunco_render::LunarSunShadow::for_profile(sun_profile);
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.
     // Per-scene display exposure belongs to a composed `UsdGeomCamera`, which

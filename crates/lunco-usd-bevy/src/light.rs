@@ -369,8 +369,7 @@ pub(crate) fn instantiate_light_prim(
     // from — same pair `apply_standard_material` uses for its texture inputs.
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
-    quality: lunco_render::RenderingQuality,
-    shadow_budget_bytes: u64,
+    quality: lunco_render::RenderQualityProfile,
 ) -> bool {
     // A SphereLight's scene-property ports are backed by a deferred Bevy light
     // component. Publish the generic pending state before projection can create
@@ -403,8 +402,7 @@ pub(crate) fn instantiate_light_prim(
             // `inputs:shadow:distance` (the heightfield march covers beyond).
             // `inputs:angle` is the sun's angular diameter driving the
             // horizon-shadow penumbra.
-            let effective_quality = quality.effective_for_shadow_budget(shadow_budget_bytes, 1);
-            let d = LunarSunShadow::for_quality(effective_quality);
+            let d = LunarSunShadow::for_profile(quality);
             // Physical identity (illuminance + apparent size) is *authored* on
             // this prim: illuminance from `intensity`×2^`exposure`, angular size
             // from `inputs:angle`. The unauthored fallback is

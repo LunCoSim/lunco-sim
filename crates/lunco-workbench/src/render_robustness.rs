@@ -69,15 +69,11 @@ use bevy::render::{
     ExtractSchedule, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_egui::{egui, EguiContexts};
-use lunco_render::{GpuShadowBudget, RenderingQualitySettings, SceneCamera, ShadowMapSuppressed};
+use lunco_render::{
+    estimate_shadow_allocation_bytes, GpuShadowAdapterLimit, RenderingQualitySettings,
+    ShadowMapSuppressed, ShadowMapSuppressionReason,
+};
 use lunco_settings::AppSettingsExt;
-
-const INTEGRATED_DIRECTIONAL_SHADOW_SIZE: usize = 1024;
-const INTEGRATED_POINT_SHADOW_SIZE: usize = 512;
-const INTEGRATED_DIRECTIONAL_CASTERS: usize = 1;
-const INTEGRATED_DIRECTIONAL_CASCADES: usize = 2;
-const INTEGRATED_POINT_CASTERS: usize = 4;
-const INTEGRATED_SPOT_CASTERS: usize = 4;
 
 /// How long a failure must persist after the applicable recovery decision
 /// before presentation is abandoned.
@@ -168,30 +164,27 @@ pub struct RenderHealth {
     /// Last failure class observed by the callback. This keeps recovery aligned
     /// with the resource that actually failed instead of guessing from totals.
     last_failure_kind: AtomicU8,
-    /// Set by render startup so the main world can apply the integrated-adapter
-    /// shadow budget before the first scene reaches the render graph.
-    integrated_adapter: AtomicBool,
 }
 
 /// Shared adapter-budget result. RenderStartup runs in the render world, while
 /// the quality projection runs in the main world, so the result crosses the
 /// existing ExtractSchedule boundary through this tiny atomic handle.
 #[derive(Resource, Clone, Debug)]
-struct ShadowBudgetHandle {
+struct ShadowAdapterLimitHandle {
     limit_bytes: Arc<AtomicU64>,
     revision: Arc<AtomicU64>,
 }
 
-impl Default for ShadowBudgetHandle {
+impl Default for ShadowAdapterLimitHandle {
     fn default() -> Self {
         Self {
-            limit_bytes: Arc::new(AtomicU64::new(GpuShadowBudget::default().limit_bytes)),
+            limit_bytes: Arc::new(AtomicU64::new(GpuShadowAdapterLimit::default().limit_bytes)),
             revision: Arc::new(AtomicU64::new(0)),
         }
     }
 }
 
-impl ShadowBudgetHandle {
+impl ShadowAdapterLimitHandle {
     fn publish(&self, limit_bytes: u64) {
         self.limit_bytes.store(limit_bytes, Ordering::Release);
         self.revision.fetch_add(1, Ordering::Release);
@@ -206,14 +199,14 @@ impl ShadowBudgetHandle {
     }
 }
 
-const INTEGRATED_SHADOW_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+const INTEGRATED_SHADOW_ADAPTER_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
 const DISCRETE_SHADOW_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 const CPU_SHADOW_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 const UNKNOWN_SHADOW_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 
-fn recommended_shadow_budget(info: &wgpu::AdapterInfo) -> u64 {
+fn recommended_shadow_adapter_limit(info: &wgpu::AdapterInfo) -> u64 {
     match info.device_type {
-        wgpu::DeviceType::IntegratedGpu => INTEGRATED_SHADOW_BUDGET_BYTES,
+        wgpu::DeviceType::IntegratedGpu => INTEGRATED_SHADOW_ADAPTER_LIMIT_BYTES,
         wgpu::DeviceType::DiscreteGpu => DISCRETE_SHADOW_BUDGET_BYTES,
         wgpu::DeviceType::Cpu => CPU_SHADOW_BUDGET_BYTES,
         wgpu::DeviceType::Other | wgpu::DeviceType::VirtualGpu => UNKNOWN_SHADOW_BUDGET_BYTES,
@@ -385,16 +378,22 @@ pub(crate) struct Ladder {
     failure_kind: FailureKind,
 }
 
-/// Tracks the scene structure for the integrated-adapter preflight. A scene
-/// loads asynchronously, so the budget is re-applied whenever another light
-/// entity materialises, then remains dormant until the next teardown.
+/// Tracks the scene structure for shadow admission. A scene loads
+/// asynchronously, so the policy is re-applied whenever another light entity
+/// materialises, then remains dormant until the next teardown.
 #[derive(Resource, Default)]
-pub(crate) struct ShadowBudgetState {
+pub(crate) struct ShadowAdmissionState {
     light_count: Option<usize>,
     /// Number of currently enabled shadow casters. This changes when the
     /// recovery ladder sheds maps and changes back when an explicit re-arm
     /// restores them, even if the scene contains the same total lights.
     enabled_caster_count: Option<usize>,
+    directional_map_size: Option<usize>,
+    point_map_size: Option<usize>,
+    directional_cascade_layers: Option<usize>,
+    budget_bytes: Option<u64>,
+    configuration_signature: Option<u64>,
+    policy_signature: Option<u64>,
 }
 
 const FAILURE_QUIET_SECS: f64 = 0.5;
@@ -492,7 +491,7 @@ impl Ladder {
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
 pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     app.register_settings_section::<RenderingQualitySettings>();
-    app.init_resource::<GpuShadowBudget>();
+    app.init_resource::<GpuShadowAdapterLimit>();
 
     if app.get_sub_app_mut(RenderApp).is_none() {
         return;
@@ -511,17 +510,17 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
         )
             .chain(),
     );
-    app.init_resource::<ShadowBudgetState>();
+    app.init_resource::<ShadowAdmissionState>();
     // Shadow allocation happens during render extraction. The preflight must
     // observe the fully materialised scene in PostUpdate, after scene-load
     // commands apply but before the render sub-app extracts lights.
-    app.add_systems(PostUpdate, apply_integrated_shadow_budget);
+    app.add_systems(PostUpdate, apply_shadow_budget_policy);
 
-    let shadow_budget = ShadowBudgetHandle::default();
-    app.insert_resource(shadow_budget.clone());
+    let adapter_limit = ShadowAdapterLimitHandle::default();
+    app.insert_resource(adapter_limit.clone());
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
-    render_app.insert_resource(shadow_budget);
+    render_app.insert_resource(adapter_limit);
     // Once the presentation decision is terminal, stop all render-stage work,
     // including `render_system`, whose only caller presents the swapchain.
     // Extraction may run one final time to propagate this resource; no render
@@ -546,12 +545,12 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     );
     render_app.add_systems(
         RenderStartup,
-        (set_error_handler, configure_shadow_budget).chain(),
+        (set_error_handler, configure_shadow_adapter_limit).chain(),
     );
     // RenderStartup cannot borrow the simulation world directly. Publish the
     // adapter result on the normal extraction boundary so scene projectors see
     // the safe budget before asynchronous USD lights arrive.
-    render_app.add_systems(ExtractSchedule, publish_shadow_budget);
+    render_app.add_systems(ExtractSchedule, publish_shadow_adapter_limit);
     // This runs after Bevy has probed the adapter and initialized the resource.
     // It affects only the known-bad Quadro/Vulkan combination above.
     render_app.add_systems(
@@ -560,8 +559,11 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     );
 }
 
-fn configure_shadow_budget(adapter: Res<RenderAdapterInfo>, budget: Res<ShadowBudgetHandle>) {
-    let limit_bytes = recommended_shadow_budget(&adapter.0);
+fn configure_shadow_adapter_limit(
+    adapter: Res<RenderAdapterInfo>,
+    budget: Res<ShadowAdapterLimitHandle>,
+) {
+    let limit_bytes = recommended_shadow_adapter_limit(&adapter.0);
     budget.publish(limit_bytes);
     info!(
         "rendering quality shadow budget: {} MiB for {} ({:?})",
@@ -571,9 +573,9 @@ fn configure_shadow_budget(adapter: Res<RenderAdapterInfo>, budget: Res<ShadowBu
     );
 }
 
-fn publish_shadow_budget(
+fn publish_shadow_adapter_limit(
     mut main_world: ResMut<MainWorld>,
-    budget: Res<ShadowBudgetHandle>,
+    budget: Res<ShadowAdapterLimitHandle>,
     mut published_revision: Local<u64>,
 ) {
     let revision = budget.revision();
@@ -581,10 +583,10 @@ fn publish_shadow_budget(
         return;
     }
 
-    let value = GpuShadowBudget {
+    let value = GpuShadowAdapterLimit {
         limit_bytes: budget.limit_bytes(),
     };
-    if let Some(mut current) = main_world.get_resource_mut::<GpuShadowBudget>() {
+    if let Some(mut current) = main_world.get_resource_mut::<GpuShadowAdapterLimit>() {
         *current = value;
     } else {
         main_world.insert_resource(value);
@@ -594,22 +596,72 @@ fn publish_shadow_budget(
 
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
-    budget: Res<GpuShadowBudget>,
+    budget: Res<GpuShadowAdapterLimit>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
 ) -> bool {
     settings.is_changed() || budget.is_changed() || directional_map.is_changed()
 }
 
+fn shadow_configuration_signature(
+    directionals: &[(Entity, usize)],
+    points: &[Entity],
+    spots: &[Entity],
+) -> u64 {
+    let mut signature = 0xcbf29ce484222325_u64;
+    for (entity, cascades) in directionals {
+        signature ^= entity.to_bits();
+        signature = signature.wrapping_mul(0x100000001b3);
+        signature ^= *cascades as u64;
+        signature = signature.wrapping_mul(0x100000001b3);
+    }
+    for (entity, class) in points.iter().zip(std::iter::repeat(1_u64)) {
+        signature ^= entity.to_bits();
+        signature = signature.wrapping_mul(0x100000001b3);
+        signature ^= class;
+        signature = signature.wrapping_mul(0x100000001b3);
+    }
+    for (entity, class) in spots.iter().zip(std::iter::repeat(2_u64)) {
+        signature ^= entity.to_bits();
+        signature = signature.wrapping_mul(0x100000001b3);
+        signature ^= class;
+        signature = signature.wrapping_mul(0x100000001b3);
+    }
+    signature
+}
+
+fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
+    let mut signature = profile.directional_shadow_map_size as u64;
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.point_shadow_map_size as u64);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.directional_cascades as u64);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.max_directional_shadow_casters as u64);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.max_point_shadow_casters as u64);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.max_spot_shadow_casters as u64);
+    signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.shadow_budget_bytes)
+}
+
 /// Project the persisted quality choice onto the live shadow resources.
 ///
 /// This is change-driven: settings, the adapter budget, or a newly authored
-/// directional-light map must change before it runs. The directional estimate
-/// happens before allocation and caps a requested profile on constrained
-/// adapters. Changing the setting is also the explicit, safe re-arm after the
+/// directional-light map must change before it runs. The selected settings are
+/// applied exactly as authored. The adapter budget is only a safety ceiling for
+/// caster admission; it never selects a lower preset or rewrites map/cascade
+/// values. Changing a setting is also the explicit, safe re-arm after the
 /// reactive error ladder has shed shadows.
 fn apply_render_quality(
     settings: Res<RenderingQualitySettings>,
-    budget: Res<GpuShadowBudget>,
+    budget: Res<GpuShadowAdapterLimit>,
     mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_map: ResMut<bevy::light::PointLightShadowMap>,
     mut directional_lights: Query<(
@@ -648,17 +700,18 @@ fn apply_render_quality(
         commands.remove_resource::<RenderWarning>();
     }
 
-    let directional_count = directional_lights
-        .iter()
-        .filter(|(_, light, _, suppressed)| {
-            light.shadow_maps_enabled || suppressed.is_some_and(|s| s.was_enabled)
-        })
-        .count()
-        .max(1);
-    let effective = settings
-        .quality
-        .effective_for_shadow_budget(budget.limit_bytes, directional_count);
-    let profile = effective.profile();
+    let profile = settings.profile();
+
+    if let Err(reason) = settings.validate() {
+        if warning.is_none() {
+            commands.insert_resource(RenderWarning {
+                message: format!(
+                    "Invalid graphics shadow settings: {reason}. The requested settings were not applied until corrected."
+                ),
+            });
+        }
+        return;
+    }
 
     if directional_map.size != profile.directional_shadow_map_size as usize {
         directional_map.size = profile.directional_shadow_map_size as usize;
@@ -671,12 +724,11 @@ fn apply_render_quality(
         if config.bounds.len() == profile.directional_cascades {
             continue;
         }
-        let maximum_distance = config
-            .bounds
-            .last()
-            .copied()
-            .unwrap_or(1500.0)
-            .max(config.minimum_distance + f32::EPSILON);
+        let Some(maximum_distance) = config.bounds.last().copied() else {
+            warn!("directional light has no authored cascade bounds; preserving its invalid shadow configuration");
+            continue;
+        };
+        let maximum_distance = maximum_distance.max(config.minimum_distance + f32::EPSILON);
         let first_cascade_far_bound = config
             .bounds
             .first()
@@ -693,16 +745,11 @@ fn apply_render_quality(
         .build();
     }
 
-    if settings.quality != lunco_render::RenderingQuality::Auto
-        && settings.quality != effective
-        && directional_count > 0
-        && warning.is_none()
-    {
+    if profile.shadow_budget_bytes > budget.limit_bytes && warning.is_none() {
         warn!(
-            "requested rendering quality {} exceeds the {} MiB shadow budget; using {}",
-            settings.quality.label(),
+            "configured shadow byte ceiling {} MiB exceeds the adapter safety ceiling of {} MiB; requested quality remains unchanged and caster admission will use the lower ceiling",
+            profile.shadow_budget_bytes / (1024 * 1024),
             budget.limit_bytes / (1024 * 1024),
-            effective.label(),
         );
     }
 }
@@ -795,13 +842,8 @@ fn set_error_handler(
     health: Res<RenderHealthHandle>,
 ) {
     // Captured once, by value: the callbacks below run on the render thread with
-    // no access to the world, and adapter identity is exactly what triage needs
-    // (the reported failures were specific to an integrated adapter).
+    // no access to the world, and adapter identity is exactly what triage needs.
     let info = &adapter.0;
-    health.0.integrated_adapter.store(
-        info.device_type == wgpu::DeviceType::IntegratedGpu,
-        Ordering::Relaxed,
-    );
     let adapter_desc = format!(
         "{} ({:?}, backend {:?}, driver {} {})",
         info.name, info.device_type, info.backend, info.driver, info.driver_info
@@ -940,155 +982,257 @@ fn set_error_handler(
         }));
 }
 
-/// Apply a conservative, deterministic shadow budget before Bevy's PBR render
-/// preparation allocates its depth textures. Integrated adapters share memory
-/// with the system and are the class that produced the observed directional
-/// atlas OOM; shedding quality up front keeps that failure out of the error
-/// ladder entirely.
-fn apply_integrated_shadow_budget(
-    health: Res<RenderHealthHandle>,
-    mut state: ResMut<ShadowBudgetState>,
+/// Apply the explicitly configured shadow-admission policy before Bevy's PBR
+/// render preparation allocates its depth textures. The configured byte ceiling
+/// is combined with the adapter safety ceiling for admission only. The user's
+/// map sizes and cascade count remain unchanged; only casters beyond the
+/// explicitly configured class limits or byte ceiling are suppressed and
+/// reported.
+///
+/// The selection is deliberately stable: directional casters are considered
+/// first, then point lights, then spot lights, and each class is ordered by
+/// Bevy's stable [`Entity`] key. There is no camera-distance heuristic whose
+/// result can change merely because the viewer moved. The shared byte estimate
+/// is the admission test for every individual caster, so the resulting set is
+/// guaranteed to fit the published budget rather than merely fit three
+/// unrelated per-class caps.
+fn apply_shadow_budget_policy(
+    mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
+    settings: Res<RenderingQualitySettings>,
+    budget: Res<GpuShadowAdapterLimit>,
     warning: Option<Res<RenderWarning>>,
-    mut directional_shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
-    mut point_shadow_map: ResMut<bevy::light::PointLightShadowMap>,
-    cameras: Query<
-        (&bevy::camera::Camera, &GlobalTransform),
-        (With<bevy::camera::Camera3d>, With<SceneCamera>),
-    >,
+    directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
+    point_shadow_map: Res<bevy::light::PointLightShadowMap>,
     mut directionals: Query<(
         Entity,
         &mut bevy::light::DirectionalLight,
-        &mut bevy::light::CascadeShadowConfig,
+        &bevy::light::CascadeShadowConfig,
+        Option<&ShadowMapSuppressed>,
     )>,
-    mut points: Query<(Entity, &GlobalTransform, &mut bevy::light::PointLight)>,
-    mut spots: Query<(Entity, &GlobalTransform, &mut bevy::light::SpotLight)>,
+    mut points: Query<(
+        Entity,
+        &mut bevy::light::PointLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
+    mut spots: Query<(
+        Entity,
+        &mut bevy::light::SpotLight,
+        Option<&ShadowMapSuppressed>,
+    )>,
 ) {
-    if !health.0.integrated_adapter.load(Ordering::Relaxed) {
+    let profile = settings.profile();
+    if settings.validate().is_err() {
         return;
     }
-    let Some(camera_position) = cameras
-        .iter()
-        .find(|(camera, _)| camera.is_active)
-        .map(|(_, transform)| transform.translation())
-    else {
-        return;
-    };
+    let admission_budget = profile.shadow_budget_bytes.min(budget.limit_bytes);
+    let policy_signature = shadow_policy_signature(profile);
 
-    let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
-    let enabled_caster_count = directionals
-        .iter()
-        .filter(|(_, light, _)| light.shadow_maps_enabled)
-        .count()
-        + points
-            .iter()
-            .filter(|(_, _, light)| light.shadow_maps_enabled)
-            .count()
-        + spots
-            .iter()
-            .filter(|(_, _, light)| light.shadow_maps_enabled)
-            .count();
-    if light_count == 0
-        || (state.light_count == Some(light_count)
-            && state.enabled_caster_count == Some(enabled_caster_count))
-    {
-        return;
+    let admission_changed = state.policy_signature != Some(policy_signature)
+        || state.budget_bytes != Some(admission_budget);
+    if admission_changed {
+        for (entity, mut light, _, suppressed) in directionals.iter_mut() {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                commands.entity(entity).remove::<ShadowMapSuppressed>();
+            }
+        }
+        for (entity, mut light, suppressed) in points.iter_mut() {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                commands.entity(entity).remove::<ShadowMapSuppressed>();
+            }
+        }
+        for (entity, mut light, suppressed) in spots.iter_mut() {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                commands.entity(entity).remove::<ShadowMapSuppressed>();
+            }
+        }
     }
 
-    directional_shadow_map.size = directional_shadow_map
-        .size
-        .min(INTEGRATED_DIRECTIONAL_SHADOW_SIZE);
-    point_shadow_map.size = point_shadow_map.size.min(INTEGRATED_POINT_SHADOW_SIZE);
+    let mut directional_entities: Vec<(Entity, usize)> = directionals
+        .iter_mut()
+        .filter_map(|(entity, light, config, _)| {
+            light
+                .shadow_maps_enabled
+                .then_some((entity, config.bounds.len().max(1)))
+        })
+        .collect();
+    directional_entities.sort_by_key(|(entity, _)| *entity);
 
-    let mut directional_entities: Vec<Entity> = directionals
+    let mut point_entities: Vec<Entity> = points
         .iter_mut()
         .filter_map(|(entity, light, _)| light.shadow_maps_enabled.then_some(entity))
         .collect();
-    directional_entities.sort();
-    for entity in directional_entities
-        .iter()
-        .skip(INTEGRATED_DIRECTIONAL_CASTERS)
-        .copied()
+    point_entities.sort();
+
+    let mut spot_entities: Vec<Entity> = spots
+        .iter_mut()
+        .filter_map(|(entity, light, _)| light.shadow_maps_enabled.then_some(entity))
+        .collect();
+    spot_entities.sort();
+
+    let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
+    let enabled_caster_count =
+        directional_entities.len() + point_entities.len() + spot_entities.len();
+    let configuration_signature =
+        shadow_configuration_signature(&directional_entities, &point_entities, &spot_entities);
+    if state.light_count == Some(light_count)
+        && state.enabled_caster_count == Some(enabled_caster_count)
+        && state.directional_map_size == Some(directional_shadow_map.size)
+        && state.point_map_size == Some(point_shadow_map.size)
+        && state.directional_cascade_layers
+            == Some(
+                directional_entities
+                    .iter()
+                    .map(|(_, cascades)| *cascades)
+                    .sum(),
+            )
+        && state.budget_bytes == Some(admission_budget)
+        && state
+            .configuration_signature
+            .is_some_and(|signature| signature == configuration_signature)
+        && state.policy_signature == Some(policy_signature)
     {
-        if let Ok((_, mut light, _)) = directionals.get_mut(entity) {
+        return;
+    }
+
+    if light_count == 0 {
+        state.light_count = Some(0);
+        state.enabled_caster_count = Some(0);
+        state.directional_map_size = Some(directional_shadow_map.size);
+        state.point_map_size = Some(point_shadow_map.size);
+        state.directional_cascade_layers = Some(0);
+        state.budget_bytes = Some(admission_budget);
+        state.configuration_signature = Some(configuration_signature);
+        state.policy_signature = Some(policy_signature);
+        return;
+    }
+
+    let mut used_bytes = 0_u64;
+    let mut kept_directionals = Vec::new();
+    let mut kept_points = Vec::new();
+    let mut kept_spots = Vec::new();
+
+    for (index, (entity, cascades)) in directional_entities.iter().enumerate() {
+        let cost = estimate_shadow_allocation_bytes(
+            directional_shadow_map.size,
+            point_shadow_map.size,
+            *cascades,
+            1,
+            0,
+            0,
+        );
+        let keep = index < profile.max_directional_shadow_casters
+            && cost <= admission_budget.saturating_sub(used_bytes);
+        if keep {
+            used_bytes = used_bytes.saturating_add(cost);
+            kept_directionals.push(*entity);
+            if let Ok((_, _, _, suppressed)) = directionals.get_mut(*entity) {
+                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                }
+            }
+        } else if let Ok((_, mut light, _, suppressed)) = directionals.get_mut(*entity) {
+            if suppressed.is_none() {
+                commands.entity(*entity).try_insert(ShadowMapSuppressed {
+                    was_enabled: true,
+                    reason: ShadowMapSuppressionReason::Budget,
+                });
+            }
             light.shadow_maps_enabled = false;
         }
     }
-    let directional_shed = directional_entities.len() > INTEGRATED_DIRECTIONAL_CASTERS;
+
+    for (index, entity) in point_entities.iter().enumerate() {
+        let cost = estimate_shadow_allocation_bytes(
+            directional_shadow_map.size,
+            point_shadow_map.size,
+            0,
+            0,
+            1,
+            0,
+        );
+        let keep = index < profile.max_point_shadow_casters
+            && cost <= admission_budget.saturating_sub(used_bytes);
+        if keep {
+            used_bytes = used_bytes.saturating_add(cost);
+            kept_points.push(*entity);
+            if let Ok((_, _, suppressed)) = points.get_mut(*entity) {
+                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                }
+            }
+        } else if let Ok((_, mut light, suppressed)) = points.get_mut(*entity) {
+            if suppressed.is_none() {
+                commands.entity(*entity).try_insert(ShadowMapSuppressed {
+                    was_enabled: true,
+                    reason: ShadowMapSuppressionReason::Budget,
+                });
+            }
+            light.shadow_maps_enabled = false;
+        }
+    }
+
+    for (index, entity) in spot_entities.iter().enumerate() {
+        let cost = estimate_shadow_allocation_bytes(
+            directional_shadow_map.size,
+            point_shadow_map.size,
+            0,
+            0,
+            0,
+            1,
+        );
+        let keep = index < profile.max_spot_shadow_casters
+            && cost <= admission_budget.saturating_sub(used_bytes);
+        if keep {
+            used_bytes = used_bytes.saturating_add(cost);
+            kept_spots.push(*entity);
+            if let Ok((_, _, suppressed)) = spots.get_mut(*entity) {
+                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                }
+            }
+        } else if let Ok((_, mut light, suppressed)) = spots.get_mut(*entity) {
+            if suppressed.is_none() {
+                commands.entity(*entity).try_insert(ShadowMapSuppressed {
+                    was_enabled: true,
+                    reason: ShadowMapSuppressionReason::Budget,
+                });
+            }
+            light.shadow_maps_enabled = false;
+        }
+    }
+
     let directional_layers = directional_entities
-        .first()
-        .and_then(|entity| directionals.get_mut(*entity).ok())
-        .map(|(_, _, mut config)| {
-            config.bounds.truncate(INTEGRATED_DIRECTIONAL_CASCADES);
-            config.bounds.len()
-        })
-        .unwrap_or(0);
-
-    let mut point_entities: Vec<(f32, Entity)> = points
-        .iter_mut()
-        .filter_map(|(entity, transform, light)| {
-            light.shadow_maps_enabled.then_some((
-                transform.translation().distance_squared(camera_position),
-                entity,
-            ))
-        })
-        .collect();
-    point_entities.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    for (_, entity) in point_entities.iter().skip(INTEGRATED_POINT_CASTERS) {
-        if let Ok((_, _, mut light)) = points.get_mut(*entity) {
-            light.shadow_maps_enabled = false;
-        }
-    }
-    let point_shed = point_entities.len() > INTEGRATED_POINT_CASTERS;
-
-    let mut spot_entities: Vec<(f32, Entity)> = spots
-        .iter_mut()
-        .filter_map(|(entity, transform, light)| {
-            light.shadow_maps_enabled.then_some((
-                transform.translation().distance_squared(camera_position),
-                entity,
-            ))
-        })
-        .collect();
-    spot_entities.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    for (_, entity) in spot_entities.iter().skip(INTEGRATED_SPOT_CASTERS) {
-        if let Ok((_, _, mut light)) = spots.get_mut(*entity) {
-            light.shadow_maps_enabled = false;
-        }
-    }
-    let spot_shed = spot_entities.len() > INTEGRATED_SPOT_CASTERS;
-
-    let directional_bytes = (directional_shadow_map.size as u64)
-        .saturating_mul(directional_shadow_map.size as u64)
-        .saturating_mul(directional_layers as u64)
-        .saturating_mul(4);
-    let point_bytes = (point_shadow_map.size as u64)
-        .saturating_mul(point_shadow_map.size as u64)
-        .saturating_mul(point_entities.len().min(INTEGRATED_POINT_CASTERS) as u64)
-        .saturating_mul(6)
-        .saturating_mul(4);
-    let spot_bytes = (directional_shadow_map.size as u64)
-        .saturating_mul(directional_shadow_map.size as u64)
-        .saturating_mul(spot_entities.len().min(INTEGRATED_SPOT_CASTERS) as u64)
-        .saturating_mul(4);
-    let estimated_mib = (directional_bytes + point_bytes + spot_bytes) as f64 / (1024.0 * 1024.0);
+        .iter()
+        .filter(|(entity, _)| kept_directionals.contains(entity))
+        .map(|(_, cascades)| *cascades)
+        .sum::<usize>();
+    let estimated_mib = used_bytes as f64 / (1024.0 * 1024.0);
+    let shed_count = enabled_caster_count
+        .saturating_sub(kept_directionals.len() + kept_points.len() + kept_spots.len());
     warn!(
-        "integrated GPU shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated depth allocation {:.1} MiB (directional {}px, point {}px)",
-        directional_entities.len().min(INTEGRATED_DIRECTIONAL_CASTERS),
+        "shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {:.1} MiB of {} MiB (directional {}px, point {}px)",
+        kept_directionals.len(),
         directional_layers,
-        point_entities.len().min(INTEGRATED_POINT_CASTERS),
-        spot_entities.len().min(INTEGRATED_SPOT_CASTERS),
+        kept_points.len(),
+        kept_spots.len(),
         estimated_mib,
+        admission_budget / (1024 * 1024),
         directional_shadow_map.size,
         point_shadow_map.size,
     );
-    if (directional_shed || point_shed || spot_shed) && warning.is_none() {
+    if shed_count > 0 && warning.is_none() {
         commands.insert_resource(RenderWarning {
             message: format!(
-                "Integrated GPU shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s); some shadows are intentionally disabled.",
-                directional_entities.len().min(INTEGRATED_DIRECTIONAL_CASTERS),
-                point_entities.len().min(INTEGRATED_POINT_CASTERS),
-                spot_entities.len().min(INTEGRATED_SPOT_CASTERS),
+                "Shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s) within {} MiB; {} caster(s) are intentionally disabled.",
+                kept_directionals.len(),
+                kept_points.len(),
+                kept_spots.len(),
+                admission_budget / (1024 * 1024),
+                shed_count,
             ),
         });
     }
@@ -1098,13 +1242,27 @@ fn apply_integrated_shadow_budget(
     // explicit re-arm would restore the fifth caster, still look like `5`, and
     // incorrectly take the early-return path above. Recording the effective
     // state makes a real re-arm visible without adding another ownership path.
-    let effective_enabled_caster_count = directional_entities
-        .len()
-        .min(INTEGRATED_DIRECTIONAL_CASTERS)
-        + point_entities.len().min(INTEGRATED_POINT_CASTERS)
-        + spot_entities.len().min(INTEGRATED_SPOT_CASTERS);
     state.light_count = Some(light_count);
-    state.enabled_caster_count = Some(effective_enabled_caster_count);
+    state.enabled_caster_count =
+        Some(kept_directionals.len() + kept_points.len() + kept_spots.len());
+    state.directional_map_size = Some(directional_shadow_map.size);
+    state.point_map_size = Some(point_shadow_map.size);
+    state.directional_cascade_layers = Some(directional_layers);
+    state.budget_bytes = Some(admission_budget);
+    state.policy_signature = Some(policy_signature);
+    state.configuration_signature = Some(shadow_configuration_signature(
+        &kept_directionals
+            .iter()
+            .filter_map(|entity| {
+                directional_entities
+                    .iter()
+                    .find(|(candidate, _)| candidate == entity)
+                    .copied()
+            })
+            .collect::<Vec<_>>(),
+        &kept_points,
+        &kept_spots,
+    ));
 }
 
 /// Scene teardown is the explicit re-arm boundary for presentation recovery.
@@ -1114,7 +1272,7 @@ fn apply_integrated_shadow_budget(
 pub(crate) fn reset_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
-    mut budget: ResMut<ShadowBudgetState>,
+    mut budget: ResMut<ShadowAdmissionState>,
     mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
     mut directional_lights: Query<(
@@ -1139,7 +1297,7 @@ pub(crate) fn reset_render_recovery(
     }
     health.0.reset_for_scene();
     *ladder = Ladder::default();
-    *budget = ShadowBudgetState::default();
+    *budget = ShadowAdmissionState::default();
     restore_suppressed_shadow_maps(
         &mut commands,
         &mut directional_lights,
@@ -1209,6 +1367,7 @@ fn escalate_render_recovery(
                 if suppressed.is_none() {
                     commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
+                        reason: ShadowMapSuppressionReason::Recovery,
                     });
                 }
                 l.shadow_maps_enabled = false;
@@ -1218,6 +1377,7 @@ fn escalate_render_recovery(
                 if suppressed.is_none() {
                     commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
+                        reason: ShadowMapSuppressionReason::Recovery,
                     });
                 }
                 l.shadow_maps_enabled = false;
@@ -1227,6 +1387,7 @@ fn escalate_render_recovery(
                 if suppressed.is_none() {
                     commands.entity(entity).try_insert(ShadowMapSuppressed {
                         was_enabled: l.shadow_maps_enabled,
+                        reason: ShadowMapSuppressionReason::Recovery,
                     });
                 }
                 l.shadow_maps_enabled = false;
@@ -1377,7 +1538,7 @@ mod tests {
         health.presentation_stopped.store(true, Ordering::Relaxed);
         world.insert_resource(RenderHealthHandle(health.clone()));
         world.init_resource::<Ladder>();
-        world.init_resource::<ShadowBudgetState>();
+        world.init_resource::<ShadowAdmissionState>();
         world.insert_resource(RenderGaveUp {
             reason: "test fault".into(),
         });
@@ -1390,7 +1551,10 @@ mod tests {
                     shadow_maps_enabled: false,
                     ..default()
                 },
-                ShadowMapSuppressed { was_enabled: true },
+                ShadowMapSuppressed {
+                    was_enabled: true,
+                    reason: ShadowMapSuppressionReason::Recovery,
+                },
             ))
             .id();
         let mut reset = Schedule::new(Update);
@@ -1447,29 +1611,26 @@ mod tests {
     }
 
     #[test]
-    fn integrated_shadow_budget_limits_casters_and_map_sizes() {
-        let health = Arc::new(RenderHealth::default());
-        health.integrated_adapter.store(true, Ordering::Relaxed);
-
+    fn configured_shadow_budget_limits_casters_without_rewriting_quality() {
         let mut app = App::new();
-        app.insert_resource(RenderHealthHandle(health));
-        app.init_resource::<ShadowBudgetState>();
-        app.init_resource::<bevy::light::DirectionalLightShadowMap>();
-        app.init_resource::<bevy::light::PointLightShadowMap>();
-        app.add_systems(PostUpdate, apply_integrated_shadow_budget);
-        app.world_mut().spawn((
-            bevy::camera::Camera3d::default(),
-            SceneCamera::default(),
-            GlobalTransform::default(),
-        ));
-        for index in 0..(INTEGRATED_POINT_CASTERS + 2) {
-            app.world_mut().spawn((
-                bevy::light::PointLight {
-                    shadow_maps_enabled: true,
-                    ..default()
-                },
-                GlobalTransform::from_xyz(index as f32, 0.0, 0.0),
-            ));
+        let mut settings = RenderingQualitySettings::default();
+        settings.directional_shadow_map_size = 1024;
+        settings.point_shadow_map_size = 512;
+        settings.max_point_shadow_casters = 4;
+        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        app.insert_resource(settings);
+        app.insert_resource(GpuShadowAdapterLimit {
+            limit_bytes: 16 * 1024 * 1024,
+        });
+        app.init_resource::<ShadowAdmissionState>();
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        for _ in 0..5 {
+            app.world_mut().spawn((bevy::light::PointLight {
+                shadow_maps_enabled: true,
+                ..default()
+            },));
         }
 
         app.update();
@@ -1478,13 +1639,13 @@ mod tests {
             app.world()
                 .resource::<bevy::light::DirectionalLightShadowMap>()
                 .size,
-            INTEGRATED_DIRECTIONAL_SHADOW_SIZE
+            1024
         );
         assert_eq!(
             app.world()
                 .resource::<bevy::light::PointLightShadowMap>()
                 .size,
-            INTEGRATED_POINT_SHADOW_SIZE
+            512
         );
         let world = app.world_mut();
         let mut query = world.query::<&bevy::light::PointLight>();
@@ -1492,34 +1653,32 @@ mod tests {
             .iter(world)
             .filter(|light| light.shadow_maps_enabled)
             .count();
-        assert_eq!(enabled, INTEGRATED_POINT_CASTERS);
+        assert_eq!(enabled, 1);
+        assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) <= 16 * 1024 * 1024);
         assert!(app.world().get_resource::<RenderWarning>().is_some());
     }
 
     #[test]
-    fn integrated_shadow_budget_rechecks_when_a_caster_is_rearmed() {
-        let health = Arc::new(RenderHealth::default());
-        health.integrated_adapter.store(true, Ordering::Relaxed);
-
+    fn configured_shadow_budget_rechecks_when_a_caster_is_rearmed() {
         let mut app = App::new();
-        app.insert_resource(RenderHealthHandle(health));
-        app.init_resource::<ShadowBudgetState>();
-        app.init_resource::<bevy::light::DirectionalLightShadowMap>();
-        app.init_resource::<bevy::light::PointLightShadowMap>();
-        app.add_systems(PostUpdate, apply_integrated_shadow_budget);
-        app.world_mut().spawn((
-            bevy::camera::Camera3d::default(),
-            SceneCamera::default(),
-            GlobalTransform::default(),
-        ));
-        for index in 0..(INTEGRATED_POINT_CASTERS + 1) {
-            app.world_mut().spawn((
-                bevy::light::PointLight {
-                    shadow_maps_enabled: true,
-                    ..default()
-                },
-                GlobalTransform::from_xyz(index as f32, 0.0, 0.0),
-            ));
+        let mut settings = RenderingQualitySettings::default();
+        settings.directional_shadow_map_size = 1024;
+        settings.point_shadow_map_size = 512;
+        settings.max_point_shadow_casters = 4;
+        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        app.insert_resource(settings);
+        app.insert_resource(GpuShadowAdapterLimit {
+            limit_bytes: 16 * 1024 * 1024,
+        });
+        app.init_resource::<ShadowAdmissionState>();
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        for _ in 0..2 {
+            app.world_mut().spawn((bevy::light::PointLight {
+                shadow_maps_enabled: true,
+                ..default()
+            },));
         }
 
         app.update();
@@ -1546,7 +1705,55 @@ mod tests {
                 .filter(|light| light.shadow_maps_enabled)
                 .count()
         };
-        assert_eq!(enabled, INTEGRATED_POINT_CASTERS);
+        assert_eq!(enabled, 1);
+    }
+
+    #[test]
+    fn adapter_limit_increase_rearms_only_budget_suppressed_casters() {
+        let mut app = App::new();
+        let mut settings = RenderingQualitySettings::default();
+        settings.directional_shadow_map_size = 1024;
+        settings.point_shadow_map_size = 512;
+        settings.max_point_shadow_casters = 4;
+        settings.shadow_budget_bytes = 64 * 1024 * 1024;
+        app.insert_resource(settings);
+        app.insert_resource(GpuShadowAdapterLimit {
+            limit_bytes: 16 * 1024 * 1024,
+        });
+        app.init_resource::<ShadowAdmissionState>();
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        for _ in 0..4 {
+            app.world_mut().spawn((bevy::light::PointLight {
+                shadow_maps_enabled: true,
+                ..default()
+            },));
+        }
+
+        app.update();
+        let initially_enabled = {
+            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
+            query
+                .iter(app.world())
+                .filter(|light| light.shadow_maps_enabled)
+                .count()
+        };
+        assert_eq!(initially_enabled, 1);
+
+        app.world_mut()
+            .resource_mut::<GpuShadowAdapterLimit>()
+            .limit_bytes = 64 * 1024 * 1024;
+        app.update();
+
+        let enabled = {
+            let mut query = app.world_mut().query::<&bevy::light::PointLight>();
+            query
+                .iter(app.world())
+                .filter(|light| light.shadow_maps_enabled)
+                .count()
+        };
+        assert_eq!(enabled, 4);
     }
 
     /// The 339-fps null loop. Errors keep coming after the mitigation, so

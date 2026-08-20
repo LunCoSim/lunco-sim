@@ -845,8 +845,7 @@ fn instantiate_usd_prim(
     canonical: &mut CanonicalStages,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
-    quality: lunco_render::RenderingQuality,
-    shadow_budget_bytes: u64,
+    quality: lunco_render::RenderQualityProfile,
 ) {
     let id = prim_path.stage_handle.id();
     if canonical.get(id).is_none() {
@@ -878,7 +877,6 @@ fn instantiate_usd_prim(
         asset_server,
         meshes,
         quality,
-        shadow_budget_bytes,
     );
 }
 
@@ -899,8 +897,7 @@ fn instantiate_usd_prim_from_stage(
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
-    quality: lunco_render::RenderingQuality,
-    shadow_budget_bytes: u64,
+    quality: lunco_render::RenderQualityProfile,
 ) {
     {
         // Deferred `defaultPrim` resolution. A scene-root spawned with an
@@ -1011,7 +1008,6 @@ fn instantiate_usd_prim_from_stage(
             asset_server,
             prim_path.stage_handle.id(),
             quality,
-            shadow_budget_bytes,
         );
 
         // UsdGeomCamera (`def Camera`) → camera intent (see `camera.rs`). The
@@ -1751,7 +1747,6 @@ fn on_usd_prim_added(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     quality: Option<Res<lunco_render::RenderingQualitySettings>>,
-    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, vis, tf, is_instance_root, member)) = q.get(entity) else {
@@ -1769,14 +1764,9 @@ fn on_usd_prim_added(
             .ok()
             .is_some_and(|c| q_high_precision.contains(c.parent()));
     let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-    let requested_quality = quality
-        .as_deref()
-        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
-            settings.quality
-        });
-    let budget_bytes = shadow_budget.as_deref().map_or_else(
-        || lunco_render::GpuShadowBudget::default().limit_bytes,
-        |budget| budget.limit_bytes,
+    let requested_profile = quality.as_deref().map_or_else(
+        || lunco_render::RenderingQuality::Balanced.profile(),
+        |settings| settings.profile(),
     );
 
     instantiate_usd_prim(
@@ -1793,8 +1783,7 @@ fn on_usd_prim_added(
         &mut canonical,
         &asset_server,
         &mut meshes,
-        requested_quality,
-        budget_bytes,
+        requested_profile,
     );
 }
 
@@ -1862,7 +1851,6 @@ pub fn sync_usd_visuals(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     quality: Option<Res<lunco_render::RenderingQualitySettings>>,
-    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
 ) {
     use bevy::asset::AssetId;
     let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
@@ -1875,14 +1863,9 @@ pub fn sync_usd_visuals(
         return;
     }
 
-    let requested_quality = quality
-        .as_deref()
-        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
-            settings.quality
-        });
-    let budget_bytes = shadow_budget.as_deref().map_or_else(
-        || lunco_render::GpuShadowBudget::default().limit_bytes,
-        |budget| budget.limit_bytes,
+    let requested_profile = quality.as_deref().map_or_else(
+        || lunco_render::RenderingQuality::Balanced.profile(),
+        |settings| settings.profile(),
     );
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
@@ -1928,8 +1911,7 @@ pub fn sync_usd_visuals(
                 &mut canonical,
                 &asset_server,
                 &mut meshes,
-                requested_quality,
-                budget_bytes,
+                requested_profile,
             );
         }
     }

@@ -5121,24 +5121,84 @@ fn register_graphics_settings_menu(world: &mut World) {
         ui.label(egui::RichText::new("Rendering").weak().small());
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
             let mut settings = *current;
+            let current_preset = settings.preset();
+            let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::Balanced);
+            let mut preset_changed = false;
             egui::ComboBox::from_id_salt("graphics.rendering_quality")
-                .selected_text(settings.quality.label())
+                .selected_text(current_preset.map_or("Custom", |preset| preset.label()))
                 .show_ui(ui, |ui| {
                     for quality in lunco_render::RenderingQuality::all() {
-                        ui.selectable_value(&mut settings.quality, quality, quality.label());
+                        preset_changed |= ui
+                            .selectable_value(&mut selected_preset, quality, quality.label())
+                            .changed();
                     }
                 });
-            if settings != *current {
-                ctx.set_resource(settings);
+            if preset_changed {
+                settings.apply_preset(selected_preset);
             }
             ui.label(
                 egui::RichText::new(
-                    "Auto caps shadow-map resolution/cascades to the detected GPU budget. \
-                     Changing this setting safely re-arms a previous shadow fallback.",
+                    "Presets only suggest values. The fields below are authoritative and are never silently downgraded to another preset.",
                 )
                 .weak()
                 .small(),
             );
+            ui.collapsing("Shadow allocation", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.directional_shadow_map_size)
+                        .speed(128.0)
+                        .prefix("Directional map: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.point_shadow_map_size)
+                        .speed(128.0)
+                        .prefix("Point map: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.directional_cascades)
+                        .speed(1.0)
+                        .prefix("Directional cascades: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_directional_shadow_casters)
+                        .speed(1.0)
+                        .prefix("Directional shadow casters: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_point_shadow_casters)
+                        .speed(1.0)
+                        .prefix("Point shadow casters: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_spot_shadow_casters)
+                        .speed(1.0)
+                        .prefix("Spot shadow casters: "),
+                );
+                let mut budget_mib = (settings.shadow_budget_bytes / (1024 * 1024)).max(1);
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut budget_mib)
+                            .speed(1.0)
+                            .prefix("Shadow byte ceiling: ")
+                            .suffix(" MiB"),
+                    )
+                    .changed()
+                {
+                    settings.shadow_budget_bytes = budget_mib.saturating_mul(1024 * 1024);
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "The adapter safety ceiling may admit fewer casters, but it never changes these requested map sizes or cascade settings.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            if settings != *current {
+                ctx.set_resource(settings);
+            }
         }
 
         ui.separator();
