@@ -1494,7 +1494,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
 fn modelica_status(model: &ModelicaModel) -> SimStatus {
     if let Some(error) = &model.last_error {
         SimStatus::Error(error.clone())
-    } else if !model.is_compiled || model.current_time <= 0.0 || model.variables.is_empty() {
+    } else if !model.is_compiled || model.current_time <= 0.0 {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
@@ -1647,6 +1647,7 @@ pub fn fire_connected_events(
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     fixed_time: Res<Time<Fixed>>,
+    world_time: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
 ) {
     // Nothing is listening: don't index the scene. This runs every FixedUpdate
@@ -1655,6 +1656,10 @@ pub fn fire_connected_events(
     if bindings.is_empty() {
         return;
     }
+    let Some(world_time) = world_time else {
+        warn!("[usd-cosim] cannot publish a connected event without the authoritative WorldTime");
+        return;
+    };
     let instance_of =
         |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
     let mut by_path = HashMap::new();
@@ -1697,7 +1702,7 @@ pub fn fire_connected_events(
                 source,
                 severity: binding.severity,
                 data: lunco_core::TelemetryValue::F64(value),
-                timestamp: 0.0,
+                timestamp: world_time.epoch_jd,
             });
         }
     }
@@ -4757,7 +4762,6 @@ mod tests {
     fn status_tracks_compile_run_pause_and_failure() {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
-        model.variables.insert("soc_out".into(), 1.0);
         model.is_compiled = true;
         model.current_time = lunco_core::SECS_PER_TICK;
         assert_eq!(modelica_status(&model), SimStatus::Running);
@@ -4768,6 +4772,55 @@ mod tests {
             modelica_status(&model),
             SimStatus::Error("singular system".into())
         );
+    }
+
+    #[derive(Resource, Default)]
+    struct CapturedTelemetry(Vec<lunco_core::TelemetryEvent>);
+
+    fn capture_telemetry(
+        trigger: On<lunco_core::TelemetryEvent>,
+        mut captured: ResMut<CapturedTelemetry>,
+    ) {
+        captured.0.push(trigger.event().clone());
+    }
+
+    #[test]
+    fn connected_event_uses_authoritative_world_epoch() {
+        let mut app = App::new();
+        app.add_observer(capture_telemetry)
+            .init_resource::<Time<Fixed>>()
+            .insert_resource(lunco_time::WorldTime {
+                epoch_jd: 2_451_600.25,
+                ..default()
+            })
+            .init_resource::<CapturedTelemetry>();
+
+        let mut source = SimComponent::default();
+        source.outputs.insert("armed".into(), 1.0);
+        app.world_mut().spawn((UsdPrimPath::default(), source));
+        let event_path = UsdPrimPath {
+            path: "/Event".into(),
+            ..default()
+        };
+        app.world_mut().spawn((
+            event_path,
+            EventBinding {
+                source_path: "/".into(),
+                output: "armed".into(),
+                name: "ARMED".into(),
+                severity: lunco_core::Severity::Info,
+                latched: false,
+                qualification_time_s: 0.0,
+                qualified_for_s: 0.0,
+                armed: true,
+            },
+        ));
+        app.add_systems(Update, fire_connected_events);
+        app.update();
+
+        let events = &app.world().resource::<CapturedTelemetry>().0;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].timestamp, 2_451_600.25);
     }
 
     #[test]
