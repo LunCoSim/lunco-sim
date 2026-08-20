@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
 use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization, viz::VizId, SignalRegistry,
+    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::VizId, SignalRegistry,
     VisualizationRegistry, VizFitRequests,
 };
 use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
@@ -165,10 +165,8 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let has_exp = crate::ui::panels::experiments::has_experiment_runs(ctx);
 
     if has_live && !has_exp {
-        // Pure live mode keeps its own one-line action header above the
-        // dedicated LinePlot (which owns the X/Y/+add binding picker and
-        // its own log-Y toggle).
-        render_plot_header(ui, ctx, viz_id);
+        // The line plot owns one compact row for X/Y bindings and the host
+        // action buttons, so no separate settings band reduces graph height.
         render_line_plot(ui, ctx, viz_id);
     } else {
         // The experiments body draws the action buttons (New / Dup / Fit /
@@ -185,37 +183,17 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     }
 }
 
-/// The pure-live action controls share the LinePlot selector row visually.
-/// They are painted as a compact right-aligned overlay, so they do not
-/// reserve a second vertical toolbar row above the graph.
-fn render_plot_header(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
-    let rect = ui.max_rect();
-    egui::Area::new(egui::Id::new(("plot_actions", viz_id.0)))
-        .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(
-            (rect.right() - 190.0).max(rect.left()),
-            rect.top() + 1.0,
-        ))
-        .show(ui.ctx(), |ui| {
-            ui.horizontal(|ui| {
-                plot_action_buttons(ui, ctx, viz_id);
-            });
-        });
-}
-
-/// The shared action cluster for every Modelica plot tab: `➕` opens a
-/// fresh plot panel, `📄` duplicates this one (same bindings + picked
-/// vars), `📐 Fit` queues a one-shot auto-fit via [`VizFitRequests`]
-/// (both the LinePlot and experiments bodies drain it), and `💾 CSV`
-/// exports the plot's curves. Renders in the caller's current layout
-/// direction (the callers use right-to-left, so `➕` lands rightmost).
+/// The shared action cluster for every Modelica plot tab: New opens a fresh
+/// plot panel, Duplicate copies this one (same bindings + picked vars), Fit
+/// queues a one-shot auto-fit via [`VizFitRequests`] (both the LinePlot and
+/// experiments bodies drain it), and CSV exports the plot's curves.
 pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let mut new_plot = false;
     let mut dup = false;
     let mut fit = false;
     let mut csv = false;
     if ui
-        .small_button("➕")
+        .small_button("New")
         .on_hover_text("New plot panel — opens a fresh tab.")
         .clicked()
     {
@@ -324,7 +302,9 @@ fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     };
     let viz = LinePlot;
     let mut p2d = Panel2DCtx { ui, wb: ctx };
-    viz.render_panel_2d(&mut p2d, &config);
+    viz.render_panel_2d_with_actions(&mut p2d, &config, |ui, ctx| {
+        plot_action_buttons(ui, ctx, viz_id);
+    });
 }
 
 /// Gather the plot's bound signals, pop a native save-file picker,
