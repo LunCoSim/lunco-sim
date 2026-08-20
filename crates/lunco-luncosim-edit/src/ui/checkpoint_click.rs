@@ -1517,7 +1517,9 @@ fn composed_prim_exists(
 /// yields and the player's input is silently swallowed — the rover just keeps driving
 /// its route while you press the keys. Taking the wheel is the universal expectation
 /// for an autopilot, so it is an implicit disengage rather than a separate hotkey
-/// (the canonical Action intent still toggles explicitly).
+/// (the canonical Action intent still toggles explicitly). Thrust is included
+/// because it is the lander's manual engine command; pressing it must also
+/// reclaim a vessel from an autopilot.
 ///
 /// Keyed off the vessel's `ActionState<UserIntent>` — the DATA keymap
 /// (`assets/config/keybindings.json`) — not hardcoded WASD, so a rebound control
@@ -1537,13 +1539,14 @@ pub fn manual_input_disengages_autopilot(
         return; // typing in a panel is not driving
     }
     use lunco_core::UserIntent::*;
-    const DRIVE: [lunco_core::UserIntent; 6] = [
+    const DRIVE: [lunco_core::UserIntent; 7] = [
         MoveForward,
         MoveBackward,
         MoveLeft,
         MoveRight,
         MoveUp,
         MoveDown,
+        Thrust,
     ];
 
     for (link, intents) in q_ctrl.iter() {

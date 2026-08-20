@@ -509,6 +509,48 @@ fn the_airframe_alone_has_no_guidance() {
     );
 }
 
+/// The lander's authored control profile must keep the autopilot shortcut and
+/// the engine command separate. This is checked on the composed asset so the
+/// runtime reader and the authoring layer cannot silently drift apart.
+#[test]
+fn lander_controls_bind_thrust_not_autopilot_action() {
+    let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/vessels/landers/descent_lander.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose descent_lander.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let thrust = SdfPath::new("/DescentLander/Controls/thrust").unwrap();
+    let action = SdfPath::new("/DescentLander/Controls/action").unwrap();
+
+    assert!(
+        view.has_prim(&thrust),
+        "the composed lander must author thrust"
+    );
+    assert_eq!(
+        view.text(&thrust, "lunco:port").as_deref(),
+        Some("external_throttle")
+    );
+    assert!(
+        !view.has_prim(&action),
+        "the autopilot Action intent must not be a lander actuator"
+    );
+}
+
+/// `lander_rover_stack` is a deterministic physics fixture, not a second
+/// interactive mission. It must not expose an Avatar that invites possession.
+#[test]
+fn lander_rover_stack_is_not_interactive() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/lander_rover_stack.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_rover_stack.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    assert!(
+        !view.has_prim(&SdfPath::new("/LanderRoverStack/Avatar").unwrap()),
+        "the regression fixture must not create a controllable avatar"
+    );
+}
+
 // ── P1.2b: SSP LinearTransformation (factor/offset) on the sink port. ─────────
 
 /// `double lunco:factor:<port>` / `lunco:offset:<port>` on the sink prim are read

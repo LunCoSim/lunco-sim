@@ -1217,7 +1217,7 @@ def Xform "DescentLander" (
     }
 
     # Intent->port control: shared lander profile as a child `references` arc
-    # (forward/back->pitch, left/right->roll, yaw_left/right->yaw, action->throttle).
+    # (forward/back->pitch, left/right->roll, yaw_left/right->yaw, thrust->throttle).
     # Composes through a spawn/reference like a component.
     def "Controls" (
         prepend references = @lunco://vessels/control_profiles.usda@</LanderControls>

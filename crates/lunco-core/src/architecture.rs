@@ -80,12 +80,17 @@ pub enum UserIntent {
 
     /// Context-sensitive primary interaction.
     Action,
+    /// Normalized propulsion command for a powered vehicle.
+    ///
+    /// This is deliberately separate from [`UserIntent::Action`]: Action is
+    /// the autopilot/editor shortcut, while a powered vehicle may consume
+    /// Thrust as its engine command.
+    Thrust,
     /// Vehicle-specific braking or hold command.
     ///
-    /// This is deliberately separate from [`UserIntent::Action`]: the latter
-    /// is the autopilot shortcut, while a surface vehicle may use this command
-    /// for its physical brake without giving every possessed entity an
-    /// autopilot toggle.
+    /// This is deliberately separate from [`UserIntent::Action`] and
+    /// [`UserIntent::Thrust`]: the former is the autopilot shortcut, while the
+    /// latter is a powered-vehicle engine command.
     Brake,
     /// Release/detach a dock or coupling (e.g. a lander→rover fixed joint). Routed
     /// through the normal intent→port machinery to a `release` command port.
@@ -121,6 +126,7 @@ impl std::fmt::Display for UserIntent {
             Self::Look => "Look",
             Self::Zoom => "Zoom",
             Self::Action => "Primary action",
+            Self::Thrust => "Vehicle thrust",
             Self::Brake => "Vehicle brake",
             Self::Release => "Release coupling",
             Self::SwitchMode => "Switch camera mode",
@@ -198,6 +204,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "yaw_right" => Some(UserIntent::MoveUp),
         "yaw_left" => Some(UserIntent::MoveDown),
         "action" => Some(UserIntent::Action),
+        "thrust" => Some(UserIntent::Thrust),
         "brake" => Some(UserIntent::Brake),
         "release" => Some(UserIntent::Release),
         "switch_mode" => Some(UserIntent::SwitchMode),
@@ -424,7 +431,7 @@ pub struct PhysicsStateReady;
 /// undeclared name is rejected → still reported as a dangling wire). A rover may
 /// expose `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, and a
 /// factory `start_cycle`/`target_rate`. Inputs are scalar `f64`s: an intent such
-/// as `Action` normally produces a binary `0.0`/`1.0` input, while analog control
+/// as `Action` or `Thrust` normally produces a binary `0.0`/`1.0` input, while analog control
 /// can supply any normalized or physical value. The keys are seeded from the vessel's
 /// [`ControlBinding`] (i.e. from its authored `Controls` scope) for USD vessels;
 /// runtime-built endpoints may declare the same surface directly with
@@ -704,6 +711,7 @@ mod tests {
             ("yaw_right", UserIntent::MoveUp),
             ("yaw_left", UserIntent::MoveDown),
             ("action", UserIntent::Action),
+            ("thrust", UserIntent::Thrust),
             ("brake", UserIntent::Brake),
             ("release", UserIntent::Release),
             ("switch_mode", UserIntent::SwitchMode),

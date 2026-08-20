@@ -8,6 +8,7 @@
   "yaw_right":  ["KeyE"],
   "yaw_left":   ["KeyQ"],
   "action":     ["KeyF"],
+  "thrust":     ["Space"],
   "brake":      ["Space"],
   "release":    ["KeyG"],
   "switch_mode": ["KeyV"],

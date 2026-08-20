@@ -56,7 +56,9 @@ def "RoverControls"
 }
 
 # ── Cosim-flown lander: forward/back -> pitch, left/right -> roll, yaw_left/right
-#    (Q/E) -> yaw, action -> throttle. Ports match Modelica `SimComponent.inputs`.
+#    (Q/E) -> yaw, thrust -> external throttle. Ports match Modelica
+#    `SimComponent.inputs`; Action remains the autopilot shortcut and is not a
+#    vehicle actuator.
 #    No `manual` arming port — manual/automatic is a separate flight-mode layer.
 def "LanderControls"
 {
@@ -97,7 +99,7 @@ def "LanderControls"
         uniform string lunco:port = "yaw"
         uniform double lunco:factor = -1
     }
-    def "action"
+    def "thrust"
     {
         uniform string lunco:port = "external_throttle"
         uniform double lunco:factor = 1

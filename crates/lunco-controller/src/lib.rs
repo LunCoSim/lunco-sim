@@ -727,7 +727,7 @@ pub fn default_key_code(label: &str) -> Option<KeyCode> {
 }
 
 /// Build an avatar `InputMap<UserIntent>` from a key/pointer→intent JSON object
-/// (`{"forward":["KeyW"], "action":["KeyF"], "brake":["Space"], …}`; keys are bevy
+/// (`{"forward":["KeyW"], "action":["KeyF"], "thrust":["Space"], …}`; keys are bevy
 /// `KeyCode` variant names, intents are canonical USD control names via
 /// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
 /// and unknown intents are skipped. `look_button` selects the button that
@@ -1013,18 +1013,35 @@ mod tests {
     }
 
     #[test]
-    fn autopilot_and_vehicle_brake_have_distinct_default_keys() {
+    fn autopilot_action_is_separate_from_contextual_space_controls() {
         let bindings = default_key_bindings();
         let action = bindings
             .iter()
             .find(|(intent, _)| *intent == UserIntent::Action)
+            .map(|(_, keys)| keys.clone());
+        let thrust = bindings
+            .iter()
+            .find(|(intent, _)| *intent == UserIntent::Thrust)
             .map(|(_, keys)| keys.clone());
         let brake = bindings
             .iter()
             .find(|(intent, _)| *intent == UserIntent::Brake)
             .map(|(_, keys)| keys.clone());
         assert_eq!(action, Some(vec![KeyCode::KeyF]));
+        assert_eq!(thrust, Some(vec![KeyCode::Space]));
         assert_eq!(brake, Some(vec![KeyCode::Space]));
+
+        let input_map = get_avatar_input_map();
+        assert_eq!(
+            input_map.get_buttonlike(&UserIntent::Thrust).map(Vec::len),
+            Some(1),
+            "Space must remain bound to the lander thrust intent"
+        );
+        assert_eq!(
+            input_map.get_buttonlike(&UserIntent::Brake).map(Vec::len),
+            Some(1),
+            "Space must remain bound to the rover brake intent"
+        );
     }
 
     /// The bundled keybindings file parses, every entry is a known intent bound to
@@ -1173,6 +1190,75 @@ mod tests {
             app.world().resource::<InteractionObserved>().0,
             Some((1.0, -1.0)),
             "the consumer must see both Q and W in the same interaction step"
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct LanderControlObserved(Option<(f64, f64, f64, f64)>);
+
+    fn observe_lander_control_ports(
+        q: Query<&lunco_core::InputPorts>,
+        mut observed: ResMut<LanderControlObserved>,
+    ) {
+        let inputs = q.single().expect("the lander input surface");
+        observed.0 = Some((
+            inputs.cmd("external_throttle"),
+            inputs.cmd("pitch"),
+            inputs.cmd("roll"),
+            inputs.cmd("yaw"),
+        ));
+    }
+
+    /// The lander control contract is a real producer-to-consumer path:
+    /// semantic intents resolve through the authored-shaped binding and arrive
+    /// on the Modelica input surface in one interaction step. `Action` is not a
+    /// throttle synonym, so F cannot both toggle autopilot and fire the engine.
+    #[test]
+    fn lander_controls_route_thrust_and_attitude_without_autopilot_action() {
+        use lunco_time::InteractionSchedule;
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            lunco_time::TimePlugin,
+            lunco_cosim::CoSimPlugin,
+        ));
+        app.configure_sets(InteractionSchedule, InteractionControlSet);
+        app.add_systems(
+            InteractionSchedule,
+            drive_self_drivers.in_set(InteractionControlSet),
+        );
+        app.add_systems(
+            InteractionSchedule,
+            observe_lander_control_ports.after(InteractionControlSet),
+        );
+        app.init_resource::<LanderControlObserved>();
+
+        let mut state = ActionState::<UserIntent>::default();
+        state.press(&UserIntent::Thrust);
+        state.press(&UserIntent::MoveForward);
+        state.press(&UserIntent::MoveLeft);
+        state.press(&UserIntent::MoveDown);
+        let binding = ControlBinding::from_intent_entries(&[
+            ("thrust".into(), "external_throttle".into(), 1.0),
+            ("forward".into(), "pitch".into(), -1.0),
+            ("left".into(), "roll".into(), 1.0),
+            ("yaw_left".into(), "yaw".into(), 1.0),
+        ])
+        .expect("lander controls must have an authored binding");
+        assert!(!binding.has_intent(UserIntent::Action));
+
+        app.world_mut().spawn((
+            state,
+            lunco_core::InputPorts::new(&["external_throttle", "pitch", "roll", "yaw"]),
+            binding,
+        ));
+        app.world_mut().run_schedule(InteractionSchedule);
+
+        assert_eq!(
+            app.world().resource::<LanderControlObserved>().0,
+            Some((1.0, -1.0, 1.0, 1.0)),
+            "thrust and W/A/Q must reach the lander's command surface together"
         );
     }
 
