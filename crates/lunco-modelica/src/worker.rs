@@ -1052,6 +1052,21 @@ pub fn validate_communication_period_secs(value: f64) -> Result<f64, String> {
     Ok(value)
 }
 
+/// Resolve the authored communication-period opinion shared by every USD
+/// Modelica projection. An omitted opinion is the documented schema default;
+/// an explicit missing or invalid value is an authoring error.
+pub fn resolve_communication_period_secs(
+    authored: bool,
+    value: Option<f64>,
+) -> Result<f64, String> {
+    if !authored {
+        return Ok(DEFAULT_COMMUNICATION_PERIOD_SECS);
+    }
+    value
+        .ok_or_else(|| "not a valid authored real value".to_string())
+        .and_then(validate_communication_period_secs)
+}
+
 /// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
 ///
 /// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
@@ -4501,6 +4516,16 @@ mod macro_step_tests {
         assert!(validate_communication_period_secs(3.0 * lunco_core::SECS_PER_TICK).is_ok());
         assert!(validate_communication_period_secs(0.13).is_err());
         assert!(validate_communication_period_secs(MAX_MACRO_STEP_DT + LIVE_MICRO_DT).is_err());
+    }
+
+    #[test]
+    fn resolves_only_omitted_period_to_the_documented_default() {
+        assert_eq!(
+            resolve_communication_period_secs(false, None).unwrap(),
+            DEFAULT_COMMUNICATION_PERIOD_SECS
+        );
+        assert!(resolve_communication_period_secs(true, None).is_err());
+        assert!(resolve_communication_period_secs(true, Some(0.13)).is_err());
     }
 
     #[test]

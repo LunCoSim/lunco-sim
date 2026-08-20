@@ -38,7 +38,6 @@ use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 use lunco_render::SceneCamera;
 use lunco_scripting::python::{get_python_status, PythonStatus};
@@ -762,24 +761,17 @@ fn process_usd_cosim_prim_read(
                 .attr_names(sdf_path)
                 .iter()
                 .any(|name| name == "lunco:program:communicationPeriod");
-            if !authored {
-                Ok(Some(DEFAULT_COMMUNICATION_PERIOD_SECS))
-            } else {
-                match reader.real(sdf_path, "lunco:program:communicationPeriod") {
-                    Some(value) => lunco_modelica::validate_communication_period_secs(value)
-                        .map(Some)
-                        .map_err(|reason| {
-                            format!(
-                                "{}: lunco:program:communicationPeriod is invalid: {reason}",
-                                prim_path.path,
-                            )
-                        }),
-                    None => Err(format!(
-                        "{}: lunco:program:communicationPeriod is not a valid authored real value",
-                        prim_path.path,
-                    )),
-                }
-            }
+            lunco_modelica::resolve_communication_period_secs(
+                authored,
+                reader.real(sdf_path, "lunco:program:communicationPeriod"),
+            )
+            .map(Some)
+            .map_err(|reason| {
+                format!(
+                    "{}: lunco:program:communicationPeriod is invalid: {reason}",
+                    prim_path.path,
+                )
+            })
         }
     };
     let communication_period_secs = match communication_period_result {

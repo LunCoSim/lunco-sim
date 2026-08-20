@@ -29,7 +29,7 @@ use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
-        .remove::<lunco_cosim::SimComponent>();
+        .remove::<(lunco_cosim::SimComponent, crate::cosim::UsdModelicaSchedule)>();
 }
 
 /// Fingerprint of the generated wrapper currently installed on a network scope.
@@ -108,6 +108,10 @@ pub struct DomainNetwork {
     pub input_sources: BTreeMap<String, String>,
     /// Public wrapper output name to component output property.
     pub outputs: BTreeMap<String, String>,
+    /// One master-clock communication period for the generated Modelica
+    /// wrapper. Every composed member must resolve to the same lattice point;
+    /// a single solver cannot honor conflicting member schedules.
+    pub communication_period_secs: f64,
     /// At least one member's `.mo` has not loaded and therefore its declared
     /// class is not available. The projector waits instead of compiling a
     /// partial network. See [`MemberClasses`].
@@ -165,6 +169,8 @@ pub struct SynthesisPlan {
     pub members: Vec<(String, String, String)>,
     /// Connected composite units emitted below the root model.
     pub units: Vec<SynthesisUnit>,
+    /// Communication period inherited from the composed Modelica members.
+    pub communication_period_secs: f64,
 }
 
 /// One way of turning a composed USD scope into ONE Modelica compilation unit.
@@ -349,6 +355,7 @@ impl DomainSynthesizer for HookSynthesizer {
                 })
                 .collect(),
             units: partition_network(&network),
+            communication_period_secs: network.communication_period_secs,
         }))
     }
 }
@@ -645,6 +652,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
                 })
                 .collect(),
             units: partition_network(&network),
+            communication_period_secs: network.communication_period_secs,
         }))
     }
 }
@@ -787,6 +795,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             component_paths,
             members: Vec::new(),
             units: vec![unit],
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
         }))
     }
 }
@@ -1477,7 +1486,7 @@ pub fn project_domain_islands(
             model_name: compiled_name.clone(),
             parameters: interface.parameters,
             inputs: interface.inputs,
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: synthesized.communication_period_secs,
             session_id,
             is_stepping: true,
             is_compiling: true,
@@ -1553,6 +1562,9 @@ pub fn project_domain_islands(
                 synthesized.inputs.iter().cloned(),
                 synthesized.outputs.iter().cloned(),
             ),
+            crate::cosim::UsdModelicaSchedule {
+                communication_period_secs: synthesized.communication_period_secs,
+            },
             DomainProjectionState { fingerprint },
             generated_source,
         ));
@@ -1698,6 +1710,76 @@ fn network_model_name(root: &str, global_id: Option<u64>) -> String {
 /// more than a std default whose stability is unspecified.
 fn source_fingerprint(source: &str) -> u64 {
     lunco_hash::fnv1a64(source.as_bytes())
+}
+
+const COMMUNICATION_PERIOD_ATTR: &str = "lunco:program:communicationPeriod";
+
+/// Aggregate member communication periods for one generated Modelica solver.
+///
+/// Periods are compared by their validated master-tick lattice index rather
+/// than raw floating-point spelling, so `0.1` and an authored six-tick value
+/// describe the same schedule. A generated wrapper has one scheduler; silently
+/// selecting one member's period would make the other member's authored policy
+/// false, so mixed periods are a terminal projection error.
+fn aggregate_communication_periods<I>(periods: I) -> Result<f64, Vec<DomainProjectionError>>
+where
+    I: IntoIterator<Item = Result<(String, f64), DomainProjectionError>>,
+{
+    let mut errors = Vec::new();
+    let mut selected: Option<(String, u64, f64)> = None;
+    for period in periods {
+        let (path, period) = match period {
+            Ok(period) => period,
+            Err(error) => {
+                errors.push(error);
+                continue;
+            }
+        };
+        let ticks = (period / lunco_core::SECS_PER_TICK).round() as u64;
+        if let Some((selected_path, selected_ticks, selected_period)) = &selected {
+            if *selected_ticks != ticks {
+                errors.push(DomainProjectionError {
+                    path: format!("{path}.{COMMUNICATION_PERIOD_ATTR}"),
+                    message: format!(
+                        "communication period {period:.9}s conflicts with {selected_period:.9}s authored at {selected_path}.{COMMUNICATION_PERIOD_ATTR}; one generated Modelica solver cannot honor mixed member schedules"
+                    ),
+                });
+            }
+        } else {
+            selected = Some((path, ticks, period));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(selected
+        .map(|(_, _, period)| period)
+        .unwrap_or(lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS))
+}
+
+fn network_communication_period(
+    view: &lunco_usd_bevy::StageView<'_>,
+    components: &[DomainComponent],
+) -> Result<f64, Vec<DomainProjectionError>> {
+    aggregate_communication_periods(components.iter().map(|component| {
+        let path = SdfPath::new(&component.path).map_err(|error| DomainProjectionError {
+            path: component.path.clone(),
+            message: format!("invalid Modelica component path: {error}"),
+        })?;
+        let authored = view
+            .attr_names(&path)
+            .iter()
+            .any(|name| name == COMMUNICATION_PERIOD_ATTR);
+        let period = lunco_modelica::resolve_communication_period_secs(
+            authored,
+            view.real(&path, COMMUNICATION_PERIOD_ATTR),
+        )
+        .map_err(|reason| DomainProjectionError {
+            path: format!("{}.{COMMUNICATION_PERIOD_ATTR}", component.path),
+            message: format!("invalid Modelica communication period: {reason}"),
+        })?;
+        Ok((component.path.clone(), period))
+    }))
 }
 
 /// Read one composed `Scope` as a network, or say why it cannot be one.
@@ -1855,6 +1937,7 @@ pub fn read_network(
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: true,
         }));
     }
@@ -1868,6 +1951,7 @@ pub fn read_network(
     if components.is_empty() {
         return Ok(None);
     }
+    let communication_period_secs = network_communication_period(view, &components)?;
 
     let attrs = view.attr_names(root);
     let inputs: BTreeSet<_> = attrs
@@ -1951,6 +2035,7 @@ pub fn read_network(
         inputs,
         input_sources,
         outputs,
+        communication_period_secs,
         pending_sources: false,
     };
     let mut errors = validate_network(&network);
@@ -2454,6 +2539,7 @@ mod tests {
             inputs: BTreeSet::from(["drive_left".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let source = emit_modelica(&network, "Electrical System");
@@ -2473,6 +2559,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
 
@@ -2502,6 +2589,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let asset = network.components[0].source_asset.clone();
@@ -2544,6 +2632,7 @@ mod tests {
                     "/Thermal/Right/Mass.outputs:temp_k".into(),
                 ),
             ]),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
 
@@ -2589,6 +2678,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let source = emit_modelica(&network, "Electrical");
@@ -2608,6 +2698,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let errors = validate_network(&network);
@@ -2669,6 +2760,30 @@ mod tests {
     }
 
     #[test]
+    fn aggregates_one_schedule_and_rejects_conflicting_member_periods() {
+        assert_eq!(
+            aggregate_communication_periods(std::iter::empty()).unwrap(),
+            lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS
+        );
+        let six_ticks = 6.0 * lunco_core::SECS_PER_TICK;
+        assert_eq!(
+            aggregate_communication_periods([
+                Ok(("/Electrical/A".into(), six_ticks)),
+                Ok(("/Electrical/B".into(), 0.1)),
+            ])
+            .unwrap(),
+            six_ticks
+        );
+        let errors = aggregate_communication_periods([
+            Ok(("/Electrical/A".into(), six_ticks)),
+            Ok(("/Electrical/B".into(), 12.0 * lunco_core::SECS_PER_TICK)),
+        ])
+        .unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("mixed member schedules"));
+    }
+
+    #[test]
     fn rejects_ambiguous_forwarded_boundary_sources() {
         let network = DomainNetwork {
             root: "/Electrical".into(),
@@ -2679,6 +2794,7 @@ mod tests {
                 ("right".into(), "/Controls.outputs:throttle".into()),
             ]),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)
@@ -2697,6 +2813,7 @@ mod tests {
             inputs: BTreeSet::from(["demand".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)
