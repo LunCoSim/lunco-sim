@@ -37,6 +37,12 @@ impl Plugin for TerrainSurfacePlugin {
         // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
         app.init_resource::<crate::stream_viz::TerrainLodConfig>();
         app.register_type::<crate::stream_viz::TerrainLodConfig>();
+        // The streamed mesh cache is a rendering-quality resource even when
+        // this plugin runs headless: the CPU-side cache still needs the same
+        // authoritative limit as the graphical client. The workbench's
+        // settings registration may replace this default with persisted user
+        // values later in plugin construction.
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
         // `SetTerrainLod` — the same knobs, addressable from the API/scripts.
         crate::stream_viz::register_all_commands(app);
         app.init_resource::<crate::stream_viz::LodMeshCache>();

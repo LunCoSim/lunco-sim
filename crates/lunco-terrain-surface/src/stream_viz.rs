@@ -1346,8 +1346,9 @@ pub struct TerrainNodeErrors {
 /// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
-/// Bounded: LRU-trimmed against a resident-derived entry cap and a byte
-/// ceiling (see [`mesh_cache_entry_cap`] / [`MESH_CACHE_BYTE_CEILING`]);
+/// Bounded: LRU-trimmed against a resident-derived entry cap and the
+/// authoritative graphics-settings byte ceiling (see
+/// [`mesh_cache_entry_cap`] / `lunco_render::RenderingQualitySettings`);
 /// entries the current frame's cover needs are never evicted.
 /// Value: the cached mesh handle AND the `origin_y` its vertices were rebased by at
 /// bake time. `origin_y` MUST travel with the mesh — the tile is placed at it, so a
@@ -1449,18 +1450,13 @@ impl LodMeshCache {
         }
     }
 
-    /// LRU trim to `entry_cap` entries / [`MESH_CACHE_BYTE_CEILING`] bytes.
+    /// LRU trim to `entry_cap` entries / `byte_cap` bytes.
     /// `protected` entries — the current frame's cover and its fallback coords —
     /// are NEVER evicted: dropping what the cover still cycles through is exactly
     /// the old failure (cap below the resident bound ⇒ every trailing-edge tile
     /// re-baked on revisit). Victims go oldest-stamp-first, a total order.
-    fn trim(
-        &mut self,
-        entry_cap: usize,
-        byte_cap: usize,
-        protected: impl Fn(&MeshCacheKey) -> bool,
-    ) {
-        if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+    fn trim(&mut self, entry_cap: usize, byte_cap: u64, protected: impl Fn(&MeshCacheKey) -> bool) {
+        if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
             return;
         }
         let mut victims: Vec<(u64, MeshCacheKey)> = self
@@ -1471,7 +1467,7 @@ impl LodMeshCache {
             .collect();
         victims.sort_unstable_by_key(|&(stamp, _)| stamp);
         for (_, key) in victims {
-            if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+            if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
                 break;
             }
             if let Some(entry) = self.map.remove(&key) {
@@ -1488,16 +1484,6 @@ impl LodMeshCache {
 fn tile_mesh_bytes(res: usize) -> usize {
     res * res * (4 * 12 + 8) + (res - 1) * (res - 1) * 6 * 4
 }
-
-/// Memory ceiling for the mesh cache, as the byte estimate of its entries.
-/// Rationale: one default terrain's resident bound is ~1.6 k tiles
-/// (`tile_budget` 768 wanted + up to as many hidden parent fallbacks) at
-/// ~190 KB each ≈ 300 MB; the ceiling admits that plus a comparable
-/// trailing-edge retention band, so a camera reversing over its own trail
-/// hits the cache instead of re-baking (the T2 failure). A cinematic 2049²
-/// tile (~330 MB) fits while wanted — protected entries are never evicted —
-/// and becomes the first LRU victim after the shot.
-const MESH_CACHE_BYTE_CEILING: usize = 640 * 1024 * 1024;
 
 /// Cache-entry cap derived from what streaming terrains can actually keep
 /// RESIDENT — the selected cover (≤ `tile_budget`), one hidden direct-parent
@@ -1990,6 +1976,16 @@ pub struct StreamScratch {
 #[reflect(Component)]
 pub struct LodFrozen;
 
+/// The two authoritative rendering controls consumed by the terrain streamer.
+/// Bundling them keeps the streaming system within Bevy's system-parameter
+/// limit without creating a second cache-budget resource or copying settings
+/// through a synchronisation shim.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct TerrainLodQuality<'w> {
+    cfg: Res<'w, TerrainLodConfig>,
+    quality: Res<'w, lunco_render::RenderingQualitySettings>,
+}
+
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
@@ -2009,7 +2005,7 @@ pub fn update_lod_tiles(
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
-    cfg: Res<TerrainLodConfig>,
+    lod_quality: TerrainLodQuality,
     mut stream_status: ResMut<TerrainStreamStatus>,
     // Set while an offline recording captures — see [`TerrainStreamLockstep`].
     lockstep: Res<TerrainStreamLockstep>,
@@ -2022,6 +2018,7 @@ pub fn update_lod_tiles(
     mut looks: Query<&mut ShaderLook>,
     mut scratch: Local<StreamScratch>,
 ) {
+    let TerrainLodQuality { cfg, quality, .. } = lod_quality;
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = overlay_params.uniforms();
@@ -2972,7 +2969,7 @@ pub fn update_lod_tiles(
         // cost a re-bake on a much later re-selection, never a visible hole.)
         mesh_cache.trim(
             mesh_cache_entry_cap(cfg.tile_budget.max(16), terrain_count),
-            MESH_CACHE_BYTE_CEILING,
+            quality.profile().terrain_mesh_cache_bytes,
             |(e, c, _)| {
                 *e == terrain
                     && (wanted.contains(c)
@@ -4228,7 +4225,7 @@ mod draw_partition_tests {
         // Touch 0 so 1 becomes the oldest unprotected entry.
         assert!(cache.get(&key(0)).is_some());
         // Trim to 2 entries; 3 stands in for the current frame's cover.
-        cache.trim(2, usize::MAX, |k| *k == key(3));
+        cache.trim(2, u64::MAX, |k| *k == key(3));
         assert_eq!(cache.map.len(), 2);
         assert!(
             cache.map.contains_key(&key(3)),
@@ -4244,7 +4241,9 @@ mod draw_partition_tests {
             cache.map.values().map(|e| e.bytes).sum::<usize>()
         );
         // The byte ceiling alone also forces eviction.
-        cache.trim(usize::MAX, tile_mesh_bytes(TILE_RES), |k| *k == key(3));
+        cache.trim(usize::MAX, tile_mesh_bytes(TILE_RES) as u64, |k| {
+            *k == key(3)
+        });
         assert_eq!(cache.map.len(), 1);
         assert!(cache.map.contains_key(&key(3)));
     }

@@ -43,6 +43,7 @@ impl RenderingQuality {
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
                 shadow_budget_bytes: 16 * 1024 * 1024,
+                terrain_mesh_cache_bytes: 640 * 1024 * 1024,
             },
             Self::Low => RenderQualityProfile {
                 directional_shadow_map_size: 512,
@@ -52,6 +53,7 @@ impl RenderingQuality {
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
                 shadow_budget_bytes: 8 * 1024 * 1024,
+                terrain_mesh_cache_bytes: 256 * 1024 * 1024,
             },
             Self::High => RenderQualityProfile {
                 directional_shadow_map_size: 2048,
@@ -61,6 +63,7 @@ impl RenderingQuality {
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
                 shadow_budget_bytes: 64 * 1024 * 1024,
+                terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
             },
         }
     }
@@ -76,6 +79,10 @@ pub struct RenderQualityProfile {
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
     pub shadow_budget_bytes: u64,
+    /// Maximum estimated GPU upload footprint retained by streamed terrain
+    /// meshes. This is a requested cache limit, not an automatic quality
+    /// downgrade; eviction is the cache's explicit response when it is full.
+    pub terrain_mesh_cache_bytes: u64,
 }
 
 /// Persisted user settings for shadow and local-light presentation quality.
@@ -100,6 +107,8 @@ pub struct RenderingQualitySettings {
     pub max_spot_shadow_casters: usize,
     #[serde(default = "default_shadow_budget_bytes")]
     pub shadow_budget_bytes: u64,
+    #[serde(default = "default_terrain_mesh_cache_bytes")]
+    pub terrain_mesh_cache_bytes: u64,
 }
 
 const fn balanced_profile() -> RenderQualityProfile {
@@ -134,6 +143,10 @@ const fn default_shadow_budget_bytes() -> u64 {
     balanced_profile().shadow_budget_bytes
 }
 
+const fn default_terrain_mesh_cache_bytes() -> u64 {
+    balanced_profile().terrain_mesh_cache_bytes
+}
+
 impl RenderingQualitySettings {
     /// Return the currently authoritative values, including custom edits.
     pub const fn profile(self) -> RenderQualityProfile {
@@ -145,6 +158,7 @@ impl RenderingQualitySettings {
             max_point_shadow_casters: self.max_point_shadow_casters,
             max_spot_shadow_casters: self.max_spot_shadow_casters,
             shadow_budget_bytes: self.shadow_budget_bytes,
+            terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
         }
     }
 
@@ -166,6 +180,7 @@ impl RenderingQualitySettings {
         self.max_point_shadow_casters = profile.max_point_shadow_casters;
         self.max_spot_shadow_casters = profile.max_spot_shadow_casters;
         self.shadow_budget_bytes = profile.shadow_budget_bytes;
+        self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
     }
 
     /// Validate persisted or UI-edited settings before they reach Bevy.
@@ -185,6 +200,9 @@ impl RenderingQualitySettings {
         if profile.shadow_budget_bytes == 0 {
             return Err("shadow byte ceiling must be greater than zero");
         }
+        if profile.terrain_mesh_cache_bytes == 0 {
+            return Err("terrain mesh cache byte ceiling must be greater than zero");
+        }
         Ok(())
     }
 }
@@ -200,6 +218,7 @@ impl Default for RenderingQualitySettings {
             max_point_shadow_casters: profile.max_point_shadow_casters,
             max_spot_shadow_casters: profile.max_spot_shadow_casters,
             shadow_budget_bytes: profile.shadow_budget_bytes,
+            terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
         }
     }
 }
