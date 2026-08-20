@@ -162,7 +162,13 @@ pub fn drain_sim_samples_to_viz(
             .unwrap_or_else(TelemetryDeadband::default);
         if batch.is_new_model {
             for (name, _) in &batch.samples {
-                sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
+                // Core runtime telemetry owns unbound state retention.  Only
+                // clear a signal here when this UI-created plot binding is
+                // also being refreshed; otherwise a late UI observer would
+                // erase the inspector's retained state.
+                if recorded.contains(name) {
+                    sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
+                }
             }
         }
         for (name, val) in &batch.samples {

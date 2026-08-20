@@ -184,6 +184,11 @@ pub mod index;
 /// gathers inputs and calls down. See [`sim_target`].
 pub mod sim_target;
 
+/// Render-free retention of live Modelica variables in the shared telemetry
+/// registry.  Inspection does not depend on a plot binding or a UI plugin.
+pub mod runtime_telemetry;
+pub use runtime_telemetry::ModelicaSignalLayout;
+
 /// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
 /// bounds resolution — shared by the egui workbench and the headless API server.
 pub mod model_commands;
@@ -1709,6 +1714,7 @@ fn build_modelica_core(app: &mut App) {
     app.init_resource::<crate::state::WorkbenchState>();
     app.init_resource::<lunco_signal::SimRegistry>();
     app.init_resource::<SimSampleStream>();
+    app.init_resource::<runtime_telemetry::RuntimeTelemetrySessions>();
     app.add_message::<ModelicaNotice>();
     app.add_message::<CompileRequested>();
 
@@ -1792,6 +1798,10 @@ fn build_modelica_core(app: &mut App) {
         .add_systems(
             Update,
             handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+        )
+        .add_systems(
+            Update,
+            runtime_telemetry::retain_modelica_runtime_state.after(ModelicaSet::HandleResponses),
         )
         .add_systems(
             FixedUpdate,

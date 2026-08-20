@@ -11,9 +11,11 @@
 //! 2. **Events**: Discrete notifications of system state changes (e.g.,
 //!    "Battery Low", "Command Ack"). These are typically broadcast as
 //!    `TelemetryEvent` packets.
-//! 3. **Timekeeping**: All telemetry is timestamped using the `WorldTime`
-//!    epoch (Julian Date, TDB; from the `lunco-time` spine) to allow for precise
-//!    post-mission analysis and correlation with ephemeris data.
+//! 3. **Timekeeping**: sampled packets carry the `WorldTime` epoch (Julian
+//!    Date, TDB; from the `lunco-time` spine) for ephemeris correlation and a
+//!    precise simulation-time value for ordering and differencing. Runtime
+//!    histories use that simulation time, never a render or wall-clock
+//!    accumulator.
 //!
 //! ## Why this lives in `lunco-core` (substrate justification, review C8)
 //!
@@ -199,8 +201,9 @@ pub struct Parameter {
     /// Samples per second, **in this channel's own time domain**. `None` ⇒
     /// `TelemetrySettings::default_rate_hz`.
     ///
-    /// Clamped to [`FIXED_HZ`](crate::FIXED_HZ): the fixed step is the sampling
-    /// ceiling, and asking for more aliases rather than oversamples.
+    /// A finite positive value above [`FIXED_HZ`](crate::FIXED_HZ) is clamped to the
+    /// fixed-step ceiling. A non-positive or non-finite value is invalid and the
+    /// channel is skipped until it is corrected; it never falls back to another rate.
     pub rate_hz: Option<f64>,
     /// Whether this channel emits. **Defaults to `true`** — a channel you bothered to
     /// author is on.
@@ -208,6 +211,9 @@ pub struct Parameter {
     /// Emit only when the value has moved by at least this much since the last
     /// *emitted* sample (absolute epsilon). `None` ⇒ use the shared
     /// `TelemetrySettings::default_deadband` policy.
+    ///
+    /// A finite non-negative value is required. An invalid authored value makes the
+    /// channel invalid and sampling is skipped until it is corrected.
     ///
     /// The single biggest bandwidth win available: a value that isn't moving costs
     /// nothing. Applies to numeric values only; `Bool`/`String` always emit when due.

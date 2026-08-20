@@ -12,6 +12,10 @@ This crate implements the simulation's **"Optical Fibers"**—a generic, "No-Cod
 - **Headless Monitoring** — Provides the primary "eyes-and-ears" for simulations running without a GPU.
 - **Mission Control Bridge** — Facilitates broadcasting data to external Mission Control systems (YAMCS, XTCE).
 
+Modelica runtime variables are retained by `lunco-modelica` in the same `SignalRegistry` using
+these settings. This crate owns the generic authored/reflection channel sampler; it does not
+create per-variable tags or require a plotting panel for solver state to be inspectable.
+
 ## Architecture
 
 The telemetry layer leverages Bevy's `AppTypeRegistry` to discover and extract data at runtime.
@@ -28,12 +32,15 @@ lunco-telemetry/
 By tagging a component with a `Parameter`, any field can be monitored without manual coding:
 
 ```rust
+use lunco_core::telemetry::{ChannelSource, Parameter};
+
 commands.spawn((
     Port { value: 42.0 },
     Parameter {
         name: "motor_current".to_string(),
         unit: "Amps".to_string(),
-        path: "Port.value".to_string(),
+        source: ChannelSource::Reflect("Port.value".to_string()),
+        ..Default::default()
     }
 ));
 ```
@@ -42,6 +49,9 @@ commands.spawn((
 
 ```rust
 app.add_plugins(LunCoTelemetryPlugin);
+
+// LunCoTelemetryPlugin installs the unified mission-time spine and telemetry
+// settings required by its fixed-clock sampler.
 
 // Subscribe to telemetry events
 app.add_observer(|trigger: On<SampledParameter>| {

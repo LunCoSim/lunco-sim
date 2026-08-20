@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, VecDeque};
 
 pub mod sim;
@@ -43,12 +43,29 @@ pub const DEFAULT_CAPACITY: usize = 2000;
 /// The default is a 1e-4 native-unit floor plus 0.1% relative tolerance.  That
 /// removes ordinary floating-point/physics jitter around zero while preserving
 /// changes that are meaningful at the signal's current scale.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct TelemetryDeadband {
     /// Absolute tolerance in the signal's native unit.
     pub atol: f64,
     /// Relative tolerance as a fraction (0.001 = 0.1%).
     pub rtol: f64,
+}
+
+impl<'de> Deserialize<'de> for TelemetryDeadband {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireTelemetryDeadband {
+            atol: f64,
+            rtol: f64,
+        }
+
+        let wire = WireTelemetryDeadband::deserialize(deserializer)?;
+        Self::try_new(wire.atol, wire.rtol).map_err(D::Error::custom)
+    }
 }
 
 impl Default for TelemetryDeadband {
@@ -61,13 +78,35 @@ impl Default for TelemetryDeadband {
 }
 
 impl TelemetryDeadband {
+    /// Whether a scalar tolerance is a valid authored policy value.
+    #[inline]
+    pub fn is_valid_tolerance(value: f64) -> bool {
+        value.is_finite() && value >= 0.0
+    }
+
+    /// Whether both tolerances form a valid policy.
+    #[inline]
+    pub fn is_valid(self) -> bool {
+        Self::is_valid_tolerance(self.atol) && Self::is_valid_tolerance(self.rtol)
+    }
+
+    /// Construct a validated deadband policy.
+    pub fn try_new(atol: f64, rtol: f64) -> Result<Self, &'static str> {
+        let deadband = Self { atol, rtol };
+        if deadband.is_valid() {
+            Ok(deadband)
+        } else {
+            Err("telemetry deadband tolerances must be finite and non-negative")
+        }
+    }
+
     /// Whether `current` is far enough from `previous` to retain a sample.
     ///
     /// Non-finite values always count as changed.  This prevents a numerical
     /// fault from being hidden by a tolerance and lets the producer decide how
     /// to represent that fault.
     pub fn changed(self, previous: f64, current: f64) -> bool {
-        if !previous.is_finite() || !current.is_finite() {
+        if !self.is_valid() || !previous.is_finite() || !current.is_finite() {
             return true;
         }
 
@@ -346,6 +385,55 @@ impl SignalRegistry {
         }
     }
 
+    /// Retain a scalar sample when the shared runtime sampling policy says it is
+    /// due and meaningful.
+    ///
+    /// Producers that discover state at runtime (for example physics bodies)
+    /// use this same policy as authored channels and Modelica state. The
+    /// registry history is the authoritative last-emitted sample, so a
+    /// producer does not need a second clock or duplicate deadband
+    /// implementation. `false` means that the value was invalid, not due, or
+    /// inside the deadband.
+    pub fn retain_scalar_if_changed(
+        &mut self,
+        sig: SignalRef,
+        time: f64,
+        value: f64,
+        rate_hz: f64,
+        deadband: TelemetryDeadband,
+        capacity: usize,
+    ) -> bool {
+        if !time.is_finite()
+            || !value.is_finite()
+            || !rate_hz.is_finite()
+            || rate_hz <= 0.0
+            || !deadband.is_valid()
+        {
+            return false;
+        }
+
+        let previous = self
+            .scalar_history(&sig)
+            .and_then(|history| history.samples.back())
+            .copied();
+        let previous = match previous {
+            Some(sample) if time >= sample.time => Some(sample),
+            Some(_) => {
+                self.clear_history(&sig);
+                None
+            }
+            None => None,
+        };
+        if let Some(sample) = previous {
+            if time - sample.time < 1.0 / rate_hz || !deadband.changed(sample.value, value) {
+                return false;
+            }
+        }
+
+        self.push_scalar_with_capacity(sig, time, value, capacity);
+        true
+    }
+
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
         if self.meta.get(&sig) != Some(&meta) {
             self.meta.insert(sig, meta);
@@ -520,6 +608,21 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_deadband_rejects_invalid_tolerances() {
+        assert!(TelemetryDeadband::try_new(0.0, 0.0).is_ok());
+        assert!(TelemetryDeadband::try_new(-1.0, 0.0).is_err());
+        assert!(TelemetryDeadband::try_new(0.0, f64::NAN).is_err());
+        assert!(
+            TelemetryDeadband {
+                atol: -1.0,
+                rtol: 0.0
+            }
+            .changed(1.0, 2.0),
+            "an invalid policy must never suppress a sample"
+        );
+    }
+
+    #[test]
     fn a_full_history_drops_the_oldest_sample() {
         let mut h = ScalarHistory::new(3);
         for i in 0..5 {
@@ -643,5 +746,27 @@ mod tests {
         reg.push_scalar_with_capacity(s.clone(), 10.0, 10.0, 2);
         assert_eq!(reg.scalar_history(&s).unwrap().len(), 2);
         assert_eq!(reg.scalar_history(&s).unwrap().capacity, 2);
+    }
+
+    #[test]
+    fn shared_runtime_sampler_owns_rate_deadband_and_time_reversal() {
+        let mut reg = SignalRegistry::default();
+        let signal = SignalRef::global("sim_time");
+        let deadband = TelemetryDeadband {
+            atol: 0.01,
+            rtol: 0.0,
+        };
+
+        assert!(reg.retain_scalar_if_changed(signal.clone(), 0.0, 1.0, 10.0, deadband, 8,));
+        assert!(!reg.retain_scalar_if_changed(signal.clone(), 0.05, 2.0, 10.0, deadband, 8,));
+        assert!(!reg.retain_scalar_if_changed(signal.clone(), 0.11, 1.005, 10.0, deadband, 8,));
+        assert!(reg.retain_scalar_if_changed(signal.clone(), 0.11, 2.0, 10.0, deadband, 8,));
+
+        // A seek/reload cannot leave a history whose timestamps belong to the
+        // previous simulation segment.
+        assert!(reg.retain_scalar_if_changed(signal.clone(), 0.0, 3.0, 10.0, deadband, 8,));
+        let history = reg.scalar_history(&signal).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.samples.back().unwrap().value, 3.0);
     }
 }

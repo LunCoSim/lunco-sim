@@ -47,6 +47,8 @@ lunco-hash = { path = "../lunco-hash" }
 # Declares what a loading scene is still waiting on — see `src/readiness.rs`.
 lunco-readiness = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-telemetry = { path = "../lunco-telemetry" }
 # TODO(backlog): even with default-features off, lunco-modelica drags its heavy
 # closure (doc-bevy, web, worker-transport, workspace, twin) into sim builds —
 # split a modelica compile-core crate and depend on that instead; see the

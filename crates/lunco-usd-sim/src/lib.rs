@@ -470,6 +470,10 @@ impl Plugin for UsdSimPlugin {
                     .chain()
                     .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
             )
+            .add_systems(
+                FixedPostUpdate,
+                physics_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+            )
             .add_observer(on_add_usd_sim_prim)
             // `try_wire_wheel` runs in PreUpdate so that the `SimConnection` entities
             // exist before cosim propagation pushes values through them.
@@ -493,6 +497,7 @@ impl Plugin for UsdSimPlugin {
             .init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<physics_telemetry::PhysicsTelemetryState>()
             .add_systems(
                 Update,
                 (
@@ -562,6 +567,7 @@ pub mod domain_projection;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
+pub mod physics_telemetry;
 pub mod powertrain;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};

@@ -3409,9 +3409,16 @@ pub fn on_remove_modelica(
     trigger: On<Remove, ModelicaModel>,
     channels: Res<ModelicaChannels>,
     mut sim_registry: ResMut<lunco_signal::SimRegistry>,
+    mut commands: Commands,
 ) {
     let entity = trigger.entity;
     sim_registry.remove_entity(entity);
+    // Scene teardown can remove `ModelicaModel` as part of despawning the
+    // entity. `try_remove` makes the ownership transition safe in both cases:
+    // explicit component removal and an entity that has already gone away.
+    commands
+        .entity(entity)
+        .try_remove::<lunco_signal::SignalSource>();
     let _ = channels.tx.send(ModelicaCommand::Despawn { entity });
     info!(
         "[modelica] observer: sent Despawn to Modelica for entity {:?}",

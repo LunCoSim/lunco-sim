@@ -103,9 +103,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
     }
 
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
-        let Some(signals) = world.get_resource::<SignalRegistry>() else {
-            return ApiResponse::ok(serde_json::json!({ "channels": [], "count": 0 }));
-        };
+        let signals = world.resource::<SignalRegistry>();
 
         let mut channels: Vec<serde_json::Value> = signals
             .iter_scalar()
@@ -181,16 +179,11 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             );
         };
 
-        // Resolve the key against the same retained registry that backs the native telemetry
-        // window. A raw Parameter query would reintroduce duplicate declarations and would
-        // also miss wholesale Modelica/cosim signals that have no Parameter component.
+        // Resolve the key against the retained registry that backs the native telemetry
+        // window. A raw Parameter query would reintroduce duplicate declarations; the
+        // registry is the authoritative catalog of history that actually exists.
         let signal = {
-            let Some(signals) = world.get_resource::<SignalRegistry>() else {
-                return ApiResponse::error(
-                    ApiErrorCode::EntityNotFound,
-                    format!("no retained telemetry channel '{key}'"),
-                );
-            };
+            let signals = world.resource::<SignalRegistry>();
             let Some(signal) = signals
                 .iter_scalar()
                 .map(|(signal, _)| signal)
@@ -218,14 +211,9 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
 
-        let epoch_jd = world
-            .get_resource::<lunco_time::WorldTime>()
-            .map(|w| w.epoch_jd)
-            .unwrap_or(0.0);
+        let epoch_jd = world.resource::<lunco_time::WorldTime>().epoch_jd;
 
-        let Some(signals) = world.get_resource::<SignalRegistry>() else {
-            return ApiResponse::ok(serde_json::json!({ "key": key, "samples": [] }));
-        };
+        let signals = world.resource::<SignalRegistry>();
         let history = signals
             .scalar_history(&signal)
             .expect("signal came from the retained registry");
@@ -302,9 +290,7 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
                 .collect()
         });
 
-        let Some(signals) = world.get_resource::<SignalRegistry>() else {
-            return ApiResponse::ok(serde_json::json!({ "times": [], "series": {} }));
-        };
+        let signals = world.resource::<SignalRegistry>();
         let channels: Vec<(String, SignalRef)> = signals
             .iter_scalar()
             .map(|(signal, _)| {

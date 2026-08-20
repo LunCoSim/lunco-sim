@@ -8154,6 +8154,8 @@ dependencies = [
  "lunco-render",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-signal",
+ "lunco-telemetry",
  "lunco-time",
  "lunco-usd-avian",
  "lunco-usd-bevy",

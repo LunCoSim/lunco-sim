@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use bevy::prelude::*;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    ModelicaNotice, NoticeLevel,
+    ModelicaNotice, ModelicaSignalLayout, NoticeLevel,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
@@ -1412,7 +1412,9 @@ pub fn project_domain_islands(
                 retire_sim_interface(&mut commands, entity);
                 // A rejected projection has no interface to hold anyone to; the
                 // rejection itself is the error the user must act on.
-                commands.entity(entity).remove::<UsdModelicaPortContract>();
+                commands
+                    .entity(entity)
+                    .remove::<(UsdModelicaPortContract, ModelicaSignalLayout)>();
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_name: model_name.clone(),
@@ -1450,6 +1452,7 @@ pub fn project_domain_islands(
                 retire_sim_interface(&mut commands, entity);
                 commands.entity(entity).remove::<(
                     ModelicaModel,
+                    ModelicaSignalLayout,
                     UsdSourcedCosim,
                     UsdModelicaPortContract,
                     DomainProjectionState,
@@ -1521,6 +1524,15 @@ pub fn project_domain_islands(
             &synthesized.members,
             &synthesized.outputs,
         );
+        let signal_layout = generated_signal_layout(
+            &view,
+            &root_path,
+            &prim.path,
+            &synthesized.outputs,
+            &synthesized.members,
+            &member_output_aliases,
+            &synthesized.units,
+        );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
             doc_uri: doc_uri.clone(),
@@ -1536,6 +1548,7 @@ pub fn project_domain_islands(
         retire_sim_interface(&mut commands, entity);
         commands.entity(entity).try_insert((
             model,
+            signal_layout,
             UsdSourcedCosim,
             // The generated ModelicaModel is installed before the ordinary
             // wrapper pass can publish SimComponent. This is an explicit
@@ -2214,6 +2227,118 @@ fn generated_member_output_aliases(
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Build the runtime address map that reconnects one generated solver to the
+/// composed USD ownership tree.
+///
+/// A generated network intentionally has one `ModelicaModel` entity.  Its
+/// solver variables therefore cannot be grouped by ECS parentage: that parent
+/// is the network scope, not the battery, motor, or panel that owns a value.
+/// The composed network already contains the authoritative mapping in two
+/// forms: boundary output connections and generated unit/member instance
+/// names.  Materialize those facts once at projection time so every telemetry
+/// consumer sees the same USD structure without parsing generated names in a
+/// UI or retaining a second solver.
+fn generated_signal_layout(
+    view: &impl UsdRead,
+    root_path: &SdfPath,
+    root: &str,
+    outputs: &BTreeSet<String>,
+    members: &[(String, String, String)],
+    member_output_aliases: &[(String, String, String)],
+    units: &[SynthesisUnit],
+) -> ModelicaSignalLayout {
+    let mut layout = ModelicaSignalLayout {
+        root_path: root.to_string(),
+        ..default()
+    };
+
+    // Public network outputs retain the authored connection's physical owner.
+    // An alias promoted from a member is not an authored root attribute, so it
+    // is added from `member_output_aliases` below instead.
+    for output in outputs {
+        let attr = format!("outputs:{output}");
+        let connections = view.connections(root_path, &attr);
+        let Some(target) = connections.first() else {
+            continue;
+        };
+        let Some((target_prim, _)) = target.rsplit_once(".outputs:") else {
+            continue;
+        };
+        layout
+            .exact_paths
+            .insert(output.clone(), target_prim.to_string());
+    }
+
+    // Boundary inputs are also solver variables.  Their authored source is
+    // the ownership fact for the command/environment value, so use it instead
+    // of leaving every generated input under the implementation scope.
+    for attr in view.attr_names(root_path) {
+        let Some(name) = attr
+            .strip_prefix("inputs:")
+            .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+        else {
+            continue;
+        };
+        let connections = view.connections(root_path, &attr);
+        let Some(target) = connections.first() else {
+            continue;
+        };
+        let Some((target_prim, _)) = target.rsplit_once(".outputs:") else {
+            continue;
+        };
+        layout
+            .exact_paths
+            .entry(name.to_string())
+            .or_insert_with(|| target_prim.to_string());
+    }
+
+    for (member, _, alias) in member_output_aliases {
+        layout.exact_paths.insert(alias.clone(), member.clone());
+    }
+
+    // The synthesizer emits every component under a deterministic unit
+    // instance.  A longest-prefix lookup assigns all public and internal
+    // variables of that member—including variables introduced by a later
+    // Modelica revision—to the authored member without an output annotation.
+    for unit in units {
+        let unit_prefix = unit_instance_identifier(&unit.name);
+        for (output, owner) in layout.exact_paths.clone() {
+            layout
+                .exact_paths
+                .insert(format!("{unit_prefix}.{output}"), owner);
+        }
+        for (member, _, alias) in member_output_aliases
+            .iter()
+            .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
+        {
+            layout
+                .exact_paths
+                .insert(format!("{unit_prefix}.{alias}"), member.clone());
+        }
+        for member in &unit.component_paths {
+            let member_prefix = instance_identifier(root, member);
+            layout
+                .prefixes
+                .push((format!("{unit_prefix}.{member_prefix}."), member.clone()));
+        }
+    }
+    // Deterministic ordering keeps the component inspectable and makes the
+    // metadata stable for tests and API snapshots. Resolution itself chooses
+    // the longest prefix, so nested instance names remain unambiguous.
+    layout
+        .prefixes
+        .sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()).then(left.cmp(right)));
+
+    // A generated member alias may be emitted in more than one synthesized
+    // unit only if the authored topology is invalid. The projection validator
+    // owns that error; this map remains a direct data projection and never
+    // invents another owner.
+    debug_assert!(members.iter().all(|(member, _, _)| units
+        .iter()
+        .any(|unit| unit.component_paths.contains(member))));
+    layout
 }
 
 /// What class a member's source asset actually declares.
