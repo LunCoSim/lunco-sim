@@ -727,7 +727,7 @@ pub fn default_key_code(label: &str) -> Option<KeyCode> {
 }
 
 /// Build an avatar `InputMap<UserIntent>` from a key/pointer→intent JSON object
-/// (`{"forward":["KeyW"], "action":["KeyF","Space"], …}`; keys are bevy
+/// (`{"forward":["KeyW"], "action":["KeyF"], "brake":["Space"], …}`; keys are bevy
 /// `KeyCode` variant names, intents are canonical USD control names via
 /// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
 /// and unknown intents are skipped. `look_button` selects the button that
@@ -1010,6 +1010,21 @@ mod tests {
         assert_eq!(default_key_code("W"), Some(KeyCode::KeyW));
         assert_eq!(default_key_code("KeyG"), Some(KeyCode::KeyG));
         assert_eq!(default_key_code("not-bound"), None);
+    }
+
+    #[test]
+    fn autopilot_and_vehicle_brake_have_distinct_default_keys() {
+        let bindings = default_key_bindings();
+        let action = bindings
+            .iter()
+            .find(|(intent, _)| *intent == UserIntent::Action)
+            .map(|(_, keys)| keys.clone());
+        let brake = bindings
+            .iter()
+            .find(|(intent, _)| *intent == UserIntent::Brake)
+            .map(|(_, keys)| keys.clone());
+        assert_eq!(action, Some(vec![KeyCode::KeyF]));
+        assert_eq!(brake, Some(vec![KeyCode::Space]));
     }
 
     /// The bundled keybindings file parses, every entry is a known intent bound to

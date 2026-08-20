@@ -20,7 +20,7 @@
     map, not authored per vessel."""
 )
 
-# ── Wheeled rover: forward/back -> throttle, left/right -> steer, action -> brake.
+# ── Wheeled rover: forward/back -> throttle, left/right -> steer, brake -> brake.
 def "RoverControls"
 {
     # Camera-follow mode (read into `lunco_core::CameraFollow` at projection): a
@@ -48,7 +48,7 @@ def "RoverControls"
         uniform string lunco:port = "steer"
         uniform double lunco:factor = 1
     }
-    def "action"
+    def "brake"
     {
         uniform string lunco:port = "brake"
         uniform double lunco:factor = 1

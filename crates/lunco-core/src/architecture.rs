@@ -80,6 +80,13 @@ pub enum UserIntent {
 
     /// Context-sensitive primary interaction.
     Action,
+    /// Vehicle-specific braking or hold command.
+    ///
+    /// This is deliberately separate from [`UserIntent::Action`]: the latter
+    /// is the autopilot shortcut, while a surface vehicle may use this command
+    /// for its physical brake without giving every possessed entity an
+    /// autopilot toggle.
+    Brake,
     /// Release/detach a dock or coupling (e.g. a lander→rover fixed joint). Routed
     /// through the normal intent→port machinery to a `release` command port.
     Release,
@@ -114,6 +121,7 @@ impl std::fmt::Display for UserIntent {
             Self::Look => "Look",
             Self::Zoom => "Zoom",
             Self::Action => "Primary action",
+            Self::Brake => "Vehicle brake",
             Self::Release => "Release coupling",
             Self::SwitchMode => "Switch camera mode",
             Self::Pause => "Pause simulation",
@@ -190,6 +198,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "yaw_right" => Some(UserIntent::MoveUp),
         "yaw_left" => Some(UserIntent::MoveDown),
         "action" => Some(UserIntent::Action),
+        "brake" => Some(UserIntent::Brake),
         "release" => Some(UserIntent::Release),
         "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
@@ -695,6 +704,7 @@ mod tests {
             ("yaw_right", UserIntent::MoveUp),
             ("yaw_left", UserIntent::MoveDown),
             ("action", UserIntent::Action),
+            ("brake", UserIntent::Brake),
             ("release", UserIntent::Release),
             ("switch_mode", UserIntent::SwitchMode),
             ("pause", UserIntent::Pause),
@@ -717,7 +727,6 @@ mod tests {
             "pitch_down",
             "roll_left",
             "roll_right",
-            "brake",
             "arm",
             "fire",
             "detach",
