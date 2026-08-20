@@ -1,93 +1,55 @@
 #!/usr/bin/env bash
-# LunCoSim API Test Scripts
-# 
+# Probe an already-running production luncosim instance.
+#
 # Usage:
 #   ./scripts/api/test_api.sh [PORT]
 #
-# Tests the API against a running LunCoSim instance.
-# Make sure the sim is running with `--api` flag first:
-#   cargo run --bin luncosim -- --api 4101
+# Start the instance separately with the canonical binary, for example:
+#   target/debug/luncosim --no-ui --api 4101
 
-set -e
+set -euo pipefail
 
 PORT="${1:-4101}"
+READY_TIMEOUT_S="${LUNCOSIM_API_READY_TIMEOUT_S:-120}"
 BASE="http://127.0.0.1:${PORT}/api"
 
-echo "🚀 LunCoSim API Tests (port ${PORT})"
-echo "====================================="
-echo ""
+echo "🚀 LunCoSim API checks (port ${PORT})"
+echo "===================================="
 
-# Wait for API to be ready
-echo "⏳ Waiting for API to be ready..."
-for i in {1..10}; do
-    if curl -s "${BASE}/health" > /dev/null 2>&1; then
-        echo "✅ API is ready"
+echo "⏳ Waiting for /api/ready to report a usable world..."
+started_at=$SECONDS
+while true; do
+    ready="$(curl --fail-with-body --silent --show-error "${BASE}/ready" 2>/dev/null || true)"
+    if jq -e '.data.ready == true and .data.world_hold == false' >/dev/null 2>&1 <<<"${ready}"; then
+        echo "✅ Runtime is ready"
         break
     fi
-    if [ $i -eq 10 ]; then
-        echo "❌ API not responding on port ${PORT}"
-        echo "   Make sure the sim is running with: cargo run --bin luncosim -- --api ${PORT}"
+    if (( SECONDS - started_at >= READY_TIMEOUT_S )); then
+        echo "❌ Runtime did not become ready within ${READY_TIMEOUT_S}s" >&2
+        echo "   Start it with: target/debug/luncosim --no-ui --api ${PORT}" >&2
         exit 1
     fi
     sleep 1
 done
-echo ""
 
-# 1. Health Check
-echo "📡 1. Health Check"
-HEALTH=$(curl -s "${BASE}/health")
-echo "${HEALTH}" | jq . 2>/dev/null || echo "  ${HEALTH}"
-echo ""
+echo
+echo "📡 1. Health"
+curl --fail-with-body --silent --show-error "${BASE}/health" | jq .
 
-# 2. Discover Schema
-echo "🔍 2. Discover Available Commands"
-SCHEMA=$(curl -s "${BASE}/commands/schema")
-if echo "${SCHEMA}" | jq . > /dev/null 2>&1; then
-    CMD_COUNT=$(echo "${SCHEMA}" | jq '.data.commands | length' 2>/dev/null || echo "0")
-    echo "  Found ${CMD_COUNT} commands:"
-    echo "${SCHEMA}" | jq -r '.data.commands[] | "    • \(.name) (\(.fields | length) fields)"' 2>/dev/null || echo "  (unable to parse commands)"
-else
-    echo "  Raw response: ${SCHEMA}"
-fi
-echo ""
+echo
+echo "🔍 2. Live command schema"
+schema="$(curl --fail-with-body --silent --show-error "${BASE}/commands/schema")"
+jq -e '.data.commands | type == "array"' >/dev/null <<<"${schema}"
+jq -r '.data.commands[] | "    • \(.name) (\(.fields | length) fields)"' <<<"${schema}"
 
-# 3. List Entities
-echo "📋 3. List Entities"
-# Wait a moment for entities to spawn
-sleep 2
-ENTITIES=$(curl -s "${BASE}/entities")
-if echo "${ENTITIES}" | jq . > /dev/null 2>&1; then
-    ENTITY_COUNT=$(echo "${ENTITIES}" | jq '.data.count // 0' 2>/dev/null || echo "0")
-    echo "  Found ${ENTITY_COUNT} entities (showing first 5):"
-    echo "${ENTITIES}" | jq -r '.data.entities[:5][] | "    • [\(.type)] \(.api_id): \(.name)"' 2>/dev/null || echo "  (unable to parse entities)"
-    if [ "$ENTITY_COUNT" -gt 5 ] 2>/dev/null; then
-        echo "    ... and $((ENTITY_COUNT - 5)) more"
-    fi
-else
-    echo "  Raw response: ${ENTITIES}"
-fi
-echo ""
+echo
+echo "📋 3. ListEntities through the command funnel"
+entities="$(curl --fail-with-body --silent --show-error \
+    -X POST "${BASE}/commands" \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"ListEntities"}')"
+jq -e '.data.entities | type == "array"' >/dev/null <<<"${entities}"
+jq -r '.data.entities[:5][] | "    • [\(.type)] \(.api_id): \(.name)"' <<<"${entities}"
 
-# 4. Get first entity
-echo "🔎 4. Query First Entity"
-FIRST_ID=$(echo "${ENTITIES}" | jq -r '.data.entities[0].api_id // empty' 2>/dev/null)
-if [ -n "$FIRST_ID" ]; then
-    echo "Querying ID: ${FIRST_ID}"
-    ENTITY_DATA=$(curl -s "${BASE}/entities/${FIRST_ID}")
-    echo "${ENTITY_DATA}" | jq . 2>/dev/null || echo "  ${ENTITY_DATA}"
-else
-    echo "  (no entities available — spawn a rover first in the sim)"
-fi
-echo ""
-
-# 5. Query an entity that doesn't exist (error case)
-echo "❌ 5. Query Non-existent Entity (expect 404)"
-# Use a zero ID which shouldn't exist in TSID
-ERROR_RESP=$(curl -s -w "\n  HTTP Status: %{http_code}" "${BASE}/entities/0")
-echo "  ${ERROR_RESP}"
-echo ""
-
-echo "✅ All tests completed"
-echo ""
-echo "💡 Try the rover drive demo:"
-echo "   ./scripts/api/demo_drive_rover.sh ${PORT}"
+echo
+echo "✅ API checks completed against the live production session"
