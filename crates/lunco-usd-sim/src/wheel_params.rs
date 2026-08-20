@@ -482,13 +482,7 @@ fn validate_suspension_values(
     spring_k: f64,
     damping_c: f64,
 ) {
-    validate_range(
-        errors,
-        "lunco:suspension:restLength",
-        rest_length,
-        0.05,
-        2.0,
-    );
+    validate_range(errors, "lunco:suspension:restLength", rest_length, 0.0, 2.0);
     validate_range(
         errors,
         "physxVehicleSuspension:springStrength",
@@ -663,11 +657,21 @@ mod tests {
     #[test]
     fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
         let mut errors = Vec::new();
-        validate_suspension_values(&mut errors, 0.01, f64::NAN, 20_001.0);
+        validate_suspension_values(&mut errors, -0.01, f64::NAN, 20_001.0);
         assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
         assert!(errors[0].starts_with("lunco:suspension:restLength"));
         assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
         assert!(errors[2].starts_with("physxVehicleSuspension:springDamperRate"));
+    }
+
+    #[test]
+    fn zero_suspension_rest_length_is_valid_only_as_an_authored_rigid_mount() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, 0.0, 15_000.0, 5_000.0);
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
     }
 }
 

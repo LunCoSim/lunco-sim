@@ -2091,6 +2091,14 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             };
+            if suspension.rest_length <= 0.0 {
+                error!(
+                    "USD raycast wheel {} has a zero suspension rest length; +                     zero travel is only valid for the rigid physical-wheel +                     realization — refusing to spawn an under-constrained +                     raycast wheel",
+                    sdf_path.as_str()
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
             setup_raycast_wheel(
                 commands,
                 entity,

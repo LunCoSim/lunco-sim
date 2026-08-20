@@ -832,7 +832,7 @@ class "LunCoSuspensionAPI" (
 {
     float lunco:suspension:restLength (
         customData = {
-            double min = 0.05
+            double min = 0
             double max = 2
             string unit = "m"
         }
