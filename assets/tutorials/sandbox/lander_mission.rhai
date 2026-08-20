@@ -25,7 +25,7 @@
 //! control of the rover". So `takeover` asks the question it actually means: is a
 //! human driving THE ROVER right now? `controller(id)` answers it directly
 //! ("AiAgent" = autopilot, "Owner"/"Operator" = a person), and it's true however
-//! the student got there — click, F, or the autopilot handing over on a keypress.
+//! the student got there — click it or use the authored handoff path.
 
 fn on_start(me) {
     // One source: the tutorial loads its own environment. The scene's embedded
@@ -49,7 +49,7 @@ fn lander_touchdown_message(me) {
 }
 
 fn lander_deployed_message(me) {
-    hint("The rover is driving itself. Take it by clicking the rover; F toggles its authored route autopilot.");
+    hint("The rover is driving itself. Click the rover to take control.");
 }
 
 fn lander_human_takeover(me) {
