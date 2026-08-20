@@ -438,7 +438,7 @@ pub fn on_scene_click_checkpoint(
     if host.is_none() {
         commands.trigger(lunco_scene_commands::runtime_waypoint::AddRuntimeWaypoint {
             target: vessel,
-            position: hit.as_vec3(),
+            position: hit.to_array(),
         });
         info!(
             "[waypoint] runtime-only rover {:?} received a live waypoint command; no authored USD document was modified",

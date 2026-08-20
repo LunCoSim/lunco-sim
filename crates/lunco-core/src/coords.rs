@@ -42,6 +42,70 @@ pub struct GridPos(pub DVec3);
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct GridRot(pub DQuat);
 
+/// The canonical authored frame for surface vehicles.
+///
+/// Vehicle assets are Y-up, right-handed, with local forward along `-Z` and
+/// local right along `+X`. Scene placement supplies the vehicle's initial
+/// heading; runtime control and traction both transform these same local axes
+/// from the authoritative physics rotation. Keeping this contract beside the
+/// typed grid rotation prevents render-frame transforms and duplicated axis
+/// conventions from crossing the navigation/physics boundary.
+pub struct VehicleFrame;
+
+impl VehicleFrame {
+    /// Canonical vehicle-local forward direction.
+    pub const FORWARD_LOCAL: DVec3 = DVec3::NEG_Z;
+    /// Canonical vehicle-local right direction.
+    pub const RIGHT_LOCAL: DVec3 = DVec3::X;
+
+    /// Transform the canonical forward direction by an authoritative body
+    /// rotation into the grid-absolute physics frame.
+    #[inline]
+    pub fn forward(rotation: GridRot) -> DVec3 {
+        rotation.0 * Self::FORWARD_LOCAL
+    }
+
+    /// Transform the canonical right direction by an authoritative body
+    /// rotation into the grid-absolute physics frame.
+    #[inline]
+    pub fn right(rotation: GridRot) -> DVec3 {
+        rotation.0 * Self::RIGHT_LOCAL
+    }
+
+    /// Return the vehicle forward direction projected onto the world yaw plane.
+    /// Ground navigation and clearance sensing use this projection so body
+    /// pitch/roll cannot turn a horizontal waypoint into a vertical command.
+    #[inline]
+    pub fn yaw_forward(rotation: GridRot) -> DVec3 {
+        let forward = Self::forward(rotation);
+        DVec3::new(forward.x, 0.0, forward.z).normalize_or_zero()
+    }
+}
+
+#[cfg(test)]
+mod vehicle_frame_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_axes_follow_physics_rotation_and_yaw_projection() {
+        let rotation = GridRot(DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2));
+        assert!((VehicleFrame::forward(rotation) - DVec3::NEG_X).length() < 1e-9);
+        assert!((VehicleFrame::right(rotation) - DVec3::NEG_Z).length() < 1e-9);
+
+        let tilted = GridRot(
+            DQuat::from_rotation_z(0.25)
+                * DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2)
+                * DQuat::from_rotation_x(0.2),
+        );
+        let yaw = VehicleFrame::yaw_forward(tilted);
+        assert!(
+            yaw.y.abs() < 1e-12,
+            "yaw projection retained vertical motion"
+        );
+        assert!((yaw - DVec3::NEG_X).length() < 1e-9, "yaw forward={yaw:?}");
+    }
+}
+
 /// Rigid f64 transform from one concrete BigSpace grid into another.
 ///
 /// Grid topology is a precision implementation detail. Systems that need to
@@ -629,10 +693,40 @@ pub fn pose_in_grid<F: QueryFilter>(
         grid_relative_pose(entity, common, q_parents, q_grids, q_spatial)?;
     let (target_position, target_rotation) =
         grid_relative_pose(target_grid, common, q_parents, q_grids, q_spatial)?;
-    let inverse = target_rotation.inverse();
+    let inverse = target_rotation.normalize().inverse();
     Some((
         inverse * (entity_position - target_position),
-        inverse * entity_rotation,
+        (inverse * entity_rotation.normalize()).normalize(),
+    ))
+}
+
+/// Convert a complete semantic pose into the local coordinates stored on a
+/// plain child of `parent`.
+///
+/// User-facing placement commands speak in `target_grid`; runtime USD
+/// instances are deliberately plain children of their spawn-anchor-like
+/// parent rather than grid-direct bodies. This helper owns the one inverse
+/// parent-pose operation those commands need. It does not invent a
+/// [`CellCoord`]; the plain-child storage contract is what keeps authored and
+/// runtime USD hierarchies identical.
+pub fn pose_in_parent_local<F: QueryFilter>(
+    position: DVec3,
+    rotation: DQuat,
+    parent: Entity,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(DVec3, DQuat)> {
+    let (parent_position, parent_rotation) = if parent == target_grid {
+        (DVec3::ZERO, DQuat::IDENTITY)
+    } else {
+        pose_in_grid(parent, target_grid, q_parents, q_grids, q_spatial)?
+    };
+    let inverse_parent = parent_rotation.normalize().inverse();
+    Some((
+        inverse_parent * (position - parent_position),
+        (inverse_parent * rotation).normalize(),
     ))
 }
 
@@ -654,12 +748,15 @@ pub fn position_in_grid_to_parent_local<F: QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(Option<CellCoord>, Vec3)> {
     let parent = q_parents.get(entity).ok()?.parent();
-    let (parent_position, parent_rotation) = if parent == target_grid {
-        (DVec3::ZERO, DQuat::IDENTITY)
-    } else {
-        pose_in_grid(parent, target_grid, q_parents, q_grids, q_spatial)?
-    };
-    let parent_local = parent_rotation.inverse() * (position - parent_position);
+    let (parent_local, _) = pose_in_parent_local(
+        position,
+        DQuat::IDENTITY,
+        parent,
+        target_grid,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
     if let Ok(grid) = q_grids.get(parent) {
         let (cell, local) = grid.translation_to_grid(parent_local);
         Some((Some(cell), local))
@@ -685,12 +782,16 @@ pub fn rotation_in_grid_to_parent_local<F: QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<DQuat> {
     let parent = q_parents.get(entity).ok()?.parent();
-    let parent_rotation = if parent == target_grid {
-        DQuat::IDENTITY
-    } else {
-        pose_in_grid(parent, target_grid, q_parents, q_grids, q_spatial)?.1
-    };
-    Some((parent_rotation.inverse() * rotation).normalize())
+    pose_in_parent_local(
+        DVec3::ZERO,
+        rotation,
+        parent,
+        target_grid,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )
+    .map(|(_, local_rotation)| local_rotation)
 }
 
 /// Convert a complete f64 pose from one arbitrary BigSpace Grid to another.

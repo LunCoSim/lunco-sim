@@ -2034,6 +2034,7 @@ mod force_law_tests {
     //! broken control (the comments name the bug).
     use super::*;
     use bevy::math::{DQuat, DVec3};
+    use lunco_core::coords::VehicleFrame;
 
     #[test]
     fn authored_allocator_vehicle_keeps_the_shared_brake_without_drive_mix() {
@@ -2066,9 +2067,19 @@ mod force_law_tests {
     fn contact_basis_upright_matches_flat_wheel() {
         // Upright wheel: contact normal = world up. Basis must equal the raw
         // wheel forward/right (so existing rovers are unchanged).
-        let (f, r) = contact_plane_basis(DVec3::NEG_Z, DVec3::X, DVec3::Y);
-        assert!((f - DVec3::NEG_Z).length() < 1e-9, "forward changed: {f:?}");
-        assert!((r - DVec3::X).length() < 1e-9, "right changed: {r:?}");
+        let (f, r) = contact_plane_basis(
+            VehicleFrame::FORWARD_LOCAL,
+            VehicleFrame::RIGHT_LOCAL,
+            DVec3::Y,
+        );
+        assert!(
+            (f - VehicleFrame::FORWARD_LOCAL).length() < 1e-9,
+            "forward changed: {f:?}"
+        );
+        assert!(
+            (r - VehicleFrame::RIGHT_LOCAL).length() < 1e-9,
+            "right changed: {r:?}"
+        );
     }
 
     #[test]
@@ -2076,7 +2087,7 @@ mod force_law_tests {
         // Cambered contact: normal tilted 22° off vertical. Both basis vectors
         // must lie in the plane ⟂ to the normal, stay unit, and be orthogonal.
         let n = DVec3::new(0.0, 1.0, 0.4).normalize();
-        let (f, r) = contact_plane_basis(DVec3::NEG_Z, DVec3::X, n);
+        let (f, r) = contact_plane_basis(VehicleFrame::FORWARD_LOCAL, VehicleFrame::RIGHT_LOCAL, n);
         assert!(
             f.dot(n).abs() < 1e-9,
             "forward not in contact plane: {}",

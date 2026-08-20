@@ -28,6 +28,7 @@ def Xform "Battery" (
     float inputs:R_internal = 0.05
     float inputs:soc_init = 1.0
     float outputs:soc_out
+    float outputs:capacity_ah
     custom token connectors:p
 
     # --- Telemetry ---

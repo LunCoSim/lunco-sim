@@ -231,7 +231,7 @@ fn cursor_ray(camera: &Camera, cam_tf: &GlobalTransform, cursor: Vec2) -> Option
 /// to the collider ring, which exists only around dynamic bodies.
 #[derive(Clone, Copy, Debug)]
 struct CursorSurfaceHit {
-    /// Grid-absolute surface point under the cursor.
+    /// Surface point under the cursor in the semantic active physics frame.
     point: GridPos,
     terrain_primary: bool,
     terrain: Option<lunco_terrain_surface::SurfaceHit>,

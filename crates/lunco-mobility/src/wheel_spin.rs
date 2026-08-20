@@ -8,7 +8,7 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::coords::{GridPos, GridRot};
+use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::InputPorts;
 
 use crate::wheel_kinematics::{wheel_heading, wheel_hub_pose, wheel_hub_velocity};
@@ -196,7 +196,7 @@ pub(crate) fn update_wheel_spin(
         let mut v_long = 0.0;
         let mut v_lat = 0.0;
         // The contact basis, kept so the force can be rebuilt in world axes below.
-        let mut basis = (DVec3::NEG_Z, DVec3::X);
+        let mut basis = (VehicleFrame::FORWARD_LOCAL, VehicleFrame::RIGHT_LOCAL);
         // The brake is a VESSEL command, so it is resolved by walking to the
         // vessel rather than read off whatever body this wheel hangs from — see
         // `owning_input_ports`. The chassis fetch below stays the carrier's,
