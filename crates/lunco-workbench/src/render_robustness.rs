@@ -646,9 +646,15 @@ fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
     signature = signature
         .wrapping_mul(0x100000001b3)
         .wrapping_add(profile.max_spot_shadow_casters as u64);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.shadow_budget_bytes);
+    signature = signature
+        .wrapping_mul(0x100000001b3)
+        .wrapping_add(profile.shadow_depth_bias.to_bits() as u64);
     signature
         .wrapping_mul(0x100000001b3)
-        .wrapping_add(profile.shadow_budget_bytes)
+        .wrapping_add(profile.shadow_normal_bias.to_bits() as u64)
 }
 
 /// Project the persisted quality choice onto the live shadow resources.

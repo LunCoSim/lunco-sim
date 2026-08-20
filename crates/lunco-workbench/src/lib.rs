@@ -5176,6 +5176,16 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .speed(1.0)
                         .prefix("Spot shadow casters: "),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_depth_bias)
+                        .speed(0.005)
+                        .prefix("Shadow depth bias: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_normal_bias)
+                        .speed(0.1)
+                        .prefix("Shadow normal bias: "),
+                );
                 let mut budget_mib = (settings.shadow_budget_bytes / (1024 * 1024)).max(1);
                 if ui
                     .add(

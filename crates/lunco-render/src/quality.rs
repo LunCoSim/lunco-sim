@@ -43,6 +43,8 @@ impl RenderingQuality {
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
                 shadow_budget_bytes: 16 * 1024 * 1024,
+                shadow_depth_bias: 0.06,
+                shadow_normal_bias: 2.5,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
             },
             Self::Low => RenderQualityProfile {
@@ -53,6 +55,8 @@ impl RenderingQuality {
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
                 shadow_budget_bytes: 8 * 1024 * 1024,
+                shadow_depth_bias: 0.1,
+                shadow_normal_bias: 4.0,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
             },
             Self::High => RenderQualityProfile {
@@ -63,6 +67,8 @@ impl RenderingQuality {
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
                 shadow_budget_bytes: 64 * 1024 * 1024,
+                shadow_depth_bias: 0.03,
+                shadow_normal_bias: 1.5,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
             },
         }
@@ -70,7 +76,7 @@ impl RenderingQuality {
 }
 
 /// The concrete shadow-map parameters selected by [`RenderingQuality`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct RenderQualityProfile {
     pub directional_shadow_map_size: u32,
     pub point_shadow_map_size: u32,
@@ -79,6 +85,10 @@ pub struct RenderQualityProfile {
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
     pub shadow_budget_bytes: u64,
+    /// Depth bias used by native directional/local-light shadow maps.
+    pub shadow_depth_bias: f32,
+    /// Normal bias, in shadow texels, used to suppress grazing-angle acne.
+    pub shadow_normal_bias: f32,
     /// Maximum estimated GPU upload footprint retained by streamed terrain
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
@@ -91,7 +101,7 @@ pub struct RenderQualityProfile {
 /// selected, these fields are the authoritative values used by the renderer;
 /// the runtime never silently replaces them with a lower preset because an
 /// adapter has less memory than requested.
-#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct RenderingQualitySettings {
     #[serde(default = "default_directional_shadow_map_size")]
     pub directional_shadow_map_size: u32,
@@ -107,6 +117,10 @@ pub struct RenderingQualitySettings {
     pub max_spot_shadow_casters: usize,
     #[serde(default = "default_shadow_budget_bytes")]
     pub shadow_budget_bytes: u64,
+    #[serde(default = "default_shadow_depth_bias")]
+    pub shadow_depth_bias: f32,
+    #[serde(default = "default_shadow_normal_bias")]
+    pub shadow_normal_bias: f32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
 }
@@ -147,6 +161,14 @@ const fn default_terrain_mesh_cache_bytes() -> u64 {
     balanced_profile().terrain_mesh_cache_bytes
 }
 
+const fn default_shadow_depth_bias() -> f32 {
+    balanced_profile().shadow_depth_bias
+}
+
+const fn default_shadow_normal_bias() -> f32 {
+    balanced_profile().shadow_normal_bias
+}
+
 impl RenderingQualitySettings {
     /// Return the currently authoritative values, including custom edits.
     pub const fn profile(self) -> RenderQualityProfile {
@@ -158,6 +180,8 @@ impl RenderingQualitySettings {
             max_point_shadow_casters: self.max_point_shadow_casters,
             max_spot_shadow_casters: self.max_spot_shadow_casters,
             shadow_budget_bytes: self.shadow_budget_bytes,
+            shadow_depth_bias: self.shadow_depth_bias,
+            shadow_normal_bias: self.shadow_normal_bias,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
         }
     }
@@ -180,6 +204,8 @@ impl RenderingQualitySettings {
         self.max_point_shadow_casters = profile.max_point_shadow_casters;
         self.max_spot_shadow_casters = profile.max_spot_shadow_casters;
         self.shadow_budget_bytes = profile.shadow_budget_bytes;
+        self.shadow_depth_bias = profile.shadow_depth_bias;
+        self.shadow_normal_bias = profile.shadow_normal_bias;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
     }
 
@@ -200,6 +226,12 @@ impl RenderingQualitySettings {
         if profile.shadow_budget_bytes == 0 {
             return Err("shadow byte ceiling must be greater than zero");
         }
+        if !profile.shadow_depth_bias.is_finite() || profile.shadow_depth_bias < 0.0 {
+            return Err("shadow depth bias must be finite and non-negative");
+        }
+        if !profile.shadow_normal_bias.is_finite() || profile.shadow_normal_bias < 0.0 {
+            return Err("shadow normal bias must be finite and non-negative");
+        }
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
         }
@@ -218,6 +250,8 @@ impl Default for RenderingQualitySettings {
             max_point_shadow_casters: profile.max_point_shadow_casters,
             max_spot_shadow_casters: profile.max_spot_shadow_casters,
             shadow_budget_bytes: profile.shadow_budget_bytes,
+            shadow_depth_bias: profile.shadow_depth_bias,
+            shadow_normal_bias: profile.shadow_normal_bias,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
         }
     }

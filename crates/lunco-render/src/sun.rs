@@ -101,16 +101,7 @@ pub struct LunarSunShadow {
 impl Default for LunarSunShadow {
     fn default() -> Self {
         Self {
-            // WEB: half the cascades. Same rule as the atlas size below — a
-            // platform decision, made once here rather than re-derived at each
-            // spawn site or asked of scene authors.
-            #[cfg(target_arch = "wasm32")]
-            num_cascades: 2,
-            #[cfg(not(target_arch = "wasm32"))]
-            // Two cascades retain contact detail while avoiding the large
-            // array allocation that invalidated the directional shadow view on
-            // integrated AMD/Vulkan adapters.
-            num_cascades: 2,
+            num_cascades: RenderingQuality::Balanced.profile().directional_cascades,
             minimum_distance: 0.1,
             first_cascade_far_bound: 40.0,
             maximum_distance: 1500.0,
@@ -120,16 +111,11 @@ impl Default for LunarSunShadow {
             // acne. Contact detail remains with the native shadow maps: Bevy
             // 0.19 cannot safely switch a custom material pipeline to its
             // contact-shadow view layout after specialization.
-            depth_bias: 0.06,
-            normal_bias: 2.5,
-            // 2048² shadow atlas keeps the shadow-pass fill and sampling cost
-            // bounded on both native and WebGL integrated GPUs.
-            #[cfg(target_arch = "wasm32")]
-            shadow_map_size: 2048,
-            #[cfg(not(target_arch = "wasm32"))]
-            // 2048² × 2 is enough for the lunar workbench and keeps the
-            // default directional allocation within shared-GPU budgets.
-            shadow_map_size: 2048,
+            depth_bias: RenderingQuality::Balanced.profile().shadow_depth_bias,
+            normal_bias: RenderingQuality::Balanced.profile().shadow_normal_bias,
+            shadow_map_size: RenderingQuality::Balanced
+                .profile()
+                .directional_shadow_map_size,
         }
     }
 }
@@ -150,6 +136,8 @@ impl LunarSunShadow {
         let mut sun = Self::default();
         sun.shadow_map_size = profile.directional_shadow_map_size;
         sun.num_cascades = profile.directional_cascades;
+        sun.depth_bias = profile.shadow_depth_bias;
+        sun.normal_bias = profile.shadow_normal_bias;
         sun
     }
 
