@@ -2497,7 +2497,7 @@ impl Plugin for SandboxCorePlugin {
                 commands.insert_resource(SANDBOX_GRAVITY)
             })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
-            // calibrated lunar surface (the canonical 128 klx / EV15 `LunarSun`
+            // calibrated lunar surface (the canonical 128 klx / EV16 `LunarSun`
             // crushes the dark blueprint ground to black). Inserted BEFORE
             // `EnvironmentPlugin` so its `init_resource` keeps these. The sun
             // spawn AND every camera's exposure read this one resource, so lux
@@ -2543,10 +2543,10 @@ impl Plugin for SandboxCorePlugin {
             // Quantified in the headless
             // `rover_jitter` probe. See `project_physical_rover_suspension`.
             //
-            // WEB: 10 substeps — the single wasm thread runs the whole solver inline,
+            // WEB: 16 substeps — the single wasm thread runs the whole solver inline,
             // so the browser uses a smaller, measured budget while retaining the
             // hard-joint convergence needed by the authored mechanisms. Native and
-            // server builds use 16 for full fidelity and peer determinism.
+            // server builds use 32 for full fidelity and peer determinism.
             .insert_resource(avian3d::prelude::SubstepCount(
                 if cfg!(target_arch = "wasm32") { 16 } else { 32 },
             ))

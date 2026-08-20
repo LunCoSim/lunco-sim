@@ -1567,8 +1567,9 @@ pub fn manual_input_disengages_autopilot(
 }
 
 /// Toggle autopilot for the possessed vessel through the canonical Action
-/// intent. The configured F and Space defaults therefore behave identically,
-/// and rebinding `action` requires no editor-side code change.
+/// intent. The default F key is the only autopilot shortcut; vehicle-specific
+/// commands such as the rover brake use their own authored intent and never
+/// reach this handler.
 pub fn handle_autopilot_toggle_intent(
     egui_focus: Res<EguiFocus>,
     avatars: Query<(Entity, &IntentState), With<Avatar>>,

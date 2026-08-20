@@ -361,7 +361,7 @@ impl Panel for CinematicPanel {
         PanelId("cinematic_tools")
     }
     fn title(&self) -> String {
-        "🎬 Cinematic".into()
+        "Cinematic".into()
     }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
@@ -380,7 +380,7 @@ impl Panel for CinematicPanel {
             ui.add_space(4.0);
 
             if ui
-                .button("📷 Add Camera Here")
+                .button("Add Camera Here")
                 .on_hover_text("Capture the current view as a new Camera prim in the scene")
                 .clicked()
             {
@@ -463,7 +463,7 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         }
         let mut loop_mut = looping;
         if ui
-            .add_enabled(bounded, egui::Checkbox::new(&mut loop_mut, "🔁"))
+            .add_enabled(bounded, egui::Checkbox::new(&mut loop_mut, "Loop"))
             .on_hover_text("Loop at the end instead of stopping")
             .on_disabled_hover_text("Needs a bounded clip range — nothing is keyed yet")
             .changed()

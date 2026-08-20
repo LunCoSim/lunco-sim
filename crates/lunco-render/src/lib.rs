@@ -28,6 +28,31 @@ pub use quality::{
 };
 pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_DEG};
 
+/// Persisted presentation preference for runtime communication-link beams.
+///
+/// The link topology and its authored up/down appearance remain scene facts;
+/// this setting owns only whether that presentation is enabled for the local
+/// viewer. The default is deliberately off so a scenario never gains extra
+/// visual clutter merely by declaring a communication graph.
+#[derive(
+    bevy::prelude::Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug,
+)]
+pub struct CommunicationLineSettings {
+    /// Show runtime-generated communication lines.
+    #[serde(default)]
+    pub show: bool,
+}
+
+impl Default for CommunicationLineSettings {
+    fn default() -> Self {
+        Self { show: false }
+    }
+}
+
+impl lunco_settings::SettingsSection for CommunicationLineSettings {
+    const KEY: &'static str = "communication_lines";
+}
+
 /// The systems that BIND a look intent (`PbrLook`, …) onto an entity as a
 /// concrete render component — everything in `lunco-render-bevy` that queues
 /// `insert(MeshMaterial3d(..))` for a changed look.

@@ -12,7 +12,7 @@ fn steps() {
         // 1
         #{ anchor: "panel.center",          title: "Moving: Orbit & Zoom",  body: "Let's look around! In Avatar mode (orbit rig by default), hold RIGHT MOUSE BUTTON and drag to orbit the target, or scroll the MOUSE WHEEL to zoom. Click Next when done.", require: "next" },
         // 2
-        #{ anchor: "panel.center",          title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Select any object and press F to focus on it. Click Next.", require: "next" },
+        #{ anchor: "panel.center",          title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Double-click an object to focus the camera on it. Click Next.", require: "next" },
         // 3
         #{ anchor: "panel.center",          title: "Camera Cycling",        body: "You can cycle perspectives. Press the C key to switch camera views (Avatar, Follow, First-Person). Press C now!", require: "cycle" },
         // 4
@@ -22,7 +22,7 @@ fn steps() {
         // 6
         #{ anchor: "panel.bottom",          title: "Spawning Objects",      body: "Open the Spawn Palette tab in the bottom dock. Click on any catalogued rover, prop, or structure to spawn it. Spawn something now!", require: "spawn" },
         // 7
-        #{ anchor: "panel.right_inspector", title: "What is the Avatar?",   body: "Your presence in the simulation is your Avatar. You can possess a vehicle (like a rover) by selecting it and pressing F (or clicking 'Possess' in the Inspector). Possess a vehicle now!", require: "possess" },
+        #{ anchor: "panel.right_inspector", title: "What is the Avatar?",   body: "Click the rover in the viewport or Entities panel, then click Possess in the Inspector or Command Deck. Possess a vehicle now!", require: "possess" },
         // 8
         #{ anchor: "panel.right_inspector", title: "Releasing Control",     body: "This links your keyboard controls directly to it. Press BACKSPACE to release control and return to Avatar mode. Press Backspace now!", require: "release" },
         // 9

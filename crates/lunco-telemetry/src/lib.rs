@@ -910,6 +910,7 @@ mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
     use lunco_core::architecture::Port;
+    use lunco_core::ports::PortDirection;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 

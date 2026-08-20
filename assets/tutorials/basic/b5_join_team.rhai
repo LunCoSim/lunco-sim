@@ -10,7 +10,7 @@ fn steps() {
         #{ anchor: "",                      title: "Joining your team",     body: "On the day you'll each be on a laptop, 1–2 drivers per team. This 60-second tour shows how to get onto the shared world and take your rover. Next / Back below — Skip anytime." },
         #{ anchor: "panel.side_browser",    title: "Connect to the server", body: "Open Connect (left panel) and enter the workshop server address the instructor gives you. You join as an Observer first — you can watch immediately." },
         #{ anchor: "panel.center",          title: "Find your rover",       body: "Your team's rover is the one in your team colour at your start marker. Orbit the camera (right-drag) to locate it in the world." },
-        #{ anchor: "panel.center",          title: "Take control",          body: "Click your rover to possess it. One driver holds control at a time; a teammate can take over by possessing when you release. F is the autopilot toggle when a route is authored." },
+        #{ anchor: "panel.center",          title: "Take control",          body: "Click your rover, then click Possess. One driver holds control at a time; a teammate can take over after you release." },
         #{ anchor: "panel.right_inspector", title: "Check your rover",      body: "With the rover selected, the Inspector shows its class and tuning — which variant you drew (Explorer LT / Standard / Hauler) changes how it climbs and tips." },
         #{ anchor: "panel.bottom",          title: "Watch your telemetry",  body: "Speed, tilt and battery read out along the bottom. The instructor sees every team's telemetry at once on Mission Control." },
         #{ anchor: "",                      title: "You're on the team",     body: "Connected, possessed, and reading telemetry. That's everything you need to join the scored run. Good luck out there." },
@@ -37,7 +37,7 @@ fn on_event(me, evt) {
 
     if this.i >= s.len() {
         end_tour();
-        notify_kind("Basics complete 🎉 — ready for the Space School track", "success");
+        notify_kind("Basics complete - ready for the Space School track", "success");
         emit("MISSION_COMPLETE", 0);
     } else {
         show(s, this.i);

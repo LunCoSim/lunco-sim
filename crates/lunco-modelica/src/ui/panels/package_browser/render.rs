@@ -38,36 +38,37 @@ pub(crate) fn render_node_single_ro(
             children,
             is_loading,
         } => {
-            let header_resp = egui::CollapsingHeader::new(format!("📁 {}", name))
-                .id_salt(id.as_str())
-                .show(ui, |ui| {
-                    if let Some(kids) = children {
-                        for kid in kids {
-                            if let Some(a) = render_node_single_ro(
-                                kid,
-                                ui,
-                                active_path,
-                                _active_drill,
-                                _depth + 1,
-                                load_out,
-                                theme,
-                            ) {
-                                action = Some(a);
+            let header_resp =
+                egui::CollapsingHeader::new(name)
+                    .id_salt(id.as_str())
+                    .show(ui, |ui| {
+                        if let Some(kids) = children {
+                            for kid in kids {
+                                if let Some(a) = render_node_single_ro(
+                                    kid,
+                                    ui,
+                                    active_path,
+                                    _active_drill,
+                                    _depth + 1,
+                                    load_out,
+                                    theme,
+                                ) {
+                                    action = Some(a);
+                                }
                             }
+                        } else {
+                            // Unscanned: request a lazy scan (the caller
+                            // defers the AsyncComputeTaskPool spawn) and show
+                            // a loading row until the `ScanResult` lands.
+                            load_out.push((id.clone(), package_path.clone()));
                         }
-                    } else {
-                        // Unscanned: request a lazy scan (the caller
-                        // defers the AsyncComputeTaskPool spawn) and show
-                        // a loading row until the `ScanResult` lands.
-                        load_out.push((id.clone(), package_path.clone()));
-                    }
-                    if children.is_none() || *is_loading {
-                        ui.horizontal(|ui| {
-                            ui.add_space(20.0);
-                            ui.label("⌛ Loading...");
-                        });
-                    }
-                });
+                        if children.is_none() || *is_loading {
+                            ui.horizontal(|ui| {
+                                ui.add_space(20.0);
+                                ui.label("⌛ Loading...");
+                            });
+                        }
+                    });
             let _ = header_resp;
         }
         PackageNode::Model {
@@ -84,9 +85,9 @@ pub(crate) fn render_node_single_ro(
                 } else {
                     let icon = match library {
                         crate::state::ModelLibrary::MSL => "?",
-                        crate::state::ModelLibrary::Bundled => "📦",
-                        crate::state::ModelLibrary::User => "📁",
-                        crate::state::ModelLibrary::InMemory => "💾",
+                        crate::state::ModelLibrary::Bundled => "Bundled",
+                        crate::state::ModelLibrary::User => "User",
+                        crate::state::ModelLibrary::InMemory => "Memory",
                     };
                     ui.label(egui::RichText::new(icon).size(11.0));
                 }

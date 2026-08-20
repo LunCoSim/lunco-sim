@@ -67,7 +67,7 @@ impl PackageTreeCache {
         // Bundled models — pre-baked tree from `msl_indexer`. Always last.
         roots.push(PackageNode::Category {
             id: "bundled_root".into(),
-            name: "📦 LunCo Examples".into(),
+            name: "LunCo Examples".into(),
             package_path: "Bundled".into(),
             fs_path: std::path::PathBuf::new(),
             children: Some(build_bundled_tree()),

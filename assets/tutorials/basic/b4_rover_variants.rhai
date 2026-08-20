@@ -8,7 +8,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Three rovers, three feels", body: "Same six wheels, very different behaviour. Three rovers are lined up on the yard — green Explorer LT, amber Standard, red Hauler. Click each rover to possess it and drive it up the ramp; the cards explain what you're witnessing. F engages autopilot when a route is authored." },
+        #{ anchor: "",                      title: "Three rovers, three feels", body: "Same six wheels, very different behaviour. Three rovers are lined up on the yard — green Explorer LT, amber Standard, red Hauler. Click each rover, click Possess, and drive it up the ramp; the cards explain what you're witnessing." },
         #{ anchor: "panel.center",          title: "Explorer LT (green)",       body: "Low centre of mass, strong motors, high grip. Planted and forgiving — it climbs the ramp easily and shrugs off a careless turn. The trainer: start here." },
         #{ anchor: "panel.center",          title: "Standard (amber)",          body: "Neutral centre of mass, moderate power. The honest baseline — it climbs fine and turns fine, but a sloppy cross-slope line will still get away from you." },
         #{ anchor: "panel.center",          title: "Hauler (red)",              body: "Top-heavy, weak motors, low grip — deliberately awful. It struggles up the ramp and tips at the smallest across-slope steer. If you can drive this one well, you can drive anything." },

@@ -246,6 +246,21 @@ impl Visualization for LinePlot {
     }
 
     fn render_panel_2d(&self, ctx: &mut Panel2DCtx, config: &VisualizationConfig) {
+        self.render_panel_2d_with_actions(ctx, config, |_, _| {});
+    }
+}
+
+impl LinePlot {
+    /// Render a line plot with optional controls appended to its single
+    /// compact toolbar row. Plot-specific actions (new/duplicate/export) are
+    /// supplied by the host application, while signal selection remains owned
+    /// by this visualization so every line plot has the same editing surface.
+    pub fn render_panel_2d_with_actions(
+        &self,
+        ctx: &mut Panel2DCtx,
+        config: &VisualizationConfig,
+        actions: impl FnOnce(&mut egui::Ui, &mut PanelCtx),
+    ) {
         // Series colours come from the active THEME (`PlotTokens::series`), published
         // into the egui data cache once per frame — plots re-theme like everything else.
         let theme = lunco_theme::active(ctx.ui.ctx());
@@ -253,7 +268,7 @@ impl Visualization for LinePlot {
         // any signal data arrives. Returns the mutation the user
         // requested, which we apply after releasing the read borrow
         // on the registry.
-        let edit = render_toolbar(ctx, config);
+        let edit = render_toolbar(ctx, config, actions);
         if let Some(edit) = edit {
             // Queue the registry mutation for after the egui pass —
             // render holds only read access to the world.
@@ -572,7 +587,11 @@ enum Edit {
     SetLogY(bool),
 }
 
-fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<Edit> {
+fn render_toolbar(
+    ctx: &mut Panel2DCtx,
+    config: &VisualizationConfig,
+    actions: impl FnOnce(&mut egui::Ui, &mut PanelCtx),
+) -> Option<Edit> {
     // Snapshot available signals + current style so we can render
     // without holding a long-lived registry borrow.
     let registry = ctx.wb.resource::<SignalRegistry>();
@@ -601,23 +620,30 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         .unwrap_or(egui::Color32::DARK_GRAY);
 
     // Resolve registry metadata for a signal at most once per toolbar render.
-    // The previous version asked the registry for `meta(&source)` twice per Y
-    // chip (once inside `binding_label`, again inside `signal_hint`) and once
-    // more per addable — a steady stream of HashMap probes and string
-    // allocations every frame. Resolving once and passing the borrow down keeps
-    // each chip to a single lookup.
-    let meta_of = |sig: &SignalRef| registry.and_then(|r| r.meta(sig));
+    // Keep owned metadata here so the row can also issue a mutable host action
+    // without holding an immutable borrow of the SignalRegistry through the
+    // egui closure. The previous version asked the registry for `meta(&source)`
+    // twice per Y chip and once more per addable.
+    let metadata: HashMap<SignalRef, SignalMeta> = available
+        .iter()
+        .filter_map(|sig| {
+            registry
+                .and_then(|r| r.meta(sig))
+                .cloned()
+                .map(|meta| (sig.clone(), meta))
+        })
+        .collect();
+    let meta_of = |sig: &SignalRef| metadata.get(sig);
 
     let mut edit: Option<Edit> = None;
     let mut removed: Option<SignalRef> = None;
 
-    // One control row: X picker, Y chips (in a bounded scroll surface), add
-    // combo, and the log-Y toggle. The chips live inside a single bounded
-    // `ScrollArea` so a large telemetry set cannot grow the header past the
-    // dock (the original `horizontal_wrapped` bug), but unlike the previous
-    // three-`horizontal`-block layout this opens one child UI per region
-    // instead of three per frame.
+    // One control row: X picker, Y chips, add/log controls, and host actions.
+    // Y bindings use a horizontal scroll surface so a large telemetry set
+    // cannot grow the header vertically. Keeping every control in this row
+    // preserves graph height and gives each plot one canonical toolbar.
     ctx.ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         // X picker.
         ui.label(egui::RichText::new("X:").size(11.0));
         let x_current = style
@@ -643,35 +669,33 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                     }
                 }
             });
-    });
-
-    // Y chips: a bounded vertical scroll surface wraps the wrapped row, so the
-    // header stays usable with many bindings without spawning a second child UI
-    // just to host the list.
-    egui::ScrollArea::vertical()
-        .id_salt(("lp_y_bindings", config.id.raw()))
-        .max_height(74.0)
-        .auto_shrink([false, true])
-        .show(ctx.ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
-                    let meta = meta_of(&b.source);
-                    let chip = ui
-                        .small_button(format!("{} ✕", binding_label(ctx.wb, b, meta)))
-                        .on_hover_text("Remove from this plot");
-                    let chip = if let Some(hint) = signal_hint(meta) {
-                        chip.on_hover_text(hint)
-                    } else {
-                        chip
-                    };
-                    if chip.clicked() {
-                        removed = Some(b.source.clone());
+        ui.separator();
+        ui.label(egui::RichText::new("Y:").size(11.0));
+        let y_width = (ui.available_width() * 0.42).clamp(120.0, 360.0);
+        egui::ScrollArea::horizontal()
+            .id_salt(("lp_y_bindings", config.id.raw()))
+            .max_width(y_width)
+            .max_height(24.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for b in config.inputs.iter().filter(|b| b.role == ROLE_Y.role) {
+                        let meta = meta_of(&b.source);
+                        let chip = ui
+                            .small_button(format!("{} x", binding_label(ctx.wb, b, meta)))
+                            .on_hover_text("Remove from this plot");
+                        let chip = if let Some(hint) = signal_hint(meta) {
+                            chip.on_hover_text(hint)
+                        } else {
+                            chip
+                        };
+                        if chip.clicked() {
+                            removed = Some(b.source.clone());
+                        }
                     }
-                }
+                });
             });
-        });
 
-    ctx.ui.horizontal(|ui| {
         // Add remains outside the scrolling list so it is always reachable.
         let addables: Vec<&SignalRef> = available
             .iter()
@@ -679,7 +703,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
             .collect();
         if !addables.is_empty() {
             egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
-                .selected_text("➕ add")
+                .selected_text("Add")
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for sig in addables {
@@ -709,16 +733,17 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
         let mut log_y = style.log_y;
         if ui
             .toggle_value(&mut log_y, "log Y")
-            .on_hover_text("Plot the Y axis on a log₁₀ scale (drops values ≤ 0)")
+            .on_hover_text("Plot the Y axis on a log10 scale (drops values <= 0)")
             .changed()
         {
             edit = Some(Edit::SetLogY(log_y));
         }
+        ui.separator();
+        actions(ui, ctx.wb);
     });
     if let Some(r) = removed {
         edit = Some(Edit::RemoveY(r));
     }
-    ctx.ui.separator();
     edit
 }
 

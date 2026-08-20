@@ -423,7 +423,7 @@ impl Panel for UsdCanvasPanel {
         USD_CANVAS_PANEL_ID
     }
     fn title(&self) -> String {
-        "🔗 Connections".into()
+        "Connections".into()
     }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene

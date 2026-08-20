@@ -156,7 +156,7 @@ impl InstancePanel for ModelViewPanel {
             .unwrap_or(true);
         let mut prefix = String::new();
         if read_only {
-            prefix.push_str("🔒 ");
+            prefix.push_str("[read-only] ");
         }
         if dirty {
             prefix.push_str("● ");
@@ -225,10 +225,10 @@ impl InstancePanel for ModelViewPanel {
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("🔒").color(egui::Color32::from_rgb(220, 200, 120)).size(14.0));
+                        ui.label(egui::RichText::new("Read-only").color(egui::Color32::from_rgb(220, 200, 120)).size(14.0));
                         ui.label(egui::RichText::new("Read-only library model — edits won't stick. Duplicate it to your workspace to make changes.").color(egui::Color32::from_rgb(220, 200, 120)).size(12.0));
                         ui.add_space(ui.available_width() - 170.0);
-                        if ui.button("📄  Duplicate to edit").clicked() { banner_duplicate_clicked = true; }
+                        if ui.button("Duplicate to edit").clicked() { banner_duplicate_clicked = true; }
                     });
                 });
             if banner_duplicate_clicked {
@@ -272,7 +272,7 @@ impl InstancePanel for ModelViewPanel {
         };
 
         if ui
-            .button(if pinned { "📌 Unpin" } else { "📌 Pin tab" })
+            .button(if pinned { "Unpin" } else { "Pin tab" })
             .clicked()
         {
             let _ = ctx.resource_scope::<ModelTabs, _>(|_, tabs| {
@@ -285,7 +285,7 @@ impl InstancePanel for ModelViewPanel {
 
         ui.separator();
 
-        if ui.button("🪟 Open in new view").clicked() {
+        if ui.button("Open in new view").clicked() {
             let new_id = ctx.resource_scope::<ModelTabs, _>(|_, tabs| tabs.open_new(doc, drilled));
             if let Some(new_id) = new_id {
                 ctx.trigger(lunco_workbench::OpenTab {
@@ -429,7 +429,7 @@ fn render_unified_toolbar(
 
     ui.horizontal(|ui| {
         if is_read_only {
-            ui.colored_label(tokens.warning, "👁").on_hover_text("Read-only");
+            ui.colored_label(tokens.warning, "Read-only");
             ui.separator();
         }
 
@@ -437,19 +437,19 @@ fn render_unified_toolbar(
         // the help-tour overlay can spotlight the exact strip instead
         // of the whole panel.
         let r_text = ui
-            .selectable_label(view_mode == ModelViewMode::Text, "📝")
+            .selectable_label(view_mode == ModelViewMode::Text, "Text")
             .on_hover_text("Text — edit the Modelica source code");
         if r_text.clicked() { new_view_mode = ModelViewMode::Text; }
         let r_canvas = ui
-            .selectable_label(view_mode == ModelViewMode::Canvas, "🔗")
+            .selectable_label(view_mode == ModelViewMode::Canvas, "Diagram")
             .on_hover_text("Diagram — wire components on the connection canvas");
         if r_canvas.clicked() { new_view_mode = ModelViewMode::Canvas; }
         let r_icon = ui
-            .selectable_label(view_mode == ModelViewMode::Icon, "🎨")
+            .selectable_label(view_mode == ModelViewMode::Icon, "Icon")
             .on_hover_text("Icon — draw the model's icon-layer graphics");
         if r_icon.clicked() { new_view_mode = ModelViewMode::Icon; }
         let r_docs = ui
-            .selectable_label(view_mode == ModelViewMode::Docs, "📖")
+            .selectable_label(view_mode == ModelViewMode::Docs, "Docs")
             .on_hover_text("Docs — view the model's documentation");
         if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
         let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
@@ -528,12 +528,12 @@ fn render_unified_toolbar(
         } else {
             "A simulation is already running — stop it before compiling again"
         };
-        // 🔨 Compile — build-only. Hammer (not 🚀) so the icon reads as
+        // Compile — build-only.
         // "build", not "launch"; the old rocket implied a run that never
         // happened. Each hint names its siblings so a single hover teaches
         // the three-way split: build vs live-run vs batch-run.
         let r_compile = ui
-            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("🔨"))
+            .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("Compile"))
             .on_hover_text("Compile — build & check the model only. It does NOT run.\n▶ Run = watch it live    ⏩ Fast Run = plots, no watching")
             .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
@@ -592,7 +592,7 @@ fn render_unified_toolbar(
 
         if is_read_only {
             ui.separator();
-            duplicate_clicked = ui.button("📄").on_hover_text("Duplicate as editable draft").clicked();
+            duplicate_clicked = ui.button("Duplicate").on_hover_text("Duplicate as editable draft").clicked();
         }
     });
 
@@ -986,7 +986,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         egui::vec2(380.0, 170.0),
         &theme,
         |ui| {
-            ui.label(egui::RichText::new("🎨").size(36.0));
+            ui.label(egui::RichText::new("Icon").size(24.0));
             ui.label(egui::RichText::new("No icon defined for this class").strong());
             ui.label(
                 egui::RichText::new("Add an Icon annotation in the Text tab.")

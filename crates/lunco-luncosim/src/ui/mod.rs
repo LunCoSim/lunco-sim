@@ -842,7 +842,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .is_some_and(|path| !path.0.is_empty());
 
         ui.add_enabled_ui(has_scene, |ui| {
-            if ui.button("🔄 Restart Scenario").clicked() {
+            if ui.button("Restart Scenario").clicked() {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
@@ -872,7 +872,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .resource::<CachedTwinsRegistry>()
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
-            ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
+            ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
                 ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 if entries.is_empty() {
@@ -1111,7 +1111,7 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         .cloned()
         .unwrap_or_default();
 
-    ui.menu_button("🎓 Tutorials", |ui| {
+    ui.menu_button("Tutorials", |ui| {
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         let Some(registry) = registry else {
@@ -1137,10 +1137,10 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             .show(ui, |ui| {
                 for meta in registry.ordered() {
                     let done = progress.completed.iter().any(|c| c == &meta.id);
-                    // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
+                    // Completed or fresh, then the title and a dim difficulty chip.
                     let label = format!(
                         "{} {}  ·  {}",
-                        if done { "✓" } else { "🎓" },
+                        if done { "[done]" } else { "[new]" },
                         meta.title,
                         meta.difficulty
                     );

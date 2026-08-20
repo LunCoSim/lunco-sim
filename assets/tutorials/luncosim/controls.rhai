@@ -49,12 +49,12 @@ fn on_start(me) {
 fn mission(me) {
     [
         objective("take_control", #{
-            text: "Take control of the rover",
+            text: "Click the rover, then click Possess in the Inspector or Command Deck",
             done: Fn("authority_taken"),
             on_complete: Fn("authority_taken_message"),
         }),
         objective("release_control", #{
-            text: "Release the rover back to the simulation",
+            text: "Click Release or press Backspace to return control to the simulation",
             requires: ["take_control"],
             done: Fn("authority_is_released"),
             dwell: 0.2,
@@ -66,7 +66,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         hint("Next: drive a rover over a gentle ramp, read its telemetry, and feel what the terrain does to the vehicle.");
-        notify_kind("Authority Handoff complete 🎉", "success");
+        notify_kind("Authority Handoff complete", "success");
     }
 }
 

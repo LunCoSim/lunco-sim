@@ -133,7 +133,7 @@ fn resolve_cert_paths() -> Option<(String, String)> {
         (Ok(c), Ok(k)) => Some((c, k)),
         // Exactly one set — almost certainly a typo'd/forgotten var. Fail loud.
         (Ok(_), Err(_)) | (Err(_), Ok(_)) => panic!(
-            "🔐 only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required. \
+            "TLS: only one of {ENV_TLS_CERT}/{ENV_TLS_KEY} is set; both are required. \
              Set both, pass `--cert <dir|file>`, or unset both for a dev self-signed cert."
         ),
         (Err(_), Err(_)) => None,
@@ -165,13 +165,13 @@ fn resolve_identity() -> (Identity, String) {
     if let Some((cert_path, key_path)) = resolve_cert_paths() {
         let identity = load_pem_identity(&cert_path, &key_path).unwrap_or_else(|e| {
             panic!(
-                "🔐 a cert was specified but could not be loaded ({e}). Refusing to \
+                "TLS: a cert was specified but could not be loaded ({e}). Refusing to \
                  start with a fallback self-signed cert — browsers would reject it. \
                  Fix the PEM paths/permissions (cert={cert_path}, key={key_path}), or \
                  remove `--cert`/the env vars to run with a dev self-signed cert."
             )
         });
-        info!("🔐 WebTransport using cert from {cert_path}");
+        info!("TLS: WebTransport using cert from {cert_path}");
         // A real CA cert's digest is unused (browsers validate the chain), but a
         // *self-signed* cert pinned this way still needs the hash-pin — so
         // publish the digest here too. This is the supported way to get a STABLE
@@ -197,14 +197,14 @@ fn resolve_identity() -> (Identity, String) {
 /// lowercase hex** form (colons stripped) for embedding in an invite link.
 fn announce_digest(identity: &Identity) -> String {
     let digest = format!("{}", identity.certificate_chain().as_slice()[0].hash());
-    info!("🔐 WebTransport cert digest: {digest}");
+    info!("TLS: WebTransport cert digest: {digest}");
     let digest_path = std::env::temp_dir().join("lunco_cert_digest.txt");
     // lunco-storage, not std::fs (clippy-banned workspace-wide for wasm parity).
     if FileStorage::new()
         .write_sync(&StorageHandle::File(digest_path.clone()), digest.as_bytes())
         .is_ok()
     {
-        info!("🔐 digest written to {}", digest_path.display());
+        info!("TLS: digest written to {}", digest_path.display());
     }
     digest
         .chars()

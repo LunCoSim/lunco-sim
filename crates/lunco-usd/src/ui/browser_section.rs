@@ -137,7 +137,7 @@ impl BrowserSection for UsdSceneSection {
 
         for row in &rows {
             let header_id = ui.make_persistent_id(("usd-stage", &row.salt));
-            let writable_badge = if row.writable { "" } else { "  🔒" };
+            let writable_badge = if row.writable { "" } else { "  [read-only]" };
             let viewport_doc = row.doc_id;
             let default_open = row.default_open;
 

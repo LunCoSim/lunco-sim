@@ -98,7 +98,7 @@ def Xform "SkidRover" (
     float physxRigidBody:angularDamping = 2.0
 
     # Intent->port control (stage 2): the shared rover profile's `Controls` scope
-    # (forward/back->throttle, left/right->steer, action->brake). Delivered as a
+    # (forward/back->throttle, left/right->steer, brake->brake). Delivered as a
     # child `references` arc so it composes through a spawn/reference like a wheel.
     # Override a single intent by redefining `Controls/<intent>` locally; the
     # key->intent half is the shared leafwing UserIntent map.
