@@ -3,12 +3,12 @@
 //! data-defined tree drives correctly and sequences waypoints — the mechanism a
 //! `SetAutopilotBehavior` command hot-swaps at runtime.
 
-use bevy::math::{DVec3, Vec3};
+use bevy::math::{DQuat, DVec3, Vec3};
 use lunco_autopilot::{
     nav_setpoint, AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState,
     TargetStates,
 };
-use lunco_core::coords::GridPos;
+use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use std::sync::Arc;
 
 #[test]
@@ -78,6 +78,31 @@ fn nav_setpoint_brakes_within_radius_drives_when_far() {
         !arrived && throttle > 0.0,
         "far + aligned → driving forward"
     );
+}
+
+#[test]
+fn waypoint_navigation_uses_shared_vehicle_frame_on_the_yaw_plane() {
+    // The shared vehicle-frame contract transforms the authored -Z axis by the
+    // body's physics yaw before a waypoint becomes a differential-drive command.
+    let forward =
+        VehicleFrame::yaw_forward(GridRot(DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2)))
+            .as_vec3();
+    assert!(
+        (forward - Vec3::NEG_X).length() < 1e-6,
+        "forward={forward:?}"
+    );
+    assert_eq!(forward.y, 0.0, "navigation must ignore body pitch/roll");
+
+    // From the origin, a waypoint along the rotated -X heading is aligned and
+    // therefore must not produce a lateral steering command.
+    let (throttle, steer, brake, arrived) = nav_setpoint(
+        GridPos(DVec3::ZERO),
+        forward,
+        GridPos(DVec3::new(-20.0, 0.0, 0.0)),
+        0.6,
+        2.0,
+    );
+    assert!(throttle > 0.0 && steer.abs() < 1e-6 && brake == 0.0 && !arrived);
 }
 
 #[test]

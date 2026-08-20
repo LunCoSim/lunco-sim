@@ -12,6 +12,7 @@
 use bevy::ecs::system::RunSystemOnce;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_autopilot::usd_tree::{compile_behavior_xml, BehaviorXml};
 use lunco_autopilot::{
     autopilot_session, setup_autopilot_session, teardown_autopilot_actors, Autopilot,
@@ -58,6 +59,15 @@ fn route_cursor(tree: &AutopilotBehavior) -> usize {
 fn appending_waypoints_while_running_resumes_route_and_drives_the_new_legs() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    let frame = app
+        .world_mut()
+        .spawn((
+            Grid::new(2_000.0, 100.0),
+            CellCoord::ZERO,
+            Transform::default(),
+        ))
+        .id();
+    app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
     app.add_systems(Update, compile_behavior_xml);
 
     // A vessel with a 3-waypoint route, parked just before waypoint 0.

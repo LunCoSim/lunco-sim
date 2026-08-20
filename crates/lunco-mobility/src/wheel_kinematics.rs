@@ -15,7 +15,7 @@
 //! `GridPos − GridPos` is the one legal way to build a lever arm.
 
 use bevy::math::{DQuat, DVec3};
-use lunco_core::coords::{GridPos, GridRot};
+use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 
 /// World pose of a wheel hub in the grid-absolute physics frame, reconstructed
 /// from the chassis body pose and the wheel's chassis-local transform.
@@ -44,7 +44,11 @@ pub fn wheel_hub_pose(
 #[inline]
 pub fn wheel_heading(chassis_rot: GridRot, wheel_local_rot: DQuat) -> (DVec3, DVec3) {
     let wheel_rot = chassis_rot.0 * wheel_local_rot;
-    (wheel_rot * DVec3::NEG_Z, wheel_rot * DVec3::X)
+    let wheel_frame = GridRot(wheel_rot);
+    (
+        VehicleFrame::forward(wheel_frame),
+        VehicleFrame::right(wheel_frame),
+    )
 }
 
 /// Linear velocity of the hub: `v + ω × r`, where `r = hub_pos − chassis_pos`
@@ -110,7 +114,7 @@ mod tests {
 
     #[test]
     fn roll_rate_is_v_long_over_radius() {
-        let forward = DVec3::NEG_Z;
+        let forward = VehicleFrame::FORWARD_LOCAL;
         let hub_vel = DVec3::new(0.0, 0.0, -4.0); // 4 m/s forward
         assert!((wheel_roll_rate(hub_vel, forward, 2.0) - 2.0).abs() < 1e-9);
         // Radius is floored to avoid div-by-zero.
@@ -124,8 +128,9 @@ mod tests {
         // by the Avian chassis attitude; using a rebased GlobalTransform would
         // incorrectly leave it in the renderer's -Z direction.
         let site_rotation = DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2);
-        let (forward, right) = wheel_heading(GridRot(site_rotation), DQuat::IDENTITY);
+        let chassis_rot = GridRot(site_rotation);
+        let (forward, right) = wheel_heading(chassis_rot, DQuat::IDENTITY);
         approx(forward, DVec3::NEG_X);
-        approx(right, DVec3::NEG_Z);
+        approx(right, VehicleFrame::right(chassis_rot));
     }
 }

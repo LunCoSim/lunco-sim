@@ -6,7 +6,7 @@
 //! path so the editor and the headless production runner exercise identical code.
 
 use avian3d::prelude::{CollisionStart, Sensor};
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
@@ -31,9 +31,10 @@ use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 pub struct AddRuntimeWaypoint {
     /// Spawned rover root receiving the waypoint.
     pub target: Entity,
-    /// Grid-absolute waypoint origin. The shared marker's overlap Sensor is
-    /// positioned relative to this point.
-    pub position: Vec3,
+    /// Waypoint origin in the semantic active physics frame. Cell and render
+    /// hierarchy details are resolved by this command boundary; the shared
+    /// marker's overlap Sensor is positioned at the same physical point.
+    pub position: [f64; 3],
 }
 
 /// Binds a spawned marker to the route index that created it.
@@ -48,7 +49,18 @@ pub struct RuntimeWaypointBinding {
 pub struct RuntimeWaypointSpawner<'w, 's> {
     pub asset_server: Res<'w, AssetServer>,
     pub catalog: Res<'w, SpawnCatalog>,
+    pub active_frame: Res<'w, lunco_core::ActivePhysicsFrame>,
     pub q_scene_root: Query<'w, 's, Entity, With<UsdSceneRoot>>,
+    pub q_parents: Query<'w, 's, &'static ChildOf>,
+    pub q_grids: Query<'w, 's, &'static big_space::prelude::Grid>,
+    pub q_spatial: Query<
+        'w,
+        's,
+        (
+            Option<&'static big_space::prelude::CellCoord>,
+            &'static Transform,
+        ),
+    >,
 }
 
 /// The synthetic key used by the live route and by the arrival set.
@@ -60,7 +72,7 @@ pub fn runtime_waypoint_key(index: usize) -> String {
 pub fn append_runtime_patrol(
     current: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     current_xml: Option<&str>,
-    point: [f32; 3],
+    point: [f64; 3],
 ) -> Result<lunco_autopilot::BehaviorSpec, String> {
     if let Some(xml) = current_xml {
         append_waypoint_leaf(Some(xml), "/__runtime_waypoint__")
@@ -75,7 +87,7 @@ pub fn append_runtime_patrol(
             dwell,
         }) => {
             let mut waypoints = waypoints.clone();
-            waypoints.push(lunco_autopilot::PatrolWaypoint::at(point.map(f64::from)));
+            waypoints.push(lunco_autopilot::PatrolWaypoint::at(point));
             Ok(lunco_autopilot::BehaviorSpec::Patrol {
                 waypoints,
                 speed: *speed,
@@ -120,17 +132,38 @@ fn spawn_runtime_waypoint_marker(
                 "runtime waypoint marker asset is not in the spawn catalog: {WAYPOINT_MARKER_ASSET}"
             )
         })?;
-    let scene_root = spawner
-        .q_scene_root
-        .iter()
-        .next()
-        .ok_or_else(|| "runtime waypoint marker has no mounted scene root".to_string())?;
+    if spawner.active_frame.0 == Entity::PLACEHOLDER
+        || spawner.q_grids.get(spawner.active_frame.0).is_err()
+    {
+        return Err(format!(
+            "runtime waypoint marker has no valid active physics Grid {:?}",
+            spawner.active_frame.0
+        ));
+    }
+    let scene_root = spawner.q_scene_root.single().map_err(|_| {
+        "runtime waypoint marker requires exactly one mounted scene root".to_string()
+    })?;
+    let (position, rotation) = lunco_core::coords::pose_in_parent_local(
+        position,
+        DQuat::IDENTITY,
+        scene_root,
+        spawner.active_frame.0,
+        &spawner.q_parents,
+        &spawner.q_grids,
+        &spawner.q_spatial,
+    )
+    .ok_or_else(|| {
+        format!(
+            "runtime waypoint marker scene root {:?} is not attached to active physics frame {:?}",
+            scene_root, spawner.active_frame.0
+        )
+    })?;
     let marker = spawn_usd_entry(
         commands,
         &spawner.asset_server,
         entry,
         position.as_vec3(),
-        Quat::IDENTITY,
+        rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
     commands
@@ -151,7 +184,7 @@ fn on_add_runtime_waypoint(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    if !cmd.position.is_finite() {
+    if cmd.position.iter().any(|value| !value.is_finite()) {
         warn!("[waypoint] runtime waypoint rejected: non-finite position");
         return;
     }
@@ -166,7 +199,7 @@ fn on_add_runtime_waypoint(
     let spec = match append_runtime_patrol(
         q_specs.get(cmd.target).ok(),
         q_xml.get(cmd.target).ok().map(|xml| xml.0.as_str()),
-        [cmd.position.x, cmd.position.y, cmd.position.z],
+        cmd.position,
     ) {
         Ok(spec) => spec,
         Err(err) => {
@@ -187,7 +220,7 @@ fn on_add_runtime_waypoint(
         &mut commands,
         cmd.target,
         waypoint_index,
-        cmd.position.as_dvec3(),
+        DVec3::from_array(cmd.position),
     ) {
         warn!("[waypoint] runtime marker could not be spawned: {err}");
         return;

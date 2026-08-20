@@ -249,19 +249,6 @@ pub fn persist_detach_to_runtime_layer(
     });
 }
 
-fn pose_relative_to_scene_root(
-    position: DVec3,
-    rotation: DQuat,
-    root_position: DVec3,
-    root_rotation: DQuat,
-) -> (DVec3, DQuat) {
-    let inverse_root = root_rotation.inverse();
-    (
-        inverse_root * (position - root_position),
-        (inverse_root * rotation).normalize(),
-    )
-}
-
 /// Lower one document-backed spawn into the single USD mutation that owns its
 /// live entity, journal entry, reload behaviour, and network propagation.
 ///
@@ -370,7 +357,15 @@ pub fn on_spawn_entity_command(
     // parent used by both authored and runtime top-level prims. This handles the
     // ordinary world-grid scene root and the site root that is itself promoted
     // to the rotating ENU Grid with the same formula.
-    let Some((root_position, root_rotation)) = lunco_core::coords::grid_relative_pose(
+    let requested_position = DVec3::from_array(cmd.position);
+    let requested_rotation = cmd
+        .rotation
+        .map(DQuat::from_array)
+        .unwrap_or(DQuat::IDENTITY)
+        .normalize();
+    let Some((position, rotation)) = lunco_core::coords::pose_in_parent_local(
+        requested_position,
+        requested_rotation,
         scene_root,
         active_frame.0,
         &q_parents,
@@ -384,18 +379,6 @@ pub fn on_spawn_entity_command(
         );
         return;
     };
-    let requested_position = DVec3::from_array(cmd.position);
-    let requested_rotation = cmd
-        .rotation
-        .map(DQuat::from_array)
-        .unwrap_or(DQuat::IDENTITY)
-        .normalize();
-    let (position, rotation) = pose_relative_to_scene_root(
-        requested_position,
-        requested_rotation,
-        root_position,
-        root_rotation,
-    );
     if !position.is_finite() || !rotation.is_finite() {
         warn!("SPAWN_ENTITY: non-finite pose for '{}'", cmd.entry_id);
         return;
@@ -3434,22 +3417,54 @@ mod tests {
     #[test]
     fn spawn_pose_is_converted_to_scene_root_axes_once() {
         use super::*;
+        use bevy::ecs::system::SystemState;
+        use big_space::prelude::{CellCoord, Grid};
 
-        let root_position = DVec3::new(4.0e8, -2.0e8, 7.0e8);
+        let mut world = World::new();
+        let active_grid = Grid::new(2_000.0, 100.0);
+        let root_cell = CellCoord::new(200, -100, 350);
         let root_rotation = DQuat::from_rotation_x(0.7) * DQuat::from_rotation_y(-1.1);
+        let root_transform =
+            Transform::from_xyz(0.25, -0.5, 0.75).with_rotation(root_rotation.as_quat());
+        let active = world.spawn((active_grid, GlobalTransform::default())).id();
         let expected_local = DVec3::new(12.25, 0.89, -44.5);
         let expected_rotation = DQuat::from_rotation_y(0.3);
-        let requested_position = root_position + root_rotation * expected_local;
-        let requested_rotation = root_rotation * expected_rotation;
+        let scene_root = world
+            .spawn((root_cell, root_transform, ChildOf(active)))
+            .id();
 
-        let (actual_position, actual_rotation) = pose_relative_to_scene_root(
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let (root_position, stored_root_rotation) =
+            lunco_core::coords::grid_relative_pose(scene_root, active, &parents, &grids, &spatial)
+                .expect("scene root pose is available in the active physics frame");
+        let stored_root_rotation = stored_root_rotation.normalize();
+        assert!(
+            root_position.length() > 1.0e5,
+            "cell translation was not composed"
+        );
+        let requested_position = root_position + stored_root_rotation * expected_local;
+        let requested_rotation = stored_root_rotation * expected_rotation;
+        let (actual_position, actual_rotation) = lunco_core::coords::pose_in_parent_local(
             requested_position,
             requested_rotation,
-            root_position,
-            root_rotation,
-        );
+            scene_root,
+            active,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .expect("scene root is connected to active physics frame");
 
-        assert!((actual_position - expected_local).length() < 1e-7);
+        assert!(
+            (actual_position - expected_local).length() < 1e-7,
+            "actual={actual_position:?} expected={expected_local:?} delta={:?}",
+            actual_position - expected_local
+        );
         assert!(actual_rotation.abs_diff_eq(expected_rotation, 1e-12));
     }
 
