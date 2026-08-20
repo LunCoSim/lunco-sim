@@ -1307,23 +1307,21 @@ class "LunCoControlBindingAPI" (
     }
     doc = """ONE intent→port binding — a child prim of a vessel's `Controls`
     scope, named for the [`UserIntent`] it binds (`forward`, `steer`, …). While
-    that intent is active it contributes `scale` per unit intent to the named
+    that intent is active it contributes `factor` per unit intent to the named
     input port. Read by the control-binding loader (lunco-usd-bevy); shared
     profiles live in `assets/components/control_profiles.usda` and arrive on
     vessels by `subLayers` + `inherits`."""
 )
 {
-    uniform token lunco:port = "" (
+    uniform string lunco:port = "" (
         doc = """The vessel input port this intent drives (`"throttle"`,
         `"pitch"`). Uniform: a binding does not retarget over time.
 
-        `token`, not `string`: this is an IDENTIFIER — it is matched against the
-        runtime port registry's names, never displayed, concatenated or
-        localized. USD interns tokens for exactly this use, and the type is what
-        tells a reader it must compare, not read. Open vocabulary (a vessel names
-        its own ports), so no `allowedTokens`."""
+        This is a string because vessel port names are an open authoring
+        vocabulary, not a closed USD token set. The runtime compares the
+        composed value with the vessel's declared port registry."""
     )
-    uniform double lunco:scale = 1 (
+    uniform double lunco:factor = 1 (
         doc = """Port contribution per unit intent — sign flips an axis, magnitude
         is sensitivity."""
     )

@@ -1304,8 +1304,8 @@ fn instantiate_usd_prim_from_stage(
                 .filter_map(|bind| {
                     let intent = bind.name()?.to_string();
                     let port = reader.scalar::<String>(&bind, "lunco:port")?;
-                    let scale = reader.real(&bind, "lunco:factor")?;
-                    Some((intent, port, scale))
+                    let factor = reader.real(&bind, "lunco:factor")?;
+                    Some((intent, port, factor))
                 })
                 .collect();
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
