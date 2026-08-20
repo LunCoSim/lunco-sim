@@ -474,7 +474,10 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
     // place; a subtree refresh of the whole rover root would tear down live
     // physics bodies.
-    if attr == "physxVehicleAckermannSteering:maxSteerAngle" || attr == "lunco:driveKernel" {
+    if attr == "physxVehicleAckermannSteering:maxSteerAngle"
+        || attr == "physxVehicleAckermannSteering:strength"
+        || attr == "lunco:driveKernel"
+    {
         return true;
     }
     // A connection transform on a `DriveMix` term prim (`lunco:factor:throttle`
@@ -502,6 +505,8 @@ struct WheelUpdate {
     params: WheelParams,
     /// Steering lock from the wheel's vehicle, when it has a steering system.
     max_steer_angle: Option<f64>,
+    /// Ackermann correction strength from the owning vehicle.
+    ackermann_strength: f64,
 }
 
 /// Re-derive every spawned wheel (and vehicle-root drive mix) of `stage` from
@@ -584,13 +589,27 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             };
             match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
                 Ok(params) => {
-                    let max_steer_angle = crate::steering_vehicle_of(&view, path)
-                        .and_then(|v| view.real(&v, "physxVehicleAckermannSteering:maxSteerAngle"));
+                    let (max_steer_angle, ackermann_strength) = match crate::steering_vehicle_of(
+                        &view, path,
+                    ) {
+                        Some(vehicle) => match crate::steering_vehicle_params(&view, &vehicle) {
+                            Ok((max, strength)) => (Some(max), strength),
+                            Err(reason) => {
+                                warn!(
+                                    "[wheel resync] {} has invalid Ackermann steering: {} — keeping the spawned values",
+                                    path, reason
+                                );
+                                continue;
+                            }
+                        },
+                        None => (None, 0.0),
+                    };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
                         params,
                         max_steer_angle,
+                        ackermann_strength,
                     });
                 }
                 Err(missing) => warn!(
@@ -622,6 +641,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 world.get_mut::<SteeringActuator>(u.entity),
             ) {
                 steer.max_steer_angle = lock;
+                steer.ackermann_strength = u.ackermann_strength;
             }
             continue;
         }
@@ -695,6 +715,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))
         {
             steer.max_steer_angle = lock;
+            steer.ackermann_strength = u.ackermann_strength;
         }
     }
     for (e, mix) in mixes {

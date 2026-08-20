@@ -1934,25 +1934,23 @@ fn process_usd_sim_prim_read(
         // in favour of the steering APIs, and a skid rover's wheels have no such
         // angle at all. RADIANS, as everywhere in PhysX (only the Kit authoring
         // wizard's UI field is in degrees).
-        let max_steer_angle = match &steering_vehicle {
-            Some(vehicle) => {
-                let Some(rad) = reader.real(vehicle, "physxVehicleAckermannSteering:maxSteerAngle")
-                else {
+        let (max_steer_angle, ackermann_strength) = match &steering_vehicle {
+            Some(vehicle) => match steering_vehicle_params(reader, vehicle) {
+                Ok(params) => params,
+                Err(reason) => {
                     error!(
-                        "USD vehicle {} applies PhysxVehicleAckermannSteeringAPI but \
-                             authors no physxVehicleAckermannSteering:maxSteerAngle — \
-                             refusing to spawn wheel {}. A steering rover must say how \
-                             far it steers.",
+                        "USD vehicle {} has invalid Ackermann steering for wheel {}: {} — refusing to spawn",
                         vehicle.as_str(),
-                        sdf_path.as_str()
+                        sdf_path.as_str(),
+                        reason
                     );
                     commands.entity(entity).try_insert(UsdSimProcessed);
                     return;
-                };
-                rad
-            }
-            // Not a steering vehicle: no lock, because there is no steering.
-            None => 0.0,
+                }
+            },
+            // Not a steering vehicle: no lock or Ackermann correction, because
+            // there is no steering actuator.
+            None => (0.0, 0.0),
         };
         if topology.joint_targets.contains_key(&prim_path.path) {
             setup_physical_wheel(
@@ -1981,6 +1979,7 @@ fn process_usd_sim_prim_read(
                 p_drive,
                 steer_for_wheel,
                 max_steer_angle,
+                ackermann_strength,
             );
         } else {
             // Strict validation (doc 53 §4): a raycast wheel uses an
@@ -2018,6 +2017,7 @@ fn process_usd_sim_prim_read(
                 p_steer,
                 steer_for_wheel,
                 max_steer_angle,
+                ackermann_strength,
             );
         }
     }
@@ -2321,6 +2321,33 @@ fn steering_vehicle_of(
     None
 }
 
+/// Read and validate the complete authored Ackermann steering contract from
+/// one vehicle prim. The schema's documented strength default is parallel
+/// steering (`0.0`), so an omitted strength is the semantic USD default; an
+/// explicit non-finite or out-of-range value is an asset error, never a clamp.
+pub(crate) fn steering_vehicle_params(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    vehicle: &SdfPath,
+) -> Result<(f64, f64), String> {
+    let max_steer_angle = reader
+        .real(vehicle, "physxVehicleAckermannSteering:maxSteerAngle")
+        .ok_or_else(|| "missing physxVehicleAckermannSteering:maxSteerAngle".to_string())?;
+    if !max_steer_angle.is_finite() || max_steer_angle < 0.0 || max_steer_angle > 1.2 {
+        return Err(format!(
+            "physxVehicleAckermannSteering:maxSteerAngle must be finite and in [0, 1.2] rad, got {max_steer_angle}"
+        ));
+    }
+    let strength = reader
+        .real(vehicle, "physxVehicleAckermannSteering:strength")
+        .unwrap_or(0.0);
+    if !strength.is_finite() || !(0.0..=1.0).contains(&strength) {
+        return Err(format!(
+            "physxVehicleAckermannSteering:strength must be finite and in [0, 1], got {strength}"
+        ));
+    }
+    Ok((max_steer_angle, strength))
+}
+
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
 ///
 /// Raycast wheels need two entities:
@@ -2342,6 +2369,7 @@ fn setup_raycast_wheel(
     p_steer: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
+    ackermann_strength: f64,
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
 
@@ -2482,6 +2510,7 @@ fn setup_raycast_wheel(
         commands.entity(entity).try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
+            ackermann_strength,
             current_ref: 0.0,
             lateral: mount.x,
             wheelbase: 2.0 * mount.z.abs(),
@@ -2569,6 +2598,7 @@ fn setup_physical_wheel(
     p_drive: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
+    ackermann_strength: f64,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
@@ -2838,6 +2868,7 @@ fn setup_physical_wheel(
         joint_cmd.try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
+            ackermann_strength,
             current_ref: 0.0,
             // Chassis-local geometry for the Ackermann correction. `mount_local`
             // is the wheel's offset from the chassis origin: X = lateral (+left),

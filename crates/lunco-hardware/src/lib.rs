@@ -485,6 +485,10 @@ pub struct SteeringActuator {
     /// Steering lock (rad) at the centreline (bicycle-model reference angle)
     /// reached at full steering input.
     pub max_steer_angle: f64,
+    /// Authored Ackermann correction strength: 0 is parallel steering, 1 is
+    /// full inner/outer-wheel geometry, and intermediate values blend the two
+    /// angles as defined by `PhysxVehicleAckermannSteeringAPI`.
+    pub ackermann_strength: f64,
     /// Current **centreline reference** steer angle (rad), ramped toward the
     /// commanded target. Both front wheels ramp this same reference at the same
     /// rate and derive their Ackermann angle from it each tick, so they slew in
@@ -513,6 +517,7 @@ impl Default for SteeringActuator {
         Self {
             port_entity: Entity::PLACEHOLDER,
             max_steer_angle: 0.5,
+            ackermann_strength: 0.0,
             current_ref: 0.0,
             lateral: 0.0,
             wheelbase: 2.0,
@@ -528,10 +533,9 @@ const STEER_SLEW_RATE: f64 = 1.25;
 /// THE single steering model, shared by physical and raycast wheels. For every
 /// [SteeringActuator] it slews the *centreline reference* angle `δ` toward
 /// `steer · max_steer_angle` at `STEER_SLEW_RATE` (so both front wheels ramp the
-/// same δ at the same rate and reach their different final angles together),
-/// then computes this wheel's **Ackermann** angle — turn radius `R = L/tan δ`, a
-/// wheel at lateral offset `y` steers `atan(L / (R − y))` so the inner wheel
-/// turns more than the outer — and stores it in `output_angle`.
+/// same δ at the same rate and reach their final angles together), computes the
+/// full **Ackermann** angle, and blends it with the parallel angle according to
+/// the authored `ackermann_strength`.
 ///
 /// If the actuator's entity also carries a [RevoluteJoint] (the physical wheel),
 /// the angle is applied here to the joint's body1 frame basis (the alignment
@@ -555,12 +559,12 @@ fn steering_actuator_system(
         steer.current_ref += delta;
         // Per-wheel Ackermann angle from the ramped reference. Near-zero → straight
         // (avoid the 1/tan blow-up).
-        let angle = if steer.current_ref.abs() < 1e-4 {
-            0.0
-        } else {
-            let r = steer.wheelbase / steer.current_ref.tan(); // signed turn radius
-            (steer.wheelbase / (r - steer.lateral)).atan()
-        };
+        let angle = steering_wheel_angle(
+            steer.current_ref,
+            steer.lateral,
+            steer.wheelbase,
+            steer.ackermann_strength,
+        );
         steer.output_angle = angle;
         // Physical wheel: apply to the joint frame here. (Raycast wheel: no joint,
         // its transform is rotated by apply_wheel_steering from output_angle.)
@@ -568,6 +572,25 @@ fn steering_actuator_system(
             joint.frame1.basis = JointBasis::Local(DQuat::from_rotation_y(-angle));
         }
     }
+}
+
+/// Convert a vehicle's centreline steering reference into one wheel's output
+/// angle. The parallel angle is the centreline reference; the Ackermann angle
+/// uses the wheel's authored lateral offset and wheelbase. The schema's strength
+/// is already validated at the USD boundary, so this function does not clamp or
+/// invent a value for malformed input.
+fn steering_wheel_angle(
+    centreline: f64,
+    lateral: f64,
+    wheelbase: f64,
+    ackermann_strength: f64,
+) -> f64 {
+    if centreline.abs() < 1e-4 {
+        return 0.0;
+    }
+    let radius = wheelbase / centreline.tan();
+    let full_ackermann = (wheelbase / (radius - lateral)).atan();
+    centreline + ackermann_strength * (full_ackermann - centreline)
 }
 
 /// A sensor that measures angular velocity along a specific axis.
@@ -674,7 +697,7 @@ mod readback_tests {
 
 #[cfg(test)]
 mod motor_curve_tests {
-    use super::{axle_torque, commanded_motor_torque, MotorActuator};
+    use super::{axle_torque, commanded_motor_torque, steering_wheel_angle, MotorActuator};
 
     const PEAK: f64 = 255.0;
     const W_NL: f64 = 12.0;
@@ -743,5 +766,23 @@ mod motor_curve_tests {
             commanded_motor_torque(&motor, 1.0, 3.0, false),
             axle_torque(PEAK, W_NL, 1.0, 3.0)
         );
+    }
+
+    #[test]
+    fn ackermann_strength_selects_parallel_or_full_geometry() {
+        let parallel = steering_wheel_angle(0.4, 0.8, 2.0, 0.0);
+        let full = steering_wheel_angle(0.4, 0.8, 2.0, 1.0);
+        let expected_full = (2.0 / (2.0 / 0.4_f64.tan() - 0.8)).atan();
+        assert!((parallel - 0.4).abs() < 1e-12);
+        assert!((full - expected_full).abs() < 1e-12);
+        assert!(full > parallel, "the inner wheel needs the larger angle");
+    }
+
+    #[test]
+    fn ackermann_strength_blends_without_recomputing_the_reference() {
+        let parallel = steering_wheel_angle(0.4, -0.8, 2.0, 0.0);
+        let full = steering_wheel_angle(0.4, -0.8, 2.0, 1.0);
+        let halfway = steering_wheel_angle(0.4, -0.8, 2.0, 0.5);
+        assert!((halfway - (parallel + full) * 0.5).abs() < 1e-12);
     }
 }
