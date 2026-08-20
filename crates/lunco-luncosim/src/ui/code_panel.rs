@@ -26,7 +26,7 @@ impl Panel for CodePanel {
         PanelId("rover_code")
     }
     fn title(&self) -> String {
-        "📄 Code".into()
+        "Code".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector

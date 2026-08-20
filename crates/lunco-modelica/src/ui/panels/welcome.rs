@@ -122,9 +122,9 @@ const STATE_ID: &str = "modelica_welcome_state_v2";
 fn domain_icon(domain: &str) -> &'static str {
     match domain {
         "Electrical" => "⚡",
-        "Mechanics" => "🔧",
-        "Fluid" => "💧",
-        "Thermal" => "🔥",
+        "Mechanics" => "M",
+        "Fluid" => "F",
+        "Thermal" => "T",
         // Use widely-rendered glyphs instead of the newer emoji
         // that turn into tofu in the bundled DejaVu Sans fallback:
         // 🧲/🧮/🛠/⏱ tend to miss, ⊗/Σ/⚒/⧖ are in basic math
@@ -137,7 +137,7 @@ fn domain_icon(domain: &str) -> &'static str {
         "Clocked" => "⧖",
         "Media" => "◆",
         "Utilities" => "⚒",
-        _ => "📦",
+        _ => "Model",
     }
 }
 
@@ -216,7 +216,7 @@ impl Panel for WelcomePanel {
     }
 
     fn title(&self) -> String {
-        "🏠 Welcome".into()
+        "Welcome".into()
     }
 
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
@@ -311,9 +311,9 @@ impl Panel for WelcomePanel {
                         create_new = true;
                     }
                     let (label, hover) = if cfg!(target_arch = "wasm32") {
-                        ("📄  Open File", "Pick a .mo file to open")
+                        ("Open File", "Pick a .mo file to open")
                     } else {
-                        ("📁  Open Folder", "Pick a folder of .mo files to browse")
+                        ("Open Folder", "Pick a folder of .mo files to browse")
                     };
                     if ui
                         .add_sized(
@@ -396,7 +396,7 @@ impl Panel for WelcomePanel {
                                 painter.text(
                                     rect.min + egui::vec2(14.0, 8.0),
                                     egui::Align2::LEFT_TOP,
-                                    format!("📄  {}", display),
+                                    format!("{}", display),
                                     egui::FontId::proportional(13.5),
                                     title_tint,
                                 );
@@ -679,7 +679,7 @@ impl Panel for WelcomePanel {
                     ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
-                        ui.label("🔍");
+                        ui.label("Search");
                         let _ = ui.add_sized(
                             [560.0, 26.0],
                             egui::TextEdit::singleline(&mut wstate.browse_query)

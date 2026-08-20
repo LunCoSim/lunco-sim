@@ -111,7 +111,7 @@ impl Panel for CelestialBodiesPanel {
             for row in &view.bodies {
                 ui.horizontal(|ui| {
                     ui.label(format!("{} ({})", row.name, row.radius_label));
-                    if ui.small_button("🌕 Surface").clicked() {
+                    if ui.small_button("Surface").clicked() {
                         if let Some(av) = avatar {
                             teleport = Some((av, row.entity_bits));
                         }

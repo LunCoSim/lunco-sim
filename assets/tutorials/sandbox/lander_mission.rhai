@@ -147,8 +147,8 @@ fn on_event(me, evt) {
         hint("Two down. Continue to the final marker.");
     } else if evt.name == "MISSION_COMPLETE" {
         // The engine emits MISSION_COMPLETE once every objective is done.
-        hint("Mission complete! You've flown a descent and driven a rover. Free-roam, or replay any lesson from the 🎓 Tutorials menu.");
-        notify_kind("Lander & Rover Mission complete 🎉", "success");
+        hint("Mission complete! You've flown a descent and driven a rover. Free-roam, or replay any lesson from the Tutorials menu.");
+        notify_kind("Lander & Rover Mission complete", "success");
     }
 }
 

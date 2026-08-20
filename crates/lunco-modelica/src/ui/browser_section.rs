@@ -111,7 +111,7 @@ impl BrowserSection for ModelicaSection {
             // All libraries start collapsed; user expands the ones
             // they care about. Keeps the browser scannable on startup.
             let _ = root_id;
-            let label = format!("🔒  {}", root_name);
+            let label = format!("[read-only]  {}", root_name);
             let resp = egui::CollapsingHeader::new(label)
                 .id_salt(("twin.modelica.library", root_id))
                 .default_open(false)
@@ -253,7 +253,7 @@ fn render_workspace_doc_row(
         // file explorer).
         let mut buf = draft;
         ui.horizontal(|ui| {
-            ui.label("📝");
+            ui.label("Draft");
             let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(180.0));
             // One-shot focus grab: only on the first frame after the
             // rename began. Calling `request_focus()` every frame
@@ -295,12 +295,12 @@ fn render_workspace_doc_row(
             .and_then(|r| r.host(doc_id))
             .map(|h| {
                 if h.document().origin().is_untitled() {
-                    "📝"
+                    "Draft"
                 } else {
-                    "📄"
+                    "File"
                 }
             })
-            .unwrap_or("📄");
+            .unwrap_or("File");
         lunco_ui::helpers::collapsing_row(
             ui,
             id,

@@ -3764,7 +3764,7 @@ fn render_layout(
             });
             anchor_rects.push(("menu.edit", r_edit.response.rect));
             let r_view = ui.menu_button("View", |ui| {
-                if ui.button("🔄 Reset Layout").clicked() {
+                if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
                     // restoring panels (notably the 3D Viewport) a stale
                     // persisted layout dropped.
@@ -3960,8 +3960,8 @@ fn render_layout(
                 let mode = theme.mode;
 
                 let label = match mode {
-                    lunco_theme::ThemeMode::Dark => "🌙 Dark",
-                    lunco_theme::ThemeMode::Light => "☀ Light",
+                    lunco_theme::ThemeMode::Dark => "Dark",
+                    lunco_theme::ThemeMode::Light => "Light",
                 };
 
                 if ui.button(label).clicked() {
@@ -4314,7 +4314,7 @@ fn render_layout(
                     if ui.small_button("✕").on_hover_text("Close").clicked() {
                         world.trigger(window_command::CloseWindow {});
                     }
-                    let max_label = if is_max { "🗗" } else { "🗖" };
+                    let max_label = if is_max { "Restore" } else { "Maximize" };
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
                     if ui.small_button(max_label).on_hover_text(max_hover).clicked() {
                         world.trigger(window_command::MaximizeWindow { maximized: None });
@@ -4384,8 +4384,8 @@ fn render_layout(
                 ui.style_mut().visuals = theme.to_visuals();
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
-                    for icon in ["📁", "🧩", "📦", "🔎", "⚙"] {
-                        ui.label(icon);
+                    for label in ["Files", "Parts", "Assets", "Find", "Settings"] {
+                        ui.label(label);
                         ui.add_space(8.0);
                     }
                 });

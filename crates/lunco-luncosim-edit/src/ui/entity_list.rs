@@ -426,7 +426,7 @@ fn select_label(
 }
 
 fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    ui.label("Click to select. Expand ▸ to reach sub-parts (wheels, body).");
+    ui.label("Click to select. Expand > to reach sub-parts (wheels, body).");
     ui.separator();
 
     // Authoritative selection — read directly (small, cheap); never shadowed.

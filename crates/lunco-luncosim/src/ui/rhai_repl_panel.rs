@@ -42,7 +42,7 @@ impl Panel for RhaiReplPanel {
         PanelId("rhai_repl")
     }
     fn title(&self) -> String {
-        "🐚 Rhai".into()
+        "Rhai".into()
     }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Tools

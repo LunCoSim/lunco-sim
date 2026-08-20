@@ -124,7 +124,7 @@ fn render_dir(
 ) {
     for (directory, child) in &node.subdirs {
         let rel = prefix.join(directory);
-        egui::CollapsingHeader::new(format!("📁 {directory}"))
+        egui::CollapsingHeader::new(directory)
             .id_salt(("library_dir", &rel))
             .default_open(false)
             .show(ui, |ui| render_dir(child, &rel, loaded_name, clicked, ui));

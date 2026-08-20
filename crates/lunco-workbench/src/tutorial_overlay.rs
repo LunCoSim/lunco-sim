@@ -646,9 +646,9 @@ fn draw_tour(
                         x += 10.0;
                     }
                     let banner_label = if step.title.is_empty() {
-                        "🎓  INTERACTIVE TUTORIAL".to_string()
+                        "INTERACTIVE TUTORIAL".to_string()
                     } else {
-                        format!("🎓  {}", step.title.to_uppercase())
+                        step.title.to_uppercase()
                     };
                     p.text(
                         banner_rect.min + egui::vec2(14.0, banner_h * 0.5),

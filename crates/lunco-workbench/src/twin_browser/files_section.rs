@@ -360,7 +360,7 @@ impl BrowserSection for FilesSection {
             } else {
                 ""
             };
-            let header_label = format!("📁  {active_marker}{folder_name}");
+            let header_label = format!("{active_marker}{folder_name}");
             let hover_path = twin.root.to_string_lossy().into_owned();
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();
@@ -475,7 +475,7 @@ fn render_dir(
             render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
         } else {
             let salt = abs.to_string_lossy().into_owned();
-            let header = egui::CollapsingHeader::new(format!("📁 {}", dir_name))
+            let header = egui::CollapsingHeader::new(dir_name)
                 .id_salt(("twin_browser_dir", salt))
                 .default_open(false);
             let resp = header.show(ui, |ui| {

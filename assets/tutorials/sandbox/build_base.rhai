@@ -123,8 +123,8 @@ fn on_event(me, evt) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
-        hint("Your base is up: power, habitat, comms, ISRU and a pad. Keep building — add the second power source, park a rover, or open the Inspector to tune a part. Replay any lesson from the 🎓 Tutorials menu.");
-        notify_kind("Build a Lunar Base complete 🎉", "success");
+        hint("Your base is up: power, habitat, comms, ISRU and a pad. Keep building - add the second power source, park a rover, or open the Inspector to tune a part. Replay any lesson from the Tutorials menu.");
+        notify_kind("Build a Lunar Base complete", "success");
     }
 }
 

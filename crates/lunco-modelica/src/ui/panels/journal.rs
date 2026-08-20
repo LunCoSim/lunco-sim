@@ -69,7 +69,7 @@ impl Panel for JournalPanel {
     }
 
     fn title(&self) -> String {
-        "📜 Journal".into()
+        "Journal".into()
     }
 
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {

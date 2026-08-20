@@ -175,7 +175,7 @@ fn register_settings_menu(world: &mut World) {
         ui.label(egui::RichText::new("Tutorial / Teach Mode").weak().small());
 
         let mut teach_mode = tut_settings.teach_mode;
-        if ui.checkbox(&mut teach_mode, "🎓 Teach Mode (Broadcast status)")
+        if ui.checkbox(&mut teach_mode, "Teach Mode (Broadcast status)")
             .on_hover_text("Take control of the system and stream your window and avatar status to followers.")
             .changed()
         {
@@ -211,7 +211,7 @@ fn register_settings_menu(world: &mut World) {
                 }
 
                 let mut allow_free = tut_settings.allow_free_movement;
-                if ui.checkbox(&mut allow_free, "🔓 Allow followers to move freely")
+                if ui.checkbox(&mut allow_free, "Allow followers to move freely")
                     .on_hover_text("If checked, followers can move as they want. Otherwise, they are locked to your perspective.")
                     .changed()
                 {
@@ -223,7 +223,7 @@ fn register_settings_menu(world: &mut World) {
                     .map(|u| u.display_name.as_str())
                     .unwrap_or("Everyone");
 
-                if ui.button(format!("👁 Send 'Look at My View' to {target_name}"))
+                if ui.button(format!("Send 'Look at My View' to {target_name}"))
                     .on_hover_text("Force followers to snap to your current active document and avatar perspective once.")
                     .clicked()
                 {
@@ -232,7 +232,7 @@ fn register_settings_menu(world: &mut World) {
 
                 if selected_target.is_some() {
                     let mut observe_mode = tut_settings.observe_mode;
-                    if ui.checkbox(&mut observe_mode, "🔍 Observe Target's View (Reverse stream)")
+                if ui.checkbox(&mut observe_mode, "Observe Target's View (Reverse stream)")
                         .on_hover_text("Observe the target student's screen and position instead of streaming yours.")
                         .changed()
                     {
@@ -244,7 +244,7 @@ fn register_settings_menu(world: &mut World) {
 
         // Per-peer opt-in: consent to be locked by a tutor broadcasting to Everyone.
         let mut follow_opt_in = tut_settings.follow_opt_in;
-        if ui.checkbox(&mut follow_opt_in, "🤝 Let a tutor lock my view (opt in)")
+        if ui.checkbox(&mut follow_opt_in, "Let a tutor lock my view (opt in)")
             .on_hover_text(
                 "Allow a tutor broadcasting to 'Everyone' to lock your view and input. \
                  Off by default — you are never force-locked without consent. A tutor \
@@ -267,9 +267,9 @@ fn register_settings_menu(world: &mut World) {
         let mut follow_mode = tut_settings.follow_mode;
         ui.add_enabled_ui(!locked_for_me, |ui| {
             let label = if locked_for_me {
-                "📖 Follow Mode (Locked by Tutor)"
+                "Follow Mode (Locked by Tutor)"
             } else {
-                "📖 Follow Mode (Mirror tutor)"
+                "Follow Mode (Mirror tutor)"
             };
             if ui.checkbox(&mut follow_mode, label)
                 .on_hover_text("Block local inputs and mirror the tutor's window and avatar status.")
@@ -357,9 +357,9 @@ pub fn draw_collaborator_cursors(
     if tutorial_settings.follow_mode {
         let can_exit = !tutor_lock_active(&tutor_status);
         let label = if tutor_lock_active(&tutor_status) {
-            "📖 Tutorial Mode (Locked by Tutor)"
+            "Tutorial Mode (Locked by Tutor)"
         } else {
-            "📖 Tutorial Mode (Mirroring)"
+            "Tutorial Mode (Mirroring)"
         };
         draw_top_banner(
             ctx,
@@ -407,9 +407,9 @@ pub fn draw_collaborator_cursors(
         tutor_status.tutor_active && !tutorial_settings.follow_mode && is_targeted;
     if is_active_student {
         let label = if tutor_status.observe_mode {
-            "👤 Student Mode (Tutor is observing you)"
+            "Student Mode (Tutor is observing you)"
         } else {
-            "👤 Student Mode (Selected by tutor)"
+            "Student Mode (Selected by tutor)"
         };
         draw_top_banner(
             ctx,
@@ -445,7 +445,7 @@ pub fn draw_collaborator_cursors(
             egui::vec2(10.0, 2.0),
             |ui| {
                 ui.label(
-                    egui::RichText::new("🎓 Teaching Mode (Broadcasting)")
+                    egui::RichText::new("Teaching Mode (Broadcasting)")
                         .color(egui::Color32::WHITE)
                         .small(),
                 );

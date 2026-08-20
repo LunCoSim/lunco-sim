@@ -15,7 +15,7 @@ fn on_start(me) {
     cmd("FocusPanel", #{ id: "command_deck" });
     spotlight("panel.command_deck", "Use the Command Deck to verify who is driving before you move.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
-    hint("Welcome, driver. Click the rover to take control. Watch the Command Deck: F engages autopilot, so use it only when a route is authored.");
+    hint("Welcome, driver. Click the rover, then click Possess in the Inspector or Command Deck.");
 }
 
 fn b1_driving_started(me) {
@@ -46,7 +46,7 @@ fn mission(me) {
     [
         // 1 — take control.
         objective("possess", #{
-            text: "Click the rover to take control. F engages autopilot when a route is authored",
+            text: "Click the rover, then click Possess in the Inspector or Command Deck",
             done: Fn("b1_controlled"),
             on_complete: Fn("b1_driving_started"),
         }),
@@ -63,7 +63,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         hint("You can drive, climb, stop, and read the result. Next: Slopes & Tip-Over — feel why a top-heavy rover rolls.");
-        notify_kind("Lesson complete 🎉 — on to Slopes & Tip-Over", "success");
+        notify_kind("Lesson complete - on to Slopes & Tip-Over", "success");
     }
 }
 

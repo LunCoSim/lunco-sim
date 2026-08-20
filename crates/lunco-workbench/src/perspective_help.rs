@@ -134,7 +134,7 @@ pub(crate) fn register_help_menu_item(layout: &mut WorkbenchLayout, id: Perspect
         let label = ctx
             .resource::<PerspectiveHelpRegistry>()
             .and_then(|registry| registry.get(id))
-            .map(|h| format!("📖 {} Help", h.title));
+            .map(|h| format!("{} Help", h.title));
         if let Some(label) = label {
             if ui.button(label).clicked() {
                 ctx.set_resource(HelpPopup(Some(id)));
@@ -258,7 +258,7 @@ fn render_help_popup(
                             }
 
                             if !help.mouse.is_empty() {
-                                ui.strong("🖱 Mouse Controls");
+                                ui.strong("Mouse Controls");
                                 ui.add_space(6.0);
                                 for m in &help.mouse {
                                     help_row(
@@ -297,7 +297,7 @@ fn render_help_popup(
                         ui.separator();
                         ui.add_space(8.0);
                         if ui
-                            .button(egui::RichText::new("🎓 Show Tour").strong())
+                            .button(egui::RichText::new("Show Tour").strong())
                             .on_hover_text("Replay the guided interactive tour")
                             .clicked()
                         {

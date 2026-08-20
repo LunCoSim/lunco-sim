@@ -110,7 +110,7 @@ pub fn render_log_view(
                 .color(muted),
         );
         if ui
-            .small_button("🗑 Clear")
+            .small_button("Clear")
             .on_hover_text("Drop all messages")
             .clicked()
         {
@@ -122,7 +122,7 @@ pub fn render_log_view(
         // one-click "copy all" is the reliable troubleshooting affordance.
         if !entries.is_empty()
             && ui
-                .small_button("📋 Copy")
+                .small_button("Copy")
                 .on_hover_text("Copy all messages to the clipboard")
                 .clicked()
         {

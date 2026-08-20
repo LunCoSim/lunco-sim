@@ -25,7 +25,7 @@
       ]
     },
     {
-      "icon": "🔧",
+      "icon": "mechanics",
       "title": "Moving parts",
       "subtitle": "Mechanics from a spring-damper to a 3D pendulum.",
       "steps": [

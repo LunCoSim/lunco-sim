@@ -107,7 +107,7 @@ pub(super) fn render_node_menu(
         ui.close();
     }
     if ui
-        .button("📋 Duplicate")
+        .button("Duplicate")
         .on_hover_text("Create a copy of this component")
         .clicked()
     {
@@ -122,7 +122,7 @@ pub(super) fn render_node_menu(
         ui.close();
     }
     if ui
-        .button("🔧 Parameters…")
+        .button("Parameters…")
         .on_hover_text("Edit this component's parameters")
         .clicked()
     {
@@ -211,7 +211,7 @@ pub(super) fn render_plot_node_menu(
 
     let sigs = collect_varying_signals(ctx);
 
-    ui.menu_button("🔗 Bind signal", |ui| {
+    ui.menu_button("Bind signal", |ui| {
         if sigs.is_empty() {
             ui.label(
                 egui::RichText::new("(no signals yet — run a simulation)")
@@ -508,7 +508,7 @@ pub(super) fn render_empty_menu(
     // `SignalRegistry`. An empty plot can be bound later via the
     // inspector.
     let sigs = collect_varying_signals(ctx);
-    ui.menu_button("📊 Add Plot here", |ui| {
+    ui.menu_button("Add Plot here", |ui| {
         // TODO(menu-height): the height is "so-so" — sometimes
         // collapses to 3 rows. Match how the Modelica
         // "Add component" cascade works (see

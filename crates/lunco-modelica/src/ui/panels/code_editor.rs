@@ -407,7 +407,7 @@ impl Panel for CodeEditorPanel {
         PanelId("modelica_code_preview")
     }
     fn title(&self) -> String {
-        "📝 Code Editor".into()
+        "Code Editor".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
@@ -561,7 +561,7 @@ impl Panel for CodeEditorPanel {
             if tab_target.is_none() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.heading("📝 Code Editor");
+                    ui.heading("Code Editor");
                     ui.add_space(20.0);
                     ui.label("Click a model in the Package Browser to open it here.");
                     ui.label("");

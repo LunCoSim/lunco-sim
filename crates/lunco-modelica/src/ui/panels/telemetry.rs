@@ -83,7 +83,7 @@ impl Panel for TelemetryPanel {
         PanelId("modelica_inspector")
     }
     fn title(&self) -> String {
-        "📊 Telemetry".into()
+        "Telemetry".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
@@ -197,7 +197,7 @@ impl Panel for TelemetryPanel {
                 ui.label(format!("Time: {current_time:.4} s"));
 
                 ui.add_space(ui.available_width() - 70.0);
-                if ui.button("🔄 Reset").clicked() {
+                if ui.button("Reset").clicked() {
                     reset_clicked = true;
                 }
             });
@@ -313,7 +313,7 @@ impl Panel for TelemetryPanel {
             .unwrap_or_default();
         let mut filter_changed = false;
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label("Search");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut filter_text)
                     .hint_text("filter…")
@@ -613,7 +613,7 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
         ui.label(egui::RichText::new(msg).color(muted).size(11.0));
         if let Some(doc) = active_doc {
             if ui
-                .small_button("🚀 Compile")
+                .small_button("Compile")
                 .on_hover_text("Compile the active model and start the stepper (F5)")
                 .clicked()
             {
@@ -709,7 +709,7 @@ fn render_selected_components_inspector(
     // Collect SetParameter ops while painting; apply via the canvas
     // pipeline (needs `&mut World`) deferred after the egui pass.
     let mut collected_ops: Vec<ModelicaOp> = Vec::new();
-    egui::CollapsingHeader::new(format!("🧩 Selected components ({})", rows.len()))
+    egui::CollapsingHeader::new(format!("Selected components ({})", rows.len()))
         .default_open(true)
         .show(ui, |ui| {
             if editing_class.is_none() {

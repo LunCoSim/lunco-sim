@@ -67,7 +67,7 @@ impl InstancePanel for ModelicaPlotPanel {
     fn menu_entry(&self) -> Option<lunco_workbench::InstancePanelMenuEntry> {
         Some(lunco_workbench::InstancePanelMenuEntry {
             group: lunco_workbench::PanelMenuGroup::Design,
-            title: "📈 Graphs",
+            title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
         })
     }
@@ -78,13 +78,13 @@ impl InstancePanel for ModelicaPlotPanel {
         // instances use whatever title was set on creation, falling
         // back to "Plot #N" via the registry config.
         if id == DEFAULT_MODELICA_GRAPH {
-            return "📈 Graphs".into();
+            return "Graphs".into();
         }
         world
             .get_resource::<VisualizationRegistry>()
             .and_then(|r| r.get(id))
-            .map(|cfg| format!("📈 {}", cfg.title))
-            .unwrap_or_else(|| format!("📈 Plot #{instance}"))
+            .map(|cfg| cfg.title.clone())
+            .unwrap_or_else(|| format!("Plot #{instance}"))
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
@@ -222,7 +222,7 @@ pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id:
         new_plot = true;
     }
     if ui
-        .small_button("📄")
+        .small_button("Duplicate")
         .on_hover_text(
             "Duplicate this plot — new tab with the same \
              signal bindings and picked variables.",
@@ -232,14 +232,14 @@ pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id:
         dup = true;
     }
     if ui
-        .small_button("📐 Fit")
+        .small_button("Fit")
         .on_hover_text("Auto-fit axes to data")
         .clicked()
     {
         fit = true;
     }
     if ui
-        .small_button("💾 CSV")
+        .small_button("CSV")
         .on_hover_text("Export the plot's curves to CSV.")
         .clicked()
     {

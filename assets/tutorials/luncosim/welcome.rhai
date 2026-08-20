@@ -13,7 +13,7 @@ fn steps() {
         #{ anchor: "panel.command_deck", focus: "command_deck", title: "Command Deck", body: "The Command Deck is the vessel control surface: it reports whether the rover is free, human-driven, or on autopilot, and exposes the authority handoff." },
         #{ anchor: "panel.spawn_palette", focus: "spawn_palette", title: "Spawn", body: "The Spawn panel is an authoring action: choose a catalog entry, then click the scene to place it. Escape cancels placement." },
         #{ anchor: "toolbar.run", focus: (), title: "One command surface", body: "The workbench buttons, Rhai scripts, HTTP API and agents use the same typed command path. The UI is a client of the simulation, not a second control system." },
-        #{ anchor: "", focus: (), title: "Ready for mechanics", body: "You have seen where to read scene facts, live signals, and control authority. Next, take the rover and perform the handoff yourself." },
+        #{ anchor: "", focus: (), title: "Ready for mechanics", body: "You have seen where to read scene facts, live signals, and control authority. Next, click the rover, click Possess in the Inspector or Command Deck, then use Release or Backspace to perform the handoff yourself." },
     ]
 }
 

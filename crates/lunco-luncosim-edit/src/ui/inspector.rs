@@ -1332,7 +1332,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
     // Delete button
     ui.separator();
-    if ui.button("🗑 Delete Entity (Del)").clicked() {
+    if ui.button("Delete Entity (Del)").clicked() {
         ctx.trigger(crate::commands::DeleteEntity {
             target: entity,
             intent: lunco_core::EditIntent::Persistent,
@@ -1433,7 +1433,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             }
             _ => return,
         };
-    egui::CollapsingHeader::new("🎚 Parameters")
+    egui::CollapsingHeader::new("Parameters")
         .default_open(true)
         .show(ui, |ui| {
             // Breadcrumb when drilled into a subpart: name the part being
@@ -1569,7 +1569,7 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
         _ => return,
     };
 
-    egui::CollapsingHeader::new("🔩 Mount")
+    egui::CollapsingHeader::new("Mount")
         .default_open(true)
         .show(ui, |ui| {
             let mut snap: Option<(String, String, [f64; 3], [f64; 3])> = None;
@@ -1582,7 +1582,7 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                         Some(ax) => format!("{} {}", item.joint, ax),
                         None => item.joint.clone(),
                     };
-                    ui.label(format!("🔌 {} ({}, {joint})", item.socket, item.accepts));
+                    ui.label(format!("{} ({}, {joint})", item.socket, item.accepts));
                 });
                 match (
                     &item.part_path,
@@ -2155,7 +2155,7 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
         ui.horizontal(|ui| {
             ui.label(format!("Seed {:#x}", spec.seed));
-            if ui.button("🎲 Reseed").clicked() {
+            if ui.button("Reseed").clicked() {
                 spec.seed = spec
                     .seed
                     .wrapping_mul(0x9E37_79B9_7F4A_7C15)

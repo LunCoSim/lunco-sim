@@ -201,7 +201,7 @@ impl Panel for CommandDeck {
                     ctx.trigger(lunco_avatar::ReleaseVessel { target: v });
                 }
             } else {
-                if ui.button("🏁 Take control").clicked() {
+                if ui.button("Take control").clicked() {
                     let v = vessel;
                     ctx.trigger(lunco_avatar::PossessVessel {
                         avatar: None,
@@ -267,7 +267,7 @@ impl Panel for CommandDeck {
                         .patrol_actions
                         .get(i)
                         .filter(|n| **n > 0)
-                        .map(|n| format!(" 🛰×{}", n))
+                        .map(|n| format!(" [tool x{}]", n))
                         .unwrap_or_default();
                     ui.label(format!(
                         "{}.  [{:.1}, {:.1}, {:.1}]{marker}",

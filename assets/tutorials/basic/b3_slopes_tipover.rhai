@@ -13,7 +13,7 @@ fn on_start(me) {
     cmd("FocusPanel", #{ id: "sandbox_inspector" });
     spotlight("panel.sandbox_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
-    hint("This is the Hauler — heavy and top-heavy on purpose. Click it to take control. F engages autopilot, so drive this lesson yourself.");
+    hint("This is the Hauler — heavy and top-heavy on purpose. Click it, then click Possess in the Inspector or Command Deck.");
 }
 
 fn b3_possessed(me) {
@@ -82,7 +82,7 @@ fn b3_brake(me) {
 fn mission(me) {
     [
         objective("possess", #{
-            text: "Take control of the Hauler",
+            text: "Click the Hauler, then click Possess in the Inspector or Command Deck",
             done: Fn("b3_controlled"),
             on_complete: Fn("b3_possessed"),
         }),
@@ -114,7 +114,7 @@ fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
         hint("You've felt why a high centre of mass tips, and how to climb anyway: pick the fall-line, keep steering inputs small on a grade. Next: compare the rover variants.");
-        notify_kind("Lesson complete 🎉 — on to Rover Variants", "success");
+        notify_kind("Lesson complete - on to Rover Variants", "success");
     }
 }
 
