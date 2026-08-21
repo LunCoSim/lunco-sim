@@ -35,7 +35,7 @@ use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
 use lunco_usd_bevy::UsdRead;
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value};
 
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
@@ -67,6 +67,122 @@ fn read_i32_strict(
         Some(value) => Ok(Some(value)),
         None if reader.has_authored_attribute(path, attribute) => Err(()),
         None => Ok(None),
+    }
+}
+
+/// Read a value only when the scene authored this property.  Schema fallback
+/// values are useful for ordinary fields, but they must not make a keyed
+/// declaration look present (`trackedId = 0` is the classic example).
+fn read_authored_i32(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<i32>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    read_i32_strict(reader, path, attribute)?
+        .ok_or(())
+        .map(Some)
+}
+
+fn read_authored_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f64>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    read_real_strict(reader, path, attribute)?
+        .ok_or(())
+        .map(Some)
+}
+
+fn read_authored_bool(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<bool>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match reader.attr_value(path, attribute) {
+        Some(Value::Bool(value)) => Ok(Some(value)),
+        // Keep the shared reader's documented exporter tolerance for integer
+        // booleans, but reject every other authored USD type.
+        Some(Value::Int(value)) => Ok(Some(value != 0)),
+        Some(Value::Int64(value)) => Ok(Some(value != 0)),
+        _ => Err(()),
+    }
+}
+
+fn read_authored_string(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match reader.attr_value(path, attribute) {
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
+fn read_authored_token(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match reader.attr_value(path, attribute) {
+        Some(Value::Token(value)) => Ok(Some(value.to_string())),
+        _ => Err(()),
+    }
+}
+
+fn rgba_from_value(value: Value) -> Option<[f32; 4]> {
+    let rgba = match value {
+        Value::Vec4f(value) => [value.x, value.y, value.z, value.w],
+        Value::Vec4d(value) => [
+            value.x as f32,
+            value.y as f32,
+            value.z as f32,
+            value.w as f32,
+        ],
+        _ => return None,
+    };
+    rgba.iter().all(|value| value.is_finite()).then_some(rgba)
+}
+
+fn read_authored_rgba(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<[f32; 4]>, ()> {
+    if !reader.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    reader
+        .attr_value(path, attribute)
+        .and_then(rgba_from_value)
+        .ok_or(())
+        .map(Some)
+}
+
+fn read_positive_optional_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f64>, ()> {
+    match read_authored_real(reader, path, attribute)? {
+        None | Some(0.0) => Ok(None),
+        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
+        Some(_) => Err(()),
     }
 }
 
@@ -298,20 +414,48 @@ pub fn insert_celestial_comms_components(
     // Keyed on `lunco:mission:id` — the identifying attribute, following the
     // libration/orbit convention above. A prim without one is not a half-declared
     // mission, it is simply not a mission.
-    if let Some(id) = reader.text(sdf_path, "lunco:mission:id") {
-        let name = reader
-            .text(sdf_path, "lunco:mission:name")
-            .unwrap_or_else(|| id.clone());
-        commands
-            .entity(entity)
-            .try_insert(lunco_celestial::MissionDecl {
+    let mission_id = match read_authored_string(reader, sdf_path, "lunco:mission:id") {
+        Ok(Some(id)) if !id.is_empty() => Some(id),
+        Ok(None) => None,
+        Ok(Some(_)) => {
+            warn!(
+                "[usd-celestial] {} has an empty mission id; declaration ignored",
+                prim_path_str
+            );
+            None
+        }
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed mission attributes; declaration ignored",
+                prim_path_str
+            );
+            None
+        }
+    };
+    if let Some(id) = mission_id {
+        let mission = (|| {
+            let name = read_authored_string(reader, sdf_path, "lunco:mission:name")?
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| id.clone());
+            let description = read_authored_string(reader, sdf_path, "lunco:mission:description")?
+                .unwrap_or_default();
+            Ok(lunco_celestial::MissionDecl {
                 id: id.clone(),
-                name: name.clone(),
-                description: reader
-                    .text(sdf_path, "lunco:mission:description")
-                    .unwrap_or_default(),
-            });
-        info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
+                name,
+                description,
+            })
+        })();
+        match mission {
+            Ok(mission) => {
+                let name = mission.name.clone();
+                commands.entity(entity).try_insert(mission);
+                info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid mission attributes; declaration ignored",
+                prim_path_str
+            ),
+        }
     }
 
     // --- Mission trajectory (LunCoMissionTrajectoryAPI) ---
@@ -321,72 +465,180 @@ pub fn insert_celestial_comms_components(
     // `trackedId`/`referenceId`, so this prim says how to DRAW a trajectory, not
     // where the spacecraft is. Keyed on `trackedId` — without a target there is
     // nothing to plot.
-    if let Some(tracked_id) = reader.scalar::<i32>(sdf_path, "lunco:trajectory:trackedId") {
-        let color = read_rgba(
-            reader,
-            sdf_path,
-            "lunco:trajectory:color",
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        commands
-            .entity(entity)
-            .try_insert(lunco_celestial::MissionTrajectoryDecl {
-                name: reader
-                    .text(sdf_path, "lunco:trajectory:name")
-                    .unwrap_or_else(|| prim_path_str.to_string()),
+    let trajectory_target = match read_authored_i32(reader, sdf_path, "lunco:trajectory:trackedId")
+    {
+        Ok(Some(id)) if id != 0 => Some(id),
+        Ok(None) => None,
+        Ok(Some(id)) => {
+            warn!(
+                "[usd-celestial] {} has invalid trajectory tracked id {}; declaration ignored",
+                prim_path_str, id
+            );
+            None
+        }
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed trajectory attributes; declaration ignored",
+                prim_path_str
+            );
+            None
+        }
+    };
+    if let Some(tracked_id) = trajectory_target {
+        let trajectory = (|| {
+            let reference_id = read_authored_i32(reader, sdf_path, "lunco:trajectory:referenceId")?
+                .unwrap_or(DEFAULT_ANCHOR_BODY);
+            if reference_id == 0 {
+                return Err(());
+            }
+            let color = read_authored_rgba(reader, sdf_path, "lunco:trajectory:color")?
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let sampling_days =
+                read_authored_real(reader, sdf_path, "lunco:trajectory:samplingDays")?
+                    .unwrap_or(1.0);
+            let sampling_step =
+                read_authored_real(reader, sdf_path, "lunco:trajectory:samplingStep")?
+                    .unwrap_or(0.01);
+            if !sampling_days.is_finite()
+                || sampling_days <= 0.0
+                || !sampling_step.is_finite()
+                || sampling_step <= 0.0
+            {
+                return Err(());
+            }
+            let frame = read_authored_token(reader, sdf_path, "lunco:trajectory:frame")?
+                .unwrap_or_else(|| "Inertial".to_string());
+            if !matches!(frame.as_str(), "Inertial" | "BodyFixed") {
+                return Err(());
+            }
+            let user_visible =
+                read_authored_bool(reader, sdf_path, "lunco:trajectory:userVisible")?;
+            let start_epoch_jd =
+                read_authored_real(reader, sdf_path, "lunco:trajectory:startEpochJd")?
+                    .and_then(|value| (value != 0.0).then_some(value));
+            let end_epoch_jd = read_authored_real(reader, sdf_path, "lunco:trajectory:endEpochJd")?
+                .and_then(|value| (value != 0.0).then_some(value));
+            if start_epoch_jd.is_some() != end_epoch_jd.is_some()
+                || matches!((start_epoch_jd, end_epoch_jd), (Some(start), Some(end)) if end < start)
+            {
+                return Err(());
+            }
+            let name = read_authored_string(reader, sdf_path, "lunco:trajectory:name")?
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| prim_path_str.to_string());
+            Ok(lunco_celestial::MissionTrajectoryDecl {
+                name,
                 tracked_id,
-                // Defaults to the Moon for the same reason `lunco:anchor:body` does.
-                reference_id: reader
-                    .scalar::<i32>(sdf_path, "lunco:trajectory:referenceId")
-                    .unwrap_or(DEFAULT_ANCHOR_BODY),
+                reference_id,
                 color,
-                sampling_days: reader
-                    .real(sdf_path, "lunco:trajectory:samplingDays")
-                    .unwrap_or(1.0),
-                sampling_step: reader
-                    .real(sdf_path, "lunco:trajectory:samplingStep")
-                    .unwrap_or(0.01),
-                // `text()`, not `scalar::<String>()` — the value is an authored
-                // `token`, and reading a token with the string accessor returns
-                // None and would silently default to Inertial.
-                frame: reader
-                    .text(sdf_path, "lunco:trajectory:frame")
-                    .unwrap_or_else(|| "Inertial".to_string()),
-                user_visible: reader.boolean(sdf_path, "lunco:trajectory:userVisible"),
-                start_epoch_jd: reader.real(sdf_path, "lunco:trajectory:startEpochJd"),
-                end_epoch_jd: reader.real(sdf_path, "lunco:trajectory:endEpochJd"),
-            });
-        info!("[usd-celestial] mission trajectory {prim_path_str}: target {tracked_id}");
+                sampling_days,
+                sampling_step,
+                frame,
+                user_visible,
+                start_epoch_jd,
+                end_epoch_jd,
+            })
+        })();
+        match trajectory {
+            Ok(trajectory) => {
+                commands.entity(entity).try_insert(trajectory);
+                info!("[usd-celestial] mission trajectory {prim_path_str}: target {tracked_id}");
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid mission trajectory attributes; declaration ignored",
+                prim_path_str
+            ),
+        }
     }
 
     // --- Mission spacecraft marker (LunCoMissionSpacecraftAPI) ---
     //
     // Keyed on `ephemerisId`: the marker's whole job is to sit where the ephemeris
     // says that body is, so a prim naming no body is unplaceable, not defaulted.
-    if let Some(ephemeris_id) = reader.scalar::<i32>(sdf_path, "lunco:spacecraft:ephemerisId") {
-        commands
-            .entity(entity)
-            .try_insert(lunco_celestial::MissionSpacecraftDecl {
-                name: reader
-                    .text(sdf_path, "lunco:spacecraft:name")
-                    .unwrap_or_else(|| prim_path_str.to_string()),
+    let spacecraft_id = match read_authored_i32(reader, sdf_path, "lunco:spacecraft:ephemerisId") {
+        Ok(Some(id)) if id != 0 => Some(id),
+        Ok(None) => None,
+        Ok(Some(id)) => {
+            warn!(
+                "[usd-celestial] {} has invalid spacecraft ephemeris id {}; declaration ignored",
+                prim_path_str, id
+            );
+            None
+        }
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed spacecraft attributes; declaration ignored",
+                prim_path_str
+            );
+            None
+        }
+    };
+    if let Some(ephemeris_id) = spacecraft_id {
+        let spacecraft = (|| {
+            let reference_id = read_authored_i32(reader, sdf_path, "lunco:spacecraft:referenceId")?
+                .unwrap_or(DEFAULT_ANCHOR_BODY);
+            if reference_id == 0 {
+                return Err(());
+            }
+            let scale =
+                read_real_strict(reader, sdf_path, "lunco:spacecraft:scale")?.unwrap_or(1.0);
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err(());
+            }
+            let scale = scale as f32;
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err(());
+            }
+            let start_epoch_jd =
+                read_authored_real(reader, sdf_path, "lunco:spacecraft:startEpochJd")?
+                    .and_then(|value| (value != 0.0).then_some(value));
+            let end_epoch_jd = read_authored_real(reader, sdf_path, "lunco:spacecraft:endEpochJd")?
+                .and_then(|value| (value != 0.0).then_some(value));
+            if start_epoch_jd.is_some() != end_epoch_jd.is_some()
+                || matches!((start_epoch_jd, end_epoch_jd), (Some(start), Some(end)) if end < start)
+            {
+                return Err(());
+            }
+            let marker_radius_km =
+                read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:markerRadiusKm")?;
+            let hit_radius_km =
+                read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:hitRadiusKm")?;
+            let name = read_authored_string(reader, sdf_path, "lunco:spacecraft:name")?
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| prim_path_str.to_string());
+            let marker_color =
+                read_authored_rgba(reader, sdf_path, "lunco:spacecraft:markerColor")?;
+            let marker_radius_km = marker_radius_km.map(|value| value as f32);
+            let hit_radius_km = hit_radius_km.map(|value| value as f32);
+            if marker_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || hit_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(());
+            }
+            Ok(lunco_celestial::MissionSpacecraftDecl {
+                name,
                 ephemeris_id,
-                reference_id: reader
-                    .scalar::<i32>(sdf_path, "lunco:spacecraft:referenceId")
-                    .unwrap_or(DEFAULT_ANCHOR_BODY),
-                scale: reader
-                    .real_f32(sdf_path, "lunco:spacecraft:scale")
-                    .unwrap_or(1.0),
-                start_epoch_jd: reader.real(sdf_path, "lunco:spacecraft:startEpochJd"),
-                end_epoch_jd: reader.real(sdf_path, "lunco:spacecraft:endEpochJd"),
-                marker_radius_km: reader.real_f32(sdf_path, "lunco:spacecraft:markerRadiusKm"),
-                hit_radius_km: reader.real_f32(sdf_path, "lunco:spacecraft:hitRadiusKm"),
-                marker_color: reader
-                    .scalar::<Vec<f32>>(sdf_path, "lunco:spacecraft:markerColor")
-                    .filter(|v| v.len() >= 4)
-                    .map(|v| [v[0], v[1], v[2], v[3]]),
-            });
-        info!("[usd-celestial] mission spacecraft {prim_path_str}: ephemeris {ephemeris_id}");
+                reference_id,
+                scale,
+                start_epoch_jd,
+                end_epoch_jd,
+                marker_radius_km,
+                hit_radius_km,
+                marker_color,
+            })
+        })();
+        match spacecraft {
+            Ok(spacecraft) => {
+                commands.entity(entity).try_insert(spacecraft);
+                info!(
+                    "[usd-celestial] mission spacecraft {prim_path_str}: ephemeris {ephemeris_id}"
+                );
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid mission spacecraft attributes; declaration ignored",
+                prim_path_str
+            ),
+        }
     }
 
     // --- Keplerian orbit (satellites) ---
@@ -523,33 +775,6 @@ pub fn insert_celestial_comms_components(
     }
 }
 
-/// Read an authored `color4f` (or any `float[4]`-shaped attribute) as RGBA,
-/// falling back to `default` when it is absent or malformed.
-///
-/// `f32` first, then `f64`: a hand-authored `.usda` may spell the same colour as
-/// either, and a value that round-trips through a `double` array would otherwise
-/// read as absent and silently take the default — the same trap
-/// [`read_occluder_box`] handles for `extent`.
-fn read_rgba(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    sdf_path: &SdfPath,
-    attr: &str,
-    default: [f32; 4],
-) -> [f32; 4] {
-    let v = reader
-        .scalar::<Vec<f32>>(sdf_path, attr)
-        .or_else(|| {
-            reader
-                .scalar::<Vec<f64>>(sdf_path, attr)
-                .map(|v| v.into_iter().map(|f| f as f32).collect())
-        })
-        .filter(|v| v.len() >= 4);
-    match v {
-        Some(v) => [v[0], v[1], v[2], v[3]],
-        None => default,
-    }
-}
-
 /// The occluding box from the prim's UsdGeom `extent` (`float3[2]` — min, max),
 /// else the unit-cube default. Both are pre-scale, in the prim's local space; the
 /// kernel applies the `Transform` scale.
@@ -660,5 +885,45 @@ def Xform "World"
         assert_eq!(orbit.elements.semi_major_axis_m, 7000000.0);
         assert_eq!(orbit.elements.eccentricity, 0.0);
         assert_eq!(orbit.elements.epoch_jd, lunco_time::J2000_JD);
+    }
+
+    #[test]
+    fn color4f_is_read_as_a_fixed_usd_vector() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body"
+    {
+        color4f lunco:trajectory:color = (0.1, 0.2, 0.3, 0.4)
+    }
+}
+"#,
+        );
+        assert_eq!(
+            read_authored_rgba(&stage.view(), &path, "lunco:trajectory:color")
+                .expect("valid color"),
+            Some([0.1, 0.2, 0.3, 0.4])
+        );
+    }
+
+    #[test]
+    fn negative_ephemeris_ids_are_preserved() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body"
+    {
+        int lunco:trajectory:trackedId = -1024
+    }
+}
+"#,
+        );
+        assert_eq!(
+            read_authored_i32(&stage.view(), &path, "lunco:trajectory:trackedId")
+                .expect("valid ephemeris id"),
+            Some(-1024)
+        );
     }
 }
