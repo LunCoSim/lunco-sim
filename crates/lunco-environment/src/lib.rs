@@ -102,15 +102,6 @@ pub use earth::{
     compute_local_earth, inject_local_earth_into_cosim, EarthDirectionWorld, LocalEarth,
 };
 
-// Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
-// mirror `lunco_render::LunarSunShadow`'s defaults but are kept locally so this
-// crate need not depend on `lunco-render` (lighting → render would invert the
-// layering: render is presentation, below environment). Keep in sync by hand if
-// the render defaults change — they rarely do, and a drift only affects the
-// runtime tuner's fallback when no live cascade bounds exist.
-const FALLBACK_FIRST_CASCADE_FAR_BOUND: f32 = 40.0;
-const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
-
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). **Render-free**: the heightfield bakes and the
 /// sun-visibility cache run headless; the material wiring they feed lives in
@@ -432,6 +423,33 @@ pub struct SetEnvironmentLight {
 #[reflect(Component)]
 pub struct Earthshine;
 
+/// Validate a live shadow-range edit against the current cascade configuration.
+///
+/// A runtime command is an explicit request, not a quality preset. Invalid
+/// values are therefore rejected rather than clamped or replaced with a
+/// renderer default. Returning the current values for omitted fields also
+/// makes a partial command preserve the other authored/live range exactly.
+fn validated_shadow_ranges(
+    minimum_distance: f32,
+    current_first_cascade_bound: f32,
+    current_maximum_distance: f32,
+    requested_first_cascade_bound: Option<f32>,
+    requested_maximum_distance: Option<f32>,
+) -> Option<(f32, f32)> {
+    if requested_first_cascade_bound.is_none() && requested_maximum_distance.is_none() {
+        return None;
+    }
+
+    let first = requested_first_cascade_bound.unwrap_or(current_first_cascade_bound);
+    let maximum = requested_maximum_distance.unwrap_or(current_maximum_distance);
+    (minimum_distance.is_finite()
+        && first.is_finite()
+        && maximum.is_finite()
+        && minimum_distance < first
+        && first < maximum)
+        .then_some((first, maximum))
+}
+
 /// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
 /// its `CascadeShadowConfig`, `GlobalAmbientLight` and camera `Exposure` — all
 /// render-FREE types, so the command works headless. Resources/queries are
@@ -493,39 +511,41 @@ fn on_set_environment_light(
             light.shadow_maps_enabled = s;
         }
         if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
-            if let Some(mut cfg) = cascades {
-                // Rebuild from the live config, overriding only the two
-                // range knobs (cascade count / overlap / near are kept).
-                // The empty-bounds fallbacks are local consts mirroring the
-                // canonical lunar-sun cascade defaults (see their declaration).
-                let cur_first = cfg
-                    .bounds
-                    .first()
-                    .copied()
-                    .unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
-                let cur_max = cfg
-                    .bounds
-                    .last()
-                    .copied()
-                    .unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
-                // The first bound has to stay a metre inside the max, so the max is
-                // floored at 2 m first: clamping the other way round (bound, then
-                // max) lets a sub-2 m max pull the first bound to zero or negative,
-                // which produces a degenerate cascade and a black shadow pass.
-                let max = cmd.shadow_max_distance.unwrap_or(cur_max).max(2.0);
-                let first = cmd
-                    .shadow_first_cascade_bound
-                    .unwrap_or(cur_first)
-                    .clamp(1.0, max - 1.0);
-                *cfg = CascadeShadowConfigBuilder {
-                    num_cascades: cfg.bounds.len().max(1),
-                    minimum_distance: cfg.minimum_distance,
-                    first_cascade_far_bound: first,
-                    maximum_distance: max,
-                    overlap_proportion: cfg.overlap_proportion,
-                }
-                .build();
+            let Some(mut cfg) = cascades else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade configuration"
+                );
+                return;
+            };
+            let Some((&cur_first, &cur_max)) = cfg.bounds.first().zip(cfg.bounds.last()) else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade bounds"
+                );
+                return;
+            };
+            let Some((first, maximum)) = validated_shadow_ranges(
+                cfg.minimum_distance,
+                cur_first,
+                cur_max,
+                cmd.shadow_first_cascade_bound,
+                cmd.shadow_max_distance,
+            ) else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: first cascade bound must be finite and greater than the minimum distance, and maximum distance must be finite and greater than the first bound"
+                );
+                return;
+            };
+            // Rebuild from the live config, overriding only the two requested
+            // range knobs. No renderer default or clamp is allowed to replace
+            // an invalid explicit request.
+            *cfg = CascadeShadowConfigBuilder {
+                num_cascades: cfg.bounds.len(),
+                minimum_distance: cfg.minimum_distance,
+                first_cascade_far_bound: first,
+                maximum_distance: maximum,
+                overlap_proportion: cfg.overlap_proportion,
             }
+            .build();
         }
     }
 
@@ -743,6 +763,34 @@ impl Plugin for EnvironmentPlugin {
 mod tests {
     use super::*;
     use big_space::prelude::Grid;
+
+    #[test]
+    fn shadow_range_validation_rejects_invalid_explicit_values_without_clamping() {
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(900.0), Some(50.0)),
+            None
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(f32::NAN), None),
+            None
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, None, Some(f32::INFINITY)),
+            None
+        );
+    }
+
+    #[test]
+    fn shadow_range_validation_preserves_omitted_live_value() {
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(80.0), None),
+            Some((80.0, 1500.0))
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, None, Some(3000.0)),
+            Some((40.0, 3000.0))
+        );
+    }
 
     #[test]
     fn flat_gravity_stays_in_the_active_physics_frame() {
