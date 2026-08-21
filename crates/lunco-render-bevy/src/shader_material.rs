@@ -62,7 +62,7 @@ use bevy::shader::{Shader, Source as ShaderSource};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
-use lunco_materials::dyn_params::{self, ParamSchema, ParamType, ParamValue};
+use lunco_materials::dyn_params::{self, ParamSchema, ParamValue};
 use lunco_materials::{
     to_snake_case, ShaderCatalog, ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE,
     ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
@@ -544,43 +544,17 @@ pub fn build_shader_material(
 pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
     let key = to_snake_case(key);
     let key = key.as_str();
-    // Type from the reflected schema if known; else infer from the value's
-    // arity (so values authored before the shader is reflected still store —
-    // packing applies them at the reflected offset once the schema lands).
-    let ty = m.schema.field(key).map(|f| f.ty).unwrap_or_else(|| {
-        match value.split(',').filter(|s| !s.trim().is_empty()).count() {
-            0 | 1 => ParamType::F32,
-            2 => ParamType::Vec2,
-            3 => ParamType::Vec3,
-            _ => ParamType::Vec4,
-        }
-    });
-    match ty {
-        ParamType::Vec3 | ParamType::Vec4 => {
-            // Colours are authored as `r,g,b` (USD displayColor style) or
-            // `r,g,b,a` for vec4 params.
-            let n: Vec<f32> = value
-                .split(',')
-                .filter_map(|s| s.trim().parse::<f32>().ok())
-                .collect();
-            if ty == ParamType::Vec4 && n.len() >= 4 {
-                m.set(key, ParamValue::Vec4([n[0], n[1], n[2], n[3]]));
-                true
-            } else if n.len() >= 3 {
-                m.set_color(key, [n[0], n[1], n[2]]);
-                true
-            } else {
-                false
-            }
-        }
-        _ => match ParamValue::parse(ty, value) {
-            Some(v) => {
-                m.set(key, v);
-                true
-            }
-            None => false,
-        },
+    let Some(field) = m.schema.field(key) else {
+        return false;
+    };
+    if m.schema.is_engine(key) {
+        return false;
     }
+    let Some(v) = ParamValue::parse_authoring(field.ty, value) else {
+        return false;
+    };
+    m.set(key, v);
+    true
 }
 
 /// Reads the current scalar value for `key` (or its schema default), or
@@ -752,6 +726,16 @@ mod tests {
         let mut m = material_with_schema();
         assert!(apply_param(&mut m, "color_a", "0.7,0.8,0.9"));
         assert_eq!(m.get_color("color_a"), Some([0.7, 0.8, 0.9]));
+    }
+
+    #[test]
+    fn unknown_and_malformed_params_are_rejected_without_a_heuristic_type() {
+        let mut m = material_with_schema();
+        assert!(!apply_param(&mut m, "not_a_shader_field", "1,2,3"));
+        assert!(!apply_param(&mut m, "color_a", "1,not-a-number,3"));
+        assert!(!apply_param(&mut m, "color_a", "1,2,3,4"));
+        assert!(!m.values.contains_key("not_a_shader_field"));
+        assert!(!m.values.contains_key("color_a"));
     }
 
     /// A fresh `ShaderMaterial` carries an empty schema and packs all-zero; once
