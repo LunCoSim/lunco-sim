@@ -93,7 +93,7 @@ struct EnergyInfo {
     capacity_wh: Option<f32>,
     /// Signed electrical power into the battery: positive charges, negative
     /// discharges. This is the canonical flow state shown by the HUD.
-    net_power_w: Option<f32>,
+    net_power_w: Option<f64>,
 }
 
 /// Information about a driven vessel's motor temperatures.
@@ -2002,7 +2002,7 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     ui.property("comms_color", comms_color);
 
     if let Some(energy) = &v.energy {
-        const POWER_FLOW_DEADBAND_W: f32 = 1.0;
+        const POWER_FLOW_DEADBAND_W: f64 = 1.0;
         let (detail, power_color) = match energy.net_power_w {
             Some(power) if power > POWER_FLOW_DEADBAND_W => (
                 format!("CHARGING · {}", format_power(power)),
@@ -2045,7 +2045,7 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     }
 }
 
-fn format_power(power_w: f32) -> String {
+fn format_power(power_w: f64) -> String {
     if power_w >= 1000.0 {
         format!("{:.1} kW", power_w / 1000.0)
     } else {

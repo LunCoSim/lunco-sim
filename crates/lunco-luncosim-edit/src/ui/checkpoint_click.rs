@@ -1207,10 +1207,12 @@ pub fn draw_waypoint_overlay(
         let label_color = theme.tokens.text;
 
         let targets = route_targets(xml, spec);
-        let authored_route = xml.is_some() && !targets.is_empty();
         let looping = route_loops(xml, spec);
-        let Some(wp_positions) = (if authored_route {
-            get_waypoint_positions(&xml.expect("authored route has XML").0, bindings, &poses)
+        let Some(wp_positions) = (if let Some(xml) = xml {
+            if targets.is_empty() {
+                continue;
+            }
+            get_waypoint_positions(&xml.0, bindings, &poses)
         } else {
             Some(
                 spec.map(get_runtime_waypoint_positions)
@@ -1615,7 +1617,7 @@ fn on_start_autopilot(
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
     q_route: Query<(
-        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     )>,
     mut registry: ResMut<SessionRegistry>,
@@ -1627,7 +1629,7 @@ fn on_start_autopilot(
     if !autopilot_engaged {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
                 "[autopilot] start ignored for vessel {:?}: no authored movement route",
@@ -1675,7 +1677,7 @@ fn on_toggle_autopilot(
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
     q_route: Query<(
-        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     )>,
     q_gid: Query<&GlobalEntityId>,
@@ -1695,7 +1697,7 @@ fn on_toggle_autopilot(
     } else {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
                 "[autopilot] F ignored for vessel {:?}: no authored movement route",
@@ -1735,10 +1737,18 @@ fn on_toggle_autopilot(
 /// not get a false "no route" warning; once a spec exists, its actual movement
 /// content is authoritative and an empty/holding tree is still rejected.
 fn has_authored_movement_route(
-    has_xml: bool,
+    xml: Option<&lunco_autopilot::usd_tree::BehaviorXml>,
     spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
 ) -> bool {
-    spec.map_or(has_xml, |spec| spec.0.has_motion())
+    if let Some(xml) = xml {
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            return false;
+        };
+        let mut targets = Vec::new();
+        collect_targets(&value, &mut targets);
+        return !targets.is_empty();
+    }
+    spec.is_some_and(|spec| spec.0.has_motion())
 }
 
 register_commands!(
