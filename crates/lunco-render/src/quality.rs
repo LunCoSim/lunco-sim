@@ -49,6 +49,9 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.06,
                 shadow_normal_bias: 2.5,
+                distant_light_default_illuminance: 128_000.0,
+                local_light_default_intensity: 1_000.0,
+                rect_light_default_intensity: 10_000.0,
                 local_light_default_range: 30.0,
                 local_shadow_map_near_z: 0.1,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
@@ -75,6 +78,9 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.1,
                 shadow_normal_bias: 4.0,
+                distant_light_default_illuminance: 128_000.0,
+                local_light_default_intensity: 1_000.0,
+                rect_light_default_intensity: 10_000.0,
                 local_light_default_range: 20.0,
                 local_shadow_map_near_z: 0.2,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
@@ -101,6 +107,9 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
+                distant_light_default_illuminance: 128_000.0,
+                local_light_default_intensity: 1_000.0,
+                rect_light_default_intensity: 10_000.0,
                 local_light_default_range: 50.0,
                 local_shadow_map_near_z: 0.05,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
@@ -139,6 +148,12 @@ pub struct RenderQualityProfile {
     pub shadow_depth_bias: f32,
     /// Normal bias, in shadow texels, used to suppress grazing-angle acne.
     pub shadow_normal_bias: f32,
+    /// Illuminance used when a DistantLight omits `inputs:intensity`.
+    pub distant_light_default_illuminance: f32,
+    /// Luminous power used when a local SphereLight omits `inputs:intensity`.
+    pub local_light_default_intensity: f32,
+    /// Luminous power used when a RectLight omits `inputs:intensity`.
+    pub rect_light_default_intensity: f32,
     /// Range used when a local light leaves `lunco:light:range` at its schema
     /// default of zero (the explicit USD meaning is engine default).
     pub local_light_default_range: f32,
@@ -200,6 +215,12 @@ pub struct RenderingQualitySettings {
     pub shadow_depth_bias: f32,
     #[serde(default = "default_shadow_normal_bias")]
     pub shadow_normal_bias: f32,
+    #[serde(default = "default_distant_light_default_illuminance")]
+    pub distant_light_default_illuminance: f32,
+    #[serde(default = "default_local_light_default_intensity")]
+    pub local_light_default_intensity: f32,
+    #[serde(default = "default_rect_light_default_intensity")]
+    pub rect_light_default_intensity: f32,
     #[serde(default = "default_local_light_default_range")]
     pub local_light_default_range: f32,
     #[serde(default = "default_local_shadow_map_near_z")]
@@ -288,6 +309,18 @@ const fn default_local_light_default_range() -> f32 {
     balanced_profile().local_light_default_range
 }
 
+const fn default_distant_light_default_illuminance() -> f32 {
+    balanced_profile().distant_light_default_illuminance
+}
+
+const fn default_local_light_default_intensity() -> f32 {
+    balanced_profile().local_light_default_intensity
+}
+
+const fn default_rect_light_default_intensity() -> f32 {
+    balanced_profile().rect_light_default_intensity
+}
+
 const fn default_local_shadow_map_near_z() -> f32 {
     balanced_profile().local_shadow_map_near_z
 }
@@ -341,6 +374,9 @@ impl RenderingQualitySettings {
             shadow_cascade_overlap: self.shadow_cascade_overlap,
             shadow_depth_bias: self.shadow_depth_bias,
             shadow_normal_bias: self.shadow_normal_bias,
+            distant_light_default_illuminance: self.distant_light_default_illuminance,
+            local_light_default_intensity: self.local_light_default_intensity,
+            rect_light_default_intensity: self.rect_light_default_intensity,
             local_light_default_range: self.local_light_default_range,
             local_shadow_map_near_z: self.local_shadow_map_near_z,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
@@ -379,6 +415,9 @@ impl RenderingQualitySettings {
         self.shadow_cascade_overlap = profile.shadow_cascade_overlap;
         self.shadow_depth_bias = profile.shadow_depth_bias;
         self.shadow_normal_bias = profile.shadow_normal_bias;
+        self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
+        self.local_light_default_intensity = profile.local_light_default_intensity;
+        self.rect_light_default_intensity = profile.rect_light_default_intensity;
         self.local_light_default_range = profile.local_light_default_range;
         self.local_shadow_map_near_z = profile.local_shadow_map_near_z;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
@@ -436,6 +475,21 @@ impl RenderingQualitySettings {
         }
         if !profile.shadow_normal_bias.is_finite() || profile.shadow_normal_bias < 0.0 {
             return Err("shadow normal bias must be finite and non-negative");
+        }
+        if !profile.distant_light_default_illuminance.is_finite()
+            || profile.distant_light_default_illuminance <= 0.0
+        {
+            return Err("distant-light default illuminance must be finite and greater than zero");
+        }
+        if !profile.local_light_default_intensity.is_finite()
+            || profile.local_light_default_intensity <= 0.0
+        {
+            return Err("local-light default intensity must be finite and greater than zero");
+        }
+        if !profile.rect_light_default_intensity.is_finite()
+            || profile.rect_light_default_intensity <= 0.0
+        {
+            return Err("rect-light default intensity must be finite and greater than zero");
         }
         if !profile.local_light_default_range.is_finite()
             || profile.local_light_default_range <= 0.0
@@ -495,6 +549,9 @@ impl Default for RenderingQualitySettings {
             shadow_cascade_overlap: profile.shadow_cascade_overlap,
             shadow_depth_bias: profile.shadow_depth_bias,
             shadow_normal_bias: profile.shadow_normal_bias,
+            distant_light_default_illuminance: profile.distant_light_default_illuminance,
+            local_light_default_intensity: profile.local_light_default_intensity,
+            rect_light_default_intensity: profile.rect_light_default_intensity,
             local_light_default_range: profile.local_light_default_range,
             local_shadow_map_near_z: profile.local_shadow_map_near_z,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
@@ -619,6 +676,27 @@ mod tests {
         assert_eq!(settings.profile().directional_shadow_map_size, 2048);
         assert_eq!(settings.profile().shadow_budget_bytes, 64 * 1024 * 1024);
         assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
+    }
+
+    #[test]
+    fn light_defaults_are_authoritative_settings_and_are_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        settings.distant_light_default_illuminance = 90_000.0;
+        settings.local_light_default_intensity = 700.0;
+        settings.rect_light_default_intensity = 4_000.0;
+        assert_eq!(
+            settings.profile().distant_light_default_illuminance,
+            90_000.0
+        );
+        assert_eq!(settings.profile().local_light_default_intensity, 700.0);
+        assert_eq!(settings.profile().rect_light_default_intensity, 4_000.0);
+        assert!(settings.validate().is_ok());
+
+        settings.local_light_default_intensity = 0.0;
+        assert_eq!(
+            settings.validate(),
+            Err("local-light default intensity must be finite and greater than zero")
+        );
     }
 
     #[test]

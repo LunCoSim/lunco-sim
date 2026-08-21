@@ -5241,6 +5241,33 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .suffix(" m"),
                 );
             });
+            ui.collapsing("Light defaults", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These values apply only when a USD light omits its intensity; authored USD intensity remains authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.distant_light_default_illuminance)
+                        .speed(1_000.0)
+                        .prefix("Distant-light default: ")
+                        .suffix(" lx"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_light_default_intensity)
+                        .speed(100.0)
+                        .prefix("Sphere-light default: ")
+                        .suffix(" lm"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.rect_light_default_intensity)
+                        .speed(100.0)
+                        .prefix("Rect-light default: ")
+                        .suffix(" lm"),
+                );
+            });
             ui.collapsing("Terrain mesh cache", |ui| {
                 let mut cache_mib = (settings.terrain_mesh_cache_bytes / (1024 * 1024)).max(1);
                 if ui

@@ -394,7 +394,11 @@ pub(crate) fn instantiate_light_prim(
             // under Bevy's physically-based exposure — an unauthored
             // intensity almost certainly means "give me a sun", so default
             // to the calibrated 128 000 lx lunar sun and let authors override.
-            let illuminance_lux = read_intensity_with_exposure(reader, sdf_path, 128_000.0);
+            let illuminance_lux = read_intensity_with_exposure(
+                reader,
+                sdf_path,
+                quality.distant_light_default_illuminance,
+            );
             let c = read_light_color(reader, sdf_path);
             let color = Color::linear_rgb(c.x, c.y, c.z);
 
@@ -525,7 +529,11 @@ pub(crate) fn instantiate_light_prim(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let base_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+            let base_lm = read_intensity_with_exposure(
+                reader,
+                sdf_path,
+                quality.local_light_default_intensity,
+            );
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
             //
@@ -697,7 +705,11 @@ pub(crate) fn instantiate_light_prim(
             // dimensionless scale, so it is read as lumens here; the larger
             // default simply reflects that an area light stands in for a panel
             // rather than a bulb.
-            let base_lm = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
+            let base_lm = read_intensity_with_exposure(
+                reader,
+                sdf_path,
+                quality.rect_light_default_intensity,
+            );
             let c = read_light_color(reader, sdf_path);
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
@@ -993,5 +1005,41 @@ def Xform "World"
             0.02
         );
         assert_eq!(read_shadow_distance(&view, &lamp, 1500.0, convention), 6.0);
+    }
+
+    #[test]
+    fn omitted_intensity_uses_renderer_default_and_authored_intensity_wins() {
+        let source = r#"#usda 1.0
+
+def Xform "World"
+{
+    def DistantLight "Sun"
+    {
+    }
+    def SphereLight "Bulb"
+    {
+    }
+    def RectLight "Panel"
+    {
+        float inputs:intensity = 23
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = stage.view();
+
+        assert_eq!(
+            read_intensity_with_exposure(&view, &SdfPath::new("/World/Sun").unwrap(), 77_000.0),
+            77_000.0
+        );
+        assert_eq!(
+            read_intensity_with_exposure(&view, &SdfPath::new("/World/Bulb").unwrap(), 700.0),
+            700.0
+        );
+        assert_eq!(
+            read_intensity_with_exposure(&view, &SdfPath::new("/World/Panel").unwrap(), 10_000.0),
+            23.0
+        );
     }
 }
