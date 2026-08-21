@@ -40,20 +40,20 @@
 //! ## Shadow quality knobs
 //!
 //! The sun's shadow range is standard `UsdLuxShadowAPI`:
-//! `inputs:shadow:distance`. Non-positive means engine default, since UsdLux's
-//! -1 "no limit" has no meaning for a cascade split. Texel density scales
-//! inversely with it, so a scene wanting crisp near-field shadows over a huge
-//! terrain authors a shorter distance.
+//! `inputs:shadow:distance`. Non-positive means the configured Graphics
+//! default, since UsdLux's -1 "no limit" has no meaning for a cascade split.
+//! Texel density scales inversely with it, so a scene wanting crisp near-field
+//! shadows over a huge terrain authors a shorter distance.
 //!
-//! `lunco:shadow:firstCascadeFarBound` (default 40 m) is the only
-//! renderer-specific knob: cascaded shadow maps are a rasterizer technique
-//! UsdLux has no attribute for, so it takes a renderer namespace the way `ri:` /
-//! `karma:` / `arnold:` do. Cascade COUNT and the depth/normal biases are engine
-//! policy in `lunco_render::LunarSunShadow`, not authorable.
+//! `lunco:shadow:firstCascadeFarBound` is the renderer-specific knob:
+//! cascaded shadow maps are a rasterizer technique UsdLux has no attribute for,
+//! so it takes a renderer namespace the way `ri:` / `karma:` / `arnold:` do.
+//! Its configured Graphics value is used only when the scene leaves it
+//! unauthored.
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use lunco_render::LunarSunShadow;
+use lunco_render::{LunarSunShadow, ShadowRangeAuthorship};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
@@ -305,14 +305,15 @@ pub fn get_attribute_as_bool(
 /// all — lit in the authoring tool, black in the engine. Non-positive therefore
 /// means default here, not "zero metres".
 ///
-/// 30 m bounds a light to the deck or cabin it belongs to, which is the scale every
-/// local light in the asset library is authored at.
-const DEFAULT_LIGHT_RANGE_M: f32 = 30.0;
-
-fn read_light_range(reader: &crate::StageView<'_>, path: &SdfPath) -> f32 {
+fn read_light_range(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    default: f32,
+    convention: crate::units::ConventionTransform,
+) -> f32 {
     match get_attribute_as_f32(reader, path, "lunco:light:range") {
-        Some(r) if r > 0.0 => r,
-        _ => DEFAULT_LIGHT_RANGE_M,
+        Some(r) if r > 0.0 => convention.length(r as f64) as f32,
+        _ => default,
     }
 }
 
@@ -324,9 +325,14 @@ fn read_light_range(reader: &crate::StageView<'_>, path: &SdfPath) -> f32 {
 /// [`read_light_range`] applies to `lunco:light:range`, and for the same reason:
 /// an author who applies the API without overriding the attribute must land on
 /// the engine default, not on a light that shadows nothing.
-fn read_shadow_distance(reader: &crate::StageView<'_>, path: &SdfPath, default: f32) -> f32 {
+fn read_shadow_distance(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    default: f32,
+    convention: crate::units::ConventionTransform,
+) -> f32 {
     match get_attribute_as_f32(reader, path, "inputs:shadow:distance") {
-        Some(d) if d > 0.0 => d,
+        Some(d) if d > 0.0 => convention.length(d as f64) as f32,
         _ => default,
     }
 }
@@ -371,6 +377,7 @@ pub(crate) fn instantiate_light_prim(
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
     quality: lunco_render::RenderQualityProfile,
 ) -> bool {
+    let convention = crate::units::stage_convention(reader);
     // A SphereLight's scene-property ports are backed by a deferred Bevy light
     // component. Publish the generic pending state before projection can create
     // wires, so an epoch seal cannot turn that short installation window into a
@@ -412,15 +419,26 @@ pub(crate) fn instantiate_light_prim(
             let angular_diameter_deg = reader
                 .real_f32(sdf_path, "inputs:angle")
                 .unwrap_or(lunco_render::SOLAR_ANGULAR_DIAMETER_DEG);
-            // Cascade COUNT, the depth/normal biases and the per-platform atlas
-            // are engine policy — `lunco_render::LunarSunShadow` owns all of
-            // them, including the wasm overrides. Authored content overrides
-            // only the two ranges below.
+            // Renderer settings supply defaults. Authored content overrides
+            // only the two range attributes below, and the provenance marker
+            // preserves that distinction for live Graphics edits.
+            let first_cascade_far_bound =
+                if reader.has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound") {
+                    reader
+                        .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
+                        .map(|distance| convention.length(distance as f64) as f32)
+                        .unwrap_or(d.first_cascade_far_bound)
+                } else {
+                    d.first_cascade_far_bound
+                };
             let sun = LunarSunShadow {
-                maximum_distance: read_shadow_distance(reader, sdf_path, d.maximum_distance),
-                first_cascade_far_bound: reader
-                    .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
-                    .unwrap_or(d.first_cascade_far_bound),
+                maximum_distance: read_shadow_distance(
+                    reader,
+                    sdf_path,
+                    d.maximum_distance,
+                    convention,
+                ),
+                first_cascade_far_bound,
                 ..d
             };
 
@@ -433,6 +451,15 @@ pub(crate) fn instantiate_light_prim(
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
                 sun.directional_light(color, illuminance_lux, casts_shadows),
                 sun.cascade_config(),
+                ShadowRangeAuthorship {
+                    first_cascade_far_bound: reader
+                        .has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound"),
+                    maximum_distance: reader
+                        .has_authored_attribute(sdf_path, "inputs:shadow:distance")
+                        && reader
+                            .real_f32(sdf_path, "inputs:shadow:distance")
+                            .is_some_and(|distance| distance > 0.0),
+                },
                 UsdAuthoredLight,
             ));
             debug!(
@@ -534,8 +561,11 @@ pub(crate) fn instantiate_light_prim(
             // bare 4πr² would instead have silently rescaled every already-calibrated
             // light in the asset library by π on a change that authored nothing.
             const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
-            let light_radius = get_attribute_as_f32(reader, sdf_path, "inputs:radius")
-                .unwrap_or(DEFAULT_SPHERE_RADIUS);
+            let default_sphere_radius = convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32;
+            let light_radius = convention.length(
+                get_attribute_as_f32(reader, sdf_path, "inputs:radius")
+                    .unwrap_or(DEFAULT_SPHERE_RADIUS) as f64,
+            ) as f32;
             let normalize =
                 get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
             // `max(0)`: a negative radius is meaningless and would still square to a
@@ -543,7 +573,7 @@ pub(crate) fn instantiate_light_prim(
             let area_scale = if normalize {
                 1.0
             } else {
-                (light_radius.max(0.0) / DEFAULT_SPHERE_RADIUS).powi(2)
+                (light_radius.max(0.0) / default_sphere_radius).powi(2)
             };
             // `inputs:intensity` is the authored photometric power. Do not impose an
             // importer-side ceiling: a lunar rover deliberately needs a much brighter
@@ -563,7 +593,12 @@ pub(crate) fn instantiate_light_prim(
             // cast therefore authors `inputs:shadow:enable = false`, and the
             // light still ILLUMINATES.
             let shadow_maps_enabled = read_shadow_enable(reader, sdf_path);
-            let range = read_light_range(reader, sdf_path);
+            let range = read_light_range(
+                reader,
+                sdf_path,
+                quality.local_light_default_range,
+                convention,
+            );
 
             if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
@@ -597,6 +632,7 @@ pub(crate) fn instantiate_light_prim(
                         shadow_maps_enabled,
                         shadow_depth_bias: quality.shadow_depth_bias,
                         shadow_normal_bias: quality.shadow_normal_bias,
+                        shadow_map_near_z: quality.local_shadow_map_near_z,
                         inner_angle,
                         outer_angle,
                         ..default()
@@ -630,6 +666,7 @@ pub(crate) fn instantiate_light_prim(
                         shadow_maps_enabled,
                         shadow_depth_bias: quality.shadow_depth_bias,
                         shadow_normal_bias: quality.shadow_normal_bias,
+                        shadow_map_near_z: quality.local_shadow_map_near_z,
                         ..default()
                     },
                     lunco_core::PortSurfaceReady,
@@ -665,8 +702,12 @@ pub(crate) fn instantiate_light_prim(
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let width = get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0);
-            let height = get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0);
+            let width = convention.length(
+                get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0) as f64,
+            ) as f32;
+            let height = convention.length(
+                get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0) as f64,
+            ) as f32;
             // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
             // implements (see the long derivation there): with normalize OFF (the
             // schema default) `intensity` fixes radiance, so emitted power scales
@@ -676,7 +717,12 @@ pub(crate) fn instantiate_light_prim(
                 get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
             let area_scale = rect_area_scale(normalize, width, height);
             let intensity_lm = base_lm * area_scale;
-            let range = read_light_range(reader, sdf_path);
+            let range = read_light_range(
+                reader,
+                sdf_path,
+                quality.local_light_default_range,
+                convention,
+            );
 
             // `UsdLuxRectLight.inputs:texture:file` (an image mapped across the
             // rect) has no Bevy equivalent — say so rather than silently drop it.
@@ -892,6 +938,7 @@ def DomeLight "Fill"
 #[cfg(test)]
 mod photometry_tests {
     use super::*;
+    use crate::canonical::{CanonicalStage, StageRecipe};
 
     #[test]
     fn rect_power_scales_with_area_unless_normalized() {
@@ -917,5 +964,34 @@ mod photometry_tests {
         let cool = blackbody_rgb(10000.0);
         assert_eq!(cool.z, 1.0);
         assert!(cool.x < 0.9, "10000 K should be blue, got {cool:?}");
+    }
+
+    #[test]
+    fn authored_light_lengths_convert_from_stage_units_to_metres() {
+        let source = r#"#usda 1.0
+
+def Xform "World"
+{
+    def SphereLight "Lamp"
+    {
+        float lunco:light:range = 90
+        float inputs:radius = 2
+        float inputs:shadow:distance = 600
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = stage.view();
+        let lamp = SdfPath::new("/World/Lamp").unwrap();
+        let convention = crate::units::stage_convention(&view);
+
+        assert_eq!(read_light_range(&view, &lamp, 30.0, convention), 0.9);
+        assert_eq!(
+            convention.length(get_attribute_as_f32(&view, &lamp, "inputs:radius").unwrap() as f64)
+                as f32,
+            0.02
+        );
+        assert_eq!(read_shadow_distance(&view, &lamp, 1500.0, convention), 6.0);
     }
 }

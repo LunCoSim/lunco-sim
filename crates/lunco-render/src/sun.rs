@@ -15,9 +15,9 @@
 //!   what the prim authors,
 //! - the `SetEnvironmentLight` runtime tuner (`lunco-environment`).
 //!
-//! Cascade COUNT and the depth/normal biases live here and are **not**
-//! authorable — they are renderer policy, not scene content, and a knob for
-//! them would be tunable but not persistable since the loader reads neither.
+//! Renderer defaults for cascade ranges, count, and bias live in persisted
+//! Graphics settings. Explicit USD shadow-range attributes still override
+//! those defaults for the individual scene light.
 
 use bevy::light::{
     CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight, DirectionalLightShadowMap,
@@ -64,9 +64,9 @@ pub const SOLAR_ANGULAR_DIAMETER_DEG: f32 = 0.53;
 /// the builders here so render stays a low presentation crate with no dependency
 /// on environment.
 ///
-/// Construct with [`LunarSunShadow::default`] for the standard look, override
-/// individual fields for an authored scene (the USD loader does this from
-/// `lunco:shadow:*` attributes), then build the Bevy components with
+/// Construct with [`LunarSunShadow::default`] for the balanced Graphics
+/// settings, override individual fields for an authored scene (the USD loader
+/// does this from shadow attributes), then build the Bevy components with
 /// [`cascade_config`](Self::cascade_config),
 /// [`directional_light`](Self::directional_light) (which takes the illuminance)
 /// and [`shadow_map`](Self::shadow_map).
@@ -102,10 +102,12 @@ impl Default for LunarSunShadow {
     fn default() -> Self {
         Self {
             num_cascades: RenderingQuality::Balanced.profile().directional_cascades,
-            minimum_distance: 0.1,
-            first_cascade_far_bound: 40.0,
-            maximum_distance: 1500.0,
-            overlap_proportion: 0.1,
+            minimum_distance: RenderingQuality::Balanced.profile().shadow_minimum_distance,
+            first_cascade_far_bound: RenderingQuality::Balanced
+                .profile()
+                .shadow_first_cascade_far_bound,
+            maximum_distance: RenderingQuality::Balanced.profile().shadow_maximum_distance,
+            overlap_proportion: RenderingQuality::Balanced.profile().shadow_cascade_overlap,
             // The terrain needs a conservative bias under grazing lunar light:
             // smaller values turn its dense DEM triangles into visible shadow
             // acne. Contact detail remains with the native shadow maps: Bevy
@@ -123,9 +125,10 @@ impl Default for LunarSunShadow {
 impl LunarSunShadow {
     /// Build the canonical sun-shadow spec for a resolved quality profile.
     ///
-    /// Authored USD may still override the physical shadow distance and the
-    /// near/far split after this constructor returns. Resolution and cascade
-    /// count remain renderer policy and therefore come from the setting.
+    /// Authored USD may still override the standard maximum shadow distance and
+    /// renderer-specific first-cascade split after this constructor returns.
+    /// Omitted values, along with all other renderer quality values, come from
+    /// the settings profile.
     pub fn for_quality(quality: RenderingQuality) -> Self {
         Self::for_profile(quality.profile())
     }
@@ -136,6 +139,10 @@ impl LunarSunShadow {
         let mut sun = Self::default();
         sun.shadow_map_size = profile.directional_shadow_map_size;
         sun.num_cascades = profile.directional_cascades;
+        sun.minimum_distance = profile.shadow_minimum_distance;
+        sun.first_cascade_far_bound = profile.shadow_first_cascade_far_bound;
+        sun.maximum_distance = profile.shadow_maximum_distance;
+        sun.overlap_proportion = profile.shadow_cascade_overlap;
         sun.depth_bias = profile.shadow_depth_bias;
         sun.normal_bias = profile.shadow_normal_bias;
         sun

@@ -71,7 +71,7 @@ use bevy::render::{
 use bevy_egui::{egui, EguiContexts};
 use lunco_render::{
     estimate_shadow_allocation_bytes, RenderingQualitySettings, ShadowMapSuppressed,
-    ShadowMapSuppressionReason,
+    ShadowMapSuppressionReason, ShadowRangeAuthorship,
 };
 use lunco_settings::AppSettingsExt;
 
@@ -578,6 +578,7 @@ fn apply_render_quality(
         &mut bevy::light::DirectionalLight,
         &mut bevy::light::CascadeShadowConfig,
         Option<&ShadowMapSuppressed>,
+        Option<&ShadowRangeAuthorship>,
     )>,
     mut point_lights: Query<(
         Entity,
@@ -629,41 +630,63 @@ fn apply_render_quality(
         point_map.size = profile.point_shadow_map_size as usize;
     }
 
-    for (_, mut light, mut config, _) in &mut directional_lights {
+    for (_, mut light, mut config, _, authored_ranges) in &mut directional_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
 
-        if config.bounds.len() != profile.directional_cascades {
-            let Some(maximum_distance) = config.bounds.last().copied() else {
-                warn!("directional light has no authored cascade bounds; preserving its invalid shadow configuration");
-                continue;
-            };
-            let maximum_distance = maximum_distance.max(config.minimum_distance + f32::EPSILON);
-            let first_cascade_far_bound = config
-                .bounds
-                .first()
-                .copied()
-                .unwrap_or(maximum_distance)
-                .clamp(config.minimum_distance + f32::EPSILON, maximum_distance);
-            *config = bevy::light::CascadeShadowConfigBuilder {
-                num_cascades: profile.directional_cascades,
-                minimum_distance: config.minimum_distance,
+        let Some(current_maximum_distance) = config.bounds.last().copied() else {
+            warn!("directional light has no cascade bounds; preserving its invalid shadow configuration");
+            continue;
+        };
+        let current_first_cascade_far_bound = config
+            .bounds
+            .first()
+            .copied()
+            .unwrap_or(current_maximum_distance);
+        let authored_ranges = authored_ranges.copied().unwrap_or_default();
+        let maximum_distance = if authored_ranges.maximum_distance {
+            current_maximum_distance
+        } else {
+            profile.shadow_maximum_distance
+        };
+        let first_cascade_far_bound = if authored_ranges.first_cascade_far_bound {
+            current_first_cascade_far_bound
+        } else {
+            profile.shadow_first_cascade_far_bound
+        };
+        if maximum_distance <= profile.shadow_minimum_distance
+            || (profile.directional_cascades > 1
+                && first_cascade_far_bound <= profile.shadow_minimum_distance)
+            || first_cascade_far_bound > maximum_distance
+        {
+            warn!(
+                "graphics shadow defaults cannot be applied to directional light: minimum={}, first={}, maximum={}; preserving its current cascade configuration",
+                profile.shadow_minimum_distance,
                 first_cascade_far_bound,
                 maximum_distance,
-                overlap_proportion: config.overlap_proportion,
-            }
-            .build();
+            );
+            continue;
         }
+        *config = bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: profile.directional_cascades,
+            minimum_distance: profile.shadow_minimum_distance,
+            first_cascade_far_bound,
+            maximum_distance,
+            overlap_proportion: profile.shadow_cascade_overlap,
+        }
+        .build();
     }
 
     for (_, mut light, _) in &mut point_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
+        light.shadow_map_near_z = profile.local_shadow_map_near_z;
     }
 
     for (_, mut light, _) in &mut spot_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
+        light.shadow_map_near_z = profile.local_shadow_map_near_z;
     }
 }
 
@@ -674,6 +697,7 @@ fn restore_suppressed_shadow_maps(
         &mut bevy::light::DirectionalLight,
         &mut bevy::light::CascadeShadowConfig,
         Option<&ShadowMapSuppressed>,
+        Option<&ShadowRangeAuthorship>,
     )>,
     point_lights: &mut Query<(
         Entity,
@@ -686,7 +710,7 @@ fn restore_suppressed_shadow_maps(
         Option<&ShadowMapSuppressed>,
     )>,
 ) {
-    for (entity, mut light, _, suppressed) in directional_lights.iter_mut() {
+    for (entity, mut light, _, suppressed, _) in directional_lights.iter_mut() {
         if let Some(suppressed) = suppressed {
             light.shadow_maps_enabled = suppressed.was_enabled;
             commands.entity(entity).remove::<ShadowMapSuppressed>();
@@ -1191,6 +1215,7 @@ pub(crate) fn reset_render_recovery(
         &mut bevy::light::DirectionalLight,
         &mut bevy::light::CascadeShadowConfig,
         Option<&ShadowMapSuppressed>,
+        Option<&ShadowRangeAuthorship>,
     )>,
     mut point_lights: Query<(
         Entity,
@@ -1530,6 +1555,71 @@ mod tests {
         let spot_light = app.world().get::<bevy::light::SpotLight>(spot).unwrap();
         assert_eq!(spot_light.shadow_depth_bias, 0.37);
         assert_eq!(spot_light.shadow_normal_bias, 7.25);
+    }
+
+    #[test]
+    fn quality_range_defaults_update_without_overwriting_authored_ranges() {
+        let mut app = App::new();
+        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
+        app.init_resource::<Ladder>();
+        app.add_systems(Update, apply_render_quality.run_if(render_quality_changed));
+
+        let unauthored = app
+            .world_mut()
+            .spawn((
+                bevy::light::DirectionalLight::default(),
+                bevy::light::CascadeShadowConfig::default(),
+            ))
+            .id();
+        let authored = app
+            .world_mut()
+            .spawn((
+                bevy::light::DirectionalLight::default(),
+                bevy::light::CascadeShadowConfigBuilder {
+                    num_cascades: 2,
+                    minimum_distance: 0.1,
+                    first_cascade_far_bound: 30.0,
+                    maximum_distance: 700.0,
+                    overlap_proportion: 0.05,
+                }
+                .build(),
+                ShadowRangeAuthorship {
+                    first_cascade_far_bound: true,
+                    maximum_distance: true,
+                },
+            ))
+            .id();
+
+        app.update();
+        let mut settings = app.world_mut().resource_mut::<RenderingQualitySettings>();
+        settings.directional_cascades = 3;
+        settings.shadow_minimum_distance = 0.5;
+        settings.shadow_first_cascade_far_bound = 25.0;
+        settings.shadow_maximum_distance = 800.0;
+        settings.shadow_cascade_overlap = 0.2;
+        app.update();
+
+        let unauthored_config = app
+            .world()
+            .get::<bevy::light::CascadeShadowConfig>(unauthored)
+            .unwrap();
+        assert_eq!(unauthored_config.bounds.len(), 3);
+        assert_eq!(unauthored_config.minimum_distance, 0.5);
+        assert_eq!(unauthored_config.bounds.first().copied(), Some(25.0));
+        assert!((unauthored_config.bounds.last().copied().unwrap() - 800.0).abs() < 1e-3);
+        assert_eq!(unauthored_config.overlap_proportion, 0.2);
+
+        let authored_config = app
+            .world()
+            .get::<bevy::light::CascadeShadowConfig>(authored)
+            .unwrap();
+        assert_eq!(authored_config.bounds.len(), 3);
+        assert_eq!(authored_config.minimum_distance, 0.5);
+        assert_eq!(authored_config.bounds.first().copied(), Some(30.0));
+        assert!((authored_config.bounds.last().copied().unwrap() - 700.0).abs() < 1e-3);
+        assert_eq!(authored_config.overlap_proportion, 0.2);
     }
 
     /// The original reason this module exists: a one-frame depth/color size skew

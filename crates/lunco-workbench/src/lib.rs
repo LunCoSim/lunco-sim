@@ -5205,6 +5205,41 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .weak()
                     .small(),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_minimum_distance)
+                        .speed(0.1)
+                        .prefix("Shadow minimum distance: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_first_cascade_far_bound)
+                        .speed(1.0)
+                        .prefix("First cascade far bound: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_maximum_distance)
+                        .speed(10.0)
+                        .prefix("Maximum shadow distance: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_cascade_overlap)
+                        .speed(0.01)
+                        .prefix("Cascade overlap: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_light_default_range)
+                        .speed(1.0)
+                        .prefix("Local-light default range: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_shadow_map_near_z)
+                        .speed(0.01)
+                        .prefix("Local shadow near Z: ")
+                        .suffix(" m"),
+                );
             });
             ui.collapsing("Terrain mesh cache", |ui| {
                 let mut cache_mib = (settings.terrain_mesh_cache_bytes / (1024 * 1024)).max(1);

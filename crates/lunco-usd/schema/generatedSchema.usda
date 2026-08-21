@@ -233,9 +233,9 @@ class "LunCoShadowAPI" (
     namespace the way `ri:` / `karma:` / `arnold:` do.
 
     Cascade COUNT and the depth/normal biases are deliberately absent: they are
-    engine policy in `lunco_render::LunarSunShadow`, not scene content. An
-    authored value for them would be tunable but not persistable, and a scene
-    that set them would be describing this renderer rather than the light."""
+    persisted renderer settings in the Graphics section, not scene content. An
+    authored value for them would describe this renderer rather than the light;
+    the Graphics settings provide the renderer-wide defaults."""
 )
 {
     float lunco:shadow:firstCascadeFarBound = 40 (

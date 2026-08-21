@@ -43,8 +43,14 @@ impl RenderingQuality {
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
                 shadow_budget_bytes: 16 * 1024 * 1024,
+                shadow_minimum_distance: 0.1,
+                shadow_first_cascade_far_bound: 40.0,
+                shadow_maximum_distance: 1500.0,
+                shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.06,
                 shadow_normal_bias: 2.5,
+                local_light_default_range: 30.0,
+                local_shadow_map_near_z: 0.1,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
                 terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
@@ -63,8 +69,14 @@ impl RenderingQuality {
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
                 shadow_budget_bytes: 8 * 1024 * 1024,
+                shadow_minimum_distance: 0.1,
+                shadow_first_cascade_far_bound: 20.0,
+                shadow_maximum_distance: 600.0,
+                shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.1,
                 shadow_normal_bias: 4.0,
+                local_light_default_range: 20.0,
+                local_shadow_map_near_z: 0.2,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
                 terrain_lod_tile_resolution: 33,
                 terrain_lod_cinematic_resolution: 1025,
@@ -83,8 +95,14 @@ impl RenderingQuality {
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
                 shadow_budget_bytes: 64 * 1024 * 1024,
+                shadow_minimum_distance: 0.1,
+                shadow_first_cascade_far_bound: 80.0,
+                shadow_maximum_distance: 3000.0,
+                shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
+                local_light_default_range: 50.0,
+                local_shadow_map_near_z: 0.05,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
                 terrain_lod_tile_resolution: 65,
                 terrain_lod_cinematic_resolution: 2049,
@@ -109,10 +127,23 @@ pub struct RenderQualityProfile {
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
     pub shadow_budget_bytes: u64,
+    /// Default nearest distance for unauthored directional shadow cascades.
+    pub shadow_minimum_distance: f32,
+    /// Default far bound of the first directional shadow cascade.
+    pub shadow_first_cascade_far_bound: f32,
+    /// Default total range for unauthored directional shadows.
+    pub shadow_maximum_distance: f32,
+    /// Default cross-fade overlap between directional cascades.
+    pub shadow_cascade_overlap: f32,
     /// Depth bias used by native directional/local-light shadow maps.
     pub shadow_depth_bias: f32,
     /// Normal bias, in shadow texels, used to suppress grazing-angle acne.
     pub shadow_normal_bias: f32,
+    /// Range used when a local light leaves `lunco:light:range` at its schema
+    /// default of zero (the explicit USD meaning is engine default).
+    pub local_light_default_range: f32,
+    /// Near Z plane used by local-light shadow maps.
+    pub local_shadow_map_near_z: f32,
     /// Maximum estimated GPU upload footprint retained by streamed terrain
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
@@ -157,10 +188,22 @@ pub struct RenderingQualitySettings {
     pub max_spot_shadow_casters: usize,
     #[serde(default = "default_shadow_budget_bytes")]
     pub shadow_budget_bytes: u64,
+    #[serde(default = "default_shadow_minimum_distance")]
+    pub shadow_minimum_distance: f32,
+    #[serde(default = "default_shadow_first_cascade_far_bound")]
+    pub shadow_first_cascade_far_bound: f32,
+    #[serde(default = "default_shadow_maximum_distance")]
+    pub shadow_maximum_distance: f32,
+    #[serde(default = "default_shadow_cascade_overlap")]
+    pub shadow_cascade_overlap: f32,
     #[serde(default = "default_shadow_depth_bias")]
     pub shadow_depth_bias: f32,
     #[serde(default = "default_shadow_normal_bias")]
     pub shadow_normal_bias: f32,
+    #[serde(default = "default_local_light_default_range")]
+    pub local_light_default_range: f32,
+    #[serde(default = "default_local_shadow_map_near_z")]
+    pub local_shadow_map_near_z: f32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
     #[serde(default = "default_terrain_lod_tile_resolution")]
@@ -213,6 +256,22 @@ const fn default_shadow_budget_bytes() -> u64 {
     balanced_profile().shadow_budget_bytes
 }
 
+const fn default_shadow_minimum_distance() -> f32 {
+    balanced_profile().shadow_minimum_distance
+}
+
+const fn default_shadow_first_cascade_far_bound() -> f32 {
+    balanced_profile().shadow_first_cascade_far_bound
+}
+
+const fn default_shadow_maximum_distance() -> f32 {
+    balanced_profile().shadow_maximum_distance
+}
+
+const fn default_shadow_cascade_overlap() -> f32 {
+    balanced_profile().shadow_cascade_overlap
+}
+
 const fn default_terrain_mesh_cache_bytes() -> u64 {
     balanced_profile().terrain_mesh_cache_bytes
 }
@@ -223,6 +282,14 @@ const fn default_shadow_depth_bias() -> f32 {
 
 const fn default_shadow_normal_bias() -> f32 {
     balanced_profile().shadow_normal_bias
+}
+
+const fn default_local_light_default_range() -> f32 {
+    balanced_profile().local_light_default_range
+}
+
+const fn default_local_shadow_map_near_z() -> f32 {
+    balanced_profile().local_shadow_map_near_z
 }
 
 const fn default_terrain_lod_tile_resolution() -> usize {
@@ -268,8 +335,14 @@ impl RenderingQualitySettings {
             max_point_shadow_casters: self.max_point_shadow_casters,
             max_spot_shadow_casters: self.max_spot_shadow_casters,
             shadow_budget_bytes: self.shadow_budget_bytes,
+            shadow_minimum_distance: self.shadow_minimum_distance,
+            shadow_first_cascade_far_bound: self.shadow_first_cascade_far_bound,
+            shadow_maximum_distance: self.shadow_maximum_distance,
+            shadow_cascade_overlap: self.shadow_cascade_overlap,
             shadow_depth_bias: self.shadow_depth_bias,
             shadow_normal_bias: self.shadow_normal_bias,
+            local_light_default_range: self.local_light_default_range,
+            local_shadow_map_near_z: self.local_shadow_map_near_z,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
@@ -300,8 +373,14 @@ impl RenderingQualitySettings {
         self.max_point_shadow_casters = profile.max_point_shadow_casters;
         self.max_spot_shadow_casters = profile.max_spot_shadow_casters;
         self.shadow_budget_bytes = profile.shadow_budget_bytes;
+        self.shadow_minimum_distance = profile.shadow_minimum_distance;
+        self.shadow_first_cascade_far_bound = profile.shadow_first_cascade_far_bound;
+        self.shadow_maximum_distance = profile.shadow_maximum_distance;
+        self.shadow_cascade_overlap = profile.shadow_cascade_overlap;
         self.shadow_depth_bias = profile.shadow_depth_bias;
         self.shadow_normal_bias = profile.shadow_normal_bias;
+        self.local_light_default_range = profile.local_light_default_range;
+        self.local_shadow_map_near_z = profile.local_shadow_map_near_z;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
         self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
         self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
@@ -330,11 +409,41 @@ impl RenderingQualitySettings {
         if profile.shadow_budget_bytes == 0 {
             return Err("shadow byte ceiling must be greater than zero");
         }
+        if !profile.shadow_minimum_distance.is_finite() || profile.shadow_minimum_distance < 0.0 {
+            return Err("shadow minimum distance must be finite and non-negative");
+        }
+        if !profile.shadow_first_cascade_far_bound.is_finite()
+            || profile.shadow_first_cascade_far_bound <= profile.shadow_minimum_distance
+        {
+            return Err(
+                "first shadow cascade bound must be finite and greater than the minimum distance",
+            );
+        }
+        if !profile.shadow_maximum_distance.is_finite()
+            || profile.shadow_maximum_distance <= profile.shadow_first_cascade_far_bound
+        {
+            return Err(
+                "maximum shadow distance must be finite and greater than the first cascade bound",
+            );
+        }
+        if !profile.shadow_cascade_overlap.is_finite()
+            || !(0.0..1.0).contains(&profile.shadow_cascade_overlap)
+        {
+            return Err("shadow cascade overlap must be finite and in [0, 1)");
+        }
         if !profile.shadow_depth_bias.is_finite() || profile.shadow_depth_bias < 0.0 {
             return Err("shadow depth bias must be finite and non-negative");
         }
         if !profile.shadow_normal_bias.is_finite() || profile.shadow_normal_bias < 0.0 {
             return Err("shadow normal bias must be finite and non-negative");
+        }
+        if !profile.local_light_default_range.is_finite()
+            || profile.local_light_default_range <= 0.0
+        {
+            return Err("local-light default range must be finite and greater than zero");
+        }
+        if !profile.local_shadow_map_near_z.is_finite() || profile.local_shadow_map_near_z < 0.0 {
+            return Err("local shadow-map near Z must be finite and non-negative");
         }
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
@@ -380,8 +489,14 @@ impl Default for RenderingQualitySettings {
             max_point_shadow_casters: profile.max_point_shadow_casters,
             max_spot_shadow_casters: profile.max_spot_shadow_casters,
             shadow_budget_bytes: profile.shadow_budget_bytes,
+            shadow_minimum_distance: profile.shadow_minimum_distance,
+            shadow_first_cascade_far_bound: profile.shadow_first_cascade_far_bound,
+            shadow_maximum_distance: profile.shadow_maximum_distance,
+            shadow_cascade_overlap: profile.shadow_cascade_overlap,
             shadow_depth_bias: profile.shadow_depth_bias,
             shadow_normal_bias: profile.shadow_normal_bias,
+            local_light_default_range: profile.local_light_default_range,
+            local_shadow_map_near_z: profile.local_shadow_map_near_z,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
@@ -415,6 +530,17 @@ pub enum ShadowMapSuppressionReason {
 pub struct ShadowMapSuppressed {
     pub was_enabled: bool,
     pub reason: ShadowMapSuppressionReason,
+}
+
+/// Which directional shadow ranges were explicitly authored by USD.
+///
+/// Renderer settings provide defaults for omitted range attributes. This
+/// provenance marker lets a live settings change update those defaults without
+/// overwriting an explicit scene opinion.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ShadowRangeAuthorship {
+    pub first_cascade_far_bound: bool,
+    pub maximum_distance: bool,
 }
 
 /// Conservative estimate for directional shadow textures and their views.

@@ -14,7 +14,7 @@
 //! [`real`](UsdRead::real)).
 
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::{FieldKey, Path as SdfPath, Value};
 use openusd::usd::Stage;
 
 use crate::view::StageView;
@@ -118,6 +118,14 @@ pub trait UsdRead {
 
     /// The default-time composed value of attribute `name` on `prim`, owned.
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
+
+    /// Whether a composed attribute has an authored default or time-sample
+    /// opinion in any contributing layer. This deliberately inspects the
+    /// authored prim stack rather than the resolved value, because a schema
+    /// fallback must not be mistaken for a scene override.
+    fn has_authored_attribute(&self, _prim: &SdfPath, _name: &str) -> bool {
+        false
+    }
 
     /// The composed USD `doc` metadata for `prim`, or `None` when no authored
     /// opinion exists. Implementations must resolve the prim's authored stack
@@ -476,6 +484,29 @@ impl UsdRead for StageView<'_> {
             .get::<Value>()
             .ok()
             .flatten()
+    }
+
+    fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
+        if prim.append_property(name).is_err() {
+            return false;
+        }
+        self.stage()
+            .prim(prim.clone())
+            .prim_stack()
+            .ok()
+            .into_iter()
+            .flatten()
+            .any(|(layer_id, authored_path)| {
+                let Some(layer) = self.stage().layer(&layer_id) else {
+                    return false;
+                };
+                let Ok(authored_property) = authored_path.append_property(name) else {
+                    return false;
+                };
+                let data = layer.data();
+                data.has_field(&authored_property, FieldKey::Default.as_str())
+                    || data.has_field(&authored_property, FieldKey::TimeSamples.as_str())
+            })
     }
 
     fn documentation(&self, prim: &SdfPath) -> Option<String> {
@@ -853,5 +884,20 @@ mod real_reader_tests {
 
         // A genuinely absent attribute is still `None` (tolerance ≠ fabrication).
         assert_eq!(view.real(&world, "missing"), None, "absent attr stays None");
+    }
+
+    #[test]
+    fn authored_attribute_presence_is_separate_from_composed_value() {
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+            .expect("stage builds");
+        cs.stage()
+            .create_attribute("/World.authored", "float")
+            .unwrap()
+            .set(Value::Float(1.0))
+            .unwrap();
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+        assert!(view.has_authored_attribute(&world, "authored"));
+        assert!(!view.has_authored_attribute(&world, "missing"));
     }
 }
