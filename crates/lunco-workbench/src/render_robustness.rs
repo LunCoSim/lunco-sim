@@ -164,6 +164,12 @@ pub struct RenderHealth {
     /// Last failure class observed by the callback. This keeps recovery aligned
     /// with the resource that actually failed instead of guessing from totals.
     last_failure_kind: AtomicU8,
+    /// Conservative pre-extraction estimate for the shadow resources admitted
+    /// by the explicit graphics settings. The wgpu callback cannot inspect the
+    /// ECS world, so the policy publishes this here for actionable OOM logs.
+    shadow_estimated_bytes: AtomicU64,
+    /// The explicit graphics ceiling paired with `shadow_estimated_bytes`.
+    shadow_budget_bytes: AtomicU64,
 }
 
 impl RenderHealth {
@@ -184,6 +190,8 @@ impl RenderHealth {
         self.presentation_stopped.store(false, Ordering::Relaxed);
         self.last_failure_kind
             .store(FailureKind::Other as u8, Ordering::Relaxed);
+        self.shadow_estimated_bytes.store(0, Ordering::Relaxed);
+        self.shadow_budget_bytes.store(0, Ordering::Relaxed);
     }
 }
 
@@ -957,7 +965,15 @@ fn set_error_handler(
                 // allocate stays invalid for every frame after. Say so once, with
                 // the adapter, and let the ladder degrade.
                 wgpu::Error::OutOfMemory { .. } => {
-                    error!("wgpu out of memory on {adapter_desc}: {desc}");
+                    let estimated_bytes = health.shadow_estimated_bytes.load(Ordering::Relaxed);
+                    let budget_bytes = health.shadow_budget_bytes.load(Ordering::Relaxed);
+                    error!(
+                        "wgpu out of memory on {adapter_desc}: {desc}; configured shadow estimate={} bytes ({} MiB), explicit byte ceiling={} bytes ({} MiB)",
+                        estimated_bytes,
+                        estimated_bytes / (1024 * 1024),
+                        budget_bytes,
+                        budget_bytes / (1024 * 1024),
+                    );
                 }
                 wgpu::Error::Internal { .. } => {
                     error!("wgpu internal error on {adapter_desc}: {desc}");
@@ -986,6 +1002,7 @@ fn apply_shadow_budget_policy(
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
     warning: Option<Res<RenderWarning>>,
+    health: Option<Res<RenderHealthHandle>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_shadow_map: Res<bevy::light::PointLightShadowMap>,
     mut directionals: Query<(
@@ -1019,6 +1036,12 @@ fn apply_shadow_budget_policy(
         return;
     }
     let admission_budget = profile.shadow_budget_bytes;
+    if let Some(health) = health.as_ref() {
+        health
+            .0
+            .shadow_budget_bytes
+            .store(admission_budget, Ordering::Relaxed);
+    }
     let policy_signature = shadow_policy_signature(profile);
 
     let admission_changed = state.policy_signature != Some(policy_signature)
@@ -1106,6 +1129,9 @@ fn apply_shadow_budget_policy(
     }
 
     if light_count == 0 {
+        if let Some(health) = health.as_ref() {
+            health.0.shadow_estimated_bytes.store(0, Ordering::Relaxed);
+        }
         state.light_count = Some(0);
         state.enabled_caster_count = Some(0);
         state.directional_map_size = Some(directional_shadow_map.size);
@@ -1231,6 +1257,12 @@ fn apply_shadow_budget_policy(
         .filter(|candidate| kept_directionals.contains(&candidate.entity))
         .map(|candidate| candidate.cascade_layers)
         .sum::<usize>();
+    if let Some(health) = health.as_ref() {
+        health
+            .0
+            .shadow_estimated_bytes
+            .store(used_bytes, Ordering::Relaxed);
+    }
     let estimated_mib = used_bytes as f64 / (1024.0 * 1024.0);
     let shed_count = enabled_caster_count
         .saturating_sub(kept_directionals.len() + kept_points.len() + kept_spots.len());
@@ -1763,6 +1795,8 @@ mod tests {
         settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
+        let health = Arc::new(RenderHealth::default());
+        app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
         app.add_systems(PostUpdate, apply_shadow_budget_policy);
@@ -1795,6 +1829,14 @@ mod tests {
             .count();
         assert_eq!(enabled, 1);
         assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) <= 16 * 1024 * 1024);
+        assert_eq!(
+            health.shadow_estimated_bytes.load(Ordering::Relaxed),
+            estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0)
+        );
+        assert_eq!(
+            health.shadow_budget_bytes.load(Ordering::Relaxed),
+            16 * 1024 * 1024
+        );
         assert!(app.world().get_resource::<RenderWarning>().is_some());
     }
 
