@@ -117,25 +117,15 @@ pub(crate) struct UpdateActions {
     pub(crate) apply_requested: bool,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct UpdateTasks {
     check: Option<Task<UpdateCheckResult>>,
     download: Option<Task<UpdateDownloadResult>>,
     download_progress: Option<Arc<Mutex<mpsc::Receiver<i16>>>>,
 }
 
-impl Default for UpdateTasks {
-    fn default() -> Self {
-        Self {
-            check: None,
-            download: None,
-            download_progress: None,
-        }
-    }
-}
-
 enum UpdateCheckResult {
-    Available(UpdateInfo),
+    Available(Box<UpdateInfo>),
     NoUpdate,
     NotInstalled,
     Error(String),
@@ -454,7 +444,7 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
         match result {
             UpdateCheckResult::Available(info) => {
                 state.status = UpdateStatus::Available;
-                state.available = Some(info);
+                state.available = Some(*info);
                 state.download_progress = None;
             }
             UpdateCheckResult::NoUpdate => {
@@ -761,7 +751,7 @@ fn check_for_updates() -> UpdateCheckResult {
         Err(error) => return UpdateCheckResult::Error(error.to_string()),
     };
     match manager.check_for_updates() {
-        Ok(UpdateCheck::UpdateAvailable(info)) => UpdateCheckResult::Available(*info),
+        Ok(UpdateCheck::UpdateAvailable(info)) => UpdateCheckResult::Available(info),
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
             UpdateCheckResult::NoUpdate
         }
