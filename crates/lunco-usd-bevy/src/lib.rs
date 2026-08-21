@@ -5061,7 +5061,7 @@ fn read_patch_surface(
     // "unknown = no surface" contract.
     if reader.has_api_schema(path, "LunCoLatheAPI") {
         let l = lathe::read_lathe(reader, path)?;
-        return Some((l.surface(), Some(l)));
+        return Some((l.surface()?, Some(l)));
     }
 
     let points = read_mesh_points(reader, path)?;

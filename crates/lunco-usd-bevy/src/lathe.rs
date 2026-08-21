@@ -259,10 +259,7 @@ impl LatheProfile {
                 length,
                 contour,
             } => {
-                // `powf` on a clamped, non-negative `s` — a negative base with a
-                // fractional exponent is NaN, and NaN control points make the whole
-                // patch vanish with no mesh and no obvious cause.
-                let t = s.clamp(0.0, 1.0).powf(contour.max(1e-6));
+                let t = s.powf(contour);
                 (
                     throat_radius + (exit_radius - throat_radius) * t,
                     -length * s,
@@ -273,8 +270,8 @@ impl LatheProfile {
                 rim_radius,
                 focal_length,
             } => {
-                let r = apex_radius + (rim_radius - apex_radius) * s.clamp(0.0, 1.0);
-                (r, r * r / (4.0 * focal_length.max(1e-6)))
+                let r = apex_radius + (rim_radius - apex_radius) * s;
+                (r, r * r / (4.0 * focal_length))
             }
         }
     }
@@ -332,9 +329,44 @@ impl UsdLathe {
     /// The u direction is the exact rational 4-arc circle, generated here rather
     /// than authored so it cannot drift: 9 control points per ring with √2/2 on the
     /// diagonals and doubled interior knots. v walks the profile.
-    pub fn surface(&self) -> NurbsSurface {
-        let rings = self.rings.max(2);
-        let v_order = self.v_order.clamp(2, rings);
+    pub fn surface(&self) -> Option<NurbsSurface> {
+        if self.rings < 2 || self.v_order < 2 || self.v_order > self.rings {
+            return None;
+        }
+        let valid_profile = match self.profile {
+            LatheProfile::Bell {
+                throat_radius,
+                exit_radius,
+                length,
+                contour,
+            } => {
+                throat_radius.is_finite()
+                    && throat_radius > 0.0
+                    && exit_radius.is_finite()
+                    && exit_radius > 0.0
+                    && length.is_finite()
+                    && length > 0.0
+                    && contour.is_finite()
+                    && (0.0..=1.0).contains(&contour)
+            }
+            LatheProfile::Paraboloid {
+                apex_radius,
+                rim_radius,
+                focal_length,
+            } => {
+                apex_radius.is_finite()
+                    && apex_radius > 0.0
+                    && rim_radius.is_finite()
+                    && rim_radius > 0.0
+                    && focal_length.is_finite()
+                    && focal_length > 0.0
+            }
+        };
+        if !valid_profile {
+            return None;
+        }
+        let rings = self.rings;
+        let v_order = self.v_order;
 
         let mut points = Vec::with_capacity((rings * CIRCLE_U_COUNT) as usize);
         let mut weights = Vec::with_capacity((rings * CIRCLE_U_COUNT) as usize);
@@ -358,7 +390,7 @@ impl UsdLathe {
             weights.extend_from_slice(&[1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0]);
         }
 
-        NurbsSurface {
+        Some(NurbsSurface {
             points,
             weights,
             u_count: CIRCLE_U_COUNT,
@@ -368,7 +400,7 @@ impl UsdLathe {
             u_knots: CIRCLE_U_KNOTS.to_vec(),
             v_knots: crate::nurbs::default_clamped_knots(rings as usize, v_order as usize),
             left_handed: self.left_handed,
-        }
+        })
     }
 }
 
@@ -507,7 +539,10 @@ pub(crate) fn read_required_nurbs_int(
 /// an identical net does not cascade into a pointless retessellation.
 pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdLathe>>) {
     for (lathe, mut surface) in &mut q {
-        let next = lathe.surface();
+        let Some(next) = lathe.surface() else {
+            warn!("[usd-bevy] invalid UsdLathe parameters; retaining the previous surface");
+            continue;
+        };
         if *surface != next {
             *surface = next;
         }
@@ -603,7 +638,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         assert_eq!(s.u_count, 9);
         assert_eq!(s.v_count, 4);
         assert_eq!(s.points.len(), 36);
@@ -642,7 +677,8 @@ mod tests {
             v_order: 3,
             left_handed: false,
         }
-        .surface();
+        .surface()
+        .expect("valid lathe");
         let mesh = surface
             .mesh(lunco_render::RenderingQuality::Balanced.profile())
             .expect("valid reflector mesh");
@@ -693,7 +729,8 @@ mod tests {
             v_order: 3,
             left_handed: false,
         }
-        .surface();
+        .surface()
+        .expect("valid lathe");
         let low = surface
             .mesh(lunco_render::RenderingQuality::Low.profile())
             .expect("low-quality reflector mesh");
@@ -724,7 +761,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         for (ring, station) in [(1usize, 1.0f32 / 3.0), (2, 2.0 / 3.0)] {
             // Verbatim `r_station_N = throat + (exit - throat) * (N/3)^contour`.
             let want = throat + (exit - throat) * station.powf(contour);
@@ -759,7 +796,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         let grid = crate::nurbs::sample_nurbs_patch(
             &s.points,
             &s.weights,
@@ -807,7 +844,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let before = lathe.surface();
+        let before = lathe.surface().expect("valid lathe");
         if let LatheProfile::Bell {
             ref mut exit_radius,
             ..
@@ -815,7 +852,7 @@ mod tests {
         {
             *exit_radius = 2.0;
         }
-        let after = lathe.surface();
+        let after = lathe.surface().expect("valid lathe");
         assert_ne!(before, after, "a changed parameter must change the net");
         assert!((after.points[27][0] - 2.0).abs() < 1e-6, "new exit radius");
         // ...and the untouched end must NOT have moved.
@@ -825,9 +862,8 @@ mod tests {
         );
     }
 
-    /// A profile with a wild exponent must not produce NaN control points. A NaN in
-    /// the net makes the entire patch vanish with no mesh, which is the worst
-    /// failure mode available and the reason `at()` clamps its base.
+    /// Invalid reflected/script parameters are refused rather than normalized into
+    /// a different surface. The last valid ECS mesh remains authoritative.
     #[test]
     fn degenerate_parameters_do_not_produce_nan_points() {
         for profile in [
@@ -843,19 +879,39 @@ mod tests {
                 focal_length: 0.0,
             },
         ] {
-            let s = UsdLathe {
+            let surface = UsdLathe {
                 profile,
                 rings: 4,
                 v_order: 3,
                 left_handed: false,
             }
             .surface();
-            for p in &s.points {
-                assert!(
-                    p.iter().all(|c| c.is_finite()),
-                    "non-finite control point {p:?}"
-                );
-            }
+            assert!(
+                surface.is_none(),
+                "invalid lathe parameters must be refused"
+            );
         }
+        let valid_profile = LatheProfile::Bell {
+            throat_radius: 0.35,
+            exit_radius: 1.35,
+            length: 1.9,
+            contour: 0.55,
+        };
+        assert!((UsdLathe {
+            profile: valid_profile.clone(),
+            rings: 1,
+            v_order: 2,
+            left_handed: false,
+        })
+        .surface()
+        .is_none());
+        assert!((UsdLathe {
+            profile: valid_profile,
+            rings: 4,
+            v_order: 5,
+            left_handed: false,
+        })
+        .surface()
+        .is_none());
     }
 }
