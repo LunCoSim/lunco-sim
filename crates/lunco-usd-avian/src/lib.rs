@@ -642,10 +642,25 @@ fn collect_child_colliders_from_usd(
             continue;
         }
 
-        // Check if child has collision enabled
-        let child_collision = reader
-            .boolean(&child_path, ptok::A_COLLISION_ENABLED)
-            .unwrap_or(true);
+        // The standard schema default is enabled, but an authored value of the
+        // wrong type is malformed data, not an omitted default. Do not let a
+        // bad collision flag silently turn a visual/physics mismatch into a
+        // solid collider.
+        let child_collision = match read_authored_bool_or_default(
+            reader,
+            &child_path,
+            ptok::A_COLLISION_ENABLED,
+            true,
+        ) {
+            Ok(value) => value,
+            Err(()) => {
+                error!(
+                    "[usd-avian] {child_path} has malformed {}; refusing collider projection",
+                    ptok::A_COLLISION_ENABLED
+                );
+                continue;
+            }
+        };
         if !child_collision {
             continue;
         }
@@ -4652,6 +4667,29 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
         let error = collect_child_colliders_from_usd(&stage.view(), &root)
             .expect_err("malformed authored transform must reject compound discovery");
         assert_eq!(error.prim, "/Root/Body");
+    }
+
+    #[test]
+    fn malformed_collision_enabled_does_not_enable_compound_geometry() {
+        let source = r#"#usda 1.0
+def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
+{
+    def Cube "Body" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    {
+        double size = 2
+    float physics:collisionEnabled = 1.0
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
+            .expect("build stage");
+        let root = SdfPath::new("/Root").unwrap();
+        assert!(
+            collect_child_colliders_from_usd(&stage.view(), &root)
+                .expect("the malformed flag is refused without corrupting traversal")
+                .is_empty(),
+            "an invalid authored collisionEnabled must not become the schema default true"
+        );
     }
 
     /// A ground plane one level under a plain `Xform` (the shape every scene and
