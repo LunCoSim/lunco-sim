@@ -54,6 +54,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
+pub use lunco_usd_bevy::{effective_purpose, Purpose};
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_primitive_axis, read_shape_dims,
     read_transform_from_usd, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView,
@@ -1453,52 +1454,6 @@ fn extract_avian_prim(
         // Neither a body nor a collider: no physics components, only the marker.
         commands.entity(entity).try_insert(UsdAvianProcessed);
     }
-}
-
-/// `UsdGeomImageable.purpose` — what a prim's geometry is FOR.
-///
-/// The four standard values, and what each means to a simulator:
-///
-/// | purpose | drawn | collided |
-/// |---|---|---|
-/// | `default` | yes | yes |
-/// | `render` | yes | only when no `proxy` sibling exists |
-/// | `proxy` | no | yes — this IS the collision shape |
-/// | `guide` | no | never |
-///
-/// Authoring none of them (which every asset in this repo does today) means
-/// `default`, so nothing shipped changes behaviour by this existing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Purpose {
-    /// `default` — the ordinary case: drawn and collided.
-    Default,
-    /// `render` — the presentation form; deferred to a `proxy` for physics.
-    Render,
-    /// `proxy` — the stand-in: cheap collision geometry, not drawn.
-    Proxy,
-    /// `guide` — annotation: never drawn in a beauty pass, never physical.
-    Guide,
-}
-
-/// The composed purpose of `path`, which is INHERITED: `purpose` is a uniform
-/// token, so a prim with none of its own takes its nearest ancestor's. Authoring
-/// it once on a `Proxy` scope is meant to cover everything inside it.
-pub fn effective_purpose(reader: &StageView<'_>, path: &SdfPath) -> Purpose {
-    let mut cur = Some(path.clone());
-    while let Some(p) = cur {
-        if p.is_abs_root() {
-            break;
-        }
-        match reader.text(&p, "purpose").as_deref() {
-            Some("guide") => return Purpose::Guide,
-            Some("proxy") => return Purpose::Proxy,
-            Some("render") => return Purpose::Render,
-            Some("default") => return Purpose::Default,
-            _ => {}
-        }
-        cur = p.parent();
-    }
-    Purpose::Default
 }
 
 /// Put a collider on the layers its `PhysicsCollisionGroup` membership implies.

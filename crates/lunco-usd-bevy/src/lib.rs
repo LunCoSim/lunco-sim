@@ -48,6 +48,38 @@ pub use openusd::sdf::Path as SdfPath;
 pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
 
+/// The standard `UsdGeomImageable.purpose` value resolved for a composed prim.
+///
+/// Physics and placement both need the same inherited purpose semantics. Keep
+/// the reader at the USD boundary so downstream projections cannot drift into
+/// separate path walks with different collision ownership rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    Default,
+    Render,
+    Proxy,
+    Guide,
+}
+
+/// Resolve the composed, inherited `UsdGeomImageable.purpose` value.
+pub fn effective_purpose(reader: &StageView<'_>, path: &SdfPath) -> Purpose {
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            break;
+        }
+        match reader.text(&p, "purpose").as_deref() {
+            Some("guide") => return Purpose::Guide,
+            Some("proxy") => return Purpose::Proxy,
+            Some("render") => return Purpose::Render,
+            Some("default") => return Purpose::Default,
+            _ => {}
+        }
+        cur = p.parent();
+    }
+    Purpose::Default
+}
+
 mod camera;
 pub mod camera_mount;
 pub mod camera_switch;
@@ -4371,10 +4403,10 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 /// same composed stage the live entity is instantiated from, so the placement
 /// solver and the physics body can never disagree.
 ///
-/// Returns `Ok(None)` when no collision geometry is found (a pure-visual prop,
-/// or a mesh-only asset whose shape this reader doesn't dimension). Malformed
-/// authored collision data is an error, not an empty footprint: callers must
-/// not replace it with a spawn heuristic.
+/// Returns `Ok(None)` when no collision geometry is found (a pure-visual prop).
+/// Native `UsdGeomMesh` collision topology is included using the same indexed
+/// points consumed by Avian. Malformed authored collision data is an error, not
+/// an empty footprint: callers must not replace it with a spawn heuristic.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ObjectAabb {
     pub min: bevy::math::DVec3,
@@ -4435,8 +4467,56 @@ pub fn collision_aabb(
     let root = SdfPath::new(root_prim)
         .map_err(|_| CollisionAabbError::InvalidRootPath(root_prim.to_owned()))?;
     let root_tf = collision_local_transform(reader, &root)?;
+    let mut candidates = vec![(root.clone(), root_tf)];
+    gather_collision_aabb_candidates(reader, &root, root_tf, &mut candidates)?;
+    let has_proxy = candidates
+        .iter()
+        .any(|(path, _)| effective_purpose(reader, path) == Purpose::Proxy);
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
-    accumulate_collision_aabb(reader, &root, root_tf, &mut acc)?;
+    for (path, world_tf) in candidates {
+        if reader
+            .text(&path, "lunco:triggerZone")
+            .is_some_and(|zone| !zone.trim().is_empty())
+        {
+            continue;
+        }
+        let purpose = effective_purpose(reader, &path);
+        if purpose == Purpose::Guide || (has_proxy && purpose == Purpose::Render) {
+            continue;
+        }
+        if !reader.has_api_schema(&path, openusd::schemas::physics::tokens::API_COLLISION) {
+            continue;
+        }
+        let collides = match reader.boolean(&path, "physics:collisionEnabled") {
+            Some(value) => value,
+            None if reader.has_authored_attribute(&path, "physics:collisionEnabled") => {
+                return Err(CollisionAabbError::InvalidCollisionEnabled {
+                    prim: path.as_str().to_owned(),
+                });
+            }
+            None => true,
+        };
+        if !collides {
+            continue;
+        }
+        let ty = reader.type_name(&path).unwrap_or_default();
+        let corners = local_shape_corners(reader, &path, &ty).ok_or_else(|| {
+            CollisionAabbError::MalformedPrimitive {
+                prim: path.as_str().to_owned(),
+                type_name: ty.clone(),
+            }
+        })?;
+        for c in corners {
+            let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
+            match acc.as_mut() {
+                Some((min, max)) => {
+                    *min = min.min(w);
+                    *max = max.max(w);
+                }
+                None => acc = Some((w, w)),
+            }
+        }
+    }
     Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
 }
 
@@ -4469,54 +4549,15 @@ fn authored_empty_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool
     }
 }
 
-/// DFS helper for [`collision_aabb`]: compose transforms down the tree (Bevy
-/// `Transform * Transform` = parent ∘ child-local, scale kept — USD propagates
-/// parent scale to child geometry) and fold each collision-enabled shape's
-/// transformed corners into `acc`.
-fn accumulate_collision_aabb(
+/// DFS helper for [`collision_aabb`]: collect the same ownership candidates as
+/// the Avian compound-body reader. Transforms are composed in the root frame;
+/// nested rigid bodies and vehicle wheels remain their own physics owners.
+fn gather_collision_aabb_candidates(
     reader: &StageView<'_>,
     path: &SdfPath,
     world_tf: Transform,
-    acc: &mut Option<(bevy::math::DVec3, bevy::math::DVec3)>,
+    out: &mut Vec<(SdfPath, Transform)>,
 ) -> Result<(), CollisionAabbError> {
-    // Fold this prim's own geometry if it is a collision-enabled shape. A child
-    // that explicitly sets `physics:collisionEnabled = false` (a visual-only part
-    // like an antenna or solar panel with no collider) is skipped, so the AABB
-    // tracks the physical footprint — exactly the shapes the avian compound
-    // collider is assembled from.
-    if reader.has_api_schema(path, openusd::schemas::physics::tokens::API_COLLISION) {
-        if let Some(ty) = reader.type_name(path) {
-            let collides = match reader.boolean(path, "physics:collisionEnabled") {
-                Some(value) => value,
-                None if reader.has_authored_attribute(path, "physics:collisionEnabled") => {
-                    return Err(CollisionAabbError::InvalidCollisionEnabled {
-                        prim: path.as_str().to_owned(),
-                    });
-                }
-                None => true,
-            };
-            if collides {
-                if is_collision_primitive_type(&ty) {
-                    let corners = local_shape_corners(reader, path, &ty).ok_or_else(|| {
-                        CollisionAabbError::MalformedPrimitive {
-                            prim: path.as_str().to_owned(),
-                            type_name: ty.clone(),
-                        }
-                    })?;
-                    for c in corners {
-                        let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
-                        match acc {
-                            Some((min, max)) => {
-                                *min = min.min(w);
-                                *max = max.max(w);
-                            }
-                            None => *acc = Some((w, w)),
-                        }
-                    }
-                }
-            }
-        }
-    }
     for child in reader.children(path) {
         if !reader.is_active(&child) {
             continue;
@@ -4530,16 +4571,10 @@ fn accumulate_collision_aabb(
         }
         let local = collision_local_transform(reader, &child)?;
         let child_world = world_tf * local;
-        accumulate_collision_aabb(reader, &child, child_world, acc)?;
+        out.push((child.clone(), child_world));
+        gather_collision_aabb_candidates(reader, &child, child_world, out)?;
     }
     Ok(())
-}
-
-fn is_collision_primitive_type(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "Cube" | "Sphere" | "Cylinder" | "Cone" | "Capsule" | "Plane"
-    )
 }
 
 #[cfg(test)]
@@ -4580,6 +4615,9 @@ def Xform "Root"
     fn visual_primitive_without_collision_api_is_not_a_collision_aabb() {
         let stage = parse(
             r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
 def Xform "Root"
 {
     def Cube "Visual"
@@ -4595,6 +4633,66 @@ def Xform "Root"
                 .is_none(),
             "visual geometry without UsdPhysicsCollisionAPI must not affect placement"
         );
+    }
+
+    #[test]
+    fn proxy_collision_geometry_excludes_render_geometry() {
+        let stage = parse(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def Xform "Root"
+{
+    def Cube "Render" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token purpose = "render"
+        double size = 10
+    }
+    def Cube "Proxy" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token purpose = "proxy"
+        double size = 2
+    }
+}
+"#,
+        );
+        let aabb = collision_aabb(&stage.view(), "/Root")
+            .expect("collision AABB derivation")
+            .expect("proxy collision AABB");
+        assert_eq!(aabb.min, bevy::math::DVec3::splat(-1.0));
+        assert_eq!(aabb.max, bevy::math::DVec3::splat(1.0));
+    }
+
+    #[test]
+    fn native_mesh_collision_geometry_is_used_for_placement() {
+        let stage = parse(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def Xform "Root"
+{
+    def Mesh "Mesh" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        point3f[] points = [(-2, -1, -3), (4, 5, 6), (1, 2, -1)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+    }
+}
+"#,
+        );
+        let aabb = collision_aabb(&stage.view(), "/Root")
+            .expect("collision AABB derivation")
+            .expect("mesh collision AABB");
+        assert_eq!(aabb.min, bevy::math::DVec3::new(-2.0, -1.0, -3.0));
+        assert_eq!(aabb.max, bevy::math::DVec3::new(4.0, 5.0, 6.0));
     }
 
     #[test]
@@ -4657,6 +4755,24 @@ fn local_shape_corners(
     path: &SdfPath,
     ty: &str,
 ) -> Option<Vec<bevy::math::DVec3>> {
+    if ty == "Mesh" {
+        let approximation = reader.text(path, "physics:approximation");
+        if approximation
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "none" | "convexHull" | "convexDecomposition"))
+            || (approximation.is_none()
+                && reader.has_authored_attribute(path, "physics:approximation"))
+        {
+            return None;
+        }
+        let (vertices, _) = read_usd_mesh_indexed(reader, path)?;
+        return Some(
+            vertices
+                .into_iter()
+                .map(|[x, y, z]| bevy::math::DVec3::new(x as f64, y as f64, z as f64))
+                .collect(),
+        );
+    }
     // Half-extents in the shape's Y-axial local frame; `axial` = the `axis` token
     // may re-orient it (round shapes only — box/sphere/plane are axis-agnostic).
     let (half, axial) = match read_shape_dims(reader, path, ty)? {
