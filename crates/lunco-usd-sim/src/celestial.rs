@@ -817,10 +817,8 @@ pub fn insert_celestial_comms_components(
     // inherits that prim's pose, scale and extent.
     //
     // The BOX IS THE PRIM'S `extent` — core UsdGeom, no invented size vocabulary.
-    // Absent (our reader sees only authored attributes, and USD computes extent
-    // for a gprim rather than requiring it), it falls back to the unit-cube
-    // convention: a `Cube` with `size = 1` scaled by S has half-extents S/2, which
-    // is exactly how `props/wall.usda` and the sandbox slabs are written.
+    // If a Cube omits its computed extent from the layer, the projector derives
+    // it from the standard `size` attribute. Other geometry must author `extent`.
     //
     // NOT derived from `PhysicsCollisionAPI`: opacity is a material property, not
     // a collision one (a handrail collides but does not block; a radome may block
@@ -856,19 +854,37 @@ pub fn insert_celestial_comms_components(
     }
 }
 
-/// The occluding box from the prim's UsdGeom `extent` (`float3[2]` — min, max),
-/// else the unit-cube default. Both are pre-scale, in the prim's local space; the
-/// kernel applies the `Transform` scale.
+/// The occluding box from the prim's UsdGeom `extent` (`float3[2]` — min, max).
+/// A cube may omit its computed extent; in that case the standard `size` attribute
+/// is the authoritative source for the local box. Both are pre-scale, in the
+/// prim's local space; the kernel applies the `Transform` scale.
 fn read_occluder_box(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
 ) -> Result<lunco_celestial::link::LinkOccluder, ()> {
     use bevy::math::DVec3;
-    let Some(value) = reader.attr_value(sdf_path, "extent") else {
-        if reader.has_authored_attribute(sdf_path, "extent") {
+    if !reader.has_authored_attribute(sdf_path, "extent") {
+        // `extent` is a computed/cacheable UsdGeom attribute. Its schema fallback
+        // is not an authored opinion and is therefore not valid geometry for a
+        // custom `size` (the shipped wall is size 1, while Cube's fallback extent
+        // describes size 2). Derive only the standard cube case; every other
+        // occluder must author the standard extent explicitly.
+        if reader.prim_type_name(sdf_path).as_deref() != Some("Cube") {
             return Err(());
         }
-        return Ok(lunco_celestial::link::LinkOccluder::default());
+        let Some(size) = reader.real(sdf_path, "size") else {
+            return Err(());
+        };
+        if !size.is_finite() || size <= 0.0 {
+            return Err(());
+        }
+        return Ok(lunco_celestial::link::LinkOccluder {
+            half_extents: DVec3::splat(size * 0.5),
+            center: DVec3::ZERO,
+        });
+    }
+    let Some(value) = reader.attr_value(sdf_path, "extent") else {
+        return Err(());
     };
     let (min, max) = match value {
         Value::Vec3fVec(values) if values.len() == 2 => (
@@ -1063,6 +1079,37 @@ def Xform "World"
     {
         float3[] extent = [(-2, -3, -4)]
     }
+}
+"#,
+        );
+        assert!(read_occluder_box(&stage.view(), &path).is_err());
+    }
+
+    #[test]
+    fn omitted_cube_extent_uses_the_authored_standard_size() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Cube "Body"
+    {
+        double size = 1.0
+    }
+}
+"#,
+        );
+        let occluder = read_occluder_box(&stage.view(), &path).expect("valid cube size");
+        assert_eq!(occluder.center, bevy::math::DVec3::ZERO);
+        assert_eq!(occluder.half_extents, bevy::math::DVec3::splat(0.5));
+    }
+
+    #[test]
+    fn omitted_extent_on_non_cube_is_rejected() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body" {}
 }
 "#,
         );
