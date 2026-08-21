@@ -1141,13 +1141,29 @@ fn passive_prismatic_suspension_from_usd(
         return None;
     }
 
-    let rest_position = reader
-        .real_f32(prim, "lunco:prismaticSuspension:restPosition")
-        .unwrap_or(0.0) as f64;
-    let spring_k = reader.real_f32(prim, "lunco:prismaticSuspension:stiffness")? as f64;
-    let damping_c = reader.real_f32(prim, "lunco:prismaticSuspension:damping")? as f64;
-    let yield_force = reader.real_f32(prim, "lunco:prismaticSuspension:yieldForce")? as f64;
-    let max_force = reader.real_f32(prim, "lunco:prismaticSuspension:maxForce")? as f64;
+    let read_required_real = |name: &str, default: Option<f64>| -> Result<f64, ()> {
+        match reader.real_f32(prim, name) {
+            Some(value) if value.is_finite() => Ok(f64::from(value)),
+            Some(_) => Err(()),
+            None if reader.has_authored_attribute(prim, name) => Err(()),
+            None => default.ok_or(()),
+        }
+    };
+    let (rest_position, spring_k, damping_c, yield_force, max_force) = (|| {
+        Ok((
+            read_required_real("lunco:prismaticSuspension:restPosition", Some(0.0))?,
+            read_required_real("lunco:prismaticSuspension:stiffness", None)?,
+            read_required_real("lunco:prismaticSuspension:damping", None)?,
+            read_required_real("lunco:prismaticSuspension:yieldForce", None)?,
+            read_required_real("lunco:prismaticSuspension:maxForce", None)?,
+        ))
+    })() else {
+        warn!(
+            "USD passive suspension {} has malformed or missing numeric attributes; suspension ignored",
+            prim.as_str()
+        );
+        return None;
+    };
     if !spring_k.is_finite()
         || spring_k <= 0.0
         || !damping_c.is_finite()
