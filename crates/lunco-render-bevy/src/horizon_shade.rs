@@ -83,9 +83,20 @@ fn sync_horizon_quality_settings(
 /// texture, static size/resolution, the per-frame sun direction, and the
 /// **shadow cache** binding + `shadow_cache_on` flag.
 /// A terrain with no authored shader gets the default `terrain_shadow.wgsl`
-/// (albedo from its `displayColor`). Idempotent and self-healing against
-/// later material swaps; steady-state cost is a uniform compare per terrain
-/// (writes only when the sun moves or the cache swaps).
+/// (albedo from its already-resolved `StandardMaterial`). Idempotent and
+/// self-healing against later material swaps; steady-state cost is a uniform
+/// compare per terrain (writes only when the sun moves or the cache swaps).
+///
+/// A pending or missing standard-material asset is not replaced with a guessed
+/// colour. The appearance binder may not have resolved the USD look yet; taking
+/// over the entity at that point would permanently erase the authored look.
+fn resolved_terrain_albedo(
+    material: Option<&MeshMaterial3d<StandardMaterial>>,
+    materials: &Assets<StandardMaterial>,
+) -> Option<Color> {
+    material.and_then(|handle| materials.get(&handle.0).map(|material| material.base_color))
+}
+
 #[allow(clippy::type_complexity)]
 pub fn wire_terrain_materials(
     mut commands: Commands,
@@ -273,10 +284,13 @@ pub fn wire_terrain_materials(
         } else {
             // No authored shader: apply the default ray-march terrain
             // shader, carrying the displayColor albedo over.
-            let albedo = std_mat
-                .and_then(|h| std_mats.get(&h.0))
-                .map(|m| m.base_color)
-                .unwrap_or(Color::srgb(0.5, 0.5, 0.5));
+            // The StandardMaterial may be absent for one or more frames while
+            // the PbrLook observer resolves the authored appearance. Do not
+            // turn that transient state into an irreversible shader takeover
+            // with an arbitrary gray colour.
+            let Some(albedo) = resolved_terrain_albedo(std_mat, &std_mats) else {
+                continue;
+            };
             let a = albedo.to_linear();
             let mut material = ShaderMaterial {
                 shader: asset_server.load("shaders/terrain_shadow.wgsl"),
@@ -631,5 +645,14 @@ mod tests {
             None,
             "terrain must be wired by wire_terrain_materials, not this system"
         );
+    }
+
+    #[test]
+    fn terrain_shader_waits_for_a_resolved_material_instead_of_guessing_gray() {
+        let materials = Assets::<StandardMaterial>::default();
+        let missing = MeshMaterial3d::<StandardMaterial>(Handle::default());
+
+        assert_eq!(resolved_terrain_albedo(None, &materials), None);
+        assert_eq!(resolved_terrain_albedo(Some(&missing), &materials), None);
     }
 }
