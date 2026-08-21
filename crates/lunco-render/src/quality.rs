@@ -56,7 +56,7 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.06,
                 shadow_normal_bias: 2.5,
                 camera_tone_map: ToneMap::AgX,
-                camera_msaa: balanced_camera_msaa(),
+                camera_msaa: MsaaLevel::X2,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -65,7 +65,7 @@ impl RenderingQuality {
                 dome_default_intensity: 1_000.0,
                 local_light_default_range: 30.0,
                 local_shadow_map_near_z: 0.1,
-                dome_cubemap_face_size: balanced_dome_face_size(),
+                dome_cubemap_face_size: 1024,
                 primitive_sphere_longitudes: 48,
                 primitive_sphere_latitudes: 32,
                 primitive_radial_segments: 64,
@@ -130,7 +130,7 @@ impl RenderingQuality {
                 dome_default_intensity: 1_000.0,
                 local_light_default_range: 20.0,
                 local_shadow_map_near_z: 0.2,
-                dome_cubemap_face_size: low_dome_face_size(),
+                dome_cubemap_face_size: 512,
                 primitive_sphere_longitudes: 24,
                 primitive_sphere_latitudes: 16,
                 primitive_radial_segments: 32,
@@ -186,7 +186,7 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
                 camera_tone_map: ToneMap::AgX,
-                camera_msaa: high_camera_msaa(),
+                camera_msaa: MsaaLevel::X4,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -195,7 +195,7 @@ impl RenderingQuality {
                 dome_default_intensity: 1_000.0,
                 local_light_default_range: 50.0,
                 local_shadow_map_near_z: 0.05,
-                dome_cubemap_face_size: high_dome_face_size(),
+                dome_cubemap_face_size: 2048,
                 primitive_sphere_longitudes: 96,
                 primitive_sphere_latitudes: 64,
                 primitive_radial_segments: 128,
@@ -690,30 +690,6 @@ const fn default_dome_default_intensity() -> f32 {
     balanced_profile().dome_default_intensity
 }
 
-const fn balanced_dome_face_size() -> u32 {
-    if cfg!(target_arch = "wasm32") {
-        512
-    } else {
-        1024
-    }
-}
-
-const fn low_dome_face_size() -> u32 {
-    if cfg!(target_arch = "wasm32") {
-        256
-    } else {
-        512
-    }
-}
-
-const fn high_dome_face_size() -> u32 {
-    if cfg!(target_arch = "wasm32") {
-        1024
-    } else {
-        2048
-    }
-}
-
 const fn default_dome_cubemap_face_size() -> u32 {
     balanced_profile().dome_cubemap_face_size
 }
@@ -736,22 +712,6 @@ const fn default_primitive_capsule_longitudes() -> u32 {
 
 const fn default_primitive_capsule_latitudes() -> u32 {
     balanced_profile().primitive_capsule_latitudes
-}
-
-const fn balanced_camera_msaa() -> MsaaLevel {
-    if cfg!(target_arch = "wasm32") {
-        MsaaLevel::Off
-    } else {
-        MsaaLevel::X2
-    }
-}
-
-const fn high_camera_msaa() -> MsaaLevel {
-    if cfg!(target_arch = "wasm32") {
-        MsaaLevel::Off
-    } else {
-        MsaaLevel::X4
-    }
 }
 
 const fn default_camera_tone_map() -> ToneMap {

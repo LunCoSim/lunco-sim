@@ -30,8 +30,8 @@
 //! 1. **MSAA was never configured anywhere in the workspace** — grep found zero
 //!    `Msaa`. So Bevy's default `Sample4` was on *everywhere*, including WebGL2,
 //!    where a 4× multisampled colour+depth target for a full-screen terrain is the
-//!    single most expensive default in the build. [`SceneCamera::default`] picks
-//!    [`MsaaLevel::Off`] on wasm and `X2` on native, deliberately.
+//!    single most expensive default in the build. The balanced Graphics profile
+//!    requests `X2` explicitly; it is not changed by the target platform.
 //! 2. **Bloom was configured on non-HDR cameras** in four crates. Bloom is now an
 //!    explicit Graphics setting or an authored environment override. The camera
 //!    intent makes HDR a consequence of an enabled bloom look, and the binder
@@ -134,7 +134,8 @@ impl BloomLook {
 #[reflect(Component)]
 pub struct SceneCamera {
     pub tone_map: ToneMap,
-    /// Multisampling. **Off on wasm by default** — see the module docs.
+    /// Multisampling. The suggested balanced profile uses 2×; Graphics settings
+    /// can explicitly choose another supported request.
     pub msaa: MsaaLevel,
     /// HDR render target. Required for [`bloom`](Self::bloom) to do anything.
     pub hdr: bool,
@@ -157,14 +158,9 @@ impl Default for SceneCamera {
     fn default() -> Self {
         Self {
             tone_map: ToneMap::default(),
-            // R4: MSAA was never set, so WebGL2 silently ran 4×. Off on the web —
-            // the terrain shader's own footprint fades already do the AA that
-            // actually matters at this scale.
-            msaa: if cfg!(target_arch = "wasm32") {
-                MsaaLevel::Off
-            } else {
-                MsaaLevel::X2
-            },
+            // R4: MSAA was never set, so Bevy silently ran 4×. The balanced
+            // renderer request is explicit and platform-independent.
+            msaa: MsaaLevel::X2,
             hdr: false,
             bloom: None,
         }

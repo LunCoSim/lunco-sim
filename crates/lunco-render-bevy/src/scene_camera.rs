@@ -234,18 +234,15 @@ mod tests {
         );
     }
 
-    /// **R4, half one.** MSAA was never configured anywhere, so WebGL2 ran Bevy's
-    /// default 4× on a full-screen terrain. Native gets 2×; wasm gets Off.
+    /// **R4, half one.** MSAA was never configured anywhere, so Bevy ran its
+    /// default 4× on a full-screen terrain. The balanced request is 2× on every
+    /// target unless Graphics settings explicitly choose another value.
     #[test]
     fn msaa_is_actually_configured() {
         let mut a = app();
         let e = a.world_mut().spawn(SceneCamera::default()).id();
         a.update();
-        let expected = if cfg!(target_arch = "wasm32") {
-            Msaa::Off
-        } else {
-            Msaa::Sample2
-        };
+        let expected = Msaa::Sample2;
         assert_eq!(a.world().entity(e).get::<Msaa>(), Some(&expected));
     }
 
