@@ -1013,7 +1013,10 @@ fn join_visual_names(names: &BTreeSet<String>) -> String {
 /// Group the executable members by their authored Modelica class for the
 /// generated unit's compact icon. This stays generic: a new class appears by
 /// its own leaf name without adding a vehicle- or domain-specific branch.
-fn generated_member_roles(unit: &SynthesisUnit, network: &DomainNetwork) -> Vec<String> {
+fn generated_member_role_groups(
+    unit: &SynthesisUnit,
+    network: &DomainNetwork,
+) -> Vec<(String, usize)> {
     let mut counts = BTreeMap::<String, usize>::new();
     for path in &unit.component_paths {
         let Some(component) = network
@@ -1023,23 +1026,79 @@ fn generated_member_roles(unit: &SynthesisUnit, network: &DomainNetwork) -> Vec<
         else {
             continue;
         };
-        let class_name = component
-            .model_class
-            .rsplit('.')
-            .next()
-            .unwrap_or(component.model_class.as_str())
-            .to_string();
+        let class_name = generated_member_class_name(component);
         *counts.entry(class_name).or_default() += 1;
     }
-    counts
-        .into_iter()
-        .map(|(class_name, count)| {
-            if count > 1 {
-                format!("{class_name} x{count}")
-            } else {
-                class_name
-            }
+    counts.into_iter().collect()
+}
+
+fn generated_member_class_name(component: &DomainComponent) -> String {
+    component
+        .model_class
+        .rsplit('.')
+        .next()
+        .unwrap_or(component.model_class.as_str())
+        .to_string()
+}
+
+/// Collapse the authored acausal connections to role-level edges for the
+/// composite icon. The detailed member-to-member `connect()` equations remain
+/// in the generated unit diagram; this is only the compact topology visible
+/// before opening that diagram.
+fn generated_unit_role_edges(
+    unit: &SynthesisUnit,
+    network: &DomainNetwork,
+) -> Vec<(String, String, usize)> {
+    let role_by_path: BTreeMap<String, String> = network
+        .components
+        .iter()
+        .filter(|component| {
+            unit.component_paths
+                .iter()
+                .any(|path| path == &component.path)
         })
+        .map(|component| {
+            (
+                component.path.clone(),
+                generated_member_class_name(component),
+            )
+        })
+        .collect();
+    let mut member_edges = BTreeSet::<(String, String)>::new();
+    let mut edges = BTreeMap::<(String, String), usize>::new();
+    for component in &network.components {
+        let Some(source_role) = role_by_path.get(&component.path) else {
+            continue;
+        };
+        for target in component.connectors.values().flatten() {
+            let Some((target_path, _)) = target.split_once(".connectors:") else {
+                continue;
+            };
+            let Some(target_role) = role_by_path.get(target_path) else {
+                continue;
+            };
+            if source_role == target_role {
+                continue;
+            }
+            let member_edge = if component.path.as_str() <= target_path {
+                (component.path.clone(), target_path.to_string())
+            } else {
+                (target_path.to_string(), component.path.clone())
+            };
+            if !member_edges.insert(member_edge) {
+                continue;
+            }
+            let role_edge = if source_role <= target_role {
+                (source_role.clone(), target_role.clone())
+            } else {
+                (target_role.clone(), source_role.clone())
+            };
+            *edges.entry(role_edge).or_default() += 1;
+        }
+    }
+    edges
+        .into_iter()
+        .map(|((left, right), count)| (left, right, count))
         .collect()
 }
 
@@ -1172,8 +1231,57 @@ fn append_generated_unit_visual_schema(
         .filter_map(|path| member_positions.get(path).copied());
     let (half_width, half_height) = visual_extent(positions, 25, 25);
     let extent = modelica_coordinate_extent(half_width, half_height);
-    let roles = generated_member_roles(unit, network);
-    let columns = roles.len().clamp(1, 3) as i32;
+    let role_groups = generated_member_role_groups(unit, network);
+    let roles = role_groups
+        .iter()
+        .map(|(class_name, count)| {
+            if *count > 1 {
+                format!("{class_name} x{count}")
+            } else {
+                class_name.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let role_edges = generated_unit_role_edges(unit, network);
+    let role_names = role_groups
+        .iter()
+        .map(|(class_name, _)| class_name.clone())
+        .collect::<Vec<_>>();
+    let mut role_degrees = BTreeMap::<String, usize>::new();
+    for (left, right, count) in &role_edges {
+        *role_degrees.entry(left.clone()).or_default() += count;
+        *role_degrees.entry(right.clone()).or_default() += count;
+    }
+    let hub = role_names
+        .iter()
+        .min_by(|left, right| {
+            role_degrees
+                .get(*right)
+                .copied()
+                .unwrap_or_default()
+                .cmp(&role_degrees.get(*left).copied().unwrap_or_default())
+                .then_with(|| left.cmp(right))
+        })
+        .cloned();
+    let mut role_positions = BTreeMap::<String, (i32, i32)>::new();
+    if let Some(hub) = hub.as_deref() {
+        role_positions.insert(hub.to_string(), (-85, 0));
+        let right_roles = role_names
+            .iter()
+            .filter(|role| role.as_str() != hub)
+            .collect::<Vec<_>>();
+        let vertical_spacing = match right_roles.len() {
+            0 | 1 => 0,
+            2 => 34,
+            3 => 22,
+            4 => 18,
+            _ => 14,
+        };
+        let top = ((right_roles.len().saturating_sub(1)) as i32 * vertical_spacing) / 2;
+        for (index, role) in right_roles.into_iter().enumerate() {
+            role_positions.insert(role.clone(), (55, top - index as i32 * vertical_spacing));
+        }
+    }
     let role_palette = [
         [105, 145, 205],
         [226, 176, 80],
@@ -1195,10 +1303,53 @@ fn append_generated_unit_visual_schema(
             modelica_color([35, 75, 55]),
         ),
     ];
-    for (index, role) in roles.iter().enumerate() {
-        let index = index as i32;
-        let x = -((columns - 1) * 85) / 2 + (index % columns) * 85;
-        let y = 10 - (index / columns) * 36;
+
+    let mut port_positions = BTreeSet::<(i32, i32)>::new();
+    for (left, right, count) in &role_edges {
+        let Some(left_position) = role_positions.get(left).copied() else {
+            continue;
+        };
+        let Some(right_position) = role_positions.get(right).copied() else {
+            continue;
+        };
+        let (start, end) = if left_position.0 <= right_position.0 {
+            (
+                (left_position.0 + 40, left_position.1),
+                (right_position.0 - 40, right_position.1),
+            )
+        } else {
+            (
+                (right_position.0 + 40, right_position.1),
+                (left_position.0 - 40, left_position.1),
+            )
+        };
+        port_positions.insert(start);
+        port_positions.insert(end);
+        icon_graphics.push(format!(
+            "Line(points={}, color={}, thickness=2)",
+            modelica_line_points(start, end),
+            modelica_color([45, 105, 75]),
+        ));
+        if *count > 1 {
+            let midpoint = ((start.0 + end.0) / 2, (start.1 + end.1) / 2);
+            icon_graphics.push(format!(
+                "Text(extent={}, textString={}, textColor={}, fontSize=8)",
+                modelica_rect(
+                    midpoint.0 - 18,
+                    midpoint.1 + 4,
+                    midpoint.0 + 18,
+                    midpoint.1 + 16
+                ),
+                modelica_string_literal(&format!("p x{count}")),
+                modelica_color([45, 105, 75]),
+            ));
+        }
+    }
+
+    for (index, ((class_name, _count), role)) in role_groups.iter().zip(roles.iter()).enumerate() {
+        let Some((x, y)) = role_positions.get(class_name).copied() else {
+            continue;
+        };
         icon_graphics.push(format!(
             "Rectangle(extent={}, lineColor={}, fillColor={}, fillPattern=FillPattern.Solid, radius=4)",
             modelica_rect(x - 39, y - 13, x + 39, y + 13),
@@ -1210,6 +1361,20 @@ fn append_generated_unit_visual_schema(
             modelica_rect(x - 35, y - 9, x + 35, y + 9),
             modelica_string_literal(role),
             modelica_color([25, 40, 35]),
+        ));
+    }
+    for (x, y) in port_positions {
+        icon_graphics.push(format!(
+            "Ellipse(extent={}, lineColor={}, fillColor={}, fillPattern=FillPattern.Solid)",
+            modelica_rect(x - 4, y - 4, x + 4, y + 4),
+            modelica_color([35, 75, 55]),
+            modelica_color([245, 250, 245]),
+        ));
+        icon_graphics.push(format!(
+            "Text(extent={}, textString={}, textColor={}, fontSize=8)",
+            modelica_rect(x - 9, y + 5, x + 9, y + 15),
+            modelica_string_literal("p"),
+            modelica_color([35, 75, 55]),
         ));
     }
     let members = unit
@@ -2943,9 +3108,11 @@ mod tests {
         motor
             .inputs
             .insert("demand".into(), "/Electrical.inputs:drive_left".into());
+        let mut battery = component("/Electrical/Battery/Model", None);
+        battery.model_class = "LunCo.Electrical.Battery".into();
         let network = DomainNetwork {
             root: "/Electrical".into(),
-            components: vec![component("/Electrical/Battery/Model", None), motor],
+            components: vec![battery, motor],
             inputs: BTreeSet::from(["drive_left".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
@@ -2958,6 +3125,9 @@ mod tests {
             "connect(Battery_x2f_Model.p, Left_x2f_Motor_x2f_Model.p) annotation(Line(points="
         ));
         assert!(source.contains("annotation(Line(points="));
+        assert!(source.contains("Ellipse(extent="));
+        assert!(source.contains("textString=\"Battery\""));
+        assert!(source.contains("textString=\"DCMotor\""));
     }
 
     #[test]
