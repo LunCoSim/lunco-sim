@@ -40,6 +40,117 @@ use openusd::sdf::Path as SdfPath;
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
 
+/// Read an authored real while preserving the distinction between an omitted
+/// property (which may use the schema default) and a malformed opinion.  A
+/// failed numeric conversion must never become a zero-valued placement input.
+fn read_real_strict(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f64>, ()> {
+    match reader.real(path, attribute) {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attribute) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read a schema-declared NAIF/body integer without turning a wrong USD type
+/// into the Moon default.
+fn read_i32_strict(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<i32>, ()> {
+    match reader.scalar::<i32>(path, attribute) {
+        Some(value) => Ok(Some(value)),
+        None if reader.has_authored_attribute(path, attribute) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Decode a geodetic anchor as one validated projection unit.  Missing latitude
+/// or longitude remains the documented zero default, but an authored invalid
+/// value rejects the anchor instead of placing it at Greenwich/equator.
+fn read_geodetic_anchor(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<GeodeticAnchor>, ()> {
+    let has_lat = reader.has_authored_attribute(path, "lunco:anchor:lat");
+    let has_lon = reader.has_authored_attribute(path, "lunco:anchor:lon");
+    if !has_lat && !has_lon {
+        return Ok(None);
+    }
+    let lat = read_real_strict(reader, path, "lunco:anchor:lat")?.unwrap_or(0.0);
+    let lon = read_real_strict(reader, path, "lunco:anchor:lon")?.unwrap_or(0.0);
+    let height = read_real_strict(reader, path, "lunco:anchor:height")?.unwrap_or(0.0);
+    let body = read_i32_strict(reader, path, "lunco:anchor:body")?.unwrap_or(DEFAULT_ANCHOR_BODY);
+    if body == 0 || !(-90.0..=90.0).contains(&lat) || !height.is_finite() {
+        return Err(());
+    }
+    Ok(Some(GeodeticAnchor {
+        body,
+        geodetic: Geodetic::new(lat, lon, height),
+    }))
+}
+
+/// Decode one authored Kepler orbit.  The semi-major axis is the schema's
+/// explicit presence key; zero/omitted means no orbit.  Every remaining field
+/// gets its USD schema default only when it is genuinely omitted, and the
+/// elliptic-only solver contract is validated before insertion.
+fn read_kepler_orbit(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<KeplerOrbit>, ()> {
+    if !reader.has_authored_attribute(path, "lunco:orbit:semiMajorAxisM") {
+        return Ok(None);
+    }
+    let Some(semi_major_axis_m) = read_real_strict(reader, path, "lunco:orbit:semiMajorAxisM")?
+    else {
+        return Ok(None);
+    };
+    if semi_major_axis_m == 0.0 {
+        return Ok(None);
+    }
+    let body = read_i32_strict(reader, path, "lunco:orbit:body")?.unwrap_or(DEFAULT_ANCHOR_BODY);
+    let eccentricity = read_real_strict(reader, path, "lunco:orbit:eccentricity")?.unwrap_or(0.0);
+    let inclination_deg =
+        read_real_strict(reader, path, "lunco:orbit:inclinationDeg")?.unwrap_or(0.0);
+    let raan_deg = read_real_strict(reader, path, "lunco:orbit:raanDeg")?.unwrap_or(0.0);
+    let arg_periapsis_deg =
+        read_real_strict(reader, path, "lunco:orbit:argPeriapsisDeg")?.unwrap_or(0.0);
+    let mean_anomaly_deg =
+        read_real_strict(reader, path, "lunco:orbit:meanAnomalyDeg")?.unwrap_or(0.0);
+    let epoch_jd =
+        read_real_strict(reader, path, "lunco:orbit:epochJd")?.unwrap_or(lunco_time::J2000_JD);
+    if body == 0
+        || !semi_major_axis_m.is_finite()
+        || semi_major_axis_m < 0.0
+        || !eccentricity.is_finite()
+        || !(0.0..1.0).contains(&eccentricity)
+        || !inclination_deg.is_finite()
+        || !raan_deg.is_finite()
+        || !arg_periapsis_deg.is_finite()
+        || !mean_anomaly_deg.is_finite()
+        || !epoch_jd.is_finite()
+    {
+        return Err(());
+    }
+    Ok(Some(KeplerOrbit {
+        body,
+        elements: KeplerianElements {
+            semi_major_axis_m,
+            eccentricity,
+            inclination_deg,
+            raan_deg,
+            arg_periapsis_deg,
+            mean_anomaly_deg,
+            epoch_jd,
+        },
+    }))
+}
+
 pub fn insert_celestial_comms_components(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -131,42 +242,48 @@ pub fn insert_celestial_comms_components(
     // it `GeodeticAnchor` here would make the celestial placement pass detach
     // it from the scene and double-place the surface relative to the rover.
     let is_terrain = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
-    let lat = reader.real(sdf_path, "lunco:anchor:lat");
-    let lon = reader.real(sdf_path, "lunco:anchor:lon");
-    if !is_terrain && (lat.is_some() || lon.is_some()) {
-        let body = reader
-            .scalar::<i32>(sdf_path, "lunco:anchor:body")
-            .unwrap_or(DEFAULT_ANCHOR_BODY);
-        let anchor = GeodeticAnchor {
-            body,
-            geodetic: Geodetic::new(
-                lat.unwrap_or(0.0),
-                lon.unwrap_or(0.0),
-                reader.real(sdf_path, "lunco:anchor:height").unwrap_or(0.0),
-            ),
-        };
-        commands.entity(entity).try_insert(anchor);
-        // Root prim anchor = the scene's site frame.
-        let is_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
-        if is_root {
-            commands.entity(entity).try_insert(SiteAnchor);
-            info!(
-                "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
-                prim_path_str,
-                body,
-                anchor.geodetic.lat_deg,
-                anchor.geodetic.lon_deg,
-                anchor.geodetic.height_m
-            );
-            // Scene-authored date: `double lunco:time:epochJd` picks the world
-            // epoch (e.g. one where a polar site is sunlit — at Shackleton the
-            // real sun crosses the horizon on a ~monthly cycle, so an unlucky
-            // "now" default renders the whole demo pitch-black).
-            if let Some(epoch_jd) = reader.real(sdf_path, "lunco:time:epochJd") {
-                info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
-                commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
+    let anchor = if is_terrain {
+        Ok(None)
+    } else {
+        read_geodetic_anchor(reader, sdf_path)
+    };
+    match anchor {
+        Ok(Some(anchor)) => {
+            commands.entity(entity).try_insert(anchor);
+            // Root prim anchor = the scene's site frame.
+            let is_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
+            if is_root {
+                commands.entity(entity).try_insert(SiteAnchor);
+                info!(
+                    "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
+                    prim_path_str,
+                    anchor.body,
+                    anchor.geodetic.lat_deg,
+                    anchor.geodetic.lon_deg,
+                    anchor.geodetic.height_m
+                );
+                // Scene-authored date: `double lunco:time:epochJd` picks the world
+                // epoch (e.g. one where a polar site is sunlit — at Shackleton the
+                // real sun crosses the horizon on a ~monthly cycle, so an unlucky
+                // "now" default renders the whole demo pitch-black).
+                match read_real_strict(reader, sdf_path, "lunco:time:epochJd") {
+                    Ok(Some(epoch_jd)) if epoch_jd != 0.0 => {
+                        info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
+                        commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
+                    }
+                    Ok(_) => {}
+                    Err(()) => warn!(
+                    "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
+                    prim_path_str
+                ),
+                }
             }
         }
+        Ok(None) => {}
+        Err(()) => warn!(
+            "[usd-celestial] {} has malformed geodetic anchor attributes; anchor ignored",
+            prim_path_str
+        ),
     }
 
     // --- Mission declaration (LunCoMissionAPI) ---
@@ -273,40 +390,25 @@ pub fn insert_celestial_comms_components(
     }
 
     // --- Keplerian orbit (satellites) ---
-    if let Some(a_m) = reader.real(sdf_path, "lunco:orbit:semiMajorAxisM") {
-        let body = reader
-            .scalar::<i32>(sdf_path, "lunco:orbit:body")
-            .unwrap_or(DEFAULT_ANCHOR_BODY);
-        let elements = KeplerianElements {
-            semi_major_axis_m: a_m,
-            eccentricity: reader
-                .real(sdf_path, "lunco:orbit:eccentricity")
-                .unwrap_or(0.0),
-            inclination_deg: reader
-                .real(sdf_path, "lunco:orbit:inclinationDeg")
-                .unwrap_or(0.0),
-            raan_deg: reader.real(sdf_path, "lunco:orbit:raanDeg").unwrap_or(0.0),
-            arg_periapsis_deg: reader
-                .real(sdf_path, "lunco:orbit:argPeriapsisDeg")
-                .unwrap_or(0.0),
-            mean_anomaly_deg: reader
-                .real(sdf_path, "lunco:orbit:meanAnomalyDeg")
-                .unwrap_or(0.0),
-            epoch_jd: reader
-                .real(sdf_path, "lunco:orbit:epochJd")
-                .unwrap_or(lunco_time::J2000_JD),
-        };
-        commands
-            .entity(entity)
-            .try_insert(KeplerOrbit { body, elements });
-        info!(
-            "[usd-celestial] orbit {}: body {} a {:.0} km e {:.2} i {:.1}°",
-            prim_path_str,
-            body,
-            elements.semi_major_axis_m / 1000.0,
-            elements.eccentricity,
-            elements.inclination_deg
-        );
+    match read_kepler_orbit(reader, sdf_path) {
+        Ok(Some(orbit)) => {
+            let body = orbit.body;
+            let elements = orbit.elements;
+            commands.entity(entity).try_insert(orbit);
+            info!(
+                "[usd-celestial] orbit {}: body {} a {:.0} km e {:.2} i {:.1}°",
+                prim_path_str,
+                body,
+                elements.semi_major_axis_m / 1000.0,
+                elements.eccentricity,
+                elements.inclination_deg
+            );
+        }
+        Ok(None) => {}
+        Err(()) => warn!(
+            "[usd-celestial] {} has malformed Kepler orbit attributes; orbit ignored",
+            prim_path_str
+        ),
     }
 
     // --- Libration point (a relay parked at L1/L2 of a pair) ---
@@ -467,5 +569,96 @@ fn read_occluder_box(
     lunco_celestial::link::LinkOccluder {
         half_extents: (max - min) * 0.5,
         center: (max + min) * 0.5,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+
+    fn view(source: &str) -> (CanonicalStage, SdfPath) {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("test stage must compose");
+        let path = SdfPath::new("/World/Body").expect("test path");
+        (stage, path)
+    }
+
+    #[test]
+    fn malformed_anchor_values_are_not_replaced_with_zeroes() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body"
+    {
+        string lunco:anchor:lat = "north"
+        double lunco:anchor:lon = 12.0
+    }
+}
+"#,
+        );
+        assert!(
+            read_geodetic_anchor(&stage.view(), &path).is_err(),
+            "a malformed latitude must not become latitude zero"
+        );
+    }
+
+    #[test]
+    fn omitted_anchor_is_not_invented() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body" {}
+}
+"#,
+        );
+        assert!(matches!(
+            read_geodetic_anchor(&stage.view(), &path),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn malformed_orbit_eccentricity_is_not_clamped() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body"
+    {
+        double lunco:orbit:semiMajorAxisM = 7000000.0
+        double lunco:orbit:eccentricity = 1.2
+    }
+}
+"#,
+        );
+        assert!(
+            read_kepler_orbit(&stage.view(), &path).is_err(),
+            "the elliptic-only solver contract must reject e >= 1"
+        );
+    }
+
+    #[test]
+    fn omitted_orbit_elements_keep_only_documented_defaults() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Body"
+    {
+        double lunco:orbit:semiMajorAxisM = 7000000.0
+    }
+}
+"#,
+        );
+        let orbit = read_kepler_orbit(&stage.view(), &path)
+            .expect("valid orbit")
+            .expect("semi-major axis opts in");
+        assert_eq!(orbit.body, DEFAULT_ANCHOR_BODY);
+        assert_eq!(orbit.elements.semi_major_axis_m, 7000000.0);
+        assert_eq!(orbit.elements.eccentricity, 0.0);
+        assert_eq!(orbit.elements.epoch_jd, lunco_time::J2000_JD);
     }
 }
