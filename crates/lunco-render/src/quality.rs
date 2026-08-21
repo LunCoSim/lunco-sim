@@ -1057,6 +1057,10 @@ impl Default for RenderingQualitySettings {
 
 impl SettingsSection for RenderingQualitySettings {
     const KEY: &'static str = "rendering_quality";
+
+    fn validate_section(&self) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
+    }
 }
 
 /// Why a shadow map is temporarily suppressed.

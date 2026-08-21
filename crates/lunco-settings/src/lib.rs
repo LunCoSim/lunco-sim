@@ -59,6 +59,17 @@ pub trait SettingsSection:
     /// unique across all registered sections (collisions silently
     /// overwrite). Snake_case is conventional.
     const KEY: &'static str;
+
+    /// Validate semantic invariants after JSON deserialization.
+    ///
+    /// Serde verifies the shape and scalar types of a section, but it cannot
+    /// know domain rules such as positive ranges or mutually consistent limits.
+    /// Returning an error rejects the stored section and makes registration use
+    /// the section's documented default instead of exposing invalid values to
+    /// runtime systems. Sections without semantic constraints keep the default.
+    fn validate_section(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Resolved path to `settings.json`. Honours the `LUNCOSIM_CONFIG`
@@ -101,6 +112,7 @@ pub fn load_section_from_disk<S: SettingsSection>() -> S {
     };
     raw.get(S::KEY)
         .and_then(|v| serde_json::from_value::<S>(v.clone()).ok())
+        .filter(|section| section.validate_section().is_ok())
         .unwrap_or_default()
 }
 
@@ -248,8 +260,13 @@ impl AppSettingsExt for App {
             match settings.raw.get(S::KEY).cloned() {
                 None => S::default(),
                 Some(v) => match serde_json::from_value::<S>(v) {
-                    Ok(s) => s,
+                    Ok(s) if s.validate_section().is_ok() => s,
                     Err(_) => {
+                        settings.raw.remove(S::KEY);
+                        settings.dirty = true;
+                        S::default()
+                    }
+                    Ok(_) => {
                         settings.raw.remove(S::KEY);
                         settings.dirty = true;
                         S::default()
@@ -502,6 +519,27 @@ mod disk_guard_tests {
         const KEY: &'static str = "test_section";
     }
 
+    #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+    struct ValidatedTestSection {
+        value: u32,
+    }
+
+    impl Default for ValidatedTestSection {
+        fn default() -> Self {
+            Self { value: 1 }
+        }
+    }
+
+    impl SettingsSection for ValidatedTestSection {
+        const KEY: &'static str = "validated_test_section";
+
+        fn validate_section(&self) -> Result<(), String> {
+            (self.value > 0)
+                .then_some(())
+                .ok_or_else(|| "value must be greater than zero".to_string())
+        }
+    }
+
     #[test]
     fn invalid_section_is_removed_and_current_defaults_are_registered() {
         let mut app = App::new();
@@ -522,6 +560,28 @@ mod disk_guard_tests {
         let settings = app.world().resource::<Settings>();
         assert!(settings.raw(TestSection::KEY).is_none());
         assert!(settings.raw("test_section.bad").is_none());
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn semantically_invalid_section_is_removed_and_defaults_are_registered() {
+        let mut app = App::new();
+        app.insert_resource(Settings {
+            raw: BTreeMap::from([(
+                ValidatedTestSection::KEY.to_string(),
+                serde_json::json!({ "value": 0 }),
+            )]),
+            dirty: false,
+        });
+
+        app.register_settings_section::<ValidatedTestSection>();
+
+        assert_eq!(
+            app.world().resource::<ValidatedTestSection>().value,
+            ValidatedTestSection::default().value
+        );
+        let settings = app.world().resource::<Settings>();
+        assert!(settings.raw(ValidatedTestSection::KEY).is_none());
         assert!(settings.dirty);
     }
 
