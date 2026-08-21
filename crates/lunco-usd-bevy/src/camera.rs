@@ -44,9 +44,9 @@ use crate::units::StageMetrics;
 const DEFAULT_FOCAL_LENGTH_MM: f32 = 50.0;
 const DEFAULT_VERTICAL_APERTURE_MM: f32 = 15.2908;
 const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
-/// USD's spec default `clippingRange` is `(1, 1_000_000)`; we tighten the near
-/// plane a touch for close-up scene work (far stays huge for planet-scale views).
-const DEFAULT_NEAR: f32 = 0.1;
+/// USD's schema defaults. Keep these aligned with `UsdGeomCamera` rather than
+/// introducing an importer-only camera profile.
+const DEFAULT_NEAR: f32 = 1.0;
 const DEFAULT_FAR: f32 = 1.0e6;
 
 /// A USD camera has exactly one writer for its pose. This is projected from
@@ -131,7 +131,13 @@ pub(crate) fn instantiate_camera_prim(
         return false;
     }
 
-    let (projection, h_fov) = read_projection(reader, sdf_path);
+    let Some((projection, h_fov)) = read_projection(reader, sdf_path) else {
+        // The prim is still handled as a USD camera, but it must not enter a
+        // render role with an invalid Bevy projection. The authored value is
+        // reported at the point where it becomes invalid; silently choosing a
+        // perspective or 45° fallback would hide a broken scene contract.
+        return true;
+    };
     let kind = match &projection {
         Projection::Orthographic(_) => "orthographic",
         _ => "perspective",
@@ -281,40 +287,88 @@ pub(crate) fn instantiate_camera_prim(
 /// Returns the projection plus, for perspective, the **horizontal** FOV
 /// derived from `horizontalAperture` — the window aspect isn't known here, so
 /// the caller conforms the vertical FOV against it (expandAperture).
-fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection, Option<f32>) {
+///
+/// `None` means an authored camera attribute is malformed or outside the USD
+/// camera contract. Schema defaults are still accepted when an attribute is
+/// genuinely unauthored; an invalid authored opinion is never converted into a
+/// guessed projection.
+fn read_projection(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let meters_per_unit = StageMetrics::from_reader(reader).meters_per_unit as f32;
-    let authored_clipping = reader
+    let resolved_clipping = reader
         .scalar::<[f32; 2]>(path, "clippingRange")
         .or_else(|| {
             reader
                 .scalar::<[f64; 2]>(path, "clippingRange")
                 .map(|[n, f]| [n as f32, f as f32])
         });
+    let clipping = match resolved_clipping {
+        Some(range) => Some(range),
+        None if reader.has_authored_attribute(path, "clippingRange") => {
+            error!(
+                "[usd-bevy] {} has an authored clippingRange with an unsupported value type",
+                path.as_str()
+            );
+            return None;
+        }
+        None => None,
+    };
     // USD stores this range in world units. Bevy's projection consumes the
-    // canonical metre frame, so only an authored range is scaled; our explicit
-    // engine defaults are already canonical metres.
-    let [near, far] = authored_clipping
+    // canonical metre frame, so the resolved USD range (including a schema
+    // fallback) is scaled from the stage's declared units.
+    let [near, far] = clipping
         .map(|[near, far]| [near * meters_per_unit, far * meters_per_unit])
         .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR]);
+    if !(near.is_finite() && far.is_finite() && near > 0.0 && far > near) {
+        error!(
+            "[usd-bevy] {} has invalid camera clippingRange ({near}, {far}); expected finite 0 < near < far",
+            path.as_str()
+        );
+        return None;
+    }
 
-    let is_ortho = reader
-        .text(path, "projection")
-        .map(|t| t == "orthographic")
-        .unwrap_or(false);
+    let projection_token = reader.text(path, "projection");
+    let is_ortho = match projection_token.as_deref() {
+        Some("perspective") => false,
+        Some("orthographic") => true,
+        Some(other) => {
+            error!(
+                "[usd-bevy] {} has unsupported camera projection token {other:?}",
+                path.as_str()
+            );
+            return None;
+        }
+        None if reader.has_authored_attribute(path, "projection") => {
+            error!(
+                "[usd-bevy] {} has an authored camera projection with an unsupported value type",
+                path.as_str()
+            );
+            return None;
+        }
+        None => false,
+    };
 
     if is_ortho {
         // Orthographic apertures are **tenths of scene units** (USD's aperture
         // convention: aperture / 10 × metersPerUnit = world units). `AutoMin`
         // keeps at least the authored width AND height visible and expands the
         // other axis for the window aspect — Bevy's native expandAperture.
-        let h_aperture = reader
-            .real_f32(path, "horizontalAperture")
-            .unwrap_or(DEFAULT_HORIZONTAL_APERTURE_MM);
-        let v_aperture = reader
-            .real_f32(path, "verticalAperture")
-            .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
-        (
+        let h_aperture = read_positive_camera_real(
+            reader,
+            path,
+            "horizontalAperture",
+            DEFAULT_HORIZONTAL_APERTURE_MM,
+        )?;
+        let v_aperture = read_positive_camera_real(
+            reader,
+            path,
+            "verticalAperture",
+            DEFAULT_VERTICAL_APERTURE_MM,
+        )?;
+        Some((
             Projection::Orthographic(OrthographicProjection {
                 near,
                 far,
@@ -322,27 +376,26 @@ fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection
                 ..OrthographicProjection::default_3d()
             }),
             None,
-        )
+        ))
     } else {
-        let focal = reader
-            .real_f32(path, "focalLength")
-            .unwrap_or(DEFAULT_FOCAL_LENGTH_MM);
-        let v_aperture = reader
-            .real_f32(path, "verticalAperture")
-            .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
-        let h_aperture = reader
-            .real_f32(path, "horizontalAperture")
-            .unwrap_or(DEFAULT_HORIZONTAL_APERTURE_MM);
+        let focal =
+            read_positive_camera_real(reader, path, "focalLength", DEFAULT_FOCAL_LENGTH_MM)?;
+        let v_aperture = read_positive_camera_real(
+            reader,
+            path,
+            "verticalAperture",
+            DEFAULT_VERTICAL_APERTURE_MM,
+        )?;
+        let h_aperture = read_positive_camera_real(
+            reader,
+            path,
+            "horizontalAperture",
+            DEFAULT_HORIZONTAL_APERTURE_MM,
+        )?;
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
-        let (fov, h_fov) = if focal > 1e-3 {
-            (
-                2.0 * (v_aperture / (2.0 * focal)).atan(),
-                Some(2.0 * (h_aperture / (2.0 * focal)).atan()),
-            )
-        } else {
-            (std::f32::consts::FRAC_PI_4, None)
-        };
-        (
+        let fov = 2.0 * (v_aperture / (2.0 * focal)).atan();
+        let h_fov = Some(2.0 * (h_aperture / (2.0 * focal)).atan());
+        Some((
             Projection::Perspective(PerspectiveProjection {
                 fov,
                 near,
@@ -350,7 +403,37 @@ fn read_projection(reader: &crate::StageView<'_>, path: &SdfPath) -> (Projection
                 ..default()
             }),
             h_fov,
-        )
+        ))
+    }
+}
+
+/// Read a positive USD camera scalar without mistaking an invalid authored
+/// opinion for an omitted schema default.
+fn read_positive_camera_real(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    schema_default: f32,
+) -> Option<f32> {
+    match reader.real_f32(path, name) {
+        Some(value) if value.is_finite() && value > 0.0 => Some(value),
+        Some(value) => {
+            error!(
+                "[usd-bevy] {} has invalid camera {} = {value}; expected a finite positive value",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {} has an authored camera {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => Some(schema_default),
     }
 }
 
@@ -423,12 +506,34 @@ mod tests {
         );
         let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
-        let (projection, _) = read_projection(&stage.view(), &path);
+        let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
         let Projection::Perspective(perspective) = projection else {
             panic!("camera defaults to perspective");
         };
         assert!((perspective.near - 0.1).abs() < 1e-6);
         assert!((perspective.far - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn invalid_authored_clipping_range_is_rejected() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert!(read_projection(&stage.view(), &path).is_none());
+    }
+
+    #[test]
+    fn invalid_authored_focal_length_is_rejected_instead_of_using_a_heuristic_fov() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert!(read_projection(&stage.view(), &path).is_none());
     }
 
     #[test]
