@@ -1107,7 +1107,7 @@ fn instantiate_usd_prim_from_stage(
         // is still built — visibility is the toggle. (Future: reveal
         // on `AssetServer::load_state(...).is_failed()`.)
         let is_placeholder = reader
-            .scalar::<bool>(&sdf_path, "lunco:placeholder")
+            .boolean(&sdf_path, "lunco:placeholder")
             .unwrap_or(false);
 
         // **Placeholder + payload pattern**: when a binary payload/reference
@@ -4071,7 +4071,7 @@ fn accumulate_collision_aabb(
     // collider is assembled from.
     if let Some(ty) = reader.type_name(path) {
         let collides = reader
-            .scalar::<bool>(path, "physics:collisionEnabled")
+            .boolean(path, "physics:collisionEnabled")
             .unwrap_or(true);
         if collides {
             if let Some(corners) = local_shape_corners(reader, path, &ty) {

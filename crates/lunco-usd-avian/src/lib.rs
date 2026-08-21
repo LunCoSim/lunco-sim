@@ -643,7 +643,7 @@ fn collect_child_colliders_from_usd(
 
         // Check if child has collision enabled
         let child_collision = reader
-            .scalar::<bool>(&child_path, ptok::A_COLLISION_ENABLED)
+            .boolean(&child_path, ptok::A_COLLISION_ENABLED)
             .unwrap_or(true);
         if !child_collision {
             continue;
@@ -1355,12 +1355,12 @@ fn extract_avian_prim(
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
         let simulated = reader
-            .scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED)
+            .boolean(sdf_path, ptok::A_RIGID_BODY_ENABLED)
             .unwrap_or(true);
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
         let kinematic = reader
-            .scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED)
+            .boolean(sdf_path, ptok::A_KINEMATIC_ENABLED)
             .unwrap_or(false);
         let (body, mobility) = if !simulated {
             (RigidBody::Static, lunco_core::Mobility::Static)
@@ -1575,7 +1575,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // the component. `over "YawJoint" { uniform bool physics:jointEnabled = false }`
     // is that way, and it is stock UsdPhysics rather than anything invented here.
     if !view
-        .scalar::<bool>(path, ptok::A_JOINT_ENABLED)
+        .boolean(path, ptok::A_JOINT_ENABLED)
         .unwrap_or(true)
     {
         return None;
@@ -3239,10 +3239,10 @@ fn apply_rigid_body_mass_props(
         });
     if authored_linear.is_some() || authored_angular.is_some() {
         let dynamic = reader
-            .scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED)
+            .boolean(sdf_path, ptok::A_RIGID_BODY_ENABLED)
             .unwrap_or(true)
             && !reader
-                .scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED)
+                .boolean(sdf_path, ptok::A_KINEMATIC_ENABLED)
                 .unwrap_or(false);
         if dynamic {
             commands.entity(entity).try_insert(AuthoredInitialVelocity {

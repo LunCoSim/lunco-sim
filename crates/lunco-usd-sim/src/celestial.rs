@@ -235,7 +235,7 @@ pub fn insert_celestial_comms_components(
                 frame: reader
                     .text(sdf_path, "lunco:trajectory:frame")
                     .unwrap_or_else(|| "Inertial".to_string()),
-                user_visible: reader.scalar::<bool>(sdf_path, "lunco:trajectory:userVisible"),
+                user_visible: reader.boolean(sdf_path, "lunco:trajectory:userVisible"),
                 start_epoch_jd: reader.real(sdf_path, "lunco:trajectory:startEpochJd"),
                 end_epoch_jd: reader.real(sdf_path, "lunco:trajectory:endEpochJd"),
             });
@@ -353,7 +353,7 @@ pub fn insert_celestial_comms_components(
     // are tracked automatically. Authored subsystems read it through the
     // `SolarPose` query — no domain component, no domain vocabulary.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:solarTracked")
+        .boolean(sdf_path, "lunco:solarTracked")
         .unwrap_or(false)
     {
         commands
@@ -367,7 +367,7 @@ pub fn insert_celestial_comms_components(
     // tracking follows automatically. `class` is an authored role the routing /
     // verdict policy reads — the core never interprets it.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:linkNode")
+        .boolean(sdf_path, "lunco:linkNode")
         .unwrap_or(false)
     {
         let d = lunco_celestial::link::LinkNode::default();
@@ -389,7 +389,7 @@ pub fn insert_celestial_comms_components(
     // intentionally not part of `LinkState`: the latter remains governed by
     // the authored Earth-only direct-link policy.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:wifiNode")
+        .boolean(sdf_path, "lunco:wifiNode")
         .unwrap_or(false)
     {
         commands
@@ -417,7 +417,7 @@ pub fn insert_celestial_comms_components(
     // a collision one (a handrail collides but does not block; a radome may block
     // but not collide). See `LinkOccluder`.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:occluder")
+        .boolean(sdf_path, "lunco:occluder")
         .unwrap_or(false)
     {
         commands.entity(entity).try_insert((

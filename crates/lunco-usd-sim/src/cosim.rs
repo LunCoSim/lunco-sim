@@ -570,9 +570,7 @@ fn project_usd_telemetry(
             continue;
         };
         let view = stage.view();
-        let authored = view
-            .scalar::<bool>(&path, "lunco:telemetry")
-            .unwrap_or(false);
+        let authored = view.boolean(&path, "lunco:telemetry").unwrap_or(false);
         if authored {
             let port = view.text(&path, "lunco:telemetry:port");
             let name = view.text(&path, "lunco:telemetry:name");
@@ -659,7 +657,7 @@ fn process_usd_cosim_prim_read(
                     .unwrap_or("info"),
             ),
             latched: reader
-                .scalar::<bool>(sdf_path, "lunco:event:latched")
+                .boolean(sdf_path, "lunco:event:latched")
                 .unwrap_or(false),
             qualification_time_s: reader
                 .scalar::<f64>(sdf_path, "lunco:event:qualificationTime")
@@ -941,7 +939,7 @@ fn process_usd_cosim_prim_read(
     // force/torque port on a client-predicted body (see
     // `docs/architecture/28-modelica-realtime-physics.md`).
     if reader
-        .scalar::<bool>(sdf_path, "lunco:program:realtimeSafe")
+        .boolean(sdf_path, "lunco:program:realtimeSafe")
         .unwrap_or(false)
     {
         commands

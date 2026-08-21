@@ -422,7 +422,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "invert",
                 H::Bool(
                     reader
-                        .scalar::<bool>(p, ptok::A_INVERT_FILTERED_GROUPS)
+                        .boolean(p, ptok::A_INVERT_FILTERED_GROUPS)
                         .unwrap_or(false),
                 ),
             ),
@@ -468,7 +468,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "kinematic",
                 H::Bool(
                     reader
-                        .scalar::<bool>(p, ptok::A_KINEMATIC_ENABLED)
+                        .boolean(p, ptok::A_KINEMATIC_ENABLED)
                         .unwrap_or(false),
                 ),
             ),
@@ -476,7 +476,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "simulated",
                 H::Bool(
                     reader
-                        .scalar::<bool>(p, ptok::A_RIGID_BODY_ENABLED)
+                        .boolean(p, ptok::A_RIGID_BODY_ENABLED)
                         .unwrap_or(true),
                 ),
             ),

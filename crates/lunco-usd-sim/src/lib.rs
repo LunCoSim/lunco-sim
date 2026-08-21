@@ -1228,7 +1228,7 @@ fn process_usd_sim_prim_read(
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
     // never make an existing scene sprout labels.
-    if reader.scalar::<bool>(&sdf_path, "lunco:billboard") == Some(true) {
+    if reader.boolean(&sdf_path, "lunco:billboard") == Some(true) {
         let default = billboard::UsdBillboard::default();
         commands.entity(entity).try_insert(billboard::UsdBillboard {
             template: reader
@@ -1243,7 +1243,7 @@ fn process_usd_sim_prim_read(
         });
     }
     if reader
-        .scalar::<bool>(&sdf_path, "lunco:waypoint")
+        .boolean(&sdf_path, "lunco:waypoint")
         .unwrap_or(false)
     {
         commands.entity(entity).try_insert(marker::WaypointMarker);
@@ -1285,7 +1285,7 @@ fn process_usd_sim_prim_read(
             });
     }
 
-    let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
+    let net_replicate = reader.boolean(&sdf_path, "lunco:net:replicate");
     let net_authority = reader.text(&sdf_path, "lunco:net:authority");
     let (net_excluded, net_opaque) = net_override_markers(net_replicate, net_authority.as_deref());
     if net_excluded {
@@ -1383,8 +1383,8 @@ fn process_usd_sim_prim_read(
     // never set up and the viewport is blank after a scene swap. Read it
     // type-tolerantly (same principle as the `text`/`real` reader family).
     let is_avatar = reader
-        .scalar::<bool>(&sdf_path, "lunco:avatar")
-        .unwrap_or_else(|| reader.text(&sdf_path, "lunco:avatar").as_deref() == Some("true"));
+        .boolean(&sdf_path, "lunco:avatar")
+        .unwrap_or(false);
     if is_avatar {
         info!(
             "Detected Avatar prim at {}, setting up camera",

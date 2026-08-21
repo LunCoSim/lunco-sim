@@ -172,7 +172,7 @@ impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
         self.reader.asset(&self.sdf, &self.attr(name))
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
-        self.reader.scalar::<bool>(&self.sdf, &self.attr(name))
+        self.reader.boolean(&self.sdf, &self.attr(name))
     }
 }
 
@@ -1612,7 +1612,7 @@ fn bridge_dem_prim_read(
     // than re-selecting under a moving camera. On the SURFACE prim, per the
     // namespace split above (`lunco:terrain:*` here, `lunco:layer:*` on layers).
     if reader
-        .scalar::<bool>(sdf, "lunco:terrain:lodFrozen")
+        .boolean(sdf, "lunco:terrain:lodFrozen")
         .unwrap_or(false)
     {
         commands

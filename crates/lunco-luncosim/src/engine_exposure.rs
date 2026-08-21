@@ -1085,7 +1085,7 @@ fn publish_lunica_schema_exposure(
         return false;
     };
     let view = stage.view();
-    if view.scalar::<bool>(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
+    if view.boolean(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
         return false;
     }
 
@@ -1105,7 +1105,7 @@ fn publish_lunica_schema_exposure(
         if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
             continue;
         }
-        if !view.is_active(&path) || view.scalar::<bool>(&path, "lunco:ui:schemaNode") != Some(true)
+        if !view.is_active(&path) || view.boolean(&path, "lunco:ui:schemaNode") != Some(true)
         {
             continue;
         }
@@ -1269,7 +1269,7 @@ fn authored_control_roots(
             continue;
         };
         let view = stage.view();
-        if view.scalar::<bool>(&path, "lunco:ui:controlHud") != Some(true) {
+        if view.boolean(&path, "lunco:ui:controlHud") != Some(true) {
             continue;
         }
         let column = view
@@ -1307,7 +1307,7 @@ fn authored_target_positions(
             let path_text = path.to_string();
             path_text.starts_with(&root_prefix)
                 && view.is_active(path)
-                && view.scalar::<bool>(path, "lunco:ui:schemaNode") == Some(true)
+                && view.boolean(path, "lunco:ui:schemaNode") == Some(true)
                 && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
         })
         .collect();

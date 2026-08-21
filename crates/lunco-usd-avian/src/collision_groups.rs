@@ -152,7 +152,7 @@ impl CollisionGroupTable {
             );
             let filtered = rel_paths(reader, &prim, ptok::A_FILTERED_GROUPS);
             let invert = reader
-                .scalar::<bool>(&prim, ptok::A_INVERT_FILTERED_GROUPS)
+                .boolean(&prim, ptok::A_INVERT_FILTERED_GROUPS)
                 .unwrap_or(false);
 
             let entry = by_key.entry(key.clone()).or_insert_with(|| {

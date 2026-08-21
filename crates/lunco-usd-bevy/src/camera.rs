@@ -157,9 +157,7 @@ pub(crate) fn instantiate_camera_prim(
     // An avatar is a viewport camera with an interactive pose. Every other
     // participating camera must apply LunCoCameraAPI and state both roles.
     let is_avatar = reader.has_api_schema(sdf_path, "LunCoAvatarAPI")
-        && reader
-            .scalar::<bool>(sdf_path, "lunco:avatar")
-            .unwrap_or(false);
+        && reader.boolean(sdf_path, "lunco:avatar").unwrap_or(false);
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
     let (is_viewport, is_sensor, pose) = if is_avatar {
         (true, false, UsdCameraPose::Avatar)
