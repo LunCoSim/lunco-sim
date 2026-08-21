@@ -157,7 +157,7 @@ class "LunCoTerrainAPI" (
         doc = "Bake a horizon map so distant terrain self-shadows."
     )
     int lunco:terrain:horizonMapResolution = 0 (
-        doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = default)."
+        doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = the runtime default of 512; positive values must be in [2, 4096])."
     )
     bool lunco:terrain:lodFrozen = false (
         doc = """Freeze CDLOD selection after first load — the cinematic-LOD hold:

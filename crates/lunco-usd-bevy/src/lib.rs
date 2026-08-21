@@ -1060,10 +1060,35 @@ fn instantiate_usd_prim_from_stage(
             .unwrap_or(false)
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();
-            if let Some(r) = reader.real_f32(&sdf_path, "lunco:terrain:horizonMapResolution") {
-                cfg.resolution = (r as u32).clamp(64, 4096);
+            let valid_resolution = match reader
+                .scalar::<i32>(&sdf_path, "lunco:terrain:horizonMapResolution")
+            {
+                Some(0) => true,
+                Some(r) if (2..=4096).contains(&r) => {
+                    cfg.resolution = r as u32;
+                    true
+                }
+                Some(r) => {
+                    error!(
+                        "[usd-bevy] {} has invalid horizonMapResolution = {r}; expected 0 or an integer in [2, 4096]",
+                        sdf_path.as_str()
+                    );
+                    false
+                }
+                None if reader
+                    .has_authored_attribute(&sdf_path, "lunco:terrain:horizonMapResolution") =>
+                {
+                    error!(
+                        "[usd-bevy] {} has authored horizonMapResolution with an unsupported value type",
+                        sdf_path.as_str()
+                    );
+                    false
+                }
+                None => true,
+            };
+            if valid_resolution {
+                commands.entity(entity).try_insert(cfg);
             }
-            commands.entity(entity).try_insert(cfg);
         }
 
         // Visibility — honour standard USD `token visibility`.

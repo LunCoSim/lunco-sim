@@ -239,8 +239,8 @@ impl HeightField {
     ///
     /// This is the CPU side of the **horizon shadow cache**: the result is
     /// uploaded to an `R8Unorm` texture the terrain fragment shader samples
-    /// with a single `textureSampleLevel` instead of running the 48-step
-    /// ray-march per pixel. `target_res` may differ from the heightfield's
+    /// with a single `textureSampleLevel` instead of running the configured
+    /// horizon march per pixel. `target_res` may differ from the heightfield's
     /// own resolution (a coarser cache on memory-constrained targets); each
     /// cache texel maps to `min + (frac) * size` and marches against the
     /// full-resolution heightfield, so the cache is always geometrically
@@ -258,7 +258,10 @@ impl HeightField {
         tan_sun_r: f32,
         target_res: u32,
     ) -> Vec<u8> {
-        let res = target_res.max(2);
+        if target_res < 2 {
+            return Vec::new();
+        }
+        let res = target_res;
         let mut bytes = vec![0u8; (res as usize) * (res as usize)];
         let inv = 1.0 / (res - 1) as f32;
         // 2×2 supersample per cache texel: a single ray per texel aliases
@@ -278,20 +281,18 @@ impl HeightField {
                 for s in SUB {
                     // CLAMP the subsample back into the grid. The ±0.25-texel offsets push
                     // the border texels' samples OUTSIDE the heightfield, where
-                    // `sun_visibility` returns `None` — and `unwrap_or(1.0)` reads that as
-                    // "fully lit". So every edge texel picked up spurious light: a
-                    // below-horizon sun baked a lit rim instead of an all-dark cache, and
-                    // the shadow behind a ridge leaked at the border. Clamping supersamples
-                    // a real edge texel slightly inward, which is exactly right — there is
-                    // no terrain out there to average in.
+                    // `sun_visibility` returns `None` outside the heightfield. Clamping
+                    // supersamples to a real edge texel avoids inventing fully-lit terrain
+                    // beyond the border: a below-horizon sun must not bake a lit rim, and a
+                    // ridge shadow must not leak at the edge.
                     let g =
                         (Vec2::new(x as f32, y as f32) + s).clamp(Vec2::ZERO, Vec2::splat(max_g));
                     let local_xz = self.min + g * inv * self.size;
-                    // Now always in-bounds; `unwrap_or` is belt-and-braces against fp edge
-                    // cases, not a real path.
-                    vis += self
-                        .sun_visibility(local_xz, sun_local, tan_sun_r)
-                        .unwrap_or(1.0);
+                    let Some(visibility) = self.sun_visibility(local_xz, sun_local, tan_sun_r)
+                    else {
+                        return Vec::new();
+                    };
+                    vis += visibility;
                 }
                 bytes[(y as usize) * (res as usize) + (x as usize)] =
                     (vis * 0.25 * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -373,13 +374,6 @@ impl Default for HorizonShadowCacheConfig {
     }
 }
 
-/// Cap on the cache texture resolution for the inline wasm bake. The native
-/// off-thread bake uses the full heightfield resolution (1:1); wasm bakes on
-/// the main thread, so a coarser cache keeps the one-time cost a load hitch,
-/// not a stall. Bilinear filtering upsamples it smoothly.
-#[cfg(target_arch = "wasm32")]
-const WASM_SHADOW_CACHE_MAX_RES: u32 = 256;
-
 /// The baked sun-visibility cache on a terrain entity: an `R8Unorm` texture
 /// (0..1 visibility over the heightfield footprint) + the terrain-local sun
 /// direction it was baked at. The fragment shader samples this with a single
@@ -452,6 +446,14 @@ pub fn start_horizon_bakes(
     >,
 ) {
     for (entity, cfg, mesh3d) in &q {
+        if cfg.resolution < 2 {
+            warn!(
+                "[horizon] terrain {entity:?} has invalid resolution {}; removing horizon-shadow opt-in",
+                cfg.resolution
+            );
+            commands.entity(entity).remove::<HorizonShadowTerrain>();
+            continue;
+        }
         let Some(mesh) = meshes.get(&mesh3d.0) else {
             continue;
         }; // not loaded yet
@@ -484,10 +486,9 @@ pub fn start_horizon_bakes(
         #[cfg(target_arch = "wasm32")]
         {
             // No worker threads on wasm (AsyncComputeTaskPool runs on the main
-            // thread), so bake INLINE at a reduced resolution: a one-time load
-            // cost — never a per-frame stall — so the web build still gets
-            // far-field terrain shadows instead of none.
-            let resolution = cfg.resolution.min(WASM_HORIZON_MAX_RES);
+            // thread), so bake INLINE at the explicitly authored resolution.
+            // This is a one-time load cost, never a per-frame stall.
+            let resolution = cfg.resolution;
             info!(
                 "[horizon] baking {resolution}² heightfield inline for {entity:?} \
                  ({} verts) on wasm…",
@@ -622,12 +623,6 @@ pub fn finish_horizon_bakes(
         );
     }
 }
-
-/// Reduced heightfield resolution for the inline wasm bake (vs. the native
-/// async bake's full `cfg.resolution`): keeps the one-time synchronous bake
-/// short enough to be a load hitch, not a stall.
-#[cfg(target_arch = "wasm32")]
-const WASM_HORIZON_MAX_RES: u32 = 512;
 
 /// Installs a finished bake on the terrain entity: gives the mesh planar UVs
 /// (`(local.xz - field.min) / field.size`, the exact inverse of the shader's
@@ -772,6 +767,12 @@ pub fn start_shadow_cache_bake(
     let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
 
     for (entity, terrain_gt, map, cache) in &terrains {
+        if map.field.resolution() < 2 {
+            warn!(
+                "[horizon] terrain {entity:?} has an invalid heightfield resolution; skipping shadow-cache bake"
+            );
+            continue;
+        }
         let sun_local = terrain_gt
             .affine()
             .inverse()
@@ -788,16 +789,7 @@ pub fn start_shadow_cache_bake(
             }
         }
 
-        let target_res = {
-            #[cfg(target_arch = "wasm32")]
-            {
-                map.field.resolution().min(WASM_SHADOW_CACHE_MAX_RES).max(2)
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                map.field.resolution().max(2)
-            }
-        };
+        let target_res = map.field.resolution();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -819,8 +811,7 @@ pub fn start_shadow_cache_bake(
         #[cfg(target_arch = "wasm32")]
         {
             // Inline (no worker threads on wasm): a one-time cost per sun
-            // threshold crossing, at a capped resolution. The threshold makes
-            // it rare; the cap keeps it a hitch, not a stall.
+            // threshold crossing at the explicitly requested cache resolution.
             let start = Instant::now();
             let bytes = map
                 .field
@@ -1102,10 +1093,10 @@ mod tests {
         assert_eq!(bytes[0], 255, "sun-facing texel is lit");
     }
 
-    /// The cache may be baked at a coarser resolution than the heightfield
-    /// (the wasm cap): each cache texel still maps to the right world position
-    /// and marches against the full-resolution field, so a ridge shadow shows
-    /// up at the downscaled rate too.
+    /// The cache may be baked at a coarser resolution than the heightfield:
+    /// each cache texel still maps to the right world position and marches
+    /// against the full-resolution field, so a ridge shadow shows up at the
+    /// requested sampling rate too.
     #[test]
     fn bake_cache_coarser_resolution_still_shadows() {
         // Two-texel ridge, for the reason spelled out in `bake_cache_ridge_casts_shadow`.
@@ -1126,5 +1117,12 @@ mod tests {
         );
         // Cache texel (0, 0) → world (0, 0): sun-facing → lit.
         assert_eq!(bytes[0], 255, "coarse-cache sun-facing texel is lit");
+    }
+
+    #[test]
+    fn bake_cache_rejects_resolution_below_two() {
+        let field = make_field(2, Vec2::ZERO, Vec2::splat(1.0), vec![0.0; 4]);
+        assert!(field.bake_visibility_cache(Vec3::Y, 0.0046, 0).is_empty());
+        assert!(field.bake_visibility_cache(Vec3::Y, 0.0046, 1).is_empty());
     }
 }

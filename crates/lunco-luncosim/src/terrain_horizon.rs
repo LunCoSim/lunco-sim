@@ -103,7 +103,14 @@ pub(crate) fn start_streamed_horizon_bakes(
             }
         }
         let oracle = hf.0.clone();
-        let res = cfg.resolution.max(2);
+        if cfg.resolution < 2 {
+            warn!(
+                "[horizon] streamed terrain {entity:?} has invalid resolution {}; skipping bake",
+                cfg.resolution
+            );
+            continue;
+        }
+        let res = cfg.resolution;
         debug!(
             "[horizon] baking {res}² heightfield for streamed terrain {entity:?} \
              from the surface oracle…"
