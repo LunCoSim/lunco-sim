@@ -1417,6 +1417,7 @@ fn finish_dem_builds(
     // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
     // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     use bevy::tasks::futures_lite::future;
 
@@ -1450,6 +1451,7 @@ fn finish_dem_builds(
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
+            quality.profile(),
         );
     }
 }
@@ -1467,6 +1469,7 @@ fn assemble_dem_build(
     with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
+    profile: lunco_render::RenderQualityProfile,
 ) {
     if built.res > HEAVY_TILE_RES {
         warn!(
@@ -1500,7 +1503,7 @@ fn assemble_dem_build(
             e.try_insert(crate::stream_viz::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
-                    crate::stream_viz::TerrainLodViz::default(),
+                    crate::stream_viz::TerrainLodViz::from_profile(profile),
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
                     crate::stream_viz::TerrainNodeErrors::default(),
@@ -1518,11 +1521,11 @@ fn assemble_dem_build(
                 // become live.
                 e.try_remove::<Collider>();
                 // Construct the ring's contact band from the SAME viz config the
-                // visual tiles use (`TerrainLodViz::default()`), so the collider's
+                // visual tiles use, so the collider's
                 // gate is floored at the visual leaf's gate — what the rover
                 // touches is what the eye sees. See `WHEEL_SINKING_ANALYSIS_v3`
                 // §4.1/§5(2) and `SurfaceBand::contact`.
-                let viz = crate::stream_viz::TerrainLodViz::default();
+                let viz = crate::stream_viz::TerrainLodViz::from_profile(profile);
                 let ring = crate::collider_ring::TerrainColliderRing::for_viz(&viz, half_extent);
                 e.try_insert((
                     ring,
@@ -1629,6 +1632,7 @@ fn finish_dem_worker(
     // does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
     // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
@@ -1687,6 +1691,7 @@ fn finish_dem_worker(
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
+                    quality.profile(),
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
@@ -1768,6 +1773,7 @@ fn finish_dem_worker(
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
+                        quality.profile(),
                     );
                     any_full = true;
                     full_terrain_entities.push(entity);

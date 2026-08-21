@@ -332,9 +332,8 @@ pub struct TerrainLodViz {
     pub tile_res: usize,
 }
 
-impl Default for TerrainLodViz {
-    fn default() -> Self {
-        let profile = lunco_render::RenderingQualitySettings::default().profile();
+impl TerrainLodViz {
+    pub fn from_profile(profile: lunco_render::RenderQualityProfile) -> Self {
         TerrainLodViz {
             max_depth: profile.terrain_lod_max_depth,
             tile_res: profile.terrain_lod_tile_resolution,
@@ -3208,7 +3207,7 @@ mod draw_partition_tests {
         );
         let shadow_image = Handle::<Image>::default();
         app.world_mut().spawn((
-            TerrainLodViz::default(),
+            TerrainLodViz::from_profile(terrain_quality()),
             tiles,
             TileShadowCache {
                 image: shadow_image.clone(),
