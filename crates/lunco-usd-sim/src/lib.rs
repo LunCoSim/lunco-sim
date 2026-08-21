@@ -2495,38 +2495,63 @@ fn read_drive_mix_scope(
     }
 
     let mut valid = true;
-    let mut entries: Vec<lunco_mobility::kernels::MixEntry> = terms
-        .into_iter()
-        .filter_map(|term| {
-            if !reader.has_api_schema(&term, "LunCoDriveMixTermAPI") {
-                error!(
-                    "DriveMix term {} does not apply LunCoDriveMixTermAPI",
-                    term.as_str()
-                );
-                valid = false;
-                return None;
+    let mut entries = Vec::with_capacity(terms.len());
+    for term in terms {
+        if !reader.has_api_schema(&term, "LunCoDriveMixTermAPI") {
+            error!(
+                "DriveMix term {} does not apply LunCoDriveMixTermAPI",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        }
+        let Some(port) = term.name().map(str::to_owned) else {
+            error!("DriveMix term {} has no valid USD name", term.as_str());
+            valid = false;
+            continue;
+        };
+
+        // An omitted factor is the documented zero contribution.  An authored
+        // factor that fails numeric resolution is different: treating it as
+        // zero silently changes the allocation and makes a misspelled or
+        // wrongly typed source look like an intentional non-response.
+        let read_factor = |name: &str| -> Result<Option<f64>, ()> {
+            match reader.real(&term, name) {
+                Some(value) if value.is_finite() => Ok(Some(value)),
+                Some(_) => Err(()),
+                None if reader.has_authored_attribute(&term, name) => Err(()),
+                None => Ok(None),
             }
-            let port = term.name()?.to_string();
-            let forward = reader.real(&term, "lunco:factor:throttle");
-            let steer = reader.real(&term, "lunco:factor:steer");
-            let brake = reader.real(&term, "lunco:factor:brake");
-            if forward.is_none() && steer.is_none() && brake.is_none() {
-                error!(
-                    "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
-                     the allocation is invalid",
-                    term.as_str()
-                );
-                valid = false;
-                return None;
-            }
-            Some(lunco_mobility::kernels::MixEntry {
-                port,
-                forward: forward.unwrap_or(0.0),
-                steer: steer.unwrap_or(0.0),
-                brake: brake.unwrap_or(0.0),
-            })
-        })
-        .collect();
+        };
+        let factors = (
+            read_factor("lunco:factor:throttle"),
+            read_factor("lunco:factor:steer"),
+            read_factor("lunco:factor:brake"),
+        );
+        let (Ok(forward), Ok(steer), Ok(brake)) = factors else {
+            error!(
+                "DriveMix term {} has a malformed authored factor; the allocation is invalid",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        };
+        if forward.is_none() && steer.is_none() && brake.is_none() {
+            error!(
+                "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
+                 the allocation is invalid",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        }
+        entries.push(lunco_mobility::kernels::MixEntry {
+            port,
+            forward: forward.unwrap_or(0.0),
+            steer: steer.unwrap_or(0.0),
+            brake: brake.unwrap_or(0.0),
+        });
+    }
     entries.sort_by(|a, b| a.port.cmp(&b.port));
     valid.then_some(entries)
 }
@@ -2673,6 +2698,67 @@ fn derive_drive_mix(
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod drive_mix_tests {
+    use super::read_drive_mix_scope;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    #[test]
+    fn malformed_authored_factor_rejects_the_whole_mix() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "drive_mix.usda",
+            r#"#usda 1.0
+def Xform "Vehicle"
+{
+    def Scope "DriveMix"
+    {
+        def Scope "left" (prepend apiSchemas = ["LunCoDriveMixTermAPI"])
+        {
+            double lunco:factor:throttle = 1.0
+            string lunco:factor:steer = "not-a-number"
+        }
+    }
+}
+"#,
+        ))
+        .expect("drive mix fixture composes");
+        let scope = SdfPath::new("/Vehicle/DriveMix").expect("scope path");
+
+        assert!(
+            read_drive_mix_scope(&stage.view(), &scope).is_none(),
+            "a malformed authored factor must not degrade to a zero contribution"
+        );
+    }
+
+    #[test]
+    fn omitted_factor_remains_the_documented_zero_contribution() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "drive_mix.usda",
+            r#"#usda 1.0
+def Xform "Vehicle"
+{
+    def Scope "DriveMix"
+    {
+        def Scope "left" (prepend apiSchemas = ["LunCoDriveMixTermAPI"])
+        {
+            double lunco:factor:throttle = 1.0
+        }
+    }
+}
+"#,
+        ))
+        .expect("drive mix fixture composes");
+        let scope = SdfPath::new("/Vehicle/DriveMix").expect("scope path");
+
+        let entries = read_drive_mix_scope(&stage.view(), &scope).expect("valid mix");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].forward, 1.0);
+        assert_eq!(entries[0].steer, 0.0);
+        assert_eq!(entries[0].brake, 0.0);
     }
 }
 
