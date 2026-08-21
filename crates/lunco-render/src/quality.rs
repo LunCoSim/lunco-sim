@@ -62,6 +62,11 @@ impl RenderingQuality {
                 local_light_default_range: 30.0,
                 local_shadow_map_near_z: 0.1,
                 dome_cubemap_face_size: balanced_dome_face_size(),
+                primitive_sphere_longitudes: 48,
+                primitive_sphere_latitudes: 32,
+                primitive_radial_segments: 64,
+                primitive_capsule_longitudes: 32,
+                primitive_capsule_latitudes: 16,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
                 terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
@@ -103,6 +108,11 @@ impl RenderingQuality {
                 local_light_default_range: 20.0,
                 local_shadow_map_near_z: 0.2,
                 dome_cubemap_face_size: low_dome_face_size(),
+                primitive_sphere_longitudes: 24,
+                primitive_sphere_latitudes: 16,
+                primitive_radial_segments: 32,
+                primitive_capsule_longitudes: 16,
+                primitive_capsule_latitudes: 8,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
                 terrain_lod_tile_resolution: 33,
                 terrain_lod_cinematic_resolution: 1025,
@@ -144,6 +154,11 @@ impl RenderingQuality {
                 local_light_default_range: 50.0,
                 local_shadow_map_near_z: 0.05,
                 dome_cubemap_face_size: high_dome_face_size(),
+                primitive_sphere_longitudes: 96,
+                primitive_sphere_latitudes: 64,
+                primitive_radial_segments: 128,
+                primitive_capsule_longitudes: 64,
+                primitive_capsule_latitudes: 32,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
                 terrain_lod_tile_resolution: 65,
                 terrain_lod_cinematic_resolution: 2049,
@@ -212,6 +227,16 @@ pub struct RenderQualityProfile {
     /// Cubemap face size used when a textured USD dome omits its authored
     /// renderer-specific face-size override.
     pub dome_cubemap_face_size: u32,
+    /// Longitudinal segments used for USD UV spheres.
+    pub primitive_sphere_longitudes: u32,
+    /// Latitudinal segments used for USD UV spheres.
+    pub primitive_sphere_latitudes: u32,
+    /// Radial segments used for USD cylinders and cones.
+    pub primitive_radial_segments: u32,
+    /// Longitudinal segments used for USD capsules.
+    pub primitive_capsule_longitudes: u32,
+    /// Latitudinal segments used for USD capsules.
+    pub primitive_capsule_latitudes: u32,
     /// Maximum estimated GPU upload footprint retained by streamed terrain
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
@@ -327,6 +352,16 @@ pub struct RenderingQualitySettings {
     pub local_shadow_map_near_z: f32,
     #[serde(default = "default_dome_cubemap_face_size")]
     pub dome_cubemap_face_size: u32,
+    #[serde(default = "default_primitive_sphere_longitudes")]
+    pub primitive_sphere_longitudes: u32,
+    #[serde(default = "default_primitive_sphere_latitudes")]
+    pub primitive_sphere_latitudes: u32,
+    #[serde(default = "default_primitive_radial_segments")]
+    pub primitive_radial_segments: u32,
+    #[serde(default = "default_primitive_capsule_longitudes")]
+    pub primitive_capsule_longitudes: u32,
+    #[serde(default = "default_primitive_capsule_latitudes")]
+    pub primitive_capsule_latitudes: u32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
     #[serde(default = "default_terrain_lod_tile_resolution")]
@@ -471,6 +506,26 @@ const fn default_dome_cubemap_face_size() -> u32 {
     balanced_profile().dome_cubemap_face_size
 }
 
+const fn default_primitive_sphere_longitudes() -> u32 {
+    balanced_profile().primitive_sphere_longitudes
+}
+
+const fn default_primitive_sphere_latitudes() -> u32 {
+    balanced_profile().primitive_sphere_latitudes
+}
+
+const fn default_primitive_radial_segments() -> u32 {
+    balanced_profile().primitive_radial_segments
+}
+
+const fn default_primitive_capsule_longitudes() -> u32 {
+    balanced_profile().primitive_capsule_longitudes
+}
+
+const fn default_primitive_capsule_latitudes() -> u32 {
+    balanced_profile().primitive_capsule_latitudes
+}
+
 const fn balanced_camera_msaa() -> MsaaLevel {
     if cfg!(target_arch = "wasm32") {
         MsaaLevel::Off
@@ -587,6 +642,11 @@ impl RenderingQualitySettings {
             local_light_default_range: self.local_light_default_range,
             local_shadow_map_near_z: self.local_shadow_map_near_z,
             dome_cubemap_face_size: self.dome_cubemap_face_size,
+            primitive_sphere_longitudes: self.primitive_sphere_longitudes,
+            primitive_sphere_latitudes: self.primitive_sphere_latitudes,
+            primitive_radial_segments: self.primitive_radial_segments,
+            primitive_capsule_longitudes: self.primitive_capsule_longitudes,
+            primitive_capsule_latitudes: self.primitive_capsule_latitudes,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
@@ -640,6 +700,11 @@ impl RenderingQualitySettings {
         self.local_light_default_range = profile.local_light_default_range;
         self.local_shadow_map_near_z = profile.local_shadow_map_near_z;
         self.dome_cubemap_face_size = profile.dome_cubemap_face_size;
+        self.primitive_sphere_longitudes = profile.primitive_sphere_longitudes;
+        self.primitive_sphere_latitudes = profile.primitive_sphere_latitudes;
+        self.primitive_radial_segments = profile.primitive_radial_segments;
+        self.primitive_capsule_longitudes = profile.primitive_capsule_longitudes;
+        self.primitive_capsule_latitudes = profile.primitive_capsule_latitudes;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
         self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
         self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
@@ -741,6 +806,22 @@ impl RenderingQualitySettings {
         {
             return Err("dome cubemap face size must be a non-zero power of two");
         }
+        if profile.primitive_sphere_longitudes < 3
+            || profile.primitive_sphere_latitudes < 2
+            || profile.primitive_radial_segments < 3
+            || profile.primitive_capsule_longitudes < 3
+            || profile.primitive_capsule_latitudes < 2
+        {
+            return Err("primitive mesh tessellation values are below their minimum");
+        }
+        if profile.primitive_sphere_longitudes > 4096
+            || profile.primitive_sphere_latitudes > 4096
+            || profile.primitive_radial_segments > 4096
+            || profile.primitive_capsule_longitudes > 4096
+            || profile.primitive_capsule_latitudes > 4096
+        {
+            return Err("primitive mesh tessellation values must be at most 4096");
+        }
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
         }
@@ -825,6 +906,11 @@ impl Default for RenderingQualitySettings {
             local_light_default_range: profile.local_light_default_range,
             local_shadow_map_near_z: profile.local_shadow_map_near_z,
             dome_cubemap_face_size: profile.dome_cubemap_face_size,
+            primitive_sphere_longitudes: profile.primitive_sphere_longitudes,
+            primitive_sphere_latitudes: profile.primitive_sphere_latitudes,
+            primitive_radial_segments: profile.primitive_radial_segments,
+            primitive_capsule_longitudes: profile.primitive_capsule_longitudes,
+            primitive_capsule_latitudes: profile.primitive_capsule_latitudes,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
@@ -998,6 +1084,24 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("dome cubemap face size must be a non-zero power of two")
+        );
+    }
+
+    #[test]
+    fn primitive_mesh_quality_is_explicit_and_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        assert_eq!(
+            settings.profile().primitive_sphere_longitudes,
+            RenderingQuality::Balanced
+                .profile()
+                .primitive_sphere_longitudes
+        );
+        assert!(settings.validate().is_ok());
+
+        settings.primitive_radial_segments = 2;
+        assert_eq!(
+            settings.validate(),
+            Err("primitive mesh tessellation values are below their minimum")
         );
     }
 

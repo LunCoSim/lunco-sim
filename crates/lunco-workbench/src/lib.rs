@@ -5320,6 +5320,45 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .prefix("Trim maximum subdivisions: "),
                 );
             });
+            ui.collapsing("Primitive meshes", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control viewer tessellation for USD spheres, cylinders, cones, and capsules; USD dimensions remain authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_sphere_longitudes)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Sphere longitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_sphere_latitudes)
+                        .speed(1.0)
+                        .range(2..=4096)
+                        .prefix("Sphere latitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_radial_segments)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Cylinder/cone radial segments: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_capsule_longitudes)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Capsule longitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_capsule_latitudes)
+                        .speed(1.0)
+                        .range(2..=4096)
+                        .prefix("Capsule latitudes: "),
+                );
+            });
             ui.collapsing("Camera look", |ui| {
                 ui.label(
                     egui::RichText::new(

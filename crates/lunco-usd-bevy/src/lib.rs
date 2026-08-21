@@ -267,6 +267,11 @@ impl Plugin for UsdBevyPlugin {
                 lathe::retessellate_patch_meshes_on_quality_change
                     .after(lathe::regenerate_patch_meshes),
             )
+            .add_systems(
+                Update,
+                retessellate_primitive_meshes_on_quality_change
+                    .after(lathe::retessellate_patch_meshes_on_quality_change),
+            )
             .add_systems(Update, camera_mount::resolve_camera_mounts)
             .add_systems(
                 PostUpdate,
@@ -1139,12 +1144,21 @@ fn instantiate_usd_prim_from_stage(
         // A Cube reads `size` and NOTHING else — `width`/`height`/`depth`
         // are not accepted on it (they are UsdGeomPlane's attributes, not
         // UsdGeomCube's). Non-uniform dimensions go through `xformOp:scale`.
-        // Shape dimensions (+ their magic defaults) come from the
+        // Shape dimensions (+ their USD schema defaults) come from the
         // canonical `read_shape_dims` so the visual mesh and the avian
-        // collider can't desync. The mesh-quality params (sphere UV
-        // tessellation, cylinder/cone radial resolution, capsule
-        // lat/long) stay here — they're rendering-only and don't affect
-        // physics.
+        // collider can't desync. Mesh-quality parameters come from the
+        // Graphics profile — they're rendering-only and don't affect physics.
+        let primitive_shape = if !invisible
+            && !matches!(
+                prim_type.as_deref(),
+                Some("Mesh") | Some("NurbsPatch") | Some("BasisCurves") | Some("NurbsCurves")
+            ) {
+            prim_type
+                .as_deref()
+                .and_then(|ty| read_shape_dims(reader, &sdf_path, ty))
+        } else {
+            None
+        };
         let mesh_handle: Option<Handle<Mesh>> = if invisible {
             None
         } else if prim_type.as_deref() == Some("Mesh") {
@@ -1186,60 +1200,19 @@ fn instantiate_usd_prim_from_stage(
             // path authors no `widths`, a conduit does.
             build_usd_curve_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else {
-            match prim_type
-                .as_deref()
-                .and_then(|ty| read_shape_dims(reader, &sdf_path, ty))
-            {
+            match primitive_shape {
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
                 // Transform below) — that is how UsdGeomCube spells a box.
-                Some(ShapeDims::Cube { size }) => {
-                    Some(meshes.add(Cuboid::new(size as f32, size as f32, size as f32)))
-                }
-                Some(ShapeDims::Sphere { radius }) => {
-                    // Lat-long (UV) sphere, NOT an icosphere: a UV sphere has a
-                    // clean rectangular UV unwrap (uv.x = longitude, uv.y =
-                    // pole-to-pole latitude), which our ShaderMaterial checker
-                    // (e.g. shaders/balloon.wgsl) needs to tile across the whole
-                    // surface. An icosphere's UVs are distorted/seamed and leave
-                    // large uncovered-looking patches.
-                    Some(meshes.add(Sphere::new(radius as f32).mesh().uv(48, 32)))
-                }
-                Some(ShapeDims::Cylinder { radius, height }) => {
-                    // Bump radial resolution well above the default so the tire
-                    // silhouette reads as round, not faceted — the low-poly
-                    // barrel made the top edge of the wheel look chunky.
-                    Some(
-                        meshes.add(
-                            Cylinder::new(radius as f32, height as f32)
-                                .mesh()
-                                .resolution(64),
-                        ),
-                    )
-                }
-                Some(ShapeDims::Cone { radius, height }) => Some(
-                    meshes.add(
-                        Cone::new(radius as f32, height as f32)
-                            .mesh()
-                            .resolution(64),
-                    ),
-                ),
-                Some(ShapeDims::Capsule { radius, height }) => {
-                    let half_length = (height / 2.0) as f32;
-                    Some(
-                        meshes.add(
-                            Capsule3d::new(radius as f32, half_length)
-                                .mesh()
-                                .latitudes(16)
-                                .longitudes(32),
-                        ),
-                    )
-                }
-                Some(ShapeDims::Plane { width, length }) => {
-                    Some(meshes.add(Plane3d::default().mesh().size(width as f32, length as f32)))
-                }
+                Some(shape) => build_primitive_mesh(shape, quality).map(|mesh| meshes.add(mesh)),
                 None => None,
             }
         };
+
+        if let Some(shape) = primitive_shape.filter(|_| mesh_handle.is_some()) {
+            commands.entity(entity).try_insert(UsdPrimitiveMesh(shape));
+        } else {
+            commands.entity(entity).remove::<UsdPrimitiveMesh>();
+        }
 
         // Author the PBR appearance intent (`PbrLook`) with the USD colour/textures
         if let Some(ref m) = mesh_handle {
@@ -4189,6 +4162,124 @@ pub enum ShapeDims {
     Cone { radius: f64, height: f64 },
     Capsule { radius: f64, height: f64 },
     Plane { width: f64, length: f64 },
+}
+
+/// Rendering-only provenance for a USD built-in primitive mesh. The dimensions
+/// remain owned by [`ShapeDims`] so a quality change can rebuild the mesh without
+/// reopening the USD stage or duplicating the dimension reader.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+struct UsdPrimitiveMesh(ShapeDims);
+
+/// Build one USD primitive's visual mesh from its resolved dimensions and the
+/// current Graphics quality profile. USD has no attribute for these tessellation
+/// counts; they are viewer policy, unlike the shape dimensions.
+fn build_primitive_mesh(
+    shape: ShapeDims,
+    quality: lunco_render::RenderQualityProfile,
+) -> Option<Mesh> {
+    if quality.primitive_sphere_longitudes < 3
+        || quality.primitive_sphere_latitudes < 2
+        || quality.primitive_radial_segments < 3
+        || quality.primitive_capsule_longitudes < 3
+        || quality.primitive_capsule_latitudes < 2
+    {
+        return None;
+    }
+
+    match shape {
+        ShapeDims::Cube { size } => Some(Cuboid::new(size as f32, size as f32, size as f32).into()),
+        ShapeDims::Sphere { radius } => Some(Sphere::new(radius as f32).mesh().uv(
+            quality.primitive_sphere_longitudes,
+            quality.primitive_sphere_latitudes,
+        )),
+        ShapeDims::Cylinder { radius, height } => Some(
+            Cylinder::new(radius as f32, height as f32)
+                .mesh()
+                .resolution(quality.primitive_radial_segments)
+                .into(),
+        ),
+        ShapeDims::Cone { radius, height } => Some(
+            Cone::new(radius as f32, height as f32)
+                .mesh()
+                .resolution(quality.primitive_radial_segments)
+                .into(),
+        ),
+        ShapeDims::Capsule { radius, height } => Some(
+            Capsule3d::new(radius as f32, (height / 2.0) as f32)
+                .mesh()
+                .latitudes(quality.primitive_capsule_latitudes)
+                .longitudes(quality.primitive_capsule_longitudes)
+                .into(),
+        ),
+        ShapeDims::Plane { width, length } => Some(
+            Plane3d::default()
+                .mesh()
+                .size(width as f32, length as f32)
+                .into(),
+        ),
+    }
+}
+
+/// Rebuild built-in USD primitive meshes when the user changes Graphics quality.
+/// Dimensions are retained in [`UsdPrimitiveMesh`], so this is change-driven and
+/// does not repeat USD traversal or touch physics colliders.
+fn retessellate_primitive_meshes_on_quality_change(
+    mut meshes: ResMut<Assets<Mesh>>,
+    q: Query<(&UsdPrimitiveMesh, &Mesh3d, Option<&Name>)>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+) {
+    let Some(settings) = quality else {
+        return;
+    };
+    if !settings.is_changed() {
+        return;
+    }
+    let profile = settings.profile();
+    for (primitive, handle, name) in &q {
+        let Some(mesh) = build_primitive_mesh(primitive.0, profile) else {
+            warn!(
+                "[usd-bevy] {} primitive mesh quality is invalid; retaining the previous mesh",
+                name.map(|n| n.as_str()).unwrap_or("<unnamed>")
+            );
+            continue;
+        };
+        let Some(mut slot) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        *slot = mesh;
+    }
+}
+
+#[cfg(test)]
+mod primitive_mesh_quality_tests {
+    use super::*;
+
+    #[test]
+    fn primitive_mesh_density_follows_graphics_quality() {
+        let shape = ShapeDims::Sphere { radius: 1.0 };
+        let low = build_primitive_mesh(shape, lunco_render::RenderingQuality::Low.profile())
+            .expect("low-quality sphere mesh");
+        let high = build_primitive_mesh(shape, lunco_render::RenderingQuality::High.profile())
+            .expect("high-quality sphere mesh");
+        assert!(
+            high.count_vertices() > low.count_vertices(),
+            "primitive mesh quality must control sphere tessellation density"
+        );
+    }
+
+    #[test]
+    fn invalid_primitive_mesh_quality_is_rejected() {
+        let mut quality = lunco_render::RenderingQuality::Balanced.profile();
+        quality.primitive_radial_segments = 2;
+        assert!(build_primitive_mesh(
+            ShapeDims::Cylinder {
+                radius: 1.0,
+                height: 2.0
+            },
+            quality
+        )
+        .is_none());
+    }
 }
 
 /// Read the dimensions of a USD primitive shape prim, **in metres**. `type_name`
