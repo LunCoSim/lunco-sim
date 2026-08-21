@@ -184,14 +184,14 @@ pub struct AimTargetSource {
 
 impl CameraPath {
     /// The aim mode in force at `t` — the last key at or before it (held).
-    pub fn aim_at(&self, t: f64) -> AimMode {
+    /// An empty track is invalid and returns `None`.
+    pub fn aim_at(&self, t: f64) -> Option<AimMode> {
         self.aim
             .iter()
             .rev()
             .find(|k| k.t <= t)
             .or_else(|| self.aim.first())
             .map(|k| k.mode)
-            .unwrap_or(AimMode::Tangent)
     }
 }
 
@@ -236,9 +236,12 @@ pub struct CameraPathDriven {
 /// the loop/clamp policy would hide. The playhead is already wrapped or clamped by
 /// `step_playhead` per the domain's own loop policy — looping is the domain's
 /// business, not ours — so this only has to guard a degenerate span.
-fn path_u(t: f64, start: f64, end: f64) -> f32 {
-    let span = (end - start).max(f64::EPSILON);
-    (((t - start) / span) as f32).clamp(0.0, 1.0)
+fn path_u(t: f64, start: f64, end: f64) -> Option<f32> {
+    if !t.is_finite() || !start.is_finite() || !end.is_finite() || end <= start {
+        return None;
+    }
+    let u = ((t - start) / (end - start)).clamp(0.0, 1.0) as f32;
+    u.is_finite().then_some(u)
 }
 
 /// The frozen link between a camera path's clock and the clock it really hangs on.
@@ -613,6 +616,13 @@ pub fn resolve_camera_paths(
             warn!("[camera-path] {} has no `points`", prim.path);
             continue;
         }
+        if points.iter().any(|point| !point.is_finite()) {
+            error!(
+                "[camera-path] {} has non-finite authored control points",
+                prim.path
+            );
+            continue;
+        }
         if points.len() < 2 {
             warn!("[camera-path] {} needs at least 2 points", prim.path);
             continue;
@@ -662,6 +672,32 @@ pub fn resolve_camera_paths(
             continue;
         }
         let periodic = wrap == "periodic";
+        let valid_shape = match basis {
+            CurveBasis::Linear => points.len() >= 2,
+            CurveBasis::CatmullRom => {
+                if periodic {
+                    points.len() >= 3
+                } else {
+                    points.len() >= 4
+                }
+            }
+            CurveBasis::Bezier => {
+                if periodic {
+                    points.len() >= 3 && points.len().is_multiple_of(3)
+                } else {
+                    points.len() >= 4 && (points.len() - 1).is_multiple_of(3)
+                }
+            }
+        };
+        if !valid_shape {
+            error!(
+                "[camera-path] {} has a control-point count incompatible with {:?} {:?}",
+                prim.path,
+                basis,
+                if periodic { "periodic" } else { "nonperiodic" }
+            );
+            continue;
+        }
         let duration = match reader.real(&path, "lunco:path:duration") {
             Some(value) if value.is_finite() && value > 0.0 => value,
             Some(value) => {
@@ -903,7 +939,12 @@ pub fn drive_camera_paths(
         let Some(t) = resolved.get(path.domain) else {
             continue;
         };
-        let u = path_u(t, pb.start, pb.end);
+        let Some(u) = path_u(t, pb.start, pb.end) else {
+            warn_once!(
+                "[camera-path] path {curve_entity:?} has an invalid playback span — camera not driven"
+            );
+            continue;
+        };
 
         // Control points are the CURVE prim's own geometry, so they are in its
         // local space. `world_pose` walks the grid hierarchy, giving the curve's
@@ -923,11 +964,20 @@ pub fn drive_camera_paths(
             );
             continue;
         };
-        let at = |u: f32| -> DVec3 {
-            let local = eval_curve(&path.points, path.basis, path.periodic, u);
-            curve_pos + curve_rot * local.as_dvec3()
+        let Some(local) = eval_curve(&path.points, path.basis, path.periodic, u) else {
+            if faults.as_deref_mut().is_some_and(|faults| {
+                faults.raise(
+                    "camera-path-invalid-curve",
+                    Some(curve_entity),
+                    "camera path",
+                    "authored curve cannot be evaluated",
+                )
+            }) {
+                error!("[camera-path] terminal runtime failure: invalid curve evaluation");
+            }
+            continue;
         };
-        let world = at(u);
+        let world = curve_pos + curve_rot * local.as_dvec3();
         if !world.is_finite() {
             if faults.as_deref_mut().is_some_and(|faults| {
                 faults.raise(
@@ -945,8 +995,14 @@ pub fn drive_camera_paths(
         // Aim, per the track in force at this instant. Direction is a DIFFERENCE
         // of two grid-absolute points, so it is small and safe in f32 — unlike the
         // positions themselves.
+        let Some(aim_mode) = path.aim_at(t) else {
+            error!(
+                "[camera-path] curve {curve_entity:?} has an empty aim track — camera not driven"
+            );
+            continue;
+        };
         let mut invalid_target = false;
-        let look_dir = match path.aim_at(t) {
+        let look_dir = match aim_mode {
             AimMode::Target(e) => {
                 match lunco_core::coords::world_pose(e, &q_parents, &q_grids, &q_spatial) {
                     Some((target, _)) => {
@@ -987,7 +1043,23 @@ pub fn drive_camera_paths(
                     }
                 }
             }
-            AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
+            AimMode::Tangent => {
+                let Some(tangent) = eval_curve_tangent(&path.points, path.basis, path.periodic, u)
+                else {
+                    if faults.as_deref_mut().is_some_and(|faults| {
+                        faults.raise(
+                            "camera-path-invalid-tangent",
+                            Some(curve_entity),
+                            "camera path",
+                            "tangent sample cannot be evaluated",
+                        )
+                    }) {
+                        error!("[camera-path] terminal runtime failure: invalid tangent sample");
+                    }
+                    continue;
+                };
+                Some((curve_rot * tangent.as_dvec3()).as_vec3())
+            }
             // Hands off: position only, so free-look (or any other system) owns
             // the rotation for this stretch.
             AimMode::Manual => None,
@@ -1015,7 +1087,7 @@ pub fn drive_camera_paths(
         if chatty {
             info!(
                 "[camera-path] drive t={t:.2} u={u:.3} eye={world:?} aim={:?} look={look_dir:?}",
-                path.aim_at(t)
+                aim_mode
             );
         }
         if let Ok(mut driven) = q_cams.get_mut(path.camera) {
@@ -1024,7 +1096,7 @@ pub fn drive_camera_paths(
             // happened to land. That is what makes a recorded frame index reproduce
             // the identical transform across runs.
             driven.target_world = world;
-            driven.aim_owned = !matches!(path.aim_at(t), AimMode::Manual);
+            driven.aim_owned = !matches!(aim_mode, AimMode::Manual);
             if let Some(dir) = look_dir {
                 if dir.length_squared() > 1e-9 {
                     driven.target_rot = Transform::default().looking_to(dir, Vec3::Y).rotation;
@@ -1111,40 +1183,73 @@ pub fn apply_camera_paths(
     }
 }
 
-/// Evaluate the curve at normalised `u` ∈ [0, 1].
+/// Evaluate the curve at normalised `u` ∈ [0, 1]. Invalid authored geometry is
+/// rejected rather than replaced by a point, polygon, or other guessed curve.
 ///
 /// Uniform in the curve parameter, NOT arc length — so points spaced unevenly
 /// make the camera speed up through sparse stretches. Fine for an even orbit;
 /// a shot with clustered points wants arc-length reparameterisation (doc 50 §9.7).
-pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Vec3 {
-    match points.len() {
-        0 => Vec3::ZERO,
-        1 => points[0],
-        _ => match basis {
-            CurveBasis::Linear => eval_linear(points, periodic, u),
-            CurveBasis::Bezier => eval_bezier(points, periodic, u),
-            CurveBasis::CatmullRom => eval_catmull_rom(points, periodic, u),
-        },
+pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Option<Vec3> {
+    eval_curve_with_tangent(points, basis, periodic, u).map(|(position, _)| position)
+}
+
+/// Evaluate the curve's position and exact parametric tangent at `u`.
+///
+/// The tangent comes from the same cubic segment coefficients as the position;
+/// camera aiming and the editor overlay therefore do not depend on arbitrary
+/// finite-difference offsets.
+pub fn eval_curve_tangent(
+    points: &[Vec3],
+    basis: CurveBasis,
+    periodic: bool,
+    u: f32,
+) -> Option<Vec3> {
+    let (_, tangent) = eval_curve_with_tangent(points, basis, periodic, u)?;
+    tangent
+        .is_finite()
+        .then_some(tangent)
+        .filter(|tangent| tangent.length_squared() > f32::EPSILON)
+}
+
+fn eval_curve_with_tangent(
+    points: &[Vec3],
+    basis: CurveBasis,
+    periodic: bool,
+    u: f32,
+) -> Option<(Vec3, Vec3)> {
+    if points.len() < 2
+        || !u.is_finite()
+        || !(0.0..=1.0).contains(&u)
+        || points.iter().any(|point| !point.is_finite())
+    {
+        return None;
+    }
+    match basis {
+        CurveBasis::Linear => eval_linear_with_tangent(points, periodic, u),
+        CurveBasis::Bezier => eval_bezier_with_tangent(points, periodic, u),
+        CurveBasis::CatmullRom => eval_catmull_rom_with_tangent(points, periodic, u),
     }
 }
 
-fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_linear_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let segs = if periodic {
         points.len()
     } else {
         points.len() - 1
     };
-    let (i, f) = segment(segs, u);
+    let (i, f) = segment(segs, u)?;
     let a = points[i % points.len()];
     let b = points[(i + 1) % points.len()];
-    a.lerp(b, f)
+    let result = a.lerp(b, f);
+    let tangent = b - a;
+    (result.is_finite() && tangent.is_finite()).then_some((result, tangent))
 }
 
 /// Catmull-Rom: interpolates its control points, so the curve goes THROUGH the
 /// points you place. Periodic curves wrap. Non-periodic ones follow USD's end
 /// conditions: the first and last CVs are TANGENT PHANTOMS, so the curve spans
 /// p₁…pₙ₋₂ with `n − 3` segments (UsdGeomBasisCurves segment counting). Fewer
-/// than 4 CVs cannot form a cubic segment — degrade to the polygon.
+/// than 4 CVs cannot form a cubic segment and are rejected.
 ///
 /// The numeric core is `bevy_math`'s [`CubicCardinalSpline`] at tension 0.5 —
 /// the same generator `lunco-celestial/src/trajectories.rs` uses, and the same
@@ -1156,23 +1261,21 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 ///   whereas USD says the authored ends ARE the phantoms, so sampling starts
 ///   one segment in — `t = 1 + u·(n − 3)` — and bevy's mirrored end segments
 ///   are never touched.
-fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_catmull_rom_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let n = points.len();
-    if !periodic && n < 4 {
-        return eval_linear(points, false, u);
+    if (!periodic && n < 4) || (periodic && n < 3) {
+        return None;
     }
-    let u = u.clamp(0.0, 1.0);
     let spline = CubicCardinalSpline::new_catmull_rom(points.iter().copied());
-    let sampled = if periodic {
-        spline.to_curve_cyclic().map(|c| c.position(u * n as f32))
+    let (sampled, tangent) = if periodic {
+        let curve = spline.to_curve_cyclic().ok()?;
+        (curve.position(u * n as f32), curve.velocity(u * n as f32))
     } else {
-        spline
-            .to_curve()
-            .map(|c| c.position(1.0 + u * (n - 3) as f32))
+        let curve = spline.to_curve().ok()?;
+        let t = 1.0 + u * (n - 3) as f32;
+        (curve.position(t), curve.velocity(t))
     };
-    // `n ≥ 2` is guaranteed by the callers above, so this is unreachable — but
-    // the polygon is a saner fallback than a panic in a render-path system.
-    sampled.unwrap_or_else(|_| eval_linear(points, periodic, u))
+    (sampled.is_finite() && tangent.is_finite()).then_some((sampled, tangent))
 }
 
 /// Cubic Bezier: 4 CVs per segment, consecutive segments sharing an endpoint.
@@ -1181,15 +1284,17 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// carries `4 + 3(segs − 1)` CVs, a `periodic` one exactly `3·segs`. The
 /// periodic form authors no closing CV — the final segment borrows the first CV
 /// back as its endpoint, which is what makes the loop close rather than stop.
-/// Too few CVs to form even one cubic segment degrades to the control polygon.
+/// Too few CVs to form even one cubic segment, or a non-periodic count that is
+/// not `4 + 3n`, is rejected.
 ///
 /// Segment windows are gathered here (that indexing IS the USD wrapping rule);
 /// the Bernstein evaluation itself is `bevy_math`'s [`CubicBezier`].
-fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_bezier_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let n = points.len();
     let segs = if periodic { n / 3 } else { (n - 1) / 3 };
-    if segs == 0 {
-        return eval_linear(points, periodic, u);
+    if segs == 0 || (periodic && !n.is_multiple_of(3)) || (!periodic && !(n - 1).is_multiple_of(3))
+    {
+        return None;
     }
     // Wrapping the index is the whole of periodicity here: only the closing
     // segment's `b + 3` ever reaches `n`, and there it lands back on CV 0.
@@ -1202,19 +1307,25 @@ fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
             points[(b + 3) % n],
         ]
     });
-    match CubicBezier::new(windows).to_curve() {
-        Ok(curve) => curve.position(u.clamp(0.0, 1.0) * segs as f32),
-        // Unreachable (`segs ≥ 1` above), but degrade rather than panic.
-        Err(_) => eval_linear(points, periodic, u),
-    }
+    let curve = CubicBezier::new(windows).to_curve().ok()?;
+    let t = u * segs as f32;
+    let sampled = curve.position(t);
+    let tangent = curve.velocity(t);
+    (sampled.is_finite() && tangent.is_finite()).then_some((sampled, tangent))
 }
 
 /// Split `u` into (segment index, local fraction).
-fn segment(segs: usize, u: f32) -> (usize, f32) {
-    let segs = segs.max(1);
-    let x = (u.clamp(0.0, 1.0)) * segs as f32;
-    let i = (x.floor() as usize).min(segs - 1);
-    (i, x - i as f32)
+fn segment(segs: usize, u: f32) -> Option<(usize, f32)> {
+    if segs == 0 || !u.is_finite() || !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let x = u * segs as f32;
+    let i = if u == 1.0 {
+        segs - 1
+    } else {
+        x.floor() as usize
+    };
+    Some((i, x - i as f32))
 }
 
 #[cfg(test)]
@@ -1239,7 +1350,7 @@ mod tests {
         let p = ring();
         for (i, want) in p.iter().enumerate() {
             let u = i as f32 / p.len() as f32; // periodic: 4 segments
-            let got = eval_curve(&p, CurveBasis::CatmullRom, true, u);
+            let got = eval_curve(&p, CurveBasis::CatmullRom, true, u).expect("valid curve");
             assert!(
                 (got - *want).length() < 1e-5,
                 "u={u} got {got:?} want {want:?}"
@@ -1250,8 +1361,8 @@ mod tests {
     #[test]
     fn periodic_curve_closes_without_a_seam() {
         let p = ring();
-        let start = eval_curve(&p, CurveBasis::CatmullRom, true, 0.0);
-        let end = eval_curve(&p, CurveBasis::CatmullRom, true, 1.0);
+        let start = eval_curve(&p, CurveBasis::CatmullRom, true, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::CatmullRom, true, 1.0).expect("valid curve");
         assert!(
             (start - end).length() < 1e-5,
             "loop must close: {start:?} vs {end:?}"
@@ -1272,8 +1383,8 @@ mod tests {
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(3.0, 0.0, 0.0), // tangent phantom
         ];
-        let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0);
-        let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0);
+        let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0).expect("valid curve");
         assert!(
             (start - p[1]).length() < 1e-5,
             "u=0 is p1, not the phantom p0"
@@ -1283,24 +1394,35 @@ mod tests {
             "u=1 is pₙ₋₂, not the phantom pₙ₋₁"
         );
         // Interior knot: n − 3 = 2 segments, so u = 0.5 sits exactly on p2.
-        let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5);
+        let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5).expect("valid curve");
         assert!((mid - p[2]).length() < 1e-5, "interior knot interpolated");
     }
 
-    /// Fewer than 4 CVs cannot form an open cubic segment — the documented
-    /// degradation is the control polygon.
+    /// Fewer than 4 CVs cannot form an open cubic segment and are rejected rather
+    /// than being silently changed into a polygon.
     #[test]
-    fn open_catmull_rom_under_four_cvs_degrades_to_the_polygon() {
+    fn open_catmull_rom_under_four_cvs_is_rejected() {
         let p = vec![
             Vec3::ZERO,
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(2.0, 2.0, 0.0),
         ];
-        let got = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
-        assert!(
-            (got - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5,
-            "3 CVs = polygon midpoint of the first edge: {got:?}"
-        );
+        assert!(eval_curve(&p, CurveBasis::CatmullRom, false, 0.25).is_none());
+    }
+
+    #[test]
+    fn malformed_curve_inputs_are_rejected_without_geometry_fallback() {
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::ONE,
+            Vec3::NEG_X,
+        ];
+        assert!(eval_curve(&p, CurveBasis::Bezier, false, 0.5).is_none());
+        assert!(eval_curve(&p, CurveBasis::Linear, false, 1.1).is_none());
+        assert!(eval_curve(&[Vec3::NAN, Vec3::X], CurveBasis::Linear, false, 0.5).is_none());
     }
 
     #[test]
@@ -1310,8 +1432,8 @@ mod tests {
         // toward the true circle — i.e. it is not a 12-gon.
         let p = ring();
         let u = 0.125; // midpoint of the first periodic segment
-        let lin = eval_curve(&p, CurveBasis::Linear, true, u);
-        let cr = eval_curve(&p, CurveBasis::CatmullRom, true, u);
+        let lin = eval_curve(&p, CurveBasis::Linear, true, u).expect("valid curve");
+        let cr = eval_curve(&p, CurveBasis::CatmullRom, true, u).expect("valid curve");
         let r_lin = (lin.x * lin.x + lin.z * lin.z).sqrt();
         let r_cr = (cr.x * cr.x + cr.z * cr.z).sqrt();
         assert!(r_lin < 0.72, "chord midpoint should cut inside: {r_lin}");
@@ -1323,13 +1445,37 @@ mod tests {
     }
 
     #[test]
+    fn tangent_comes_from_the_curve_derivative() {
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::new(2.0, 1.0, 0.0),
+            Vec3::new(3.0, 1.0, 0.0),
+        ];
+        let tangent = eval_curve_tangent(&p, CurveBasis::Linear, false, 0.25)
+            .expect("non-degenerate linear tangent");
+        assert_eq!(tangent, Vec3::X);
+        assert!(
+            eval_curve_tangent(&[Vec3::ZERO, Vec3::ZERO], CurveBasis::Linear, false, 0.5).is_none()
+        );
+    }
+
+    #[test]
     fn path_u_is_a_pure_function_of_domain_time() {
         // The determinism property the fixed-cadence + `overstep_fraction()` design
         // did NOT have: the pose depends on the domain clock and nothing else, so a
         // given `t` maps to a given point on the curve regardless of frame timing,
         // frame rate, or how many fixed steps the frame happened to run.
         let p = ring();
-        let sample = |t: f64| eval_curve(&p, CurveBasis::CatmullRom, true, path_u(t, 0.0, 8.0));
+        let sample = |t: f64| {
+            eval_curve(
+                &p,
+                CurveBasis::CatmullRom,
+                true,
+                path_u(t, 0.0, 8.0).expect("valid playback span"),
+            )
+            .expect("valid curve")
+        };
         assert_eq!(sample(3.0), sample(3.0), "same t ⇒ same pose, bit for bit");
         // …and distinct times genuinely move the camera (the multi-fixed-step defect
         // was `prev == target`, i.e. two evaluations that could not differ).
@@ -1340,25 +1486,11 @@ mod tests {
     }
 
     #[test]
-    fn path_u_clamps_and_survives_a_degenerate_span() {
-        assert_eq!(
-            path_u(-5.0, 0.0, 10.0),
-            0.0,
-            "before the span clamps to the start"
-        );
-        assert_eq!(
-            path_u(50.0, 0.0, 10.0),
-            1.0,
-            "after the span clamps to the end"
-        );
-        assert!((path_u(5.0, 0.0, 10.0) - 0.5).abs() < 1e-6);
-        // A zero-length `Playback` span must not divide by zero and produce NaN — a
-        // NaN `u` propagates into the camera's Transform and the view goes black,
-        // which is a spectacularly unhelpful symptom for "duration = 0".
-        assert!(
-            path_u(1.0, 4.0, 4.0).is_finite(),
-            "degenerate span must stay finite"
-        );
+    fn path_u_clamps_and_rejects_a_degenerate_span() {
+        assert_eq!(path_u(-5.0, 0.0, 10.0), Some(0.0));
+        assert_eq!(path_u(50.0, 0.0, 10.0), Some(1.0));
+        assert!((path_u(5.0, 0.0, 10.0).expect("valid span") - 0.5).abs() < 1e-6);
+        assert!(path_u(1.0, 4.0, 4.0).is_none());
     }
 
     #[test]
@@ -1369,8 +1501,14 @@ mod tests {
             Vec3::new(1.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
         ];
-        assert!((eval_curve(&p, CurveBasis::Bezier, false, 0.0) - p[0]).length() < 1e-5);
-        assert!((eval_curve(&p, CurveBasis::Bezier, false, 1.0) - p[3]).length() < 1e-5);
+        assert!(
+            (eval_curve(&p, CurveBasis::Bezier, false, 0.0).expect("valid curve") - p[0]).length()
+                < 1e-5
+        );
+        assert!(
+            (eval_curve(&p, CurveBasis::Bezier, false, 1.0).expect("valid curve") - p[3]).length()
+                < 1e-5
+        );
     }
 
     /// `wrap = "periodic"` means the closing segment ends on CV 0, so `u = 1`
@@ -1386,16 +1524,18 @@ mod tests {
             Vec3::new(2.0, -1.0, 0.0),
             Vec3::new(1.0, -1.0, 0.0),
         ];
-        let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0);
-        let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0);
+        let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0).expect("valid curve");
         assert!((start - p[0]).length() < 1e-5, "periodic start is CV 0");
         assert!(
             (end - start).length() < 1e-5,
             "periodic end wraps back onto the start"
         );
-        // The same CVs read nonperiodically span only one segment (4 + 3(segs−1)
-        // ⇒ segs = 1) and stop on CV 3 — the wrap is what adds the return leg.
-        let open_end = eval_curve(&p, CurveBasis::Bezier, false, 1.0);
+        // A periodic six-CV path is not a valid nonperiodic cubic (the latter
+        // requires 4 + 3(n - 1) control points), so it must not silently drop
+        // the trailing two points. A valid four-CV open path ends on CV 3.
+        assert!(eval_curve(&p, CurveBasis::Bezier, false, 1.0).is_none());
+        let open_end = eval_curve(&p[..4], CurveBasis::Bezier, false, 1.0).expect("valid curve");
         assert!(
             (open_end - p[3]).length() < 1e-5,
             "nonperiodic stops at its last endpoint"

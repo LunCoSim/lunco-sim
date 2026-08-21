@@ -4723,6 +4723,16 @@ fn build_usd_curve_mesh(
     if points.is_empty() {
         return None;
     }
+    if points
+        .iter()
+        .any(|point| point.iter().any(|value| !value.is_finite()))
+    {
+        error!(
+            "[usd-bevy] {} has non-finite authored curve control points",
+            path.as_str()
+        );
+        return None;
+    }
     // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
     let widths = match read_curve_real_array(reader, path, "widths") {
         Ok(Some(widths)) if !widths.is_empty() => widths,
@@ -5002,11 +5012,19 @@ fn build_usd_curve_mesh(
             cvs.clone()
         } else {
             let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
-            (0..=steps)
+            let Some(samples) = (0..=steps)
                 .map(|i| {
                     crate::camera_path::eval_curve(&cvs, basis, periodic, i as f32 / steps as f32)
                 })
-                .collect()
+                .collect::<Option<Vec<_>>>()
+            else {
+                error!(
+                    "[usd-bevy] {} has a BasisCurves segment that cannot be evaluated",
+                    path.as_str()
+                );
+                return None;
+            };
+            samples
         };
         // Resampling changes the point count, so per-vertex radii must be
         // resampled with it or a tapered tube would snap back to its control-point

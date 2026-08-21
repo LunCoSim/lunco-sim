@@ -32,7 +32,7 @@ use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd_bevy::camera_path::{eval_curve, AimMode, CameraPath};
+use lunco_usd_bevy::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// How many points to sample along a camera path when drawing it. The authored
@@ -128,12 +128,21 @@ pub fn draw_camera_paths(
         if looking_through == Some(path.camera) {
             continue;
         }
-        let at =
-            |u: f32| gt.transform_point(eval_curve(&path.points, path.basis, path.periodic, u));
-
-        let pts: Vec<Vec3> = (0..=PATH_SAMPLES)
-            .map(|i| at(i as f32 / PATH_SAMPLES as f32))
-            .collect();
+        let Some(pts) = (0..=PATH_SAMPLES)
+            .map(|i| {
+                eval_curve(
+                    &path.points,
+                    path.basis,
+                    path.periodic,
+                    i as f32 / PATH_SAMPLES as f32,
+                )
+                .map(|point| gt.transform_point(point))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            warn!("[cinematic] refusing to draw malformed camera path");
+            continue;
+        };
         gizmos.linestrip(pts.iter().copied(), Color::srgb(0.25, 0.8, 1.0));
 
         // The control points — what you drag — each with the view direction the
@@ -141,7 +150,7 @@ pub fn draw_camera_paths(
         // lander" stretch and one inside a "free look" stretch genuinely differ;
         // reading `aim_at` (rather than assuming one target) is what makes the
         // arrows tell the truth.
-        let n = path.points.len().max(1);
+        let n = path.points.len();
         for (i, p) in path.points.iter().enumerate() {
             let at_pt = gt.transform_point(*p);
             gizmos.sphere(
@@ -152,20 +161,22 @@ pub fn draw_camera_paths(
             // Time at this point, on the path's own clock.
             let u_i = i as f32 / n as f32;
             let t_i = span_of(&q_playback, path).map(|(s, e)| s + (e - s) * u_i as f64);
-            let dir = match (t_i.map(|t| path.aim_at(t)), path.aim_at(0.0)) {
-                (Some(AimMode::Target(e)), _) | (None, AimMode::Target(e)) => q_gt
+            let dir = match t_i
+                .and_then(|t| path.aim_at(t))
+                .or_else(|| path.aim_at(0.0))
+            {
+                Some(AimMode::Target(e)) => q_gt
                     .get(e)
                     .ok()
                     .map(|tgt| (tgt.translation() - at_pt).normalize_or_zero()),
-                (Some(AimMode::Manual), _) => None, // user steers here — nothing to draw
-                _ => {
-                    let ahead = gt.transform_point(eval_curve(
-                        &path.points,
-                        path.basis,
-                        path.periodic,
-                        (u_i + 0.01).min(1.0),
-                    ));
-                    Some((ahead - at_pt).normalize_or_zero())
+                Some(AimMode::Manual) | None => None, // user steers here — nothing to draw
+                Some(AimMode::Tangent) => {
+                    eval_curve_tangent(&path.points, path.basis, path.periodic, u_i).map(
+                        |tangent| {
+                            let ahead = gt.transform_point(*p + tangent);
+                            (ahead - at_pt).normalize_or_zero()
+                        },
+                    )
                 }
             };
             if let Some(d) = dir.filter(|d| d.length_squared() > 1e-6) {
@@ -175,13 +186,16 @@ pub fn draw_camera_paths(
 
         // Where the playhead sits on the curve right now.
         if let (Ok(pb), Some(t)) = (q_playback.get(path.domain), resolved.get(path.domain)) {
-            let span = (pb.end - pb.start).max(f64::EPSILON);
-            let u = (((t - pb.start) / span) as f32).clamp(0.0, 1.0);
-            gizmos.sphere(
-                Isometry3d::from_translation(at(u)),
-                1.0,
-                Color::srgb(1.0, 0.9, 0.2),
-            );
+            if pb.end > pb.start && pb.start.is_finite() && pb.end.is_finite() && t.is_finite() {
+                let u = (((t - pb.start) / (pb.end - pb.start)).clamp(0.0, 1.0)) as f32;
+                if let Some(point) = eval_curve(&path.points, path.basis, path.periodic, u) {
+                    gizmos.sphere(
+                        Isometry3d::from_translation(gt.transform_point(point)),
+                        1.0,
+                        Color::srgb(1.0, 0.9, 0.2),
+                    );
+                }
+            }
         }
     }
 }
