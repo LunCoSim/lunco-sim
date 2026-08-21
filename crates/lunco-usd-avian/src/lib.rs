@@ -590,6 +590,9 @@ fn collect_child_colliders_from_usd(
     parent_path: &SdfPath,
 ) -> Result<Vec<(Position, Rotation, Collider)>, TransformReadError> {
     let mut shapes = Vec::new();
+    let convention = lunco_usd_bevy::stage_convention(reader).map_err(|_| TransformReadError {
+        prim: parent_path.as_str().to_owned(),
+    })?;
 
     // Per the spec a rigid body aggregates ALL descendant colliders, not only
     // direct children — a collider under an intermediate grouping `Xform`
@@ -678,8 +681,8 @@ fn collect_child_colliders_from_usd(
                 // axis of the STAGE's frame while the collider is built in the
                 // canonical one (identical to what usd-bevy does for the visual
                 // Transform, so mesh and collider can't disagree on a Z-up stage).
-                let q_axis = lunco_usd_bevy::stage_convention(reader)
-                    .orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
+                let q_axis =
+                    convention.orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
                 if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                     child_tf.rotation *= q_axis;
                 }
@@ -1234,10 +1237,12 @@ fn read_physics_scene_gravity(
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
 ) -> Result<(f64, DVec3), &'static str> {
+    let convention = lunco_usd_bevy::stage_convention(reader)
+        .map_err(|_| "stage convention metadata is invalid")?;
     let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
         Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
         Some(value) if value.is_finite() => {
-            let converted = lunco_usd_bevy::stage_convention(reader).length(value as f64);
+            let converted = convention.length(value as f64);
             if !converted.is_finite() {
                 return Err("gravity magnitude is not finite after stage-unit conversion");
             }
@@ -1260,7 +1265,7 @@ fn read_physics_scene_gravity(
     let direction = if raw_direction == DVec3::ZERO {
         DVec3::NEG_Y
     } else {
-        lunco_usd_bevy::stage_convention(reader)
+        convention
             .dir_d(raw_direction)
             .try_normalize()
             .ok_or("gravity direction must not be degenerate")?
@@ -1703,7 +1708,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // Read raw it would hinge about the wrong axis while the meshes and colliders
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
-    let conv = lunco_usd_bevy::stage_convention(&view);
+    let conv = lunco_usd_bevy::stage_convention(&view).ok()?;
     let read_real_or_default = |name: &str, default: f64| -> Option<f64> {
         match view.real(path, name) {
             Some(value) => Some(value),
@@ -1788,7 +1793,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
     fn base<J: JointBase>(j: &J, reader: &StageView<'_>, path: &SdfPath) -> Option<JointBaseRead> {
-        let conv = lunco_usd_bevy::stage_convention(reader);
+        let conv = lunco_usd_bevy::stage_convention(reader).ok()?;
         let read_local_pos = |attr: openusd::usd::Attribute, name: &str| -> Option<Option<DVec3>> {
             if !reader.has_authored_attribute(path, name) {
                 return Some(None);
@@ -3337,7 +3342,7 @@ fn apply_rigid_body_mass_props(
     // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
     // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
     // them as overrides hands the solver a degenerate body.
-    let conv = lunco_usd_bevy::stage_convention(reader);
+    let conv = lunco_usd_bevy::stage_convention(reader).map_err(|_| ())?;
     let mpu = conv.length(1.0);
     if !mpu.is_finite() || mpu <= 0.0 {
         return Err(());

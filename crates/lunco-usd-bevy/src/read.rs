@@ -456,16 +456,12 @@ pub trait UsdRead {
     /// camera-track key enumeration.
     fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
 
-    /// The stage's authored `metersPerUnit` (SI metres per authored linear unit),
-    /// or `None` when unauthored — the USD default is then `1.0`. Tolerant of
-    /// `float`/`double` authoring. **Interpreted in exactly one place**:
-    /// [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
-    fn stage_meters_per_unit(&self) -> Option<f64>;
-
-    /// The stage's authored `upAxis` token (`"Y"` / `"Z"`), or `None` when
-    /// unauthored — the USD default is then `"Y"`. **Interpreted in exactly one
-    /// place**: [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
-    fn stage_up_axis(&self) -> Option<String>;
+    /// The composed pseudo-root metadata value for `name`, or `None` when the
+    /// metadata is unauthored. Stage convention metadata is interpreted in one
+    /// place by [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader),
+    /// which must distinguish an omitted USD default from an authored value of
+    /// the wrong type.
+    fn stage_metadata_value(&self, name: &str) -> Option<Value>;
 
     /// The authored `timeSamples` span `(first, last)` of attribute `name` on
     /// `prim` — the min/max sample time codes. Provided from
@@ -717,24 +713,8 @@ impl UsdRead for StageView<'_> {
             .unwrap_or_default()
     }
 
-    fn stage_meters_per_unit(&self) -> Option<f64> {
-        // Composed pseudo-root metadata (session layer wins over root), the same
-        // resolution `timeCodesPerSecond` gets. Precision-tolerant: `metersPerUnit`
-        // is spec'd `double` but exporters do author `float`.
-        let v = self
-            .stage()
-            .stage_metadata("metersPerUnit")
-            .ok()
-            .flatten()?;
-        v.clone()
-            .get::<f64>()
-            .or_else(|| v.get::<f32>().map(f64::from))
-    }
-
-    fn stage_up_axis(&self) -> Option<String> {
-        // `upAxis` is authored as a `Token`; `as_str` coerces Token/String alike.
-        let v = self.stage().stage_metadata("upAxis").ok().flatten()?;
-        v.as_str().map(str::to_string).filter(|s| !s.is_empty())
+    fn stage_metadata_value(&self, name: &str) -> Option<Value> {
+        self.stage().stage_metadata(name).ok().flatten()
     }
 }
 

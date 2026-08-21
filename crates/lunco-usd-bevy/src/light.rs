@@ -618,7 +618,16 @@ pub(crate) fn instantiate_light_prim(
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
     quality: lunco_render::RenderQualityProfile,
 ) -> bool {
-    let convention = crate::units::stage_convention(reader);
+    let convention = match crate::units::stage_convention(reader) {
+        Ok(convention) => convention,
+        Err(error) => {
+            error!(
+                "[usd-bevy] {} has invalid stage convention metadata: {error}; refusing light",
+                sdf_path.as_str()
+            );
+            return false;
+        }
+    };
     match prim_type {
         Some("DistantLight") => {
             // UsdLux spec default intensity is 1.0, but 1 lx is invisible
@@ -1407,7 +1416,7 @@ def Xform "World"
             .expect("stage builds");
         let view = stage.view();
         let lamp = SdfPath::new("/World/Lamp").unwrap();
-        let convention = crate::units::stage_convention(&view);
+        let convention = crate::units::stage_convention(&view).expect("valid stage convention");
 
         assert_eq!(read_light_range(&view, &lamp, 30.0, convention), Ok(0.9));
         assert_eq!(
@@ -1437,10 +1446,13 @@ def DistantLight "Sun"
         let sun = SdfPath::new("/Sun").unwrap();
 
         assert!(read_intensity_with_exposure(&view, &sun, 77_000.0).is_err());
-        assert!(
-            read_shadow_distance(&view, &sun, 1500.0, crate::units::stage_convention(&view))
-                .is_err()
-        );
+        assert!(read_shadow_distance(
+            &view,
+            &sun,
+            1500.0,
+            crate::units::stage_convention(&view).expect("valid stage convention"),
+        )
+        .is_err());
         assert!(read_shadow_enable(&view, &sun).is_err());
     }
 

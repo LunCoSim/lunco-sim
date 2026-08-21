@@ -58,7 +58,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use bevy::log::{error_once, warn_once};
+use bevy::log::warn_once;
 use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 
@@ -89,6 +89,33 @@ pub struct StageMetrics {
     pub up_axis: UpAxis,
 }
 
+/// An authored stage-convention declaration that cannot be interpreted under
+/// the USD contract. Omission remains eligible for the USD schema defaults;
+/// explicit malformed metadata is terminal for that stage instead of being
+/// replaced with canonical units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageMetricsError {
+    /// `upAxis` was authored with a value other than `Y` or `Z`, or with an
+    /// unsupported USD value type.
+    InvalidUpAxis(String),
+    /// `metersPerUnit` was authored with an unsupported type or a non-positive
+    /// or non-finite value.
+    InvalidMetersPerUnit(String),
+}
+
+impl std::fmt::Display for StageMetricsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUpAxis(value) => write!(f, "invalid upAxis metadata: {value}"),
+            Self::InvalidMetersPerUnit(value) => {
+                write!(f, "invalid metersPerUnit metadata: {value}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StageMetricsError {}
+
 impl Default for StageMetrics {
     /// Our canonical frame: `upAxis = "Y"`, `metersPerUnit = 1.0`. NOT the
     /// unauthored-stage fallback — USD's is `0.01` (centimetres); an unauthored
@@ -104,37 +131,48 @@ impl Default for StageMetrics {
 impl StageMetrics {
     /// Read the composed stage metrics from any [`UsdRead`] source.
     ///
-    /// **Warns loudly** rather than importing wrong silently:
+    /// **Rejects malformed declarations** rather than importing wrong silently:
     /// - an unauthored `metersPerUnit` takes the USD spec fallback `0.01`
     ///   (centimetres, `UsdGeomLinearUnits::centimeters`) — NOT `1.0`;
-    /// - an `upAxis` token that is neither `Y` nor `Z` is an **error** (USD only
-    ///   defines those two) → treated as `Y`;
-    /// - a non-finite or non-positive `metersPerUnit` is an **error** → `1.0`;
+    /// - an `upAxis` value that is neither `Y` nor `Z` is an **error** (USD only
+    ///   defines those two);
+    /// - a non-finite or non-positive `metersPerUnit` is an **error**;
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
     ///   one-shot warning naming what is being converted, so an unexpected
     ///   Omniverse/Isaac stage is visible rather than merely handled.
-    pub fn from_reader(reader: &crate::StageView<'_>) -> Self {
-        let up_axis = match reader.stage_up_axis().as_deref() {
-            None | Some("Y") => UpAxis::Y,
-            Some("Z") => UpAxis::Z,
-            Some(other) => {
-                error_once!(
-                    "[usd-units] stage declares unsupported upAxis = {other:?} (USD defines only \
-                     \"Y\" and \"Z\"); importing as Y-up — geometry may be rotated wrongly"
-                );
-                UpAxis::Y
-            }
+    pub fn from_reader(reader: &crate::StageView<'_>) -> Result<Self, StageMetricsError> {
+        let up_axis = match reader.stage_metadata_value("upAxis") {
+            None => UpAxis::Y,
+            Some(value) => match value.as_str().map(str::to_string).as_deref() {
+                Some("Y") => UpAxis::Y,
+                Some("Z") => UpAxis::Z,
+                Some(other) => {
+                    return Err(StageMetricsError::InvalidUpAxis(other.to_string()));
+                }
+                None => {
+                    return Err(StageMetricsError::InvalidUpAxis(
+                        "unsupported USD value type".to_string(),
+                    ));
+                }
+            },
         };
-        let meters_per_unit = match reader.stage_meters_per_unit() {
+        let meters_per_unit = match reader.stage_metadata_value("metersPerUnit") {
             // Unauthored ⇒ the USD spec fallback: centimetres.
             None => 0.01,
-            Some(m) if m.is_finite() && m > 0.0 => m,
-            Some(bad) => {
-                error_once!(
-                    "[usd-units] stage declares unsupported metersPerUnit = {bad}; importing at \
-                     1.0 (metres) — scene scale may be wrong"
-                );
-                1.0
+            Some(value) => {
+                let value = value
+                    .clone()
+                    .get::<f64>()
+                    .or_else(|| value.get::<f32>().map(f64::from))
+                    .ok_or_else(|| {
+                        StageMetricsError::InvalidMetersPerUnit(
+                            "unsupported USD value type".to_string(),
+                        )
+                    })?;
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(StageMetricsError::InvalidMetersPerUnit(value.to_string()));
+                }
+                value
             }
         };
         let metrics = Self {
@@ -150,7 +188,7 @@ impl StageMetrics {
                 metrics.meters_per_unit
             );
         }
-        metrics
+        Ok(metrics)
     }
 
     /// The same metrics off an authoring [`Stage`](openusd::usd::Stage).
@@ -168,34 +206,45 @@ impl StageMetrics {
     ///
     /// Silent on a non-canonical stage: `from_reader` warned already at import, and
     /// this runs once per edit.
-    pub fn from_stage(stage: &openusd::usd::Stage) -> Self {
+    pub fn from_stage(stage: &openusd::usd::Stage) -> Result<Self, StageMetricsError> {
         let up_axis = match stage
             .stage_metadata("upAxis")
             .ok()
             .flatten()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .as_deref()
+            .map(|v| v.as_str().map(str::to_string))
         {
-            Some("Z") => UpAxis::Z,
-            _ => UpAxis::Y,
+            None => UpAxis::Y,
+            Some(Some(value)) if value == "Y" => UpAxis::Y,
+            Some(Some(value)) if value == "Z" => UpAxis::Z,
+            Some(Some(value)) => return Err(StageMetricsError::InvalidUpAxis(value)),
+            Some(None) => {
+                return Err(StageMetricsError::InvalidUpAxis(
+                    "unsupported USD value type".to_string(),
+                ));
+            }
         };
-        let meters_per_unit = stage
-            .stage_metadata("metersPerUnit")
-            .ok()
-            .flatten()
-            .and_then(|v| {
-                v.clone()
+        let meters_per_unit = match stage.stage_metadata("metersPerUnit").ok().flatten() {
+            None => 0.01,
+            Some(value) => {
+                let value = value
+                    .clone()
                     .get::<f64>()
-                    .or_else(|| v.get::<f32>().map(f64::from))
-            })
-            // Invalid ⇒ 1.0, unauthored ⇒ the USD spec fallback (centimetres) —
-            // mirroring `from_reader`, so read and write agree on the frame.
-            .map(|m| if m.is_finite() && m > 0.0 { m } else { 1.0 })
-            .unwrap_or(0.01);
-        Self {
+                    .or_else(|| value.get::<f32>().map(f64::from))
+                    .ok_or_else(|| {
+                        StageMetricsError::InvalidMetersPerUnit(
+                            "unsupported USD value type".to_string(),
+                        )
+                    })?;
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(StageMetricsError::InvalidMetersPerUnit(value.to_string()));
+                }
+                value
+            }
+        };
+        Ok(Self {
             meters_per_unit,
             up_axis,
-        }
+        })
     }
 
     /// Whether the stage is already in the canonical frame (Y-up, metres) ⇒ the
@@ -826,8 +875,12 @@ impl ConventionTransform {
 /// The stage → canonical conversion for `reader`'s stage. Cheap (two metadata
 /// field reads); the decoders call it per prim rather than threading a gate
 /// through every signature.
-pub fn stage_convention(reader: &crate::StageView<'_>) -> ConventionTransform {
-    ConventionTransform::from_stage_metrics(&StageMetrics::from_reader(reader))
+pub fn stage_convention(
+    reader: &crate::StageView<'_>,
+) -> Result<ConventionTransform, StageMetricsError> {
+    Ok(ConventionTransform::from_stage_metrics(
+        &StageMetrics::from_reader(reader)?,
+    ))
 }
 
 #[cfg(test)]

@@ -1293,8 +1293,7 @@ impl Document for UsdDocument {
                 // so this changes nothing except for imported Omniverse/Isaac
                 // content, which is exactly where silent frame corruption would be
                 // hardest to spot.
-                let conv =
-                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let conv = authoring_stage_convention(&stage)?;
                 let authored = conv.stage_point_d(DVec3::from_array(value)).to_array();
                 stage
                     .create_attribute(format!("{path}.xformOp:translate"), "double3")
@@ -1367,8 +1366,7 @@ impl Document for UsdDocument {
                 // conversion is the identity — the canonical stages we author
                 // ourselves keep their authored digits exactly, and only genuinely
                 // non-canonical stages pay the precision of the remap they need.
-                let conv =
-                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let conv = authoring_stage_convention(&stage)?;
                 let authored = conv.stage_euler_xyz_deg(value);
                 stage
                     .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
@@ -1464,8 +1462,7 @@ impl Document for UsdDocument {
                 // literal is ever re-formatted to convert it — a string round-trip
                 // here would risk changing values it was only meant to move.
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv =
-                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let conv = authoring_stage_convention(&conv_stage)?;
                 let val = conv.stage_xform_value(&name, &type_name, val);
 
                 // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
@@ -1576,8 +1573,7 @@ impl Document for UsdDocument {
                 // and its `timeSamples` land in different unit frames inside one
                 // serialized file on any non-canonical stage.
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv =
-                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let conv = authoring_stage_convention(&conv_stage)?;
                 let val = conv.stage_xform_value(&name, &type_name, val);
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
@@ -1681,8 +1677,7 @@ impl Document for UsdDocument {
                         _ => None,
                     });
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv =
-                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let conv = authoring_stage_convention(&conv_stage)?;
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
                     let old = conv.canonical_xform_value(&name, &ty, old);
@@ -2028,6 +2023,17 @@ impl Document for UsdDocument {
 /// document validation failure.
 fn author_err<E: std::fmt::Display>(e: E) -> DocumentError {
     DocumentError::ValidationFailed(format!("authoring failed: {e}"))
+}
+
+/// Read the composed authoring stage's convention once at the document boundary.
+/// Invalid explicit USD metadata rejects the edit; it must never be rewritten as
+/// a canonical identity because that would serialize a value in the wrong frame.
+fn authoring_stage_convention(
+    stage: &openusd::usd::Stage,
+) -> Result<ConventionTransform, DocumentError> {
+    StageMetrics::from_stage(stage)
+        .map(|metrics| ConventionTransform::from_stage_metrics(&metrics))
+        .map_err(author_err)
 }
 
 #[cfg(test)]

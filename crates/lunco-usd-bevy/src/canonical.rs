@@ -163,6 +163,7 @@ impl CanonicalStage {
     pub(crate) fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
         let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
             .stage_point_d(bevy::math::DVec3::from_array(value))
             .to_array();
         self.stage
@@ -181,7 +182,9 @@ impl CanonicalStage {
     /// already listed (extends a stack, never clobbers it).
     pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let value = crate::stage_convention(&self.view()).stage_euler_xyz_deg(value);
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_euler_xyz_deg(value);
         self.stage
             .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
             .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
@@ -493,7 +496,9 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let value = crate::stage_convention(&self.view()).stage_xform_value(name, type_name, value);
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author attribute {prim}.{name} ({type_name}): {e}"))?
@@ -520,7 +525,9 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let value = crate::stage_convention(&self.view()).stage_xform_value(name, type_name, value);
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author time sample {prim}.{name} ({type_name}): {e}"))?

@@ -331,7 +331,7 @@ fn read_projection(
     path: &SdfPath,
 ) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
-    let meters_per_unit = StageMetrics::from_reader(reader).meters_per_unit as f32;
+    let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit as f32;
     let resolved_clipping = reader
         .scalar::<[f32; 2]>(path, "clippingRange")
         .or_else(|| {

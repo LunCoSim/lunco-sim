@@ -959,6 +959,15 @@ fn instantiate_usd_prim_from_stage(
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
 ) {
+    let convention = match stage_convention(reader) {
+        Ok(convention) => convention,
+        Err(error) => {
+            error!(
+                "[usd-bevy] stage has invalid convention metadata: {error}; refusing visual projection"
+            );
+            return;
+        }
+    };
     {
         // Deferred `defaultPrim` resolution. A scene-root spawned with an
         // empty path is the "use the stage's defaultPrim" sentinel
@@ -1533,8 +1542,7 @@ fn instantiate_usd_prim_from_stage(
                 // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
                 // `axis = "Z"` cylinder therefore stands up along canonical +Y, as it
                 // did along the stage's +Z. Identity on a Y-up stage.
-                let conv = stage_convention(reader);
-                let q_axis = conv.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+                let q_axis = convention.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
                 if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                     transform.rotation *= q_axis;
                 }
@@ -1560,8 +1568,7 @@ fn instantiate_usd_prim_from_stage(
             if let Some([tx, ty, tz]) = read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
                 // A point in the camera's PARENT-local (stage-frame) space →
                 // canonical, exactly like every other authored point.
-                let target =
-                    stage_convention(reader).point(Vec3::new(tx as f32, ty as f32, tz as f32));
+                let target = convention.point(Vec3::new(tx as f32, ty as f32, tz as f32));
                 let eye = transform.translation;
                 if (target - eye).length_squared() > 1e-6 {
                     transform.rotation = Transform::from_translation(eye)
@@ -3492,7 +3499,13 @@ pub fn sample_usd_animation(
         // the sampler drives the raw composer (not `local_transform_at`), so it
         // must convert explicitly or an animated prim on a Z-up/cm stage would
         // snap back to stage units every frame.
-        let conv = stage_convention(reader);
+        let Ok(conv) = stage_convention(reader) else {
+            error!(
+                "[usd-bevy] animated prim {} has invalid stage convention metadata; refusing sample",
+                sdf_path.as_str()
+            );
+            continue;
+        };
         match &plan.xform {
             XformDrive::OpOrder => {
                 if let Ok(Some(m)) = compose_xform_order_at(reader, sdf_path, t) {
@@ -4333,7 +4346,8 @@ pub fn local_transform_at(
     let Some(raw) = local_transform_at_raw(reader, path, time)? else {
         return Ok(None);
     };
-    Ok(Some(stage_convention(reader).local_transform(raw)))
+    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+    Ok(Some(convention.local_transform(raw)))
 }
 
 /// [`local_transform_at`] **before** the canonical conversion — the transform as
@@ -5200,7 +5214,7 @@ pub fn read_shape_dims(
     type_name: &str,
 ) -> Option<ShapeDims> {
     let dims = read_shape_dims_raw(reader, path, type_name)?;
-    let conv = stage_convention(reader);
+    let conv = stage_convention(reader).ok()?;
     if conv.is_identity() {
         return Some(dims);
     }
@@ -5319,7 +5333,7 @@ fn read_mesh_points(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<[f32; 
     if points.is_empty() {
         return None;
     }
-    let conv = stage_convention(reader);
+    let conv = stage_convention(reader).ok()?;
     if conv.is_identity() {
         return Some(points);
     }
@@ -5354,7 +5368,7 @@ fn read_mesh_normals(
     if normals.is_empty() {
         return None;
     }
-    let conv = stage_convention(reader);
+    let conv = stage_convention(reader).ok()?;
     if conv.is_identity() {
         return Some((normals, attr));
     }
@@ -5421,7 +5435,7 @@ fn build_usd_curve_mesh(
 
     // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
     // not `conv.point`. (`read_mesh_points` already converted the centerline.)
-    let conv = stage_convention(reader);
+    let conv = stage_convention(reader).ok()?;
     let radii: Vec<f32> = widths
         .iter()
         .map(|w| conv.length(*w / 2.0) as f32)
@@ -7801,13 +7815,13 @@ def Xform "World"
 
     #[test]
     fn reads_stage_metrics() {
-        let m = StageMetrics::from_reader(&parse(ZUP_CM).view());
+        let m = StageMetrics::from_reader(&parse(ZUP_CM).view()).expect("valid stage metrics");
         assert_eq!(m.up_axis, UpAxis::Z);
         assert_eq!(m.meters_per_unit, 0.01);
         assert!(!m.is_canonical());
 
         // Unauthored ⇒ the USD defaults, which are our canonical frame.
-        let m = StageMetrics::from_reader(&parse(YUP_M).view());
+        let m = StageMetrics::from_reader(&parse(YUP_M).view()).expect("valid stage metrics");
         assert_eq!(m.up_axis, UpAxis::Y);
         assert_eq!(m.meters_per_unit, 1.0);
         assert!(
@@ -7857,7 +7871,7 @@ def Xform "World"
         // The `axis` token is a STAGE-frame axis: a Z-axial cylinder stands up in a
         // Z-up world, so after conversion it must stand up along canonical +Y —
         // i.e. the composed geometry rotation maps the primitive's own +Y to +Y.
-        let conv = stage_convention(&reader);
+        let conv = stage_convention(&reader).expect("valid stage convention");
         let q = conv.orient(usd_axis_to_quat("Z").unwrap_or(Quat::IDENTITY));
         assert!(
             (q * Vec3::Y).abs_diff_eq(Vec3::Y, 1e-5),
@@ -7893,23 +7907,44 @@ def Xform "World"
         let __cs = parse(YUP_M);
         let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
-        assert!(stage_convention(&reader).is_identity());
+        assert!(stage_convention(&reader)
+            .expect("valid stage convention")
+            .is_identity());
         let tf = local_transform_at(&reader, &tower, 0.0).unwrap().unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 3.0, 0.0), 1e-6));
         assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-6));
         assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-6));
     }
 
-    /// An unsupported declaration must not import silently-wrong: it falls back
-    /// to the canonical frame (and logs an error — see `StageMetrics::from_reader`).
+    /// An unsupported declaration must not import silently-wrong: the stage is
+    /// rejected instead of being replaced with the canonical frame.
     #[test]
-    fn unsupported_declarations_fall_back_to_canonical() {
+    fn unsupported_declarations_are_rejected() {
         let bogus = parse(
             "#usda 1.0\n(\n    upAxis = \"X\"\n    metersPerUnit = 0\n)\ndef Xform \"W\"\n{\n}\n",
         );
-        let m = StageMetrics::from_reader(&bogus.view());
-        assert_eq!(m.up_axis, UpAxis::Y);
-        assert_eq!(m.meters_per_unit, 1.0);
+        let error = StageMetrics::from_reader(&bogus.view()).expect_err("malformed metadata");
+        assert!(matches!(
+            error,
+            crate::units::StageMetricsError::InvalidUpAxis(_)
+        ));
+        assert!(stage_convention(&bogus.view()).is_err());
+        assert!(matches!(
+            StageMetrics::from_stage(bogus.stage()),
+            Err(crate::units::StageMetricsError::InvalidUpAxis(_))
+        ));
+
+        let malformed_units = parse(
+            "#usda 1.0\n(\n    upAxis = \"Y\"\n    metersPerUnit = 0\n)\ndef Xform \"W\"\n{\n}\n",
+        );
+        assert!(matches!(
+            StageMetrics::from_reader(&malformed_units.view()),
+            Err(crate::units::StageMetricsError::InvalidMetersPerUnit(_))
+        ));
+        assert!(matches!(
+            StageMetrics::from_stage(malformed_units.stage()),
+            Err(crate::units::StageMetricsError::InvalidMetersPerUnit(_))
+        ));
     }
 }
 
