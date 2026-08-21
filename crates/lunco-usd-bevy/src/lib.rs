@@ -261,6 +261,11 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (lathe::relathe_changed, lathe::regenerate_patch_meshes).chain(),
             )
+            .add_systems(
+                Update,
+                lathe::retessellate_patch_meshes_on_quality_change
+                    .after(lathe::regenerate_patch_meshes),
+            )
             .add_systems(Update, camera_mount::resolve_camera_mounts)
             .add_systems(
                 PostUpdate,
@@ -1158,7 +1163,7 @@ fn instantiate_usd_prim_from_stage(
             // existing scripting bridge writes them with no new verb, and
             // `crate::lathe`'s `Changed`-filtered systems rebuild the mesh once per
             // edit instead of once per frame.
-            build_usd_nurbs_patch_mesh(reader, &sdf_path).map(|(mesh, def)| {
+            build_usd_nurbs_patch_mesh(reader, &sdf_path, quality).map(|(mesh, def)| {
                 if let Some((surface, lathe_params)) = def {
                     let mut e = commands.entity(entity);
                     e.try_insert(surface);
@@ -4730,6 +4735,7 @@ def NurbsPatch "Patch"
 fn build_usd_nurbs_patch_mesh(
     reader: &StageView<'_>,
     path: &SdfPath,
+    quality: lunco_render::RenderQualityProfile,
 ) -> Option<(Mesh, Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)>)> {
     use bevy::asset::RenderAssetUsages;
     use bevy_mesh::PrimitiveTopology;
@@ -4813,7 +4819,7 @@ fn build_usd_nurbs_patch_mesh(
                 &tpoints,
                 u_span,
                 v_span,
-                24,
+                quality.nurbs_trim_curve_samples,
             );
             if loops.is_empty() {
                 bevy::log::warn!(
@@ -4828,7 +4834,7 @@ fn build_usd_nurbs_patch_mesh(
         });
 
     if let Some(loops) = trim_loops {
-        let grid = (u_count.max(v_count) * 6).clamp(12, 96);
+        let grid = quality.nurbs_trim_subdivisions(u_count.max(v_count));
         bevy::log::info!(
             "[usd-bevy] {} trimming: {} loop(s), grid {}",
             path.as_str(),
@@ -4886,7 +4892,7 @@ fn build_usd_nurbs_patch_mesh(
     // EXACTLY the operation the regeneration system has to perform when a parameter
     // changes. Keeping a second copy here would be two tessellators that can
     // disagree — the same trap `crate::nurbs`' module doc describes for evaluators.
-    let Some(mesh) = surface.mesh() else {
+    let Some(mesh) = surface.mesh(quality) else {
         // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
         // adds the prim path, which it has no way to know.
         bevy::log::warn!(

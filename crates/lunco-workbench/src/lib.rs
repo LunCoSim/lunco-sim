@@ -5262,6 +5262,51 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .suffix(" lm"),
                 );
             });
+            ui.collapsing("Parametric surfaces", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "NURBS tessellation controls mesh detail only; USD control nets, orders, and authored trim data remain authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_samples_per_control_span)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("Samples per control span: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_minimum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Surface minimum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_maximum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Surface maximum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_curve_samples)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim-curve samples: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_minimum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim minimum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_maximum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim maximum subdivisions: "),
+                );
+            });
             ui.collapsing("Camera look", |ui| {
                 ui.label(
                     egui::RichText::new(

@@ -116,7 +116,7 @@ pub struct NurbsSurface {
 }
 
 impl NurbsSurface {
-    /// Tessellate into a `Mesh`. `None` when the definition is malformed —
+    /// Tessellate into a `Mesh` at the requested graphics quality. `None` when the definition is malformed —
     /// [`crate::nurbs::sample_nurbs_patch`] has already warned which guard fired.
     ///
     /// This is the UNTRIMMED build. Trimmed patches (`trimCurve:*`) keep their
@@ -125,13 +125,13 @@ impl NurbsSurface {
     /// the patch's parameter space and re-deriving it from a changed control net is
     /// a different problem than this one. Better to not offer the capability than to
     /// offer it wrong.
-    pub fn mesh(&self) -> Option<Mesh> {
+    pub fn mesh(&self, quality: lunco_render::RenderQualityProfile) -> Option<Mesh> {
         use bevy::asset::RenderAssetUsages;
         use bevy_mesh::PrimitiveTopology;
 
         let (u_count, v_count) = (self.u_count as usize, self.v_count as usize);
-        let u_steps = (u_count * 6).clamp(8, 128);
-        let v_steps = (v_count * 6).clamp(8, 128);
+        let u_steps = quality.nurbs_surface_subdivisions(u_count);
+        let v_steps = quality.nurbs_surface_subdivisions(v_count);
 
         let grid = crate::nurbs::sample_nurbs_patch(
             &self.points,
@@ -527,12 +527,48 @@ pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdL
 pub fn regenerate_patch_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>), Changed<NurbsSurface>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
 ) {
+    let profile = quality.as_deref().map_or_else(
+        || lunco_render::RenderingQuality::Balanced.profile(),
+        |settings| settings.profile(),
+    );
     for (surface, handle, name) in &q {
-        let Some(mesh) = surface.mesh() else {
+        let Some(mesh) = surface.mesh(profile) else {
             warn!(
                 "[usd-bevy] {} NurbsSurface changed but produced no samples — mesh left \
                  as it was (check the control net / knot vectors)",
+                name.map(|n| n.as_str().to_string()).unwrap_or_default()
+            );
+            continue;
+        };
+        let Some(mut slot) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        *slot = mesh;
+    }
+}
+
+/// Rebuild every live untrimmed NURBS mesh when the graphics tessellation policy
+/// changes. Quality is an explicit user setting, so existing geometry must update
+/// immediately rather than only newly loaded patches adopting the new density.
+pub fn retessellate_patch_meshes_on_quality_change(
+    mut meshes: ResMut<Assets<Mesh>>,
+    q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>)>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+) {
+    let Some(settings) = quality else {
+        return;
+    };
+    if !settings.is_changed() {
+        return;
+    }
+    let profile = settings.profile();
+    for (surface, handle, name) in &q {
+        let Some(mesh) = surface.mesh(profile) else {
+            warn!(
+                "[usd-bevy] {} NurbsSurface quality change produced no samples — mesh left as it was \
+                 (check the control net / knot vectors)",
                 name.map(|n| n.as_str().to_string()).unwrap_or_default()
             );
             continue;
@@ -607,7 +643,9 @@ mod tests {
             left_handed: false,
         }
         .surface();
-        let mesh = surface.mesh().expect("valid reflector mesh");
+        let mesh = surface
+            .mesh(lunco_render::RenderingQuality::Balanced.profile())
+            .expect("valid reflector mesh");
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .and_then(|attribute| attribute.as_float3())
@@ -641,6 +679,31 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 100, "expected the full reflector tessellation");
+    }
+
+    #[test]
+    fn mesh_density_follows_graphics_quality_settings() {
+        let surface = UsdLathe {
+            profile: LatheProfile::Paraboloid {
+                apex_radius: 0.02,
+                rim_radius: 0.58,
+                focal_length: 0.35,
+            },
+            rings: 4,
+            v_order: 3,
+            left_handed: false,
+        }
+        .surface();
+        let low = surface
+            .mesh(lunco_render::RenderingQuality::Low.profile())
+            .expect("low-quality reflector mesh");
+        let high = surface
+            .mesh(lunco_render::RenderingQuality::High.profile())
+            .expect("high-quality reflector mesh");
+        assert!(
+            high.count_vertices() > low.count_vertices(),
+            "graphics quality must control NURBS tessellation density"
+        );
     }
 
     /// The bell's control net must be exactly what `BellNozzle.mo` says it is.

@@ -69,6 +69,12 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 24,
                 terrain_lod_max_inflight_bakes: 64,
                 terrain_lod_tile_budget: 768,
+                nurbs_surface_samples_per_control_span: 6,
+                nurbs_surface_minimum_subdivisions: 8,
+                nurbs_surface_maximum_subdivisions: 128,
+                nurbs_trim_curve_samples: 24,
+                nurbs_trim_minimum_subdivisions: 12,
+                nurbs_trim_maximum_subdivisions: 96,
             },
             Self::Low => RenderQualityProfile {
                 directional_shadow_map_size: 512,
@@ -102,6 +108,12 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 8,
                 terrain_lod_max_inflight_bakes: 16,
                 terrain_lod_tile_budget: 256,
+                nurbs_surface_samples_per_control_span: 3,
+                nurbs_surface_minimum_subdivisions: 6,
+                nurbs_surface_maximum_subdivisions: 64,
+                nurbs_trim_curve_samples: 12,
+                nurbs_trim_minimum_subdivisions: 8,
+                nurbs_trim_maximum_subdivisions: 48,
             },
             Self::High => RenderQualityProfile {
                 directional_shadow_map_size: 2048,
@@ -135,6 +147,12 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 48,
                 terrain_lod_max_inflight_bakes: 128,
                 terrain_lod_tile_budget: 1536,
+                nurbs_surface_samples_per_control_span: 10,
+                nurbs_surface_minimum_subdivisions: 12,
+                nurbs_surface_maximum_subdivisions: 256,
+                nurbs_trim_curve_samples: 48,
+                nurbs_trim_minimum_subdivisions: 16,
+                nurbs_trim_maximum_subdivisions: 192,
             },
         }
     }
@@ -201,6 +219,43 @@ pub struct RenderQualityProfile {
     pub terrain_lod_max_inflight_bakes: usize,
     /// Maximum selected streamed terrain tiles per terrain.
     pub terrain_lod_tile_budget: usize,
+    /// Samples per control-point span used for untrimmed NURBS surfaces.
+    pub nurbs_surface_samples_per_control_span: usize,
+    /// Minimum samples per direction used for untrimmed NURBS surfaces.
+    pub nurbs_surface_minimum_subdivisions: usize,
+    /// Maximum samples per direction used for untrimmed NURBS surfaces.
+    pub nurbs_surface_maximum_subdivisions: usize,
+    /// Samples used to approximate each NURBS trim curve.
+    pub nurbs_trim_curve_samples: usize,
+    /// Minimum grid subdivisions used for trimmed NURBS surfaces.
+    pub nurbs_trim_minimum_subdivisions: usize,
+    /// Maximum grid subdivisions used for trimmed NURBS surfaces.
+    pub nurbs_trim_maximum_subdivisions: usize,
+}
+
+impl RenderQualityProfile {
+    /// Resolve the requested untrimmed NURBS sample count for one control-net
+    /// direction. The profile is a rendering policy; USD remains the owner of
+    /// the control net and its structural orders/counts.
+    pub fn nurbs_surface_subdivisions(self, control_count: usize) -> usize {
+        control_count
+            .saturating_mul(self.nurbs_surface_samples_per_control_span)
+            .clamp(
+                self.nurbs_surface_minimum_subdivisions,
+                self.nurbs_surface_maximum_subdivisions,
+            )
+    }
+
+    /// Resolve the requested trimmed-surface grid count from its largest control
+    /// direction.
+    pub fn nurbs_trim_subdivisions(self, control_count: usize) -> usize {
+        control_count
+            .saturating_mul(self.nurbs_surface_samples_per_control_span)
+            .clamp(
+                self.nurbs_trim_minimum_subdivisions,
+                self.nurbs_trim_maximum_subdivisions,
+            )
+    }
 }
 
 /// Persisted user settings for shadow and local-light presentation quality.
@@ -273,6 +328,18 @@ pub struct RenderingQualitySettings {
     pub terrain_lod_max_inflight_bakes: usize,
     #[serde(default = "default_terrain_lod_tile_budget")]
     pub terrain_lod_tile_budget: usize,
+    #[serde(default = "default_nurbs_surface_samples_per_control_span")]
+    pub nurbs_surface_samples_per_control_span: usize,
+    #[serde(default = "default_nurbs_surface_minimum_subdivisions")]
+    pub nurbs_surface_minimum_subdivisions: usize,
+    #[serde(default = "default_nurbs_surface_maximum_subdivisions")]
+    pub nurbs_surface_maximum_subdivisions: usize,
+    #[serde(default = "default_nurbs_trim_curve_samples")]
+    pub nurbs_trim_curve_samples: usize,
+    #[serde(default = "default_nurbs_trim_minimum_subdivisions")]
+    pub nurbs_trim_minimum_subdivisions: usize,
+    #[serde(default = "default_nurbs_trim_maximum_subdivisions")]
+    pub nurbs_trim_maximum_subdivisions: usize,
 }
 
 const fn balanced_profile() -> RenderQualityProfile {
@@ -419,6 +486,30 @@ const fn default_terrain_lod_tile_budget() -> usize {
     balanced_profile().terrain_lod_tile_budget
 }
 
+const fn default_nurbs_surface_samples_per_control_span() -> usize {
+    balanced_profile().nurbs_surface_samples_per_control_span
+}
+
+const fn default_nurbs_surface_minimum_subdivisions() -> usize {
+    balanced_profile().nurbs_surface_minimum_subdivisions
+}
+
+const fn default_nurbs_surface_maximum_subdivisions() -> usize {
+    balanced_profile().nurbs_surface_maximum_subdivisions
+}
+
+const fn default_nurbs_trim_curve_samples() -> usize {
+    balanced_profile().nurbs_trim_curve_samples
+}
+
+const fn default_nurbs_trim_minimum_subdivisions() -> usize {
+    balanced_profile().nurbs_trim_minimum_subdivisions
+}
+
+const fn default_nurbs_trim_maximum_subdivisions() -> usize {
+    balanced_profile().nurbs_trim_maximum_subdivisions
+}
+
 impl RenderingQualitySettings {
     /// Return the currently authoritative values, including custom edits.
     pub const fn profile(self) -> RenderQualityProfile {
@@ -454,6 +545,12 @@ impl RenderingQualitySettings {
             terrain_lod_bakes_per_frame: self.terrain_lod_bakes_per_frame,
             terrain_lod_max_inflight_bakes: self.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: self.terrain_lod_tile_budget,
+            nurbs_surface_samples_per_control_span: self.nurbs_surface_samples_per_control_span,
+            nurbs_surface_minimum_subdivisions: self.nurbs_surface_minimum_subdivisions,
+            nurbs_surface_maximum_subdivisions: self.nurbs_surface_maximum_subdivisions,
+            nurbs_trim_curve_samples: self.nurbs_trim_curve_samples,
+            nurbs_trim_minimum_subdivisions: self.nurbs_trim_minimum_subdivisions,
+            nurbs_trim_maximum_subdivisions: self.nurbs_trim_maximum_subdivisions,
         }
     }
 
@@ -499,6 +596,13 @@ impl RenderingQualitySettings {
         self.terrain_lod_bakes_per_frame = profile.terrain_lod_bakes_per_frame;
         self.terrain_lod_max_inflight_bakes = profile.terrain_lod_max_inflight_bakes;
         self.terrain_lod_tile_budget = profile.terrain_lod_tile_budget;
+        self.nurbs_surface_samples_per_control_span =
+            profile.nurbs_surface_samples_per_control_span;
+        self.nurbs_surface_minimum_subdivisions = profile.nurbs_surface_minimum_subdivisions;
+        self.nurbs_surface_maximum_subdivisions = profile.nurbs_surface_maximum_subdivisions;
+        self.nurbs_trim_curve_samples = profile.nurbs_trim_curve_samples;
+        self.nurbs_trim_minimum_subdivisions = profile.nurbs_trim_minimum_subdivisions;
+        self.nurbs_trim_maximum_subdivisions = profile.nurbs_trim_maximum_subdivisions;
     }
 
     /// Validate persisted or UI-edited settings before they reach Bevy.
@@ -606,6 +710,29 @@ impl RenderingQualitySettings {
         if profile.terrain_lod_tile_budget == 0 {
             return Err("terrain LOD tile budget must be greater than zero");
         }
+        if profile.nurbs_surface_samples_per_control_span == 0 {
+            return Err("NURBS surface samples per control span must be greater than zero");
+        }
+        if profile.nurbs_surface_minimum_subdivisions == 0
+            || profile.nurbs_surface_minimum_subdivisions
+                > profile.nurbs_surface_maximum_subdivisions
+        {
+            return Err("NURBS surface subdivision minimum must not exceed its maximum");
+        }
+        if profile.nurbs_surface_maximum_subdivisions > 4096 {
+            return Err("NURBS surface subdivision maximum must be at most 4096");
+        }
+        if profile.nurbs_trim_curve_samples == 0 {
+            return Err("NURBS trim-curve samples must be greater than zero");
+        }
+        if profile.nurbs_trim_minimum_subdivisions == 0
+            || profile.nurbs_trim_minimum_subdivisions > profile.nurbs_trim_maximum_subdivisions
+        {
+            return Err("NURBS trim subdivision minimum must not exceed its maximum");
+        }
+        if profile.nurbs_trim_maximum_subdivisions > 4096 {
+            return Err("NURBS trim subdivision maximum must be at most 4096");
+        }
         Ok(())
     }
 }
@@ -645,6 +772,12 @@ impl Default for RenderingQualitySettings {
             terrain_lod_bakes_per_frame: profile.terrain_lod_bakes_per_frame,
             terrain_lod_max_inflight_bakes: profile.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: profile.terrain_lod_tile_budget,
+            nurbs_surface_samples_per_control_span: profile.nurbs_surface_samples_per_control_span,
+            nurbs_surface_minimum_subdivisions: profile.nurbs_surface_minimum_subdivisions,
+            nurbs_surface_maximum_subdivisions: profile.nurbs_surface_maximum_subdivisions,
+            nurbs_trim_curve_samples: profile.nurbs_trim_curve_samples,
+            nurbs_trim_minimum_subdivisions: profile.nurbs_trim_minimum_subdivisions,
+            nurbs_trim_maximum_subdivisions: profile.nurbs_trim_maximum_subdivisions,
         }
     }
 }
@@ -834,6 +967,27 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("camera bloom intensity must be finite and non-negative")
+        );
+    }
+
+    #[test]
+    fn nurbs_tessellation_is_explicit_and_validated() {
+        let balanced = RenderingQuality::Balanced.profile();
+        assert_eq!(balanced.nurbs_surface_subdivisions(9), 54);
+        assert_eq!(balanced.nurbs_trim_subdivisions(9), 54);
+
+        let mut settings = RenderingQualitySettings::default();
+        settings.nurbs_surface_samples_per_control_span = 2;
+        settings.nurbs_surface_minimum_subdivisions = 16;
+        settings.nurbs_surface_maximum_subdivisions = 20;
+        assert_eq!(settings.profile().nurbs_surface_subdivisions(4), 16);
+        assert_eq!(settings.profile().nurbs_surface_subdivisions(20), 20);
+        assert!(settings.validate().is_ok());
+
+        settings.nurbs_surface_maximum_subdivisions = 8;
+        assert_eq!(
+            settings.validate(),
+            Err("NURBS surface subdivision minimum must not exceed its maximum")
         );
     }
 
