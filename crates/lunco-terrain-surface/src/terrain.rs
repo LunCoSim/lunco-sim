@@ -1503,7 +1503,7 @@ fn assemble_dem_build(
             e.try_insert(crate::stream_viz::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
-                    crate::stream_viz::TerrainLodViz::from_profile(profile),
+                    crate::stream_viz::TerrainLodViz,
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
                     crate::stream_viz::TerrainNodeErrors::default(),
@@ -1520,13 +1520,13 @@ fn assemble_dem_build(
                 // failure). Remove that competing collider before the ring tiles
                 // become live.
                 e.try_remove::<Collider>();
-                // Construct the ring's contact band from the SAME viz config the
-                // visual tiles use, so the collider's
+                // Construct the ring's contact band from the same authoritative
+                // Graphics profile the visual tiles use, so the collider's
                 // gate is floored at the visual leaf's gate — what the rover
                 // touches is what the eye sees. See `WHEEL_SINKING_ANALYSIS_v3`
                 // §4.1/§5(2) and `SurfaceBand::contact`.
-                let viz = crate::stream_viz::TerrainLodViz::from_profile(profile);
-                let ring = crate::collider_ring::TerrainColliderRing::for_viz(&viz, half_extent);
+                let ring =
+                    crate::collider_ring::TerrainColliderRing::for_profile(profile, half_extent);
                 e.try_insert((
                     ring,
                     crate::collider_ring::ColliderTiles::default(),

@@ -159,10 +159,16 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp)
                     .after(crate::collider_ring::update_physics_support_cache),
-                // Live retune (Inspector / reflection / a scene authoring the
-                // fields): marks resident tiles stale so the new lattice reaches
-                // the ground already under the wheels. Change-driven — the query
-                // is empty on every frame nobody edits the ring.
+                // Graphics quality is read directly by visual LOD selection;
+                // retune existing collider rings from the same profile before
+                // the Changed<TerrainColliderRing> invalidation runs.
+                crate::collider_ring::sync_ring_quality
+                    .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
+                    .before(crate::collider_ring::invalidate_ring_on_retune),
+                // Quality projection and explicit ring edits both mark resident
+                // tiles stale so the active lattice reaches the ground already
+                // under the wheels. Change-driven — the query is empty on every
+                // frame nobody edits the ring.
                 crate::collider_ring::invalidate_ring_on_retune
                     .before(crate::collider_ring::update_collider_ring),
                 // Change-driven: early-outs unless a `TerrainColliderRing`

@@ -324,22 +324,13 @@ fn lod_rgb(depth: u32) -> [f32; 3] {
     P[(depth as usize).min(P.len() - 1)]
 }
 
-/// Marker + params: this terrain streams visual LOD tiles. Inserted by the build
-/// when the request set `lod_viz`. Physics stays on the static heightfield collider.
+/// Marker: this terrain streams visual LOD tiles. Inserted by the build when
+/// the request set `lod_viz`. The authoritative tile-resolution and refinement
+/// policy lives in [`lunco_render::RenderingQualitySettings`], so this marker
+/// intentionally carries no second copy that could go stale after a Graphics
+/// edit.
 #[derive(Component)]
-pub struct TerrainLodViz {
-    pub max_depth: u8,
-    pub tile_res: usize,
-}
-
-impl TerrainLodViz {
-    pub fn from_profile(profile: lunco_render::RenderQualityProfile) -> Self {
-        TerrainLodViz {
-            max_depth: profile.terrain_lod_max_depth,
-            tile_res: profile.terrain_lod_tile_resolution,
-        }
-    }
-}
+pub struct TerrainLodViz;
 
 /// One spawned LOD tile + the regen **generation** it was baked at. When a live
 /// re-bake (Inspector edit) changes the heights, the terrain's generation bumps; a
@@ -3207,7 +3198,7 @@ mod draw_partition_tests {
         );
         let shadow_image = Handle::<Image>::default();
         app.world_mut().spawn((
-            TerrainLodViz::from_profile(terrain_quality()),
+            TerrainLodViz,
             tiles,
             TileShadowCache {
                 image: shadow_image.clone(),

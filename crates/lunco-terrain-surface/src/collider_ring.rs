@@ -43,12 +43,12 @@ use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Square};
 use crate::stream_viz::DemHeightField;
 
-/// Seed values for the collider ring. `for_viz` replaces these with the active
-/// visual tile lattice. Keeping the fallback here is useful for reflected/test
-/// construction, but production terrain must not have a second resolution
-/// contract: a collider sampled on another lattice can put a body above a
-/// visible slope or below a visible crater rim.
+/// Seed values for the collider ring. Production terrain constructs the ring
+/// from the authoritative Graphics profile; these values remain only for
+/// reflected/test construction that has no terrain profile.
+#[cfg(test)]
 const COLLIDER_DEPTH: u8 = 8;
+#[cfg(test)]
 const COLLIDER_RES: usize = 49;
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle. Anchored in the WORLD
@@ -60,12 +60,11 @@ const COLLIDER_QUANT_STEP: f64 = 1e-3;
 /// static heightfield. Inserted by the DEM build when the request set
 /// `collider_ring`. Needs the retained [`DemHeightField`] to sample tiles from.
 ///
-/// **Live-tunable.** The consts above only SEED this; the ring systems read these
-/// fields, so editing them (Inspector, reflection API, or a scene authoring them)
-/// re-shapes contact at runtime — `invalidate_ring_on_retune` re-bakes the resident
-/// tiles so the change applies to the ground already under the wheels, not only to
-/// tiles baked later. Contact fidelity is a property of the TERRAIN, which is why
-/// it lives here per-entity rather than in a global.
+/// The resolution and contact band are derived from the authoritative Graphics
+/// profile when the terrain is built and when that profile changes. Keeping the
+/// derived values on the terrain makes the active bake contract inspectable;
+/// `invalidate_ring_on_retune` re-bakes resident tiles after a quality edit so
+/// the ground under the wheels follows the newly drawn surface.
 #[derive(Component, Reflect, Debug, Clone, PartialEq)]
 #[reflect(Component)]
 pub struct TerrainColliderRing {
@@ -74,24 +73,25 @@ pub struct TerrainColliderRing {
     /// Heightfield samples per tile side.
     pub res: usize,
     /// The shared contact-band filter policy — the surface a wheel touches,
-    /// floored so it agrees with what the drawn visual leaf carries. Built once
-    /// at spawn from the terrain's viz config (see [`Self::for_viz`]), so the
+    /// floored so it agrees with what the drawn visual leaf carries. Built from
+    /// the terrain's Graphics profile (see [`Self::for_profile`]), so the
     /// collider and the visual leaf provably sample one band. See
     /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
     pub contact_band: SurfaceBand,
 }
 
 impl TerrainColliderRing {
-    /// Construct from the terrain's visual LOD config + half-extent. The contact
-    /// band's floor is the visual leaf's gate: the leaf is at `viz.max_depth`
-    /// with `viz.tile_res` samples, so its step is
+    /// Construct from the authoritative Graphics profile + half-extent. The
+    /// contact band's floor is the visual leaf's gate: the leaf is at
+    /// `profile.terrain_lod_max_depth` with `profile.terrain_lod_tile_resolution`
+    /// samples, so its step is
     /// `(2·half_extent) / 2^max_depth / (tile_res − 1)` and its gate is `2·step`.
     /// The collider's own native gate (`2·collider_step`) is finer, so the floor
     /// picks the coarser visual gate — what the body touches is what the eye
     /// sees, not a finer band the mesh flattens out.
-    pub fn for_viz(viz: &crate::stream_viz::TerrainLodViz, half_extent: f64) -> Self {
-        let depth = viz.max_depth;
-        let res = viz.tile_res.max(2);
+    pub fn for_profile(profile: lunco_render::RenderQualityProfile, half_extent: f64) -> Self {
+        let depth = profile.terrain_lod_max_depth;
+        let res = profile.terrain_lod_tile_resolution.max(2);
         let tile_side = (2.0 * half_extent) / (1u32 << depth) as f64;
         let step = tile_side / (res - 1) as f64;
         TerrainColliderRing {
@@ -102,22 +102,6 @@ impl TerrainColliderRing {
             // invariant; it also avoids a body riding a finer physics surface
             // than the mesh currently shown to the user.
             contact_band: SurfaceBand::contact(step, step),
-        }
-    }
-}
-
-impl Default for TerrainColliderRing {
-    fn default() -> Self {
-        // Without a viz config we cannot know the visual leaf step, so default
-        // to the collider's own native gate (no contact floor). Real terrains
-        // construct via [`Self::for_viz`] at spawn; this default exists only for
-        // reflection / tests that don't drive the contact invariant.
-        let collider_side_factor = 1.0 / (1u32 << COLLIDER_DEPTH) as f64;
-        let collider_step = collider_side_factor / (COLLIDER_RES.max(2) - 1) as f64;
-        TerrainColliderRing {
-            depth: COLLIDER_DEPTH,
-            res: COLLIDER_RES,
-            contact_band: SurfaceBand::visual(collider_step),
         }
     }
 }
@@ -255,6 +239,30 @@ pub fn invalidate_ring_on_retune(
         let resident: Vec<QuadCoord> = tiles.map.keys().copied().collect();
         for coord in resident {
             tiles.stale.insert(coord);
+        }
+    }
+}
+
+/// Re-project the authoritative Graphics terrain quality onto already-live
+/// collider rings. Visual LOD selection reads the settings resource directly;
+/// without this change-driven projection, an existing ring would keep its old
+/// lattice and contact band after a Graphics edit while newly rendered tiles
+/// used the new one.
+pub fn sync_ring_quality(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut q: Query<(&DemHeightField, &mut TerrainColliderRing)>,
+) {
+    if let Err(reason) = settings.validate() {
+        warn!(
+            "[terrain] invalid Graphics terrain quality; preserving collider-ring quality: {reason}"
+        );
+        return;
+    }
+    let profile = settings.profile();
+    for (height_field, mut ring) in &mut q {
+        let next = TerrainColliderRing::for_profile(profile, height_field.0.half_extent() as f64);
+        if *ring != next {
+            *ring = next;
         }
     }
 }
@@ -1960,6 +1968,45 @@ mod tests {
     fn native_band(region: Square) -> SurfaceBand {
         let step = region.side() / (COLLIDER_RES as f64 - 1.0);
         SurfaceBand::visual(step)
+    }
+
+    #[test]
+    fn graphics_quality_change_reprojects_existing_ring() {
+        let mut app = App::new();
+        let mut settings = lunco_render::RenderingQualitySettings::default();
+        settings.apply_preset(lunco_render::RenderingQuality::Low);
+        app.insert_resource(settings);
+        app.add_systems(Update, sync_ring_quality);
+
+        let oracle = SurfaceOracle::new(
+            std::sync::Arc::new(HeightGrid::new_flat(3, 100.0)),
+            Vec::new(),
+        );
+        let terrain = app
+            .world_mut()
+            .spawn((
+                DemHeightField(std::sync::Arc::new(oracle)),
+                TerrainColliderRing::for_profile(
+                    lunco_render::RenderingQuality::Low.profile(),
+                    100.0,
+                ),
+            ))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<lunco_render::RenderingQualitySettings>()
+            .apply_preset(lunco_render::RenderingQuality::High);
+        app.update();
+
+        let ring = app
+            .world()
+            .entity(terrain)
+            .get::<TerrainColliderRing>()
+            .unwrap();
+        let expected =
+            TerrainColliderRing::for_profile(lunco_render::RenderingQuality::High.profile(), 100.0);
+        assert_eq!(ring, &expected);
     }
 
     #[test]
