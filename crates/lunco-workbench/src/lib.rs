@@ -5189,7 +5189,7 @@ fn register_graphics_settings_menu(world: &mut World) {
                 );
                 ui.label(
                     egui::RichText::new(
-                        "This explicit ceiling admits only the configured number of casters; it never changes requested map sizes or cascade settings.",
+                        "This explicit ceiling must cover the configured caster limits; it never changes map sizes, cascades, or caster limits automatically.",
                     )
                     .weak()
                     .small(),

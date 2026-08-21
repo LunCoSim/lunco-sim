@@ -44,7 +44,7 @@ impl RenderingQuality {
                 max_directional_shadow_casters: 1,
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
-                shadow_budget_bytes: 16 * 1024 * 1024,
+                shadow_budget_bytes: 256 * 1024 * 1024,
                 horizon_shadow_cache_enabled: true,
                 horizon_shadow_cache_sun_threshold_deg: 0.05,
                 horizon_march_steps: 48,
@@ -96,7 +96,7 @@ impl RenderingQuality {
                 max_directional_shadow_casters: 1,
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
-                shadow_budget_bytes: 8 * 1024 * 1024,
+                shadow_budget_bytes: 32 * 1024 * 1024,
                 horizon_shadow_cache_enabled: false,
                 horizon_shadow_cache_sun_threshold_deg: 0.2,
                 horizon_march_steps: 24,
@@ -148,7 +148,7 @@ impl RenderingQuality {
                 max_directional_shadow_casters: 2,
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
-                shadow_budget_bytes: 64 * 1024 * 1024,
+                shadow_budget_bytes: 2 * 1024 * 1024 * 1024,
                 horizon_shadow_cache_enabled: true,
                 horizon_shadow_cache_sun_threshold_deg: 0.02,
                 horizon_march_steps: 96,
@@ -304,6 +304,19 @@ pub struct RenderQualityProfile {
 }
 
 impl RenderQualityProfile {
+    /// Conservative allocation required when all configured caster limits are
+    /// admitted at this profile's map sizes and cascade count.
+    pub fn maximum_shadow_allocation_bytes(self) -> u64 {
+        estimate_shadow_allocation_bytes(
+            self.directional_shadow_map_size as usize,
+            self.point_shadow_map_size as usize,
+            self.directional_cascades,
+            self.max_directional_shadow_casters,
+            self.max_point_shadow_casters,
+            self.max_spot_shadow_casters,
+        )
+    }
+
     /// Resolve the requested untrimmed NURBS sample count for one control-net
     /// direction. The profile is a rendering policy; USD remains the owner of
     /// the control net and its structural orders/counts.
@@ -821,6 +834,9 @@ impl RenderingQualitySettings {
         if profile.shadow_budget_bytes == 0 {
             return Err("shadow byte ceiling must be greater than zero");
         }
+        if profile.shadow_budget_bytes < profile.maximum_shadow_allocation_bytes() {
+            return Err("shadow byte ceiling is below the configured maximum shadow allocation");
+        }
         if !profile.horizon_shadow_cache_sun_threshold_deg.is_finite()
             || profile.horizon_shadow_cache_sun_threshold_deg <= 0.0
             || profile.horizon_shadow_cache_sun_threshold_deg >= 180.0
@@ -1146,8 +1162,38 @@ mod tests {
         let mut settings = RenderingQualitySettings::default();
         settings.apply_preset(RenderingQuality::High);
         assert_eq!(settings.profile().directional_shadow_map_size, 2048);
-        assert_eq!(settings.profile().shadow_budget_bytes, 64 * 1024 * 1024);
+        assert_eq!(
+            settings.profile().shadow_budget_bytes,
+            2 * 1024 * 1024 * 1024
+        );
         assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
+    }
+
+    #[test]
+    fn every_suggested_profile_covers_its_configured_shadow_maximum() {
+        for quality in RenderingQuality::all() {
+            let mut settings = RenderingQualitySettings::default();
+            settings.apply_preset(quality);
+            let profile = settings.profile();
+            assert!(
+                profile.shadow_budget_bytes >= profile.maximum_shadow_allocation_bytes(),
+                "{quality:?} profile exceeds its explicit shadow ceiling"
+            );
+            assert!(
+                settings.validate().is_ok(),
+                "{quality:?} profile is invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shadow_ceiling_below_configured_maximum_is_rejected() {
+        let mut settings = RenderingQualitySettings::default();
+        settings.shadow_budget_bytes = 1;
+        assert_eq!(
+            settings.validate(),
+            Err("shadow byte ceiling is below the configured maximum shadow allocation")
+        );
     }
 
     #[test]

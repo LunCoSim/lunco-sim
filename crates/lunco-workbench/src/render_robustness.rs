@@ -944,11 +944,12 @@ fn set_error_handler(
         }));
 }
 
-/// Apply the explicitly configured shadow-admission policy before Bevy's PBR
-/// render preparation allocates its depth textures. The configured byte ceiling
-/// is the sole admission limit. The user's map sizes and cascade count remain
-/// unchanged; only casters beyond the explicitly configured class limits or
-/// byte ceiling are suppressed and reported.
+/// Apply the explicitly configured shadow-caster limits before Bevy's PBR
+/// render preparation allocates its depth textures. The user's map sizes,
+/// cascade count, and byte ceiling remain unchanged. Only casters beyond the
+/// explicitly configured per-class limits are suppressed and reported; the
+/// byte ceiling is validated as a constraint on those settings and never
+/// causes an additional quality downgrade.
 ///
 /// The selection is deliberately stable: directional casters are considered
 /// first, then point lights, then spot lights, and each class is ordered by the
@@ -994,7 +995,14 @@ fn apply_shadow_budget_policy(
     )>,
 ) {
     let profile = settings.profile();
-    if settings.validate().is_err() {
+    if let Err(reason) = settings.validate() {
+        if warning.is_none() {
+            commands.insert_resource(RenderWarning {
+                message: format!(
+                    "Invalid graphics shadow settings: {reason}. Shadow caster limits were not changed."
+                ),
+            });
+        }
         return;
     }
     let admission_budget = profile.shadow_budget_bytes;
@@ -1119,8 +1127,7 @@ fn apply_shadow_budget_policy(
             0,
             0,
         );
-        let keep = index < profile.max_directional_shadow_casters
-            && cost <= admission_budget.saturating_sub(used_bytes);
+        let keep = index < profile.max_directional_shadow_casters;
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
             kept_directionals.push(candidate.entity);
@@ -1157,8 +1164,7 @@ fn apply_shadow_budget_policy(
             1,
             0,
         );
-        let keep = index < profile.max_point_shadow_casters
-            && cost <= admission_budget.saturating_sub(used_bytes);
+        let keep = index < profile.max_point_shadow_casters;
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
             kept_points.push(candidate.entity);
@@ -1193,8 +1199,7 @@ fn apply_shadow_budget_policy(
             0,
             1,
         );
-        let keep = index < profile.max_spot_shadow_casters
-            && cost <= admission_budget.saturating_sub(used_bytes);
+        let keep = index < profile.max_spot_shadow_casters;
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
             kept_spots.push(candidate.entity);
@@ -1232,10 +1237,10 @@ fn apply_shadow_budget_policy(
             .store(used_bytes, Ordering::Relaxed);
     }
     let estimated_mib = used_bytes as f64 / (1024.0 * 1024.0);
-    let shed_count = enabled_caster_count
+    let limit_shed_count = enabled_caster_count
         .saturating_sub(kept_directionals.len() + kept_points.len() + kept_spots.len());
     warn!(
-        "shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of {} bytes (directional {}px, point {}px)",
+        "shadow allocation: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of configured ceiling {} bytes (directional {}px, point {}px)",
         kept_directionals.len(),
         directional_layers,
         kept_points.len(),
@@ -1246,15 +1251,14 @@ fn apply_shadow_budget_policy(
         directional_shadow_map.size,
         point_shadow_map.size,
     );
-    if shed_count > 0 && warning.is_none() {
+    if limit_shed_count > 0 && warning.is_none() {
         commands.insert_resource(RenderWarning {
             message: format!(
-                "Shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s) within {} bytes; {} caster(s) are intentionally disabled.",
+                "Configured shadow caster limits: kept {} directional, {} point, and {} spot shadow caster(s); {} caster(s) are disabled by the Graphics settings.",
                 kept_directionals.len(),
                 kept_points.len(),
                 kept_spots.len(),
-                admission_budget,
-                shed_count,
+                limit_shed_count,
             ),
         });
     }
@@ -1690,12 +1694,14 @@ mod tests {
     }
 
     #[test]
-    fn configured_shadow_budget_limits_casters_without_rewriting_quality() {
+    fn configured_shadow_caster_limits_do_not_rewrite_quality() {
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
             point_shadow_map_size: 512,
-            max_point_shadow_casters: 4,
+            max_directional_shadow_casters: 0,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 0,
             shadow_budget_bytes: 16 * 1024 * 1024,
             ..Default::default()
         };
@@ -1747,11 +1753,14 @@ mod tests {
     }
 
     #[test]
-    fn byte_ceiling_is_admitted_without_mib_rounding() {
+    fn invalid_byte_ceiling_does_not_shed_casters() {
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
             point_shadow_map_size: 512,
+            max_directional_shadow_casters: 0,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 0,
             shadow_budget_bytes: 1,
             ..Default::default()
         };
@@ -1769,11 +1778,12 @@ mod tests {
 
         app.update();
 
-        assert_eq!(health.shadow_budget_bytes.load(Ordering::Relaxed), 1);
+        assert_eq!(health.shadow_budget_bytes.load(Ordering::Relaxed), 0);
         assert_eq!(health.shadow_estimated_bytes.load(Ordering::Relaxed), 0);
         let world = app.world_mut();
         let mut query = world.query::<&bevy::light::PointLight>();
-        assert!(!query.single(world).unwrap().shadow_maps_enabled);
+        assert!(query.single(world).unwrap().shadow_maps_enabled);
+        assert!(app.world().get_resource::<RenderWarning>().is_some());
     }
 
     #[test]
@@ -1782,7 +1792,9 @@ mod tests {
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
             point_shadow_map_size: 512,
-            max_point_shadow_casters: 2,
+            max_directional_shadow_casters: 0,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 0,
             shadow_budget_bytes: 16 * 1024 * 1024,
             ..Default::default()
         };
@@ -1834,12 +1846,14 @@ mod tests {
     }
 
     #[test]
-    fn configured_shadow_budget_rechecks_when_a_caster_is_rearmed() {
+    fn configured_shadow_limit_rechecks_when_a_caster_is_rearmed() {
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
             point_shadow_map_size: 512,
-            max_point_shadow_casters: 4,
+            max_directional_shadow_casters: 0,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 0,
             shadow_budget_bytes: 16 * 1024 * 1024,
             ..Default::default()
         };
@@ -1883,13 +1897,15 @@ mod tests {
     }
 
     #[test]
-    fn user_budget_increase_rearms_only_budget_suppressed_casters() {
+    fn user_caster_limit_increase_rearms_only_limit_suppressed_casters() {
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
             point_shadow_map_size: 512,
-            max_point_shadow_casters: 4,
-            shadow_budget_bytes: 16 * 1024 * 1024,
+            max_directional_shadow_casters: 0,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 0,
+            shadow_budget_bytes: 64 * 1024 * 1024,
             ..Default::default()
         };
         app.insert_resource(settings);
@@ -1916,7 +1932,7 @@ mod tests {
 
         app.world_mut()
             .resource_mut::<RenderingQualitySettings>()
-            .shadow_budget_bytes = 64 * 1024 * 1024;
+            .max_point_shadow_casters = 4;
         app.update();
 
         let enabled = {
@@ -1972,7 +1988,7 @@ mod tests {
     /// The grace period is measured from the first persistent failure because
     /// no automatic mitigation is applied.
     #[test]
-    fn grace_period_starts_at_the_mitigation() {
+    fn grace_period_starts_at_the_first_failure() {
         let mut l = Ladder::default();
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 100.0), None);
         // 4s after the first failure — not yet.
