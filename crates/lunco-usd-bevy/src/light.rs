@@ -415,7 +415,8 @@ pub(crate) fn read_authored_bool(
 /// standard Kim et al. cubic-spline approximation of the Planckian locus in CIE
 /// xy, converted through XYZ to linear sRGB and normalized to a max component of
 /// 1 — so 6500 K comes out ≈ white, low temperatures warm orange, high ones
-/// blue. Input is clamped to the approximation's 1667–25000 K validity range.
+/// blue. Values outside the approximation's 1667–25000 K validity range are
+/// rejected rather than clamped.
 fn blackbody_rgb(kelvin: f32) -> Option<Vec3> {
     if !kelvin.is_finite() || !(1667.0..=25000.0).contains(&kelvin) {
         return None;
@@ -443,16 +444,56 @@ fn blackbody_rgb(kelvin: f32) -> Option<Vec3> {
     (max > 0.0 && max.is_finite()).then_some(rgb / max)
 }
 
+/// Convert one authored positive stage-space length to canonical metres without
+/// admitting an overflowed or degenerate result.
+fn positive_length(
+    value: f32,
+    convention: crate::units::ConventionTransform,
+    path: &SdfPath,
+    name: &str,
+) -> Result<f32, LightReadError> {
+    if !value.is_finite() || value <= 0.0 {
+        error!(
+            "[usd-bevy] {} has invalid authored {} = {value}; expected a positive value",
+            path.as_str(),
+            name
+        );
+        return Err(LightReadError);
+    }
+    let metres = convention.length(value as f64) as f32;
+    if metres.is_finite() && metres > 0.0 {
+        Ok(metres)
+    } else {
+        error!(
+            "[usd-bevy] {} has {} that is not finite and positive after unit conversion",
+            path.as_str(),
+            name
+        );
+        Err(LightReadError)
+    }
+}
+
+fn read_positive_length(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    default: f32,
+    convention: crate::units::ConventionTransform,
+) -> Result<f32, LightReadError> {
+    let value = read_authored_real(reader, path, name)?.unwrap_or(default);
+    positive_length(value, convention, path, name)
+}
+
 /// UsdLux area scaling for a `RectLight`: with `inputs:normalize` off (the
 /// schema default) emitted power scales with the emitting area, and the ratio is
 /// taken against the 1×1 m schema-fallback rect so an unauthored size is exactly
-/// neutral — the rect analogue of the SphereLight arm's `(r/r₀)²`. `max(0)`
-/// because a negative dimension is meaningless, not a sign flip.
-fn rect_area_scale(normalize: bool, width: f32, height: f32) -> f32 {
+/// neutral — the rect analogue of the SphereLight arm's `(r/r₀)²`. A
+/// non-positive or overflowing area is rejected rather than normalized.
+fn area_scale(normalize: bool, area_ratio: f32) -> Option<f32> {
     if normalize {
-        1.0
+        Some(1.0)
     } else {
-        width.max(0.0) * height.max(0.0)
+        (area_ratio.is_finite() && area_ratio > 0.0).then_some(area_ratio)
     }
 }
 
@@ -814,40 +855,47 @@ pub(crate) fn instantiate_light_prim(
             // bare 4πr² would instead have silently rescaled every already-calibrated
             // light in the asset library by π on a change that authored nothing.
             const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
-            let default_sphere_radius = convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32;
-            let light_radius = match read_authored_real(reader, sdf_path, "inputs:radius") {
-                Ok(Some(radius)) if radius > 0.0 => convention.length(radius as f64) as f32,
-                Ok(Some(radius)) => {
-                    error!(
-                        "[usd-bevy] {} has invalid authored SphereLight radius {radius}; expected a positive value",
-                        sdf_path.as_str()
-                    );
-                    return false;
-                }
-                Ok(None) => convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32,
-                Err(_) => return false,
-            };
-            if !light_radius.is_finite() || light_radius <= 0.0 {
-                error!(
-                    "[usd-bevy] {} has a SphereLight radius that is not finite after unit conversion",
-                    sdf_path.as_str()
-                );
+            let Ok(default_sphere_radius) = positive_length(
+                DEFAULT_SPHERE_RADIUS,
+                convention,
+                sdf_path,
+                "SphereLight radius",
+            ) else {
                 return false;
-            }
+            };
+            let Ok(light_radius) = read_positive_length(
+                reader,
+                sdf_path,
+                "inputs:radius",
+                DEFAULT_SPHERE_RADIUS,
+                convention,
+            ) else {
+                return false;
+            };
             let Ok(normalize) = read_authored_bool(reader, sdf_path, "inputs:normalize") else {
                 return false;
             };
             let normalize = normalize.unwrap_or(false);
-            let area_scale = if normalize {
-                1.0
-            } else {
-                (light_radius / default_sphere_radius).powi(2)
+            let radius_ratio = light_radius / default_sphere_radius;
+            let Some(area_scale) = area_scale(normalize, radius_ratio.powi(2)) else {
+                error!(
+                    "[usd-bevy] {} has a SphereLight area scale that is not finite",
+                    sdf_path.as_str()
+                );
+                return false;
             };
             // `inputs:intensity` is the authored photometric power. Do not impose an
             // importer-side ceiling: a lunar rover deliberately needs a much brighter
             // work beam than a terrestrial cabin lamp to remain visible at its camera
             // exposure, and clamping here silently changes the USD scene.
             let intensity_lm = base_lm * area_scale;
+            if !intensity_lm.is_finite() {
+                error!(
+                    "[usd-bevy] {} has a SphereLight intensity that is not finite after area scaling",
+                    sdf_path.as_str()
+                );
+                return false;
+            }
 
             let Ok(c) = read_light_color(reader, sdf_path) else {
                 return false;
@@ -1015,29 +1063,14 @@ pub(crate) fn instantiate_light_prim(
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let width = match read_authored_real(reader, sdf_path, "inputs:width") {
-                Ok(Some(width)) if width > 0.0 => convention.length(width as f64) as f32,
-                Ok(Some(width)) => {
-                    error!(
-                        "[usd-bevy] {} has invalid authored RectLight width {width}; expected a positive value",
-                        sdf_path.as_str()
-                    );
-                    return false;
-                }
-                Ok(None) => convention.length(1.0) as f32,
-                Err(_) => return false,
+            let Ok(width) = read_positive_length(reader, sdf_path, "inputs:width", 1.0, convention)
+            else {
+                return false;
             };
-            let height = match read_authored_real(reader, sdf_path, "inputs:height") {
-                Ok(Some(height)) if height > 0.0 => convention.length(height as f64) as f32,
-                Ok(Some(height)) => {
-                    error!(
-                        "[usd-bevy] {} has invalid authored RectLight height {height}; expected a positive value",
-                        sdf_path.as_str()
-                    );
-                    return false;
-                }
-                Ok(None) => convention.length(1.0) as f32,
-                Err(_) => return false,
+            let Ok(height) =
+                read_positive_length(reader, sdf_path, "inputs:height", 1.0, convention)
+            else {
+                return false;
             };
             // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
             // implements (see the long derivation there): with normalize OFF (the
@@ -1048,8 +1081,21 @@ pub(crate) fn instantiate_light_prim(
                 return false;
             };
             let normalize = normalize.unwrap_or(false);
-            let area_scale = rect_area_scale(normalize, width, height);
+            let Some(area_scale) = area_scale(normalize, width * height) else {
+                error!(
+                    "[usd-bevy] {} has a RectLight area that is not finite",
+                    sdf_path.as_str()
+                );
+                return false;
+            };
             let intensity_lm = base_lm * area_scale;
+            if !intensity_lm.is_finite() {
+                error!(
+                    "[usd-bevy] {} has a RectLight intensity that is not finite after area scaling",
+                    sdf_path.as_str()
+                );
+                return false;
+            }
             let Ok(range) = read_light_range(
                 reader,
                 sdf_path,
@@ -1061,11 +1107,19 @@ pub(crate) fn instantiate_light_prim(
 
             // `UsdLuxRectLight.inputs:texture:file` (an image mapped across the
             // rect) has no Bevy equivalent — say so rather than silently drop it.
-            if reader
-                .asset(sdf_path, "inputs:texture:file")
-                .filter(|p| !p.is_empty())
-                .is_some()
-            {
+            let texture_authored = reader.has_authored_attribute(sdf_path, "inputs:texture:file")
+                || !reader
+                    .connections(sdf_path, "inputs:texture:file")
+                    .is_empty();
+            let texture_value = reader.asset(sdf_path, "inputs:texture:file");
+            if texture_authored && texture_value.is_none() {
+                error!(
+                    "[usd-bevy] {} has authored RectLight inputs:texture:file with an unsupported type",
+                    sdf_path.as_str()
+                );
+                return false;
+            }
+            if texture_value.is_some_and(|p| !p.is_empty()) {
                 warn!(
                     "[usd-bevy] {} RectLight inputs:texture:file is unsupported — \
                      the light emits its flat color instead",
@@ -1308,13 +1362,15 @@ mod photometry_tests {
     #[test]
     fn rect_power_scales_with_area_unless_normalized() {
         // Schema-fallback 1×1 m is exactly neutral.
-        assert_eq!(rect_area_scale(false, 1.0, 1.0), 1.0);
+        assert_eq!(area_scale(false, 1.0), Some(1.0));
         // normalize OFF (the default): power scales with w·h.
-        assert_eq!(rect_area_scale(false, 2.0, 3.0), 6.0);
+        assert_eq!(area_scale(false, 2.0 * 3.0), Some(6.0));
         // normalize ON: authored intensity IS the power, whatever the size.
-        assert_eq!(rect_area_scale(true, 2.0, 3.0), 1.0);
-        // A negative dimension clamps to zero rather than flipping sign.
-        assert_eq!(rect_area_scale(false, -2.0, 3.0), 0.0);
+        assert_eq!(area_scale(true, 2.0 * 3.0), Some(1.0));
+        // A negative or overflowing area is rejected rather than turned into a
+        // plausible zero/finite light.
+        assert_eq!(area_scale(false, -2.0 * 3.0), None);
+        assert_eq!(area_scale(false, f32::INFINITY), None);
     }
 
     #[test]
