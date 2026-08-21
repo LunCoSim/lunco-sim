@@ -2513,13 +2513,20 @@ mod tests {
 
     #[test]
     fn pending_authored_xml_is_a_route_until_its_spec_is_derived() {
-        assert!(has_authored_movement_route(true, None));
+        let xml = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "sequence",
+                "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+            }))
+            .unwrap(),
+        );
+        assert!(has_authored_movement_route(Some(&xml), None));
         assert!(!has_authored_movement_route(
-            false,
+            None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::Brake))
         ));
         assert!(has_authored_movement_route(
-            false,
+            None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::DriveTo {
                 target: [1.0, 0.0, 0.0],
                 speed: 0.5,
