@@ -97,9 +97,10 @@ pub use surface_query::{
     TerrainPoseInPhysicsFrame,
 };
 pub use terrain::{
-    BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,
-    DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers,
-    RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase, TerrainGenStatus,
+    resolve_dem_request_parameters, BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource,
+    DemTerrainSurface, DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock,
+    RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase,
+    TerrainGenStatus,
 };
 pub use terrain_layers::{
     edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer, terrain_layer_params,

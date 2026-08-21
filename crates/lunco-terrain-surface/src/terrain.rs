@@ -80,9 +80,13 @@ const MAX_TARGET_RES: u32 = 4096;
 /// Resolve the command's explicit terrain-quality parameters without changing
 /// them into a different request. `0` is the documented semantic value for
 /// whole-map/native output; every other value must be valid as authored.
-fn resolve_spawn_dem_parameters(
+/// Validate the shared DEM request parameters used by command and USD
+/// projections. The signed resolution input is intentional: USD's `int`
+/// attribute must be rejected when negative rather than cast into a large
+/// unsigned value or silently treated as native resolution.
+pub fn resolve_dem_request_parameters(
     window_m: f32,
-    target_res: u32,
+    target_res: i64,
 ) -> Result<(f64, usize), &'static str> {
     let half_window = if window_m == 0.0 {
         f64::INFINITY
@@ -96,7 +100,7 @@ fn resolve_spawn_dem_parameters(
 
     let target_res = if target_res == 0 {
         0
-    } else if !(MIN_TARGET_RES..=MAX_TARGET_RES).contains(&target_res) {
+    } else if !(i64::from(MIN_TARGET_RES)..=i64::from(MAX_TARGET_RES)).contains(&target_res) {
         return Err("target_res must be 0 or between the supported visual-resolution bounds");
     } else {
         target_res as usize
@@ -536,16 +540,17 @@ fn on_spawn_dem_terrain(
             crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE),
         );
     }
-    let (half_window, target_res) = match resolve_spawn_dem_parameters(ev.window_m, ev.target_res) {
-        Ok(parameters) => parameters,
-        Err(reason) => {
-            warn!(
-                "[dem-terrain] rejected SpawnDemTerrain for '{}': {reason}",
-                ev.uri
-            );
-            return;
-        }
-    };
+    let (half_window, target_res) =
+        match resolve_dem_request_parameters(ev.window_m, i64::from(ev.target_res)) {
+            Ok(parameters) => parameters,
+            Err(reason) => {
+                warn!(
+                    "[dem-terrain] rejected SpawnDemTerrain for '{}': {reason}",
+                    ev.uri
+                );
+                return;
+            }
+        };
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
@@ -2769,11 +2774,11 @@ mod visual_product_tests {
     #[test]
     fn spawn_dem_parameters_preserve_documented_zero_semantics() {
         assert_eq!(
-            resolve_spawn_dem_parameters(0.0, 0).expect("zero parameters are valid"),
+            resolve_dem_request_parameters(0.0, 0).expect("zero parameters are valid"),
             (f64::INFINITY, 0)
         );
         assert_eq!(
-            resolve_spawn_dem_parameters(512.0, 128).expect("explicit parameters are valid"),
+            resolve_dem_request_parameters(512.0, 128).expect("explicit parameters are valid"),
             (256.0, 128)
         );
     }
@@ -2781,10 +2786,15 @@ mod visual_product_tests {
     #[test]
     fn spawn_dem_parameters_reject_invalid_quality_instead_of_clamping() {
         for window_m in [f32::NAN, f32::INFINITY, -1.0, MAX_WINDOW_M + 1.0] {
-            assert!(resolve_spawn_dem_parameters(window_m, 0).is_err());
+            assert!(resolve_dem_request_parameters(window_m, 0).is_err());
         }
-        for target_res in [1, MIN_TARGET_RES - 1, MAX_TARGET_RES + 1] {
-            assert!(resolve_spawn_dem_parameters(0.0, target_res).is_err());
+        for target_res in [
+            -1,
+            1,
+            i64::from(MIN_TARGET_RES - 1),
+            i64::from(MAX_TARGET_RES) + 1,
+        ] {
+            assert!(resolve_dem_request_parameters(0.0, target_res).is_err());
         }
     }
 

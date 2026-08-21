@@ -135,6 +135,43 @@ impl UsdLayerAttrs<'_> {
     fn attr(&self, name: &str) -> String {
         ns_attr(self.ns, name)
     }
+
+    /// Read a layer scalar while preserving the distinction between an omitted
+    /// schema attribute and an explicitly malformed one. The projection may
+    /// use a schema fallback only for the former.
+    fn authored_f32(&self, name: &str) -> Result<Option<f32>, String> {
+        let full = self.attr(name);
+        if !self.reader.has_authored_attribute(&self.sdf, &full) {
+            return Ok(None);
+        }
+        self.reader
+            .real_f32(&self.sdf, &full)
+            .ok_or_else(|| format!("{full} has an unsupported value type"))
+            .map(Some)
+    }
+
+    fn authored_i64(&self, name: &str) -> Result<Option<i64>, String> {
+        let full = self.attr(name);
+        if !self.reader.has_authored_attribute(&self.sdf, &full) {
+            return Ok(None);
+        }
+        self.reader
+            .scalar::<i64>(&self.sdf, &full)
+            .or_else(|| self.reader.scalar::<i32>(&self.sdf, &full).map(i64::from))
+            .ok_or_else(|| format!("{full} has an unsupported value type"))
+            .map(Some)
+    }
+
+    fn authored_bool(&self, name: &str) -> Result<Option<bool>, String> {
+        let full = self.attr(name);
+        if !self.reader.has_authored_attribute(&self.sdf, &full) {
+            return Ok(None);
+        }
+        self.reader
+            .boolean(&self.sdf, &full)
+            .ok_or_else(|| format!("{full} has an unsupported value type"))
+            .map(Some)
+    }
 }
 
 impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
@@ -1523,11 +1560,6 @@ fn bridge_dem_prim_read(
         sdf: d.clone(),
         ns: NS_LAYER,
     });
-    let attr_f32 = |name: &str| -> Option<f32> { dem_attrs.as_ref()?.get_f32(name) };
-    let attr_i32 =
-        |name: &str| -> Option<i32> { dem_attrs.as_ref()?.get_i64(name).map(|v| v as i32) };
-    let attr_bool = |name: &str| -> Option<bool> { dem_attrs.as_ref()?.get_bool(name) };
-
     let rel = dem_attrs.as_ref().and_then(|a| a.get_asset("demSource"));
     let Some(rel) = rel else {
         warn!(
@@ -1557,40 +1589,78 @@ fn bridge_dem_prim_read(
     // Native gives an absolute path; the web autoload path keeps it
     // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
     let uri = lunco_assets::asset_path::slashed(root.join(&rel));
-    // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
-    // absent/negative = a safe 4 km window (avoid an accidental full-map build).
-    let half_window = match attr_f32("windowM") {
-        Some(0.0) => f64::INFINITY,
-        Some(w) if w > 0.0 => (w * 0.5) as f64,
-        _ => 2048.0,
+    let window_m = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_f32("windowM"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => 0.0,
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
     };
-    // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
-    let target_res = attr_i32("targetRes")
-        .filter(|&r| r > 0)
-        .map(|r| r as usize)
-        .unwrap_or(0);
+    let target_res = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_i64("targetRes"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => 0,
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
+    };
+    let (half_window, target_res) =
+        match lunco_terrain_surface::resolve_dem_request_parameters(window_m, target_res) {
+            Ok(parameters) => parameters,
+            Err(reason) => {
+                warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+                return;
+            }
+        };
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
-    let lod_viz = attr_bool("lodViz").unwrap_or(true);
+    let lod_viz = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_bool("lodViz"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => true,
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
+    };
     // `colliderRing` = stream a per-body collider ring vs one static collider.
-    // The static full-DEM collider is Nyquist-gated at the DEM base spacing
-    // (~3.9 m), so it fades every crater below ~12 m radius FLAT in physics while
-    // the 0.65 m near tiles render deep bowls (rovers visibly float above / sink
-    // into what they see). Analytic height-modifier layers (craters / edits /
-    // overzoom) live ENTIRELY below that limit — a static collider therefore CANNOT
-    // represent them, so whenever the terrain both streams fine visuals (`lodViz`)
-    // AND carries such layers, force the ring (it samples the oracle at each tile's
-    // own resolution, matching the surface exactly). Only when there are no height
-    // layers does the authored attr decide (default = `lodViz`); an explicit
-    // `colliderRing = false` still keeps the static collider for a plain DEM.
+    // A static collider cannot represent analytic height layers at the visual
+    // tile resolution. That is an explicit scene constraint, not a reason to
+    // overwrite the authored choice, so reject the contradictory combination.
+    let collider_ring = match dem_attrs
+        .as_ref()
+        .map(|a| a.authored_bool("colliderRing"))
+        .transpose()
+    {
+        Ok(Some(Some(value))) => value,
+        Ok(Some(None) | None) => true,
+        Err(reason) => {
+            warn!("[usd-dem] prim {} rejected: {reason}", prim_path.path);
+            return;
+        }
+    };
     let has_height_layers = stack
         .0
         .iter()
         .any(|e| matches!(e.layer.id(), "craters" | "edits" | "overzoom"));
-    let collider_ring = if lod_viz && has_height_layers {
-        true
-    } else {
-        attr_bool("colliderRing").unwrap_or(lod_viz)
-    };
+    if lod_viz && has_height_layers && !collider_ring {
+        warn!(
+            "[usd-dem] prim {} rejected: colliderRing=false cannot represent authored analytic height layers while lodViz=true",
+            prim_path.path
+        );
+        return;
+    }
     // Craters and edits are analytic modifiers on the surface oracle, sampled
     // at each consumer's own resolution; no separate grid-upsample control is
     // part of the terrain projection contract.
@@ -1965,9 +2035,47 @@ def Xform \"Traverse\"\n{\n}\n"
     }
 
     #[test]
-    fn lod_viz_false_defaults_collider_ring_off() {
-        // `colliderRing` unauthored follows `lodViz` when no forcing applies:
-        // a static-mesh terrain (lodViz=false) keeps the static collider.
+    fn malformed_or_out_of_range_dem_quality_is_rejected() {
+        for layer_extra in [
+            "        float lunco:layer:windowM = -1\n",
+            "        int lunco:layer:targetRes = -1\n",
+            "        int64 lunco:layer:targetRes = 8192\n",
+            "        string lunco:layer:lodViz = \"true\"\n",
+        ] {
+            let scene = dem_scene("", layer_extra);
+            let (world, entity) = bridge(&scene);
+            assert!(
+                world
+                    .get::<lunco_terrain_surface::DemTerrainRequest>(entity)
+                    .is_none(),
+                "invalid DEM quality must not become a different request: {layer_extra:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_static_collider_with_analytic_layers_is_rejected() {
+        let scene = dem_scene(
+            "    def Xform \"Detail\"\n    {\n\
+             \x20       token lunco:layer = \"overzoom\"\n\
+             \x20       float lunco:layer:amplitude = 0.08\n\
+             \x20   }\n",
+            "        bool lunco:layer:colliderRing = false\n",
+        );
+        let (world, entity) = bridge(&scene);
+        assert!(
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(entity)
+                .is_none(),
+            "the bridge must not override colliderRing=false for analytic layers"
+        );
+    }
+
+    #[test]
+    fn collider_ring_uses_its_schema_default_independently_of_lod_viz() {
+        // `colliderRing` is an independent schema property. Its fallback is
+        // true even when visual streaming is disabled; the bridge must not
+        // invent a dependency on `lodViz`.
         let scene = dem_scene("", "        bool lunco:layer:lodViz = false\n");
         let (world, e) = bridge(&scene);
         let req = world
@@ -1975,8 +2083,8 @@ def Xform \"Traverse\"\n{\n}\n"
             .expect("request attached");
         assert!(!req.lod_viz);
         assert!(
-            !req.collider_ring,
-            "unauthored colliderRing follows lodViz=false"
+            req.collider_ring,
+            "unauthored colliderRing uses the schema fallback"
         );
     }
 
@@ -2107,10 +2215,10 @@ def Xform \"Traverse\"\n{\n}\n"
     }
 
     #[test]
-    fn streaming_terrain_with_height_layers_forces_collider_ring() {
-        // The Nyquist rule: lodViz + any analytic height layer (the default
-        // overzoom counts) ⇒ the ring is FORCED even if the author says no —
-        // a static full-DEM collider cannot represent sub-DEM height layers.
+    fn streaming_terrain_with_height_layers_rejects_static_collider() {
+        // A static full-DEM collider cannot represent sub-DEM height layers.
+        // That is an invalid authored combination, not permission for the
+        // bridge to rewrite `colliderRing=false` to true.
         let scene = dem_scene(
             "    def Xform \"Detail\"\n    {\n\
              \x20       token lunco:layer = \"overzoom\"\n\
@@ -2119,13 +2227,11 @@ def Xform \"Traverse\"\n{\n}\n"
             "        bool lunco:layer:colliderRing = false\n",
         );
         let (world, e) = bridge(&scene);
-        let req = world
-            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
-            .expect("request attached");
-        assert!(req.lod_viz, "streaming visuals on (default)");
         assert!(
-            req.collider_ring,
-            "lodViz + height layers must force the collider ring despite colliderRing=false"
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+                .is_none(),
+            "lodViz + analytic layers + colliderRing=false must be rejected"
         );
     }
 

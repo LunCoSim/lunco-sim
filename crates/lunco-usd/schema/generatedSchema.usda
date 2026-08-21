@@ -151,10 +151,10 @@ class "LunCoTerrainLayerAPI" (
         reasoning that moved `lunco:material:shader` to `asset` applies here."""
     )
     float lunco:layer:windowM = 0 (
-        doc = "Half-window of the DEM patch, in metres."
+        doc = "Side length of the DEM patch, in metres; zero means the whole map."
     )
     int lunco:layer:targetRes = 0 (
-        doc = "Target heightfield resolution."
+        doc = "Target visual heightfield resolution per side; zero keeps native resolution."
     )
     bool lunco:layer:lodViz = true (
         doc = "Whether to build the visual CDLOD mesh."
