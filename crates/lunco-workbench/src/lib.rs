@@ -5422,7 +5422,16 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
-            if settings != *current {
+            if let Err(reason) = settings.validate() {
+                let error_color = ctx
+                    .resource::<lunco_theme::Theme>()
+                    .map(|theme| theme.tokens.error)
+                    .unwrap_or(egui::Color32::LIGHT_RED);
+                ui.colored_label(
+                    error_color,
+                    format!("Graphics settings rejected: {reason}"),
+                );
+            } else if settings != *current {
                 ctx.set_resource(settings);
             }
         }
