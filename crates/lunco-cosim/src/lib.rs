@@ -144,6 +144,22 @@ fn sync_model_endpoint_lifecycle(world: &mut World) {
 /// create [`crate::SimComponent`] instances when models compile.
 pub struct CoSimPlugin;
 
+/// Clear co-simulation state owned by the outgoing scene before its entities
+/// are reclaimed. Port holds, deferred control fences, binding epochs, and
+/// diagnostics all contain entity-scoped state and must not cross a scene
+/// replacement boundary.
+fn reset_scene_state(
+    mut diagnostics: ResMut<diagnostics::CosimDiagnostics>,
+    mut holds: ResMut<connection::PortHolds>,
+    mut fence: ResMut<connection::ControlWriteFence>,
+    mut revision: ResMut<BindingRevision>,
+) {
+    *diagnostics = diagnostics::CosimDiagnostics::default();
+    *holds = connection::PortHolds::default();
+    *fence = connection::ControlWriteFence::default();
+    *revision = BindingRevision::default();
+}
+
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
@@ -175,6 +191,7 @@ impl Plugin for CoSimPlugin {
         // outside the shared control boundary until next tick.
         app.init_resource::<connection::ControlWriteFence>();
         app.add_systems(FixedFirst, connection::clear_control_write_fence);
+        app.add_systems(lunco_core::SceneTeardown, reset_scene_state);
         app.add_observer(binding::on_add_connection)
             // Co-sim retains every `SimComponent` output itself, with source
             // metadata. Mark it at lifecycle time so generic port telemetry does
@@ -565,6 +582,52 @@ mod binding_lifecycle_tests {
             .world()
             .get::<lunco_core::PortSurfaceReady>(entity)
             .is_some());
+    }
+
+    #[test]
+    fn scene_teardown_clears_scene_owned_cosim_state() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app.world_mut().spawn_empty().id();
+        {
+            let mut diagnostics = app.world_mut().resource_mut::<CosimDiagnostics>();
+            let broken = BrokenConnection {
+                entity,
+                global_id: None,
+                port: "drive_left".into(),
+                has_port_surface: true,
+                dropped_value: 1.0,
+            };
+            diagnostics
+                .faults
+                .insert((entity, "drive_left".into()), broken.clone());
+            diagnostics.landed.insert((entity, "drive_right".into()));
+            diagnostics.pending.push(broken.clone());
+            diagnostics.broken.push(broken);
+            diagnostics
+                .reported
+                .insert("target:entity:0:drive_left".into());
+        }
+        app.world_mut()
+            .resource_mut::<PortHolds>()
+            .hold(entity, "throttle", 0.5, 100.0);
+        app.world_mut()
+            .resource_mut::<ControlWriteFence>()
+            .block(entity);
+        app.world_mut().resource_mut::<BindingRevision>().request();
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        let diagnostics = app.world().resource::<CosimDiagnostics>();
+        assert!(diagnostics.pending.is_empty());
+        assert!(diagnostics.broken.is_empty());
+        assert!(diagnostics.faults.is_empty());
+        assert!(diagnostics.landed.is_empty());
+        assert!(diagnostics.reported.is_empty());
+        assert!(app.world().resource::<PortHolds>().is_empty());
+        assert!(!app.world().resource::<ControlWriteFence>().blocks(entity));
+        assert!(!app.world().resource::<BindingRevision>().pending());
     }
 }
 
