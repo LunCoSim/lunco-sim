@@ -1067,13 +1067,17 @@ fn process_usd_cosim_prim_read(
     // to step. Absent ⇒ not promised, and `rewire_usd_connections` refuses it a
     // force/torque port on a client-predicted body (see
     // `docs/architecture/28-modelica-realtime-physics.md`).
-    if reader
-        .boolean(sdf_path, "lunco:program:realtimeSafe")
-        .unwrap_or(false)
-    {
-        commands
-            .entity(entity)
-            .try_insert(lunco_cosim::RealtimeSafe);
+    match read_authored_bool_strict(reader, sdf_path, "lunco:program:realtimeSafe") {
+        Ok(Some(true)) => {
+            commands
+                .entity(entity)
+                .try_insert(lunco_cosim::RealtimeSafe);
+        }
+        Ok(Some(false)) | Ok(None) => {}
+        Err(()) => warn!(
+            "[usd-cosim] program {} has malformed `lunco:program:realtimeSafe`; promise ignored",
+            prim_path.path
+        ),
     }
 
     info!(
