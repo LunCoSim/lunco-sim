@@ -4646,6 +4646,33 @@ def NurbsPatch "Nozzle" (
             "an invalid parametric profile must not fall through to authored points"
         );
     }
+
+    #[test]
+    fn lathe_api_rejects_invalid_profile_parameters_without_clamping_them() {
+        let recipe = canonical::StageRecipe::from_source(
+            "lathe.usda",
+            r#"#usda 1.0
+def NurbsPatch "Nozzle" (
+    prepend apiSchemas = ["LunCoLatheAPI"]
+)
+{
+    uniform token lunco:lathe:profile = "paraboloid"
+    float lunco:lathe:focalLength = 0
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    int uVertexCount = 2
+    int vVertexCount = 2
+    int uOrder = 2
+    int vOrder = 2
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Nozzle").unwrap();
+        assert!(
+            read_patch_surface(&stage.view(), &path).is_none(),
+            "an invalid focal length must not be replaced with a tiny denominator"
+        );
+    }
 }
 
 /// Build a `NurbsPatch`'s mesh AND the definition to retain alongside it.

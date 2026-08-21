@@ -387,21 +387,45 @@ impl UsdLathe {
 /// "unauthored", which would silently substitute a default.
 pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
-    let p = |name: &str, default: f32| -> f32 {
-        reader.real(path, name).map(|v| v as f32).unwrap_or(default)
+    let p = |name: &str, default: f32, valid: fn(f32) -> bool| -> Option<f32> {
+        let value = match reader.real(path, name) {
+            Some(value) => value as f32,
+            None if reader.has_authored_attribute(path, name) => {
+                error!(
+                    "[usd-bevy] {} has an authored lathe parameter {name} with an unsupported value type",
+                    path.as_str()
+                );
+                return None;
+            }
+            None => default,
+        };
+        if !valid(value) {
+            error!(
+                "[usd-bevy] {} has invalid lathe parameter {name} = {value}",
+                path.as_str()
+            );
+            return None;
+        }
+        Some(value)
     };
 
     let profile = match kind.as_str() {
         "bell" => LatheProfile::Bell {
-            throat_radius: p("lunco:lathe:throatRadius", 0.35),
-            exit_radius: p("lunco:lathe:exitRadius", 1.35),
-            length: p("lunco:lathe:length", 1.90),
-            contour: p("lunco:lathe:contour", 0.55),
+            throat_radius: p("lunco:lathe:throatRadius", 0.35, |v| {
+                v.is_finite() && v > 0.0
+            })?,
+            exit_radius: p("lunco:lathe:exitRadius", 1.35, |v| v.is_finite() && v > 0.0)?,
+            length: p("lunco:lathe:length", 1.90, |v| v.is_finite() && v > 0.0)?,
+            contour: p("lunco:lathe:contour", 0.55, |v| {
+                v.is_finite() && (0.0..=1.0).contains(&v)
+            })?,
         },
         "paraboloid" => LatheProfile::Paraboloid {
-            apex_radius: p("lunco:lathe:apexRadius", 0.02),
-            rim_radius: p("lunco:lathe:rimRadius", 0.58),
-            focal_length: p("lunco:lathe:focalLength", 0.35),
+            apex_radius: p("lunco:lathe:apexRadius", 0.02, |v| v.is_finite() && v > 0.0)?,
+            rim_radius: p("lunco:lathe:rimRadius", 0.58, |v| v.is_finite() && v > 0.0)?,
+            focal_length: p("lunco:lathe:focalLength", 0.35, |v| {
+                v.is_finite() && v > 0.0
+            })?,
         },
         other => {
             warn!(
