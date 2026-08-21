@@ -8,7 +8,6 @@
 //! and therefore no egui/workbench dependency.
 
 use bevy::prelude::*;
-use lunco_signal::TelemetryDeadband;
 use lunco_telemetry::TelemetrySettings;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 use lunco_workbench::status_bus::{StatusBus, StatusLevel};
