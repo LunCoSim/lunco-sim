@@ -949,7 +949,7 @@ mod authoring_tests {
     use super::*;
     use crate::UsdRead;
 
-    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
 
     fn touches(changes: &[RawStageChange], path: &str) -> bool {
         changes.iter().any(|c| {
