@@ -82,6 +82,8 @@ impl RenderingQuality {
                 nurbs_trim_curve_samples: 24,
                 nurbs_trim_minimum_subdivisions: 12,
                 nurbs_trim_maximum_subdivisions: 96,
+                curve_samples_per_segment: 8,
+                curve_radial_segments: 12,
             },
             Self::Low => RenderQualityProfile {
                 directional_shadow_map_size: 512,
@@ -128,6 +130,8 @@ impl RenderingQuality {
                 nurbs_trim_curve_samples: 12,
                 nurbs_trim_minimum_subdivisions: 8,
                 nurbs_trim_maximum_subdivisions: 48,
+                curve_samples_per_segment: 4,
+                curve_radial_segments: 6,
             },
             Self::High => RenderQualityProfile {
                 directional_shadow_map_size: 2048,
@@ -174,6 +178,8 @@ impl RenderingQuality {
                 nurbs_trim_curve_samples: 48,
                 nurbs_trim_minimum_subdivisions: 16,
                 nurbs_trim_maximum_subdivisions: 192,
+                curve_samples_per_segment: 16,
+                curve_radial_segments: 24,
             },
         }
     }
@@ -269,6 +275,10 @@ pub struct RenderQualityProfile {
     pub nurbs_trim_minimum_subdivisions: usize,
     /// Maximum grid subdivisions used for trimmed NURBS surfaces.
     pub nurbs_trim_maximum_subdivisions: usize,
+    /// Samples used for each non-linear USD curve control-point segment.
+    pub curve_samples_per_segment: usize,
+    /// Radial segments used to sweep USD curve tubes.
+    pub curve_radial_segments: usize,
 }
 
 impl RenderQualityProfile {
@@ -392,6 +402,10 @@ pub struct RenderingQualitySettings {
     pub nurbs_trim_minimum_subdivisions: usize,
     #[serde(default = "default_nurbs_trim_maximum_subdivisions")]
     pub nurbs_trim_maximum_subdivisions: usize,
+    #[serde(default = "default_curve_samples_per_segment")]
+    pub curve_samples_per_segment: usize,
+    #[serde(default = "default_curve_radial_segments")]
+    pub curve_radial_segments: usize,
 }
 
 const fn balanced_profile() -> RenderQualityProfile {
@@ -614,6 +628,14 @@ const fn default_nurbs_trim_maximum_subdivisions() -> usize {
     balanced_profile().nurbs_trim_maximum_subdivisions
 }
 
+const fn default_curve_samples_per_segment() -> usize {
+    balanced_profile().curve_samples_per_segment
+}
+
+const fn default_curve_radial_segments() -> usize {
+    balanced_profile().curve_radial_segments
+}
+
 impl RenderingQualitySettings {
     /// Return the currently authoritative values, including custom edits.
     pub const fn profile(self) -> RenderQualityProfile {
@@ -662,6 +684,8 @@ impl RenderingQualitySettings {
             nurbs_trim_curve_samples: self.nurbs_trim_curve_samples,
             nurbs_trim_minimum_subdivisions: self.nurbs_trim_minimum_subdivisions,
             nurbs_trim_maximum_subdivisions: self.nurbs_trim_maximum_subdivisions,
+            curve_samples_per_segment: self.curve_samples_per_segment,
+            curve_radial_segments: self.curve_radial_segments,
         }
     }
 
@@ -721,6 +745,8 @@ impl RenderingQualitySettings {
         self.nurbs_trim_curve_samples = profile.nurbs_trim_curve_samples;
         self.nurbs_trim_minimum_subdivisions = profile.nurbs_trim_minimum_subdivisions;
         self.nurbs_trim_maximum_subdivisions = profile.nurbs_trim_maximum_subdivisions;
+        self.curve_samples_per_segment = profile.curve_samples_per_segment;
+        self.curve_radial_segments = profile.curve_radial_segments;
     }
 
     /// Validate persisted or UI-edited settings before they reach Bevy.
@@ -874,6 +900,15 @@ impl RenderingQualitySettings {
         if profile.nurbs_trim_maximum_subdivisions > 4096 {
             return Err("NURBS trim subdivision maximum must be at most 4096");
         }
+        if profile.curve_samples_per_segment == 0 {
+            return Err("curve samples per segment must be greater than zero");
+        }
+        if profile.curve_radial_segments < 3 {
+            return Err("curve radial segments must be at least three");
+        }
+        if profile.curve_samples_per_segment > 4096 || profile.curve_radial_segments > 4096 {
+            return Err("curve tessellation values must be at most 4096");
+        }
         Ok(())
     }
 }
@@ -926,6 +961,8 @@ impl Default for RenderingQualitySettings {
             nurbs_trim_curve_samples: profile.nurbs_trim_curve_samples,
             nurbs_trim_minimum_subdivisions: profile.nurbs_trim_minimum_subdivisions,
             nurbs_trim_maximum_subdivisions: profile.nurbs_trim_maximum_subdivisions,
+            curve_samples_per_segment: profile.curve_samples_per_segment,
+            curve_radial_segments: profile.curve_radial_segments,
         }
     }
 }
@@ -1102,6 +1139,20 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("primitive mesh tessellation values are below their minimum")
+        );
+    }
+
+    #[test]
+    fn curve_tessellation_is_explicit_and_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        assert_eq!(settings.profile().curve_samples_per_segment, 8);
+        assert_eq!(settings.profile().curve_radial_segments, 12);
+        assert!(settings.validate().is_ok());
+
+        settings.curve_radial_segments = 2;
+        assert_eq!(
+            settings.validate(),
+            Err("curve radial segments must be at least three")
         );
     }
 

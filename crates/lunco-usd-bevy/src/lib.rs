@@ -272,6 +272,11 @@ impl Plugin for UsdBevyPlugin {
                 retessellate_primitive_meshes_on_quality_change
                     .after(lathe::retessellate_patch_meshes_on_quality_change),
             )
+            .add_systems(
+                Update,
+                retessellate_curve_meshes_on_quality_change
+                    .after(retessellate_primitive_meshes_on_quality_change),
+            )
             .add_systems(Update, camera_mount::resolve_camera_mounts)
             .add_systems(
                 PostUpdate,
@@ -1198,7 +1203,10 @@ fn instantiate_usd_prim_from_stage(
             // `lunco:path:camera`, see `camera_path.rs`) from silently becoming a
             // visible pipe. So the two readings coexist without a gate: a camera
             // path authors no `widths`, a conduit does.
-            build_usd_curve_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+            build_usd_curve_mesh(reader, &sdf_path, quality).map(|m| {
+                commands.entity(entity).try_insert(UsdCurveMesh);
+                meshes.add(m)
+            })
         } else {
             match primitive_shape {
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
@@ -4205,6 +4213,12 @@ pub enum ShapeDims {
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 struct UsdPrimitiveMesh(ShapeDims);
 
+/// Rendering-only marker for a USD curve tube. The authored curve remains
+/// addressable through [`UsdPrimPath`], so a Graphics quality change can rebuild
+/// the mesh from the composed stage without duplicating USD geometry data in ECS.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct UsdCurveMesh;
+
 /// Build one USD primitive's visual mesh from its resolved dimensions and the
 /// current Graphics quality profile. USD has no attribute for these tessellation
 /// counts; they are viewer policy, unlike the shape dimensions.
@@ -4282,6 +4296,123 @@ fn retessellate_primitive_meshes_on_quality_change(
             continue;
         };
         *slot = mesh;
+    }
+}
+
+/// Rebuild curve-tube meshes when the user changes Graphics tessellation.
+/// Invalid settings leave the existing mesh in place and are reported; no lower
+/// quality profile is selected implicitly.
+fn retessellate_curve_meshes_on_quality_change(
+    mut meshes: ResMut<Assets<Mesh>>,
+    q: Query<(&UsdPrimPath, &Mesh3d, Option<&Name>), With<UsdCurveMesh>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    canonical: NonSend<CanonicalStages>,
+) {
+    let Some(settings) = quality else {
+        return;
+    };
+    if !settings.is_changed() {
+        return;
+    }
+    let profile = settings.profile();
+    for (prim_path, handle, name) in &q {
+        let Some(stage) = canonical.get(prim_path.stage_handle.id()) else {
+            continue;
+        };
+        let Ok(path) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
+        let Some(mesh) = build_usd_curve_mesh(&stage.view(), &path, profile) else {
+            warn!(
+                "[usd-bevy] {} curve quality is invalid or its authored curve cannot be tessellated; retaining the previous mesh",
+                name.map(|n| n.as_str()).unwrap_or("<unnamed>")
+            );
+            continue;
+        };
+        let Some(mut slot) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        *slot = mesh;
+    }
+}
+
+#[cfg(test)]
+mod curve_mesh_quality_tests {
+    use super::*;
+
+    fn stage(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("curve.usda", source))
+            .expect("build curve stage")
+    }
+
+    #[test]
+    fn curve_tube_density_follows_graphics_quality() {
+        let stage = stage(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def BasisCurves "Tube"
+{
+    uniform token type = "cubic"
+    uniform token basis = "catmullRom"
+    int[] curveVertexCounts = [4]
+    point3f[] points = [(0, 0, 0), (1, 0, 1), (2, 0, -1), (3, 0, 0)]
+    float[] widths = [0.2]
+}
+"#,
+        );
+        let reader = stage.view();
+        let path = SdfPath::new("/Tube").unwrap();
+        let low = build_usd_curve_mesh(
+            &reader,
+            &path,
+            lunco_render::RenderingQuality::Low.profile(),
+        )
+        .expect("low curve mesh");
+        let high = build_usd_curve_mesh(
+            &reader,
+            &path,
+            lunco_render::RenderingQuality::High.profile(),
+        )
+        .expect("high curve mesh");
+        assert!(high.count_vertices() > low.count_vertices());
+    }
+
+    #[test]
+    fn malformed_curve_structure_is_rejected_instead_of_guessed() {
+        let stage = stage(
+            r#"#usda 1.0
+def NurbsCurves "MissingKnots"
+{
+    int[] curveVertexCounts = [3]
+    int[] order = [3]
+    point3f[] points = [(0, 0, 0), (1, 0, 1), (2, 0, 0)]
+    float[] widths = [0.2]
+}
+def BasisCurves "WrongBasis"
+{
+    uniform token type = "cubic"
+    uniform token basis = "bspline"
+    int[] curveVertexCounts = [4]
+    point3f[] points = [(0, 0, 0), (1, 0, 1), (2, 0, -1), (3, 0, 0)]
+    float[] widths = [0.2]
+}
+"#,
+        );
+        let reader = stage.view();
+        assert!(build_usd_curve_mesh(
+            &reader,
+            &SdfPath::new("/MissingKnots").unwrap(),
+            lunco_render::RenderingQuality::Balanced.profile(),
+        )
+        .is_none());
+        assert!(build_usd_curve_mesh(
+            &reader,
+            &SdfPath::new("/WrongBasis").unwrap(),
+            lunco_render::RenderingQuality::Balanced.profile(),
+        )
+        .is_none());
     }
 }
 
@@ -4579,7 +4710,11 @@ fn read_mesh_normals(
 /// per-vertex. Absent `widths` means an infinitely thin curve, which has no
 /// surface — returns `None` rather than inventing a radius, so a curve authored
 /// as a pure path (a camera rail) does not silently become a visible pipe.
-fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> {
+fn build_usd_curve_mesh(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    quality: lunco_render::RenderQualityProfile,
+) -> Option<Mesh> {
     use crate::camera_path::CurveBasis;
     use crate::curve_sweep::sweep_tube;
 
@@ -4589,14 +4724,17 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
         return None;
     }
     // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
-    // `reals`, not `scalar::<Vec<f32>>`: `widths` is `float[]` per the USD spec but a
-    // `double[]` is what you get from a DCC that promotes everything, and a strict
-    // read of that is indistinguishable from "no widths" — which this function turns
-    // into `None`, i.e. the tube vanishes from the scene with no diagnostic.
-    let widths = reader.reals(path, "widths");
-    if widths.is_empty() {
-        return None;
-    }
+    let widths = match read_curve_real_array(reader, path, "widths") {
+        Ok(Some(widths)) if !widths.is_empty() => widths,
+        Ok(Some(_)) | Ok(None) => return None,
+        Err(()) => {
+            error!(
+                "[usd-bevy] {} has authored curve widths with an unsupported value type",
+                path.as_str()
+            );
+            return None;
+        }
+    };
 
     // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
     // not `conv.point`. (`read_mesh_points` already converted the centerline.)
@@ -4605,6 +4743,13 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
         .iter()
         .map(|w| conv.length(*w / 2.0) as f32)
         .collect();
+    if radii.iter().any(|r| !r.is_finite() || *r <= 0.0) {
+        error!(
+            "[usd-bevy] {} has curve widths that are not finite and positive",
+            path.as_str()
+        );
+        return None;
+    }
 
     // `NurbsCurves` carries its own basis: per-curve `order`, a concatenated
     // `knots` array, and optional rational `pointWeights`. `BasisCurves` carries a
@@ -4612,46 +4757,137 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
     // curve is reduced to a centerline — the only difference is how that
     // centerline is produced.
     let is_nurbs = reader.type_name(path).as_deref() == Some("NurbsCurves");
-    let orders = read_int_array(reader, path, "order").unwrap_or_default();
-    // `reals`: `knots`/`pointWeights` are `double[]` per the NURBS schema, but a
-    // `float[]` knot vector reads as an EMPTY one under a strict read — and an empty
-    // knot vector is not an error here, it is the "fall back to a default clamped
-    // basis" path, so a mistyped NURBS curve quietly evaluates as a different curve.
-    let all_knots = reader.reals(path, "knots");
-    let point_weights = reader.reals(path, "pointWeights");
-
-    let ty = reader
-        .text(path, "type")
-        .unwrap_or_else(|| "cubic".to_string());
-    // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
-    let basis_tok = reader
-        .text(path, "basis")
-        .unwrap_or_else(|| "bezier".to_string());
-    let basis = if ty == "linear" {
-        // `type = "linear"` is the polygon — `basis` is meaningless and USD says
-        // so; honour the type over a stale basis token.
-        CurveBasis::Linear
-    } else {
-        match basis_tok.as_str() {
-            // `bspline` evaluates through the interpolating catmullRom path —
-            // approximating rather than hitting its hull. Acceptable for a swept
-            // tube (the centerline shifts by less than a wall thickness); a true
-            // B-spline basis lands with the NURBS evaluator.
-            "catmullRom" | "bspline" => CurveBasis::CatmullRom,
-            _ => CurveBasis::Bezier,
+    let counts = match read_curve_int_array(reader, path, "curveVertexCounts") {
+        Ok(Some(counts)) if !counts.is_empty() => counts,
+        Ok(Some(_)) | Ok(None) => {
+            error!(
+                "[usd-bevy] {} has no usable authored curveVertexCounts; USD requires this topology field",
+                path.as_str()
+            );
+            return None;
+        }
+        Err(()) => {
+            error!(
+                "[usd-bevy] {} has authored curveVertexCounts with an unsupported value type",
+                path.as_str()
+            );
+            return None;
         }
     };
-    let periodic = reader.text(path, "wrap").as_deref() == Some("periodic");
+    let total_control_points: usize = counts
+        .iter()
+        .filter_map(|count| usize::try_from(*count).ok())
+        .sum();
+    if total_control_points != points.len() || counts.iter().any(|count| *count < 2) {
+        error!(
+            "[usd-bevy] {} has curveVertexCounts inconsistent with its points",
+            path.as_str()
+        );
+        return None;
+    }
+    if widths.len() != 1 && widths.len() != counts.len() && widths.len() != points.len() {
+        error!(
+            "[usd-bevy] {} has {} widths for {} curves and {} points; expected constant, uniform, or vertex widths",
+            path.as_str(),
+            widths.len(),
+            counts.len(),
+            points.len()
+        );
+        return None;
+    }
 
-    // `curveVertexCounts` partitions `points` into a batch of curves. Absent ⇒ one
-    // curve over all points (tolerant: a hand-authored single curve often omits it).
-    let counts = read_int_array(reader, path, "curveVertexCounts")
-        .unwrap_or_else(|| vec![points.len() as i32]);
+    let (basis, periodic, orders, all_knots, point_weights) = if is_nurbs {
+        let orders = match read_curve_int_array(reader, path, "order") {
+            Ok(Some(orders)) if !orders.is_empty() => orders,
+            Ok(Some(_)) | Ok(None) => {
+                error!(
+                    "[usd-bevy] {} has no usable authored NurbsCurves order",
+                    path.as_str()
+                );
+                return None;
+            }
+            Err(()) => {
+                error!(
+                    "[usd-bevy] {} has authored NurbsCurves order with an unsupported value type",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        if orders.len() != 1 && orders.len() != counts.len() {
+            error!(
+                "[usd-bevy] {} has {} NurbsCurves orders for {} curves",
+                path.as_str(),
+                orders.len(),
+                counts.len()
+            );
+            return None;
+        }
+        let all_knots = match read_curve_real_array(reader, path, "knots") {
+            Ok(Some(knots)) if !knots.is_empty() => knots,
+            Ok(Some(_)) | Ok(None) | Err(()) => {
+                error!(
+                    "[usd-bevy] {} has no usable authored NurbsCurves knots",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        let point_weights = match read_curve_real_array(reader, path, "pointWeights") {
+            Ok(Some(weights)) if weights.len() == points.len() => weights,
+            Ok(Some(_)) => {
+                error!(
+                    "[usd-bevy] {} has pointWeights whose length does not match points",
+                    path.as_str()
+                );
+                return None;
+            }
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[usd-bevy] {} has authored pointWeights with an unsupported value type",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        (CurveBasis::Linear, false, orders, all_knots, point_weights)
+    } else {
+        let ty = match read_curve_token(reader, path, "type", "cubic", &["linear", "cubic"]) {
+            Ok(token) => token,
+            Err(()) => return None,
+        };
+        let basis = if ty == "linear" {
+            CurveBasis::Linear
+        } else {
+            match read_curve_token(reader, path, "basis", "bezier", &["bezier", "catmullRom"]) {
+                Ok(token) if token == "bezier" => CurveBasis::Bezier,
+                Ok(_) => CurveBasis::CatmullRom,
+                Err(()) => return None,
+            }
+        };
+        let wrap = match read_curve_token(
+            reader,
+            path,
+            "wrap",
+            "nonperiodic",
+            &["nonperiodic", "periodic", "pinned"],
+        ) {
+            Ok(wrap) => wrap,
+            Err(()) => return None,
+        };
+        (
+            basis,
+            wrap == "periodic",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
 
-    // Samples per control point. Linear needs none — the control points ARE the
-    // centerline, and resampling a polygon only rounds off its corners.
-    const SAMPLES_PER_SEGMENT: usize = 8;
-    let sides = 8;
+    if quality.curve_samples_per_segment == 0 || quality.curve_radial_segments < 3 {
+        return None;
+    }
 
     let mut merged: Option<Mesh> = None;
     let mut cursor = 0usize;
@@ -4659,11 +4895,21 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
     // `vertexCount_i + order_i` of them, consumed in order. Tracked separately
     // from the point cursor because the strides differ.
     let mut knot_cursor = 0usize;
+    let curve_count = counts.len();
     for (ci, c) in counts.into_iter().enumerate() {
-        let n = c.max(0) as usize;
-        if n < 2 || cursor + n > points.len() {
-            cursor += n;
-            continue;
+        let Ok(n) = usize::try_from(c) else {
+            error!(
+                "[usd-bevy] {} has a negative curveVertexCounts entry",
+                path.as_str()
+            );
+            return None;
+        };
+        if n < 2 || n > points.len().saturating_sub(cursor) {
+            error!(
+                "[usd-bevy] {} has curve topology outside its points",
+                path.as_str()
+            );
+            return None;
         }
         // Captured before `cursor` advances — `pointWeights` is indexed by control
         // point, so it slices with the same offset the points did.
@@ -4674,6 +4920,8 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
             .collect();
         let seg_radii: Vec<f32> = if radii.len() == 1 {
             vec![radii[0]]
+        } else if radii.len() == curve_count {
+            vec![radii[ci]]
         } else {
             radii
                 .iter()
@@ -4685,32 +4933,35 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
         cursor += n;
 
         let centerline: Vec<Vec3> = if is_nurbs {
-            // Per-curve order; a single authored value applies to the whole batch
-            // (USD allows either), else default to cubic.
-            let order = orders
+            // Per-curve order; a single authored value applies to the whole batch.
+            let Some(order) = orders
                 .get(ci)
                 .or_else(|| orders.first())
-                .map(|o| (*o).max(2) as usize)
-                .unwrap_or(4)
-                .min(n); // a curve cannot have order > control-point count
+                .and_then(|order| usize::try_from(*order).ok())
+                .filter(|order| *order >= 2 && *order <= n)
+            else {
+                error!(
+                    "[usd-bevy] {} has an invalid NurbsCurves order",
+                    path.as_str()
+                );
+                return None;
+            };
             let need = n + order;
-            let knots: Vec<f64> = if knot_cursor + need <= all_knots.len() {
-                let k = all_knots[knot_cursor..knot_cursor + need].to_vec();
-                knot_cursor += need;
-                k
+            if knot_cursor + need > all_knots.len() {
+                error!(
+                    "[usd-bevy] {} has insufficient NurbsCurves knots",
+                    path.as_str()
+                );
+                return None;
+            }
+            let knots = all_knots[knot_cursor..knot_cursor + need].to_vec();
+            knot_cursor += need;
+            let w: Vec<f64> = if point_weights.is_empty() {
+                Vec::new()
             } else {
-                // Missing or short `knots` — reconstruct the standard clamped
-                // vector rather than dropping the curve. Assets omit it often
-                // enough that guessing beats losing the geometry, and clamped is
-                // what every DCC writes.
-                crate::nurbs::default_clamped_knots(n, order)
-            };
-            let w: Vec<f64> = if point_weights.len() >= cursor_start + n {
                 point_weights[cursor_start..cursor_start + n].to_vec()
-            } else {
-                Vec::new() // unauthored ⇒ polynomial, all weights 1
             };
-            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
             let pts: Vec<[f32; 3]> = cvs.iter().map(|p| p.to_array()).collect();
             let sampled = crate::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
             if sampled.is_empty() {
@@ -4721,7 +4972,7 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
         } else if basis == CurveBasis::Linear {
             cvs.clone()
         } else {
-            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
             (0..=steps)
                 .map(|i| {
                     crate::camera_path::eval_curve(&cvs, basis, periodic, i as f32 / steps as f32)
@@ -4745,7 +4996,12 @@ fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> 
                 .collect()
         };
 
-        let Some(tube) = sweep_tube(&centerline, &seg_radii, sides, periodic) else {
+        let Some(tube) = sweep_tube(
+            &centerline,
+            &seg_radii,
+            quality.curve_radial_segments,
+            periodic,
+        ) else {
             continue;
         };
         merged = Some(match merged {
@@ -5154,6 +5410,87 @@ fn read_int_array(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<
         Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
         _ => None,
+    }
+}
+
+/// Read a curve integer array while preserving the distinction between an
+/// omitted optional value and an authored value of the wrong type. Curve
+/// topology is structural USD data; it must never be replaced by a guessed
+/// single-curve layout.
+fn read_curve_int_array(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<i32>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::IntVec(values)) => Ok(Some(values)),
+        Some(Value::Int64Vec(values)) => {
+            Ok(Some(values.iter().map(|value| *value as i32).collect()))
+        }
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read a curve real array (`float[]` or `double[]`) without turning an
+/// authored type mismatch into an omitted attribute.
+fn read_curve_real_array(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<f64>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::DoubleVec(values)) => Ok(Some(values)),
+        Some(Value::FloatVec(values)) => Ok(Some(values.into_iter().map(f64::from).collect())),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read one standard USD token with its schema fallback. An authored token
+/// outside the schema's allowed set is malformed and is rejected, rather than
+/// being interpreted as a different curve basis or wrap mode.
+fn read_curve_token(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+    schema_default: &str,
+    allowed: &[&str],
+) -> Result<String, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::Token(value)) => {
+            let value = value.to_string();
+            if allowed.contains(&value.as_str()) {
+                Ok(value)
+            } else {
+                error!(
+                    "[usd-bevy] {} has unsupported {} token `{}`",
+                    path.as_str(),
+                    attr,
+                    value
+                );
+                Err(())
+            }
+        }
+        Some(_) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                attr
+            );
+            Err(())
+        }
+        None if reader.has_authored_attribute(path, attr) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                attr
+            );
+            Err(())
+        }
+        None => Ok(schema_default.to_string()),
     }
 }
 

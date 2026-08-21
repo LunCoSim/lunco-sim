@@ -5359,6 +5359,27 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .prefix("Capsule latitudes: "),
                 );
             });
+            ui.collapsing("Curve tubes", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control only the viewer tessellation of USD curve tubes; curve points, widths, and topology remain authored USD data.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.curve_samples_per_segment)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Samples per curve segment: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.curve_radial_segments)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Tube radial segments: "),
+                );
+            });
             ui.collapsing("Camera look", |ui| {
                 ui.label(
                     egui::RichText::new(
