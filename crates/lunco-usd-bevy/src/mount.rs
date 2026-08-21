@@ -22,9 +22,10 @@
 //! }
 //! ```
 //!
-//! Detection is by the authored `lunco:mount:socket` attribute ([`read_sockets`]),
-//! NOT by `kind` — `kind` is USD's regulated model taxonomy and `"mount"` is not a
-//! valid kind, so the socket discriminator is a LunCo attribute.
+//! Detection is by the applied `LunCoMountSocketAPI` ([`read_sockets`]), not by
+//! a loose attribute-name convention or by `kind` — `kind` is USD's regulated
+//! model taxonomy and `"mount"` is not a valid kind. The plug half likewise must
+//! apply `LunCoMountPlugAPI`.
 //! and on the part:
 //! ```usda
 //! uniform token lunco:mount:plug  = "wheel"
@@ -96,17 +97,55 @@ fn compose(a: Transform, b: Transform) -> Transform {
     Transform::from_matrix(a.to_matrix() * b.to_matrix())
 }
 
+fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    path.as_str() == root
+        || path
+            .as_str()
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+/// Read a local frame while distinguishing USD's identity-for-unauthored
+/// transform from a malformed authored transform.
+fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<Transform> {
+    match local_transform_at(reader, path, 0.0) {
+        Some(transform) => Some(transform),
+        None if reader.has_authored_attribute(path, "xformOpOrder") => {
+            bevy::log::warn!(
+                "mount frame {} has malformed authored xformOpOrder or xform op; mount rejected",
+                path.as_str()
+            );
+            None
+        }
+        None => Some(Transform::IDENTITY),
+    }
+}
+
 /// The local frame of `mount_prim` expressed in `body_root`'s space — the product
 /// of local transforms from `body_root`'s child down to `mount_prim`, i.e. every
 /// intermediate `Mounts` xform is folded in, but `body_root`'s own placement is
-/// **not** (we want a body-local frame). An unauthored xform reads as identity.
+/// **not** (we want a body-local frame). An unauthored xform reads as USD's
+/// identity; a malformed authored xform rejects the frame.
 pub fn frame_in_body(
     reader: &crate::StageView<'_>,
     body_root: &str,
     mount_prim: &SdfPath,
-) -> Transform {
+) -> Option<Transform> {
     let body_root = body_root.trim_end_matches('/');
-    let mut acc = local_transform_at(reader, mount_prim, 0.0).unwrap_or(Transform::IDENTITY);
+    let body_root_path = SdfPath::new(body_root).ok()?;
+    if !is_descendant_or_self(mount_prim, body_root) {
+        bevy::log::warn!(
+            "mount frame {} is outside body root {}; mount rejected",
+            mount_prim.as_str(),
+            body_root
+        );
+        return None;
+    }
+    if mount_prim == &body_root_path {
+        return Some(Transform::IDENTITY);
+    }
+    let mut acc = local_mount_transform(reader, mount_prim)?;
     let mut cur = mount_prim.clone();
     // Walk up, prepending each ancestor's local transform, until the next step
     // would be `body_root` (whose transform we exclude) or the tree runs out.
@@ -115,14 +154,13 @@ pub fn frame_in_body(
             break;
         }
         let Ok(parent_path) = SdfPath::new(&parent) else {
-            break;
+            return None;
         };
-        let parent_local =
-            local_transform_at(reader, &parent_path, 0.0).unwrap_or(Transform::IDENTITY);
+        let parent_local = local_mount_transform(reader, &parent_path)?;
         acc = compose(parent_local, acc);
         cur = parent_path;
     }
-    acc
+    Some(acc)
 }
 
 /// Every socket a `host` body advertises under its `Mounts` group. Empty when the
@@ -133,20 +171,81 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
     };
     let mut out = Vec::new();
     for child in reader.children(&group) {
-        let Some(accepts) = reader.text(&child, "lunco:mount:socket") else {
-            continue; // not a socket — skip mount groups that hold other data
+        if !reader.has_api_schema(&child, "LunCoMountSocketAPI") {
+            continue;
+        }
+        let Some(accepts) = reader
+            .text(&child, "lunco:mount:socket")
+            .filter(|value| !value.is_empty())
+        else {
+            bevy::log::warn!(
+                "mount socket {} applies LunCoMountSocketAPI but has no accepted plug kind",
+                child.as_str()
+            );
+            continue;
         };
         let joint = reader
             .text(&child, "lunco:mount:joint")
             .unwrap_or_else(|| "fixed".to_string());
-        // A fixed joint carries no axis; drop any stray authored one.
-        let axis = if joint == "fixed" {
-            None
-        } else {
-            reader.text(&child, "lunco:mount:axis")
+        let authored_axis = reader.text(&child, "lunco:mount:axis");
+        let axis = match joint.as_str() {
+            "fixed" => {
+                if authored_axis
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                {
+                    bevy::log::warn!(
+                        "fixed mount socket {} authors an axis; socket rejected",
+                        child.as_str()
+                    );
+                    continue;
+                }
+                None
+            }
+            "revolute" | "prismatic" => match authored_axis.as_deref() {
+                Some(axis @ ("X" | "Y" | "Z")) => Some(axis.to_string()),
+                _ => {
+                    bevy::log::warn!(
+                        "{} mount socket {} needs axis X, Y, or Z; socket rejected",
+                        joint,
+                        child.as_str()
+                    );
+                    continue;
+                }
+            },
+            _ => {
+                bevy::log::warn!(
+                    "mount socket {} has unsupported joint token {:?}; socket rejected",
+                    child.as_str(),
+                    joint
+                );
+                continue;
+            }
         };
-        let frame = frame_in_body(reader, host, &child);
-        let part = reader.rel_target(&child, "lunco:mount:part");
+        let Some(frame) = frame_in_body(reader, host, &child) else {
+            continue;
+        };
+        let part = match reader.rel_target(&child, "lunco:mount:part") {
+            Some(path) => {
+                let Ok(path) = SdfPath::new(&path) else {
+                    bevy::log::warn!(
+                        "mount socket {} has an invalid part relationship; socket rejected",
+                        child.as_str()
+                    );
+                    continue;
+                };
+                if !is_descendant_or_self(&path, host) {
+                    bevy::log::warn!(
+                        "mount socket {} points outside host {}; socket rejected",
+                        child.as_str(),
+                        host
+                    );
+                    continue;
+                }
+                Some(path.as_str().to_string())
+            }
+            None => None,
+        };
         // `lunco:mount:asset` names a USD FILE, so it is an `asset` — the resolver
         // and the reference-closure walk only see the ones typed as such.
         let asset = reader.asset(&child, "lunco:mount:asset");
@@ -170,14 +269,31 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocke
     out
 }
 
-/// The plug frame of an attached `part`, in the **part's** local space — follows
-/// the part's `rel lunco:mount:frame` to the plug prim and composes it back to the
-/// part root. `None` when the part advertises no plug frame.
-pub fn read_plug_frame(reader: &crate::StageView<'_>, part: &str) -> Option<Transform> {
+/// The plug advertised by an attached `part`, including its kind and frame in the
+/// **part's** local space. The part must apply `LunCoMountPlugAPI`; loose
+/// `lunco:mount:*` attributes are not a mount contract.
+#[derive(Debug, Clone)]
+pub struct MountPlug {
+    /// Plug kind matched against a socket's accepted kind.
+    pub kind: String,
+    /// Plug frame composed into the part root's local space.
+    pub frame: Transform,
+}
+
+pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug> {
     let part_path = SdfPath::new(part).ok()?;
+    if !reader.has_api_schema(&part_path, "LunCoMountPlugAPI") {
+        return None;
+    }
+    let kind = reader
+        .text(&part_path, "lunco:mount:plug")
+        .filter(|value| !value.is_empty())?;
     let plug = reader.rel_target(&part_path, "lunco:mount:frame")?;
     let plug_path = SdfPath::new(&plug).ok()?;
-    Some(frame_in_body(reader, part, &plug_path))
+    Some(MountPlug {
+        kind,
+        frame: frame_in_body(reader, part, &plug_path)?,
+    })
 }
 
 /// The plug frame of a component **asset that is not yet on the live stage** — the
@@ -185,19 +301,19 @@ pub fn read_plug_frame(reader: &crate::StageView<'_>, part: &str) -> Option<Tran
 /// asset file, not in the composed scene). Composes the asset's full closure
 /// off-thread-safe via [`compose_file_to_stage`](crate::compose_file_to_stage)
 /// (resolving its references, anchored at the file's own directory), then reads the
-/// plug frame off its `defaultPrim` — the part every `AttachSpec` references in.
+/// plug off its `defaultPrim` — the part every `AttachSpec` references in.
 ///
 /// `asset_path` is a **filesystem** path (resolve an asset-relative path against the
-/// asset root first). Returns the plug [`Transform`] in the part's local space, or
+/// asset root first). Returns the [`MountPlug`] in the part's local space, or
 /// `None` if the asset has no `defaultPrim` or the default part advertises no plug.
 /// Native-only: composition does file I/O.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_asset_plug_frame(asset_path: &std::path::Path) -> Option<Transform> {
+pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
     let stage = crate::compose_file_to_stage(asset_path).ok()?;
     let cs = crate::CanonicalStage::from_stage(stage, asset_path.to_string_lossy().to_string());
     let view = cs.view();
     let default_prim = view.default_prim()?;
-    read_plug_frame(&view, &format!("/{default_prim}"))
+    read_plug(&view, &format!("/{default_prim}"))
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -209,7 +325,7 @@ mod mount_reader_tests {
     //! metadata + `part` relationship compose. A wrong frame here is the physics
     //! bug the design deferred the UI for; this pins it deterministically.
 
-    use super::{read_plug_frame, read_sockets};
+    use super::{read_plug, read_sockets};
     use crate::canonical::{CanonicalStage, StageRecipe};
 
     // Base at (5,6,5); a socket 2.5 up under Base/Mounts naming a child Arm; Arm
@@ -227,7 +343,9 @@ def Xform "World"
         uniform token[] xformOpOrder = ["xformOp:translate"]
         def Xform "Mounts"
         {
-            def Xform "arm"
+            def Xform "arm" (
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
+            )
             {
                 uniform token lunco:mount:socket = "arm"
                 uniform token lunco:mount:joint = "revolute"
@@ -237,7 +355,9 @@ def Xform "World"
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }
         }
-        def Cube "Arm"
+        def Cube "Arm" (
+            prepend apiSchemas = ["LunCoMountPlugAPI"]
+        )
         {
             double3 xformOp:translate = (2, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -289,13 +409,14 @@ def Xform "World"
             .expect("stage builds");
         let view = cs.view();
 
-        let plug = read_plug_frame(&view, "/World/Base/Arm").expect("Arm advertises a plug");
+        let plug = read_plug(&view, "/World/Base/Arm").expect("Arm advertises a plug");
+        assert_eq!(plug.kind, "arm");
         // Plug is PART-LOCAL: the hub offset (0.1,0.2,0.3), NOT folded with Arm's
         // own (2,0,0) placement — a plug frame is expressed in the part's space.
         assert!(
-            close(plug.translation, [0.1, 0.2, 0.3]),
+            close(plug.frame.translation, [0.1, 0.2, 0.3]),
             "plug frame {:?}",
-            plug.translation
+            plug.frame.translation
         );
     }
 
@@ -309,19 +430,51 @@ def Xform "World"
     }
 
     #[test]
+    fn loose_mount_attributes_are_not_a_schema_contract() {
+        let source = SCENE
+            .replace("prepend apiSchemas = [\"LunCoMountSocketAPI\"]", "")
+            .replace("prepend apiSchemas = [\"LunCoMountPlugAPI\"]", "");
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", &source))
+            .expect("stage builds");
+        let view = cs.view();
+
+        assert!(read_sockets(&view, "/World/Base").is_empty());
+        assert!(read_plug(&view, "/World/Base/Arm").is_none());
+    }
+
+    #[test]
+    fn invalid_joint_metadata_is_rejected_instead_of_becoming_fixed_or_x() {
+        let source = SCENE
+            .replace(
+                "uniform token lunco:mount:joint = \"revolute\"",
+                "uniform token lunco:mount:joint = \"hinge\"",
+            )
+            .replace(
+                "uniform token lunco:mount:axis = \"Z\"",
+                "uniform token lunco:mount:axis = \"\"",
+            );
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", &source))
+            .expect("stage builds");
+        let view = cs.view();
+
+        assert!(read_sockets(&view, "/World/Base").is_empty());
+    }
+
+    #[test]
     fn reads_plug_frame_off_a_not_yet_loaded_asset_file() {
-        // The new-attach path: `read_asset_plug_frame` composes a component asset
+        // The new-attach path: `read_asset_plug` composes a component asset
         // straight off disk (its plug lives in the file, not the live scene) and
         // reads the plug frame off its `defaultPrim`. Validates against the shipped
         // demo component, whose hub sits 0.4 m above the part origin.
         let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/components/mounting/demo_probe.usda");
-        let plug = super::read_asset_plug_frame(&asset)
-            .expect("demo_probe.usda composes and advertises a plug");
+        let plug =
+            super::read_asset_plug(&asset).expect("demo_probe.usda composes and advertises a plug");
+        assert_eq!(plug.kind, "probe");
         assert!(
-            close(plug.translation, [0.0, 0.4, 0.0]),
+            close(plug.frame.translation, [0.0, 0.4, 0.0]),
             "asset plug frame {:?}",
-            plug.translation
+            plug.frame.translation
         );
     }
 }

@@ -671,6 +671,7 @@ def Xform "SandboxScene" (
         {
             def Xform "arm" (
                 kind = "subcomponent"
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
             )
             {
                 uniform token lunco:mount:socket = "arm"     # what may attach
@@ -686,6 +687,7 @@ def Xform "SandboxScene" (
             # and references + joints it here with the plug landed on this socket.
             def Xform "probe" (
                 kind = "subcomponent"
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
             )
             {
                 uniform token lunco:mount:socket = "probe"
@@ -697,7 +699,7 @@ def Xform "SandboxScene" (
         }
 
         def Cube "Arm" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI"]
         )
         {
             double size = 1.0

@@ -118,6 +118,7 @@ pub(crate) struct AttachAtSocketRequested {
     host_path: String,
     name: String,
     asset: String,
+    accepts: String,
     joint: lunco_usd::attach::AttachJoint,
     socket_frame: Transform,
 }
@@ -360,6 +361,7 @@ pub(crate) fn on_attach_at_socket_requested(
             request.host_path,
             request.name,
             request.asset,
+            request.accepts,
             request.joint,
             request.socket_frame,
         );
@@ -1526,19 +1528,30 @@ fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
 
 /// Map a socket's `lunco:mount:joint` token (+ optional axis) to the typed
 /// [`AttachJoint`](lunco_usd::attach::AttachJoint) the attach lowering wants.
-/// Unknown tokens fall back to `Fixed` (the safe, axis-free default).
+/// Unknown tokens are rejected; mount metadata must not silently become a
+/// different joint.
 #[cfg(not(target_arch = "wasm32"))]
-fn attach_joint_from(joint: &str, axis: Option<&str>) -> lunco_usd::attach::AttachJoint {
+fn attach_joint_from(joint: &str, axis: Option<&str>) -> Option<lunco_usd::attach::AttachJoint> {
     use lunco_usd::attach::{AttachJoint, Axis};
-    let axis = match axis {
-        Some("Y") => Axis::Y,
-        Some("Z") => Axis::Z,
-        _ => Axis::X,
-    };
     match joint {
-        "revolute" => AttachJoint::Revolute { axis },
-        "prismatic" => AttachJoint::Prismatic { axis },
-        _ => AttachJoint::Fixed,
+        "fixed" if axis.is_none() => Some(AttachJoint::Fixed),
+        "revolute" => Some(AttachJoint::Revolute {
+            axis: match axis? {
+                "X" => Axis::X,
+                "Y" => Axis::Y,
+                "Z" => Axis::Z,
+                _ => return None,
+            },
+        }),
+        "prismatic" => Some(AttachJoint::Prismatic {
+            axis: match axis? {
+                "X" => Axis::X,
+                "Y" => Axis::Y,
+                "Z" => Axis::Z,
+                _ => return None,
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -1567,9 +1580,16 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
         .default_open(true)
         .show(ui, |ui| {
             let mut snap: Option<(String, String, [f64; 3], [f64; 3])> = None;
-            // (asset, child name, host, joint token, axis, socket frame)
-            let mut attach: Option<(String, String, String, String, Option<String>, Transform)> =
-                None;
+            // (asset, child name, host, accepted plug kind, joint token, axis, socket frame)
+            let mut attach: Option<(
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Transform,
+            )> = None;
             for item in &items {
                 ui.horizontal(|ui| {
                     let joint = match &item.axis {
@@ -1618,6 +1638,7 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                                         asset.clone(),
                                         item.socket.clone(),
                                         host_path.clone(),
+                                        item.accepts.clone(),
                                         item.joint.clone(),
                                         item.axis.clone(),
                                         item.socket_frame,
@@ -1642,15 +1663,20 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 });
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some((asset, name, host, joint_tok, axis, socket_frame)) = attach {
-                ctx.trigger(AttachAtSocketRequested {
-                    entity,
-                    host_path: host,
-                    name,
-                    asset,
-                    joint: attach_joint_from(&joint_tok, axis.as_deref()),
-                    socket_frame,
-                });
+            if let Some((asset, name, host, accepts, joint_tok, axis, socket_frame)) = attach {
+                if let Some(joint) = attach_joint_from(&joint_tok, axis.as_deref()) {
+                    ctx.trigger(AttachAtSocketRequested {
+                        entity,
+                        host_path: host,
+                        name,
+                        asset,
+                        accepts,
+                        joint,
+                        socket_frame,
+                    });
+                } else {
+                    warn!("mount socket `{name}` has invalid joint metadata; attach skipped");
+                }
             }
             #[cfg(target_arch = "wasm32")]
             let _ = &attach;
@@ -1668,6 +1694,7 @@ fn attach_component_at_socket(
     host_path: String,
     name: String,
     asset: String,
+    accepts: String,
     joint: lunco_usd::attach::AttachJoint,
     socket_frame: Transform,
 ) {
@@ -1687,7 +1714,7 @@ fn attach_component_at_socket(
         );
         return;
     };
-    let Some(plug) = lunco_usd_bevy::mount::read_asset_plug_frame(&fs_path) else {
+    let Some(plug) = lunco_usd_bevy::mount::read_asset_plug(&fs_path) else {
         report_inspector_error(
             world,
             format!(
@@ -1697,6 +1724,16 @@ fn attach_component_at_socket(
         );
         return;
     };
+    if plug.kind != accepts {
+        report_inspector_error(
+            world,
+            format!(
+                "Mount asset `{asset}` advertises plug `{}` but socket accepts `{accepts}`; attach was skipped",
+                plug.kind
+            ),
+        );
+        return;
+    }
     let Some(doc) = resolve_doc_for_entity(world, entity) else {
         report_inspector_error(world, "Selected mount host is not document-backed");
         return;
@@ -1708,7 +1745,7 @@ fn attach_component_at_socket(
         asset,
         joint,
         socket_frame,
-        plug,
+        plug.frame,
     );
     world.trigger(lunco_usd::commands::AttachComponent { doc, spec });
 }
