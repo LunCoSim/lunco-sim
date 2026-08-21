@@ -777,6 +777,16 @@ mod real_reader_tests {
             .unwrap()
             .set(Value::Int64(5))
             .unwrap();
+        stage
+            .create_attribute("/World.bool_val", "bool")
+            .unwrap()
+            .set(Value::Bool(true))
+            .unwrap();
+        stage
+            .create_attribute("/World.int_flag", "int64")
+            .unwrap()
+            .set(Value::Int64(1))
+            .unwrap();
         cs
     }
 
@@ -895,6 +905,9 @@ mod real_reader_tests {
         );
         assert_eq!(view.real_f32(&world, "i_val"), Some(4.0));
         assert_eq!(view.real_f32(&world, "i64_val"), Some(5.0));
+        assert_eq!(view.boolean(&world, "bool_val"), Some(true));
+        assert_eq!(view.boolean(&world, "int_flag"), Some(true));
+        assert_eq!(view.boolean(&world, "i_val"), Some(true));
 
         // The time-sampled variants fall back to the `default` opinion when a
         // channel has no `timeSamples`, and are precision-tolerant there too.
