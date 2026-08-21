@@ -100,6 +100,22 @@ fn tan_sun_radius(diameter_deg: f32) -> f32 {
     (diameter_deg.to_radians() * 0.5).tan()
 }
 
+/// Resolve the standard UsdLux angular-size fallback without turning an
+/// explicitly malformed component into an omitted attribute. Zero is valid:
+/// it represents a point-like distant source and the march's texel floor keeps
+/// that hard-shadow case finite.
+fn sun_diameter_deg(angle: Option<&SunAngularDiameter>) -> Option<f32> {
+    match angle {
+        None => Some(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG),
+        Some(SunAngularDiameter(diameter))
+            if diameter.is_finite() && (0.0..=180.0).contains(diameter) =>
+        {
+            Some(*diameter)
+        }
+        Some(_) => None,
+    }
+}
+
 /// The baked terrain heightfield. Cheap to clone (`Arc`) so bake tasks and
 /// CPU queries share it. The GPU sees the same data as an R32Float texture.
 #[derive(Clone)]
@@ -987,20 +1003,19 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
         );
         return None;
     }
-    Some(first).map(|(gt, light, ang, csm)| {
-        let csm_far = if light.shadow_maps_enabled {
-            csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
-        } else {
-            0.0
-        };
-        // A sun with no authored angular size must not yield tan(0)=0
-        // (→ div-by-zero in the march). Use the UsdLux schema fallback.
-        let diameter_deg = ang
-            .map(|a| a.0)
-            .filter(|d| *d > 0.0)
-            .unwrap_or(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG);
-        (gt, tan_sun_radius(diameter_deg), csm_far)
-    })
+    let (gt, light, ang, csm) = first;
+    let csm_far = if light.shadow_maps_enabled {
+        csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let Some(diameter_deg) = sun_diameter_deg(ang) else {
+        warn!(
+            "[environment] authored `SunAngularDiameter` is invalid; refusing the sun until it is finite and in [0, 180] degrees"
+        );
+        return None;
+    };
+    Some((gt, tan_sun_radius(diameter_deg), csm_far))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1054,6 +1069,22 @@ mod tests {
             size,
             heights: Arc::new(heights),
         }
+    }
+
+    #[test]
+    fn sun_angle_uses_schema_default_only_when_omitted() {
+        assert_eq!(
+            sun_diameter_deg(None),
+            Some(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG)
+        );
+        assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(0.0))), Some(0.0));
+        assert_eq!(
+            sun_diameter_deg(Some(&SunAngularDiameter(0.53))),
+            Some(0.53)
+        );
+        assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(-1.0))), None);
+        assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(f32::NAN))), None);
+        assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(181.0))), None);
     }
 
     /// Zenith sun (straight up): every texel is fully lit — the march
