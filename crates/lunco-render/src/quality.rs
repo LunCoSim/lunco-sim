@@ -75,6 +75,10 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 1024,
                 terrain_derived_ao_directions: 8,
                 terrain_derived_ao_steps: 8,
+                terrain_derived_ao_radius_fraction: 0.15,
+                terrain_derived_roughness_base: 0.6,
+                terrain_derived_roughness_saturation_radians: 0.6,
+                terrain_derived_texture_anisotropy: 4,
                 terrain_rock_max_instances: 6_000,
                 terrain_rock_mesh_buckets: 6,
                 terrain_rock_mesh_cube_count: 4,
@@ -135,6 +139,10 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 512,
                 terrain_derived_ao_directions: 4,
                 terrain_derived_ao_steps: 4,
+                terrain_derived_ao_radius_fraction: 0.1,
+                terrain_derived_roughness_base: 0.6,
+                terrain_derived_roughness_saturation_radians: 0.6,
+                terrain_derived_texture_anisotropy: 1,
                 terrain_rock_max_instances: 2_000,
                 terrain_rock_mesh_buckets: 3,
                 terrain_rock_mesh_cube_count: 2,
@@ -195,6 +203,10 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 2048,
                 terrain_derived_ao_directions: 16,
                 terrain_derived_ao_steps: 16,
+                terrain_derived_ao_radius_fraction: 0.2,
+                terrain_derived_roughness_base: 0.6,
+                terrain_derived_roughness_saturation_radians: 0.6,
+                terrain_derived_texture_anisotropy: 8,
                 terrain_rock_max_instances: 12_000,
                 terrain_rock_mesh_buckets: 12,
                 terrain_rock_mesh_cube_count: 8,
@@ -299,6 +311,14 @@ pub struct RenderQualityProfile {
     pub terrain_derived_ao_directions: usize,
     /// March samples per azimuth for terrain-derived ambient occlusion.
     pub terrain_derived_ao_steps: usize,
+    /// Horizon-ray reach as a fraction of the terrain half-extent.
+    pub terrain_derived_ao_radius_fraction: f64,
+    /// Roughness of flat terrain in the derived surface map.
+    pub terrain_derived_roughness_base: f32,
+    /// Slope angle at which derived roughness reaches one, in radians.
+    pub terrain_derived_roughness_saturation_radians: f32,
+    /// Anisotropic filtering level for derived terrain textures.
+    pub terrain_derived_texture_anisotropy: u16,
     /// Maximum procedural rock entities admitted from an authored density.
     pub terrain_rock_max_instances: usize,
     /// Number of shared size buckets used by procedural and placed rocks.
@@ -463,6 +483,14 @@ pub struct RenderingQualitySettings {
     pub terrain_derived_ao_directions: usize,
     #[serde(default = "default_terrain_derived_ao_steps")]
     pub terrain_derived_ao_steps: usize,
+    #[serde(default = "default_terrain_derived_ao_radius_fraction")]
+    pub terrain_derived_ao_radius_fraction: f64,
+    #[serde(default = "default_terrain_derived_roughness_base")]
+    pub terrain_derived_roughness_base: f32,
+    #[serde(default = "default_terrain_derived_roughness_saturation_radians")]
+    pub terrain_derived_roughness_saturation_radians: f32,
+    #[serde(default = "default_terrain_derived_texture_anisotropy")]
+    pub terrain_derived_texture_anisotropy: u16,
     #[serde(default = "default_terrain_rock_max_instances")]
     pub terrain_rock_max_instances: usize,
     #[serde(default = "default_terrain_rock_mesh_buckets")]
@@ -585,6 +613,22 @@ const fn default_terrain_derived_ao_directions() -> usize {
 
 const fn default_terrain_derived_ao_steps() -> usize {
     balanced_profile().terrain_derived_ao_steps
+}
+
+const fn default_terrain_derived_ao_radius_fraction() -> f64 {
+    balanced_profile().terrain_derived_ao_radius_fraction
+}
+
+const fn default_terrain_derived_roughness_base() -> f32 {
+    balanced_profile().terrain_derived_roughness_base
+}
+
+const fn default_terrain_derived_roughness_saturation_radians() -> f32 {
+    balanced_profile().terrain_derived_roughness_saturation_radians
+}
+
+const fn default_terrain_derived_texture_anisotropy() -> u16 {
+    balanced_profile().terrain_derived_texture_anisotropy
 }
 
 const fn default_terrain_rock_max_instances() -> usize {
@@ -824,6 +868,11 @@ impl RenderingQualitySettings {
             terrain_derived_map_resolution: self.terrain_derived_map_resolution,
             terrain_derived_ao_directions: self.terrain_derived_ao_directions,
             terrain_derived_ao_steps: self.terrain_derived_ao_steps,
+            terrain_derived_ao_radius_fraction: self.terrain_derived_ao_radius_fraction,
+            terrain_derived_roughness_base: self.terrain_derived_roughness_base,
+            terrain_derived_roughness_saturation_radians: self
+                .terrain_derived_roughness_saturation_radians,
+            terrain_derived_texture_anisotropy: self.terrain_derived_texture_anisotropy,
             terrain_rock_max_instances: self.terrain_rock_max_instances,
             terrain_rock_mesh_buckets: self.terrain_rock_mesh_buckets,
             terrain_rock_mesh_cube_count: self.terrain_rock_mesh_cube_count,
@@ -904,6 +953,11 @@ impl RenderingQualitySettings {
         self.terrain_derived_map_resolution = profile.terrain_derived_map_resolution;
         self.terrain_derived_ao_directions = profile.terrain_derived_ao_directions;
         self.terrain_derived_ao_steps = profile.terrain_derived_ao_steps;
+        self.terrain_derived_ao_radius_fraction = profile.terrain_derived_ao_radius_fraction;
+        self.terrain_derived_roughness_base = profile.terrain_derived_roughness_base;
+        self.terrain_derived_roughness_saturation_radians =
+            profile.terrain_derived_roughness_saturation_radians;
+        self.terrain_derived_texture_anisotropy = profile.terrain_derived_texture_anisotropy;
         self.terrain_rock_max_instances = profile.terrain_rock_max_instances;
         self.terrain_rock_mesh_buckets = profile.terrain_rock_mesh_buckets;
         self.terrain_rock_mesh_cube_count = profile.terrain_rock_mesh_cube_count;
@@ -1061,6 +1115,33 @@ impl RenderingQualitySettings {
         {
             return Err("terrain derived ambient-occlusion samples must be between 1 and 64");
         }
+        if !profile.terrain_derived_ao_radius_fraction.is_finite()
+            || !(0.0..=1.0).contains(&profile.terrain_derived_ao_radius_fraction)
+            || profile.terrain_derived_ao_radius_fraction == 0.0
+        {
+            return Err(
+                "terrain derived ambient-occlusion radius fraction must be finite and in (0, 1]",
+            );
+        }
+        if !profile.terrain_derived_roughness_base.is_finite()
+            || !(0.0..=1.0).contains(&profile.terrain_derived_roughness_base)
+        {
+            return Err("terrain derived roughness base must be finite and in [0, 1]");
+        }
+        if !profile
+            .terrain_derived_roughness_saturation_radians
+            .is_finite()
+            || !(0.0..=std::f32::consts::FRAC_PI_2)
+                .contains(&profile.terrain_derived_roughness_saturation_radians)
+            || profile.terrain_derived_roughness_saturation_radians == 0.0
+        {
+            return Err(
+                "terrain derived roughness saturation angle must be finite and in (0, pi/2]",
+            );
+        }
+        if !(1..=16).contains(&profile.terrain_derived_texture_anisotropy) {
+            return Err("terrain derived texture anisotropy must be between 1 and 16");
+        }
         if profile.terrain_rock_max_instances == 0 || profile.terrain_rock_max_instances > 1_000_000
         {
             return Err("terrain rock maximum instances must be between 1 and 1000000");
@@ -1186,6 +1267,11 @@ impl Default for RenderingQualitySettings {
             terrain_derived_map_resolution: profile.terrain_derived_map_resolution,
             terrain_derived_ao_directions: profile.terrain_derived_ao_directions,
             terrain_derived_ao_steps: profile.terrain_derived_ao_steps,
+            terrain_derived_ao_radius_fraction: profile.terrain_derived_ao_radius_fraction,
+            terrain_derived_roughness_base: profile.terrain_derived_roughness_base,
+            terrain_derived_roughness_saturation_radians: profile
+                .terrain_derived_roughness_saturation_radians,
+            terrain_derived_texture_anisotropy: profile.terrain_derived_texture_anisotropy,
             terrain_rock_max_instances: profile.terrain_rock_max_instances,
             terrain_rock_mesh_buckets: profile.terrain_rock_mesh_buckets,
             terrain_rock_mesh_cube_count: profile.terrain_rock_mesh_cube_count,
@@ -1488,6 +1574,15 @@ mod tests {
         assert_eq!(settings.profile().terrain_derived_map_resolution, 1024);
         assert_eq!(settings.profile().terrain_derived_ao_directions, 8);
         assert_eq!(settings.profile().terrain_derived_ao_steps, 8);
+        assert_eq!(settings.profile().terrain_derived_ao_radius_fraction, 0.15);
+        assert_eq!(settings.profile().terrain_derived_roughness_base, 0.6);
+        assert_eq!(
+            settings
+                .profile()
+                .terrain_derived_roughness_saturation_radians,
+            0.6
+        );
+        assert_eq!(settings.profile().terrain_derived_texture_anisotropy, 4);
         assert_eq!(settings.profile().terrain_rock_max_instances, 6_000);
         assert_eq!(settings.profile().terrain_rock_mesh_buckets, 6);
         assert_eq!(settings.profile().terrain_rock_mesh_cube_count, 4);
@@ -1534,6 +1629,20 @@ mod tests {
         );
 
         settings.terrain_derived_ao_steps = 8;
+        settings.terrain_derived_ao_radius_fraction = 0.0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain derived ambient-occlusion radius fraction must be finite and in (0, 1]")
+        );
+
+        settings.terrain_derived_ao_radius_fraction = 0.15;
+        settings.terrain_derived_texture_anisotropy = 17;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain derived texture anisotropy must be between 1 and 16")
+        );
+
+        settings.terrain_derived_texture_anisotropy = 4;
         settings.terrain_rock_mesh_buckets = 1;
         assert_eq!(
             settings.validate(),

@@ -5518,9 +5518,36 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .range(1..=64)
                         .prefix("AO steps per direction: "),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_radius_fraction)
+                        .speed(0.01)
+                        .range(0.01..=1.0)
+                        .prefix("AO radius fraction: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_roughness_base)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .prefix("Flat-ground roughness: "),
+                );
+                ui.add(
+                    egui::DragValue::new(
+                        &mut settings.terrain_derived_roughness_saturation_radians,
+                    )
+                    .speed(0.01)
+                    .range(0.01..=std::f32::consts::FRAC_PI_2)
+                    .prefix("Roughness saturation slope: ")
+                    .suffix(" rad"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_texture_anisotropy)
+                        .speed(1.0)
+                        .range(1..=16)
+                        .prefix("Derived-texture anisotropy: "),
+                );
                 ui.label(
                     egui::RichText::new(
-                        "These settings control the baked terrain roughness, ambient-occlusion, and normal textures. Changes rebake off-thread and keep the previous maps visible until ready.",
+                        "These settings control the baked terrain roughness, ambient-occlusion, normal textures, and filtering. Changes rebake off-thread and keep the previous maps visible until ready.",
                     )
                     .weak()
                     .small(),

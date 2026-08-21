@@ -57,12 +57,6 @@ use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
-/// AO ray reach as a fraction of the tile half-extent.
-const AO_RADIUS_FRAC: f64 = 0.15;
-/// Slope (radians) at which roughness saturates.
-const ROUGH_BASE: f32 = 0.6;
-const ROUGH_STEEP_RAD: f32 = 0.6; // ~34°
-
 /// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
 /// square. This is the one definition used by both the baker's filters and the
 /// renderer metadata, so their frequency boundary cannot drift.
@@ -143,13 +137,20 @@ struct DerivedMapsStale {
 /// this signature separate from the whole quality resource prevents a shadow or
 /// camera edit from needlessly rebaking every terrain's large textures.
 #[derive(Resource, Default)]
-struct DerivedQualitySignature(Option<(usize, usize, usize)>);
+struct DerivedQualitySignature(Option<(usize, usize, usize, u64, u32, u32)>);
 
-fn derived_quality_signature(profile: lunco_render::RenderQualityProfile) -> (usize, usize, usize) {
+fn derived_quality_signature(
+    profile: lunco_render::RenderQualityProfile,
+) -> (usize, usize, usize, u64, u32, u32) {
     (
         profile.terrain_derived_map_resolution,
         profile.terrain_derived_ao_directions,
         profile.terrain_derived_ao_steps,
+        profile.terrain_derived_ao_radius_fraction.to_bits(),
+        profile.terrain_derived_roughness_base.to_bits(),
+        profile
+            .terrain_derived_roughness_saturation_radians
+            .to_bits(),
     )
 }
 
@@ -334,7 +335,9 @@ fn start_derived_bakes(
 /// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
 /// band-limited to 6 texels, so full-res sampling was resolving detail the
 /// source cannot contain, at ~10 oracle evaluations per texel.
-const CACHE_FORMAT_VERSION: u64 = 8;
+/// v8: derived-map resolution and AO sample counts became Graphics settings.
+/// v9: AO radius and roughness transfer parameters became Graphics settings.
+const CACHE_FORMAT_VERSION: u64 = 9;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
@@ -361,9 +364,13 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         h.write_u64(self.profile.terrain_derived_map_resolution as u64);
         h.write_u64(self.profile.terrain_derived_ao_directions as u64);
         h.write_u64(self.profile.terrain_derived_ao_steps as u64);
-        h.write_u64(AO_RADIUS_FRAC.to_bits());
-        h.write_u64(ROUGH_BASE.to_bits() as u64);
-        h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
+        h.write_u64(self.profile.terrain_derived_ao_radius_fraction.to_bits());
+        h.write_u64(self.profile.terrain_derived_roughness_base.to_bits() as u64);
+        h.write_u64(
+            self.profile
+                .terrain_derived_roughness_saturation_radians
+                .to_bits() as u64,
+        );
         for &v in &grid.heights {
             h.write_u64(v.to_bits());
         }
@@ -495,25 +502,26 @@ fn bake_derived(
     // so the fused kernel halves the oracle samples per texel.
     let bounded = BoundedHeightSource::new(&limited, half);
     let (normals, slope) = normal_slope_maps(&bounded, &region, res);
-    // AO is smooth by construction (a horizon integral over AO_RADIUS_FRAC of
+    // AO is smooth by construction (a horizon integral over the configured
+    // terrain-derived AO radius fraction of
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
     let ao_res = (res / 2).max(1);
     let ao_texel = raster_texel_size_m(half, ao_res);
-    // The AO march walks horizon rays out to `half·AO_RADIUS_FRAC` from each
+    // The AO march walks horizon rays out to the configured fraction of `half` from each
     // texel, so the scope must grow by that reach — a ray leaving the box would
     // otherwise sample a view the region prune never promised.
     let ao_limited = SurfaceBand::visual(ao_texel).limited_region(
         oracle,
         region,
-        half * AO_RADIUS_FRAC + 2.0 * ao_texel,
+        half * profile.terrain_derived_ao_radius_fraction + 2.0 * ao_texel,
     );
     let ao_bounded = BoundedHeightSource::new(&ao_limited, half);
     let ao_small = ao_map(
         &ao_bounded,
         &region,
         ao_res,
-        half * AO_RADIUS_FRAC,
+        half * profile.terrain_derived_ao_radius_fraction,
         profile.terrain_derived_ao_directions,
         profile.terrain_derived_ao_steps,
         half,
@@ -551,7 +559,13 @@ fn bake_derived(
 
     let roughness: Vec<f32> = slope
         .iter()
-        .map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD))
+        .map(|&s| {
+            roughness_from_slope(
+                s,
+                profile.terrain_derived_roughness_base,
+                profile.terrain_derived_roughness_saturation_radians,
+            )
+        })
         .collect();
 
     DerivedMaps {
@@ -568,10 +582,14 @@ fn bake_derived(
 fn finish_derived_bakes(
     mut commands: Commands,
     time: Res<Time>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     mut tasks: Query<(Entity, &mut DerivedBakeTask, &DemHeightField)>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
     let Some(mut images) = images else { return };
+    let Ok(profile) = quality.validated_profile() else {
+        return;
+    };
     for (entity, mut task, hf) in &mut tasks {
         let Some(maps) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
@@ -593,8 +611,16 @@ fn finish_derived_bakes(
         // Derived rasters are texel-centred cells over the full terrain square:
         // adjacent centres are exactly `width / res` apart (derive::texel_world).
         let texel_size_m = raster_texel_size_m(hf.0.half_extent() as f64, res) as f32;
-        let surface = images.add(data_texture(maps.res, maps.surface));
-        let normal = images.add(data_texture(maps.res, maps.normal));
+        let surface = images.add(data_texture(
+            maps.res,
+            maps.surface,
+            profile.terrain_derived_texture_anisotropy,
+        ));
+        let normal = images.add(data_texture(
+            maps.res,
+            maps.normal,
+            profile.terrain_derived_texture_anisotropy,
+        ));
         // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
         // re-instantiate this terrain while its derived-layer bake is still in flight,
         // so the entity may be gone by the time these deferred commands apply. No-op
@@ -665,7 +691,7 @@ fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
 /// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
 /// Takes the PREBUILT chain (`(data, level_count)` from [`mip_chain_rgba8`],
 /// run in the bake task) — this only wraps it in an `Image`.
-fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
+fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp: u16) -> Image {
     use bevy::image::ImageSamplerDescriptor;
     // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
     // but ours carries the whole mip chain.
@@ -682,12 +708,8 @@ fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = mip_levels;
     // Anisotropy keeps grazing-angle terrain (most of the screen) sharp instead
-    // of mip-smeared. wgpu requires all-linear filters with anisotropy > 1.
-    // WebGL2's anisotropy support is extension-dependent → stay isotropic there.
-    #[cfg(not(target_arch = "wasm32"))]
-    let anisotropy_clamp = 8;
-    #[cfg(target_arch = "wasm32")]
-    let anisotropy_clamp = 1;
+    // of mip-smeared. The requested value is an explicit Graphics setting; it is
+    // never replaced with a platform-specific lower quality here.
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         min_filter: bevy::image::ImageFilterMode::Linear,
         mag_filter: bevy::image::ImageFilterMode::Linear,
