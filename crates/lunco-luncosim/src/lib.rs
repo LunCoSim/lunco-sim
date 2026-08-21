@@ -1919,19 +1919,25 @@ fn project_env_settings(
             {
                 continue;
             }
-            if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
-                // RECORD it — `apply_authored_env` owns getting it onto cameras,
-                // including cameras that do not exist yet. Also seed `LunarSun`,
-                // the documented single source the sun spawn and the celestial
-                // auto-exposure both read, so a scene that later gains a
-                // celestial hierarchy ramps toward the authored value instead of
-                // the studio default.
-                authored.exposure_ev100 = Some(ev);
-                if let Some(sun) = lunar_sun.as_mut() {
-                    sun.exposure_ev100 = ev;
-                }
-                for mut e in &mut q_exposure {
-                    e.ev100 = ev;
+            if view.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
+                if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100")
+                    .filter(|ev| ev.is_finite())
+                {
+                    // RECORD it — `apply_authored_env` owns getting it onto cameras,
+                    // including cameras that do not exist yet. Also seed `LunarSun`,
+                    // the documented single source the sun spawn and the celestial
+                    // auto-exposure both read, so a scene that later gains a
+                    // celestial hierarchy ramps toward the authored value instead of
+                    // the studio default.
+                    authored.exposure_ev100 = Some(ev);
+                    if let Some(sun) = lunar_sun.as_mut() {
+                        sun.exposure_ev100 = ev;
+                    }
+                    for mut e in &mut q_exposure {
+                        e.ev100 = ev;
+                    }
+                } else {
+                    warn!("ignoring invalid authored lunco:env:exposureEv100 on {prim}");
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {

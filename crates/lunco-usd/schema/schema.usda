@@ -74,11 +74,10 @@ class LunCoEnvironment "LunCoEnvironment" (
     the stage's default prim instead of being smuggled onto a UsdLux light."""
 )
 {
-    float lunco:env:exposureEv100 = 16 (
-        doc = """Camera exposure in EV100. The lunar default (16) is full
-        daylight; grazing polar light needs a much lower value (~12.5), and the
-        difference between them is the difference between a lit scene and a black
-        one."""
+    float lunco:env:exposureEv100 (
+        doc = """Optional authored camera exposure in EV100. When omitted, the
+        camera's authored exposure or the renderer's calibrated scene default
+        remains authoritative."""
     )
     float lunco:env:bloomIntensity (
         doc = "Optional authored bloom intensity; 0 = off. When omitted, Graphics settings supply the renderer default."
