@@ -742,9 +742,11 @@ mod tests {
 
     #[test]
     fn preset_is_only_a_suggestion_until_explicitly_applied() {
-        let mut settings = RenderingQualitySettings::default();
-        settings.directional_shadow_map_size = 4096;
-        settings.shadow_budget_bytes = 256 * 1024 * 1024;
+        let mut settings = RenderingQualitySettings {
+            directional_shadow_map_size: 4096,
+            shadow_budget_bytes: 256 * 1024 * 1024,
+            ..Default::default()
+        };
         assert!(settings.preset().is_none());
         settings.apply_preset(RenderingQuality::Low);
         assert_eq!(settings.preset(), Some(RenderingQuality::Low));
@@ -762,10 +764,12 @@ mod tests {
 
     #[test]
     fn light_defaults_are_authoritative_settings_and_are_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        settings.distant_light_default_illuminance = 90_000.0;
-        settings.local_light_default_intensity = 700.0;
-        settings.rect_light_default_intensity = 4_000.0;
+        let mut settings = RenderingQualitySettings {
+            distant_light_default_illuminance: 90_000.0,
+            local_light_default_intensity: 700.0,
+            rect_light_default_intensity: 4_000.0,
+            ..Default::default()
+        };
         assert_eq!(
             settings.profile().distant_light_default_illuminance,
             90_000.0
@@ -817,8 +821,10 @@ mod tests {
 
     #[test]
     fn camera_bloom_rejects_invalid_values_without_clamping() {
-        let mut settings = RenderingQualitySettings::default();
-        settings.camera_bloom_intensity = f32::NAN;
+        let mut settings = RenderingQualitySettings {
+            camera_bloom_intensity: f32::NAN,
+            ..Default::default()
+        };
         assert_eq!(
             settings.validate(),
             Err("camera bloom intensity must be finite and non-negative")

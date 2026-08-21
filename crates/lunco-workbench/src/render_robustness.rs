@@ -1788,11 +1788,13 @@ mod tests {
     #[test]
     fn configured_shadow_budget_limits_casters_without_rewriting_quality() {
         let mut app = App::new();
-        let mut settings = RenderingQualitySettings::default();
-        settings.directional_shadow_map_size = 1024;
-        settings.point_shadow_map_size = 512;
-        settings.max_point_shadow_casters = 4;
-        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        let settings = RenderingQualitySettings {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            max_point_shadow_casters: 4,
+            shadow_budget_bytes: 16 * 1024 * 1024,
+            ..Default::default()
+        };
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
@@ -1843,11 +1845,13 @@ mod tests {
     #[test]
     fn shadow_budget_orders_casters_by_canonical_identity_not_spawn_order() {
         let mut app = App::new();
-        let mut settings = RenderingQualitySettings::default();
-        settings.directional_shadow_map_size = 1024;
-        settings.point_shadow_map_size = 512;
-        settings.max_point_shadow_casters = 2;
-        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        let settings = RenderingQualitySettings {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            max_point_shadow_casters: 2,
+            shadow_budget_bytes: 16 * 1024 * 1024,
+            ..Default::default()
+        };
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
@@ -1898,11 +1902,13 @@ mod tests {
     #[test]
     fn configured_shadow_budget_rechecks_when_a_caster_is_rearmed() {
         let mut app = App::new();
-        let mut settings = RenderingQualitySettings::default();
-        settings.directional_shadow_map_size = 1024;
-        settings.point_shadow_map_size = 512;
-        settings.max_point_shadow_casters = 4;
-        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        let settings = RenderingQualitySettings {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            max_point_shadow_casters: 4,
+            shadow_budget_bytes: 16 * 1024 * 1024,
+            ..Default::default()
+        };
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
@@ -1945,11 +1951,13 @@ mod tests {
     #[test]
     fn user_budget_increase_rearms_only_budget_suppressed_casters() {
         let mut app = App::new();
-        let mut settings = RenderingQualitySettings::default();
-        settings.directional_shadow_map_size = 1024;
-        settings.point_shadow_map_size = 512;
-        settings.max_point_shadow_casters = 4;
-        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        let settings = RenderingQualitySettings {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            max_point_shadow_casters: 4,
+            shadow_budget_bytes: 16 * 1024 * 1024,
+            ..Default::default()
+        };
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
