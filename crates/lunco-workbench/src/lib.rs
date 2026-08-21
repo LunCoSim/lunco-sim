@@ -5180,18 +5180,13 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .speed(0.1)
                         .prefix("Shadow normal bias: "),
                 );
-                let mut budget_mib = (settings.shadow_budget_bytes / (1024 * 1024)).max(1);
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut budget_mib)
-                            .speed(1.0)
-                            .prefix("Shadow byte ceiling: ")
-                            .suffix(" MiB"),
-                    )
-                    .changed()
-                {
-                    settings.shadow_budget_bytes = budget_mib.saturating_mul(1024 * 1024);
-                }
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_budget_bytes)
+                        .speed(1024.0 * 1024.0)
+                        .range(1..=u64::MAX)
+                        .prefix("Shadow byte ceiling: ")
+                        .suffix(" bytes"),
+                );
                 ui.label(
                     egui::RichText::new(
                         "This explicit ceiling admits only the configured number of casters; it never changes requested map sizes or cascade settings.",
@@ -5488,18 +5483,13 @@ fn register_graphics_settings_menu(world: &mut World) {
                 );
             });
             ui.collapsing("Terrain mesh cache", |ui| {
-                let mut cache_mib = (settings.terrain_mesh_cache_bytes / (1024 * 1024)).max(1);
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut cache_mib)
-                            .speed(16.0)
-                            .prefix("Mesh-cache byte ceiling: ")
-                            .suffix(" MiB"),
-                    )
-                    .changed()
-                {
-                    settings.terrain_mesh_cache_bytes = cache_mib.saturating_mul(1024 * 1024);
-                }
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_mesh_cache_bytes)
+                        .speed(16.0 * 1024.0 * 1024.0)
+                        .range(1..=u64::MAX)
+                        .prefix("Mesh-cache byte ceiling: ")
+                        .suffix(" bytes"),
+                );
                 ui.label(
                     egui::RichText::new(
                         "The cache evicts least-recently-used meshes at this explicit ceiling; terrain detail is not silently downgraded.",

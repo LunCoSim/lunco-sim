@@ -1267,24 +1267,25 @@ fn apply_shadow_budget_policy(
     let shed_count = enabled_caster_count
         .saturating_sub(kept_directionals.len() + kept_points.len() + kept_spots.len());
     warn!(
-        "shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {:.1} MiB of {} MiB (directional {}px, point {}px)",
+        "shadow budget: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of {} bytes (directional {}px, point {}px)",
         kept_directionals.len(),
         directional_layers,
         kept_points.len(),
         kept_spots.len(),
+        used_bytes,
         estimated_mib,
-        admission_budget / (1024 * 1024),
+        admission_budget,
         directional_shadow_map.size,
         point_shadow_map.size,
     );
     if shed_count > 0 && warning.is_none() {
         commands.insert_resource(RenderWarning {
             message: format!(
-                "Shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s) within {} MiB; {} caster(s) are intentionally disabled.",
+                "Shadow budget active: kept {} directional, {} point, and {} spot shadow caster(s) within {} bytes; {} caster(s) are intentionally disabled.",
                 kept_directionals.len(),
                 kept_points.len(),
                 kept_spots.len(),
-                admission_budget / (1024 * 1024),
+                admission_budget,
                 shed_count,
             ),
         });
@@ -1840,6 +1841,36 @@ mod tests {
             16 * 1024 * 1024
         );
         assert!(app.world().get_resource::<RenderWarning>().is_some());
+    }
+
+    #[test]
+    fn byte_ceiling_is_admitted_without_mib_rounding() {
+        let mut app = App::new();
+        let settings = RenderingQualitySettings {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            shadow_budget_bytes: 1,
+            ..Default::default()
+        };
+        app.insert_resource(settings);
+        app.init_resource::<ShadowAdmissionState>();
+        let health = Arc::new(RenderHealth::default());
+        app.insert_resource(RenderHealthHandle(health.clone()));
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.world_mut().spawn(bevy::light::PointLight {
+            shadow_maps_enabled: true,
+            ..default()
+        });
+
+        app.update();
+
+        assert_eq!(health.shadow_budget_bytes.load(Ordering::Relaxed), 1);
+        assert_eq!(health.shadow_estimated_bytes.load(Ordering::Relaxed), 0);
+        let world = app.world_mut();
+        let mut query = world.query::<&bevy::light::PointLight>();
+        assert!(!query.single(world).unwrap().shadow_maps_enabled);
     }
 
     #[test]
