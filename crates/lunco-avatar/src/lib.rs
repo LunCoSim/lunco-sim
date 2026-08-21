@@ -94,10 +94,6 @@ mod intents;
 /// (Unifies the former ad-hoc `0..10` / `MAX_DEPTH = 8` bounds.)
 const MAX_HIERARCHY_WALK_DEPTH: usize = 16;
 
-/// Fallback body radius (Earth mean radius, metres) used when a target
-/// `CelestialBody` is missing — keeps altitude math finite instead of
-/// collapsing distances to zero.
-
 /// UI panels for avatar status, camera mode, and surface coordinates.
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -2571,7 +2567,7 @@ fn freeflight_scroll_transit_system(
                 .try_insert(OrbitViewReturn {
                     parent_grid: child_of.parent(),
                     cell: *cell,
-                    transform: tf.clone(),
+                    transform: *tf,
                     behavior,
                     gravity_body: gravity_body.copied(),
                     surface_relative,
@@ -3311,14 +3307,14 @@ fn on_return_from_orbit(
 
     if child_of.parent() == return_state.parent_grid {
         *cell = return_state.cell;
-        *transform = return_state.transform.clone();
+        *transform = return_state.transform;
     } else {
         migrate_to_grid(
             &mut commands,
             avatar,
             return_state.parent_grid,
             return_state.cell,
-            return_state.transform.clone(),
+            return_state.transform,
         );
     }
     apply_orbit_return(&mut commands, avatar, &return_state);
@@ -3385,14 +3381,14 @@ fn on_release_command(
             if let Some(state) = &return_state {
                 if child_of.parent() == state.parent_grid {
                     *cell = state.cell;
-                    *tf = state.transform.clone();
+                    *tf = state.transform;
                 } else {
                     migrate_to_grid(
                         &mut commands,
                         avatar_ent,
                         state.parent_grid,
                         state.cell,
-                        state.transform.clone(),
+                        state.transform,
                     );
                 }
             }
@@ -4030,7 +4026,7 @@ fn on_focus_command(
         ent.try_insert(OrbitViewReturn {
             parent_grid: cam_parent.parent(),
             cell: *cam_cell,
-            transform: cam_tf.clone(),
+            transform: *cam_tf,
             behavior,
             gravity_body: gravity_body.copied(),
             surface_relative,
@@ -4325,8 +4321,7 @@ fn on_surface_teleport_command(
         let root = discriminant.sqrt();
         let t = [-b - root, -b + root]
             .into_iter()
-            .filter(|t| *t > 0.0)
-            .next()
+            .find(|t| *t > 0.0)
             .unwrap_or(0.0);
         let surface_body_pos = origin_body + direction_body * t;
         let surface_normal = surface_body_pos.normalize_or(DVec3::Y);
