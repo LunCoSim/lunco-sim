@@ -136,16 +136,16 @@ impl LunarSunShadow {
     /// Build the canonical sun-shadow spec from the authoritative graphics
     /// settings, including custom edits made after a preset was applied.
     pub fn for_profile(profile: RenderQualityProfile) -> Self {
-        let mut sun = Self::default();
-        sun.shadow_map_size = profile.directional_shadow_map_size;
-        sun.num_cascades = profile.directional_cascades;
-        sun.minimum_distance = profile.shadow_minimum_distance;
-        sun.first_cascade_far_bound = profile.shadow_first_cascade_far_bound;
-        sun.maximum_distance = profile.shadow_maximum_distance;
-        sun.overlap_proportion = profile.shadow_cascade_overlap;
-        sun.depth_bias = profile.shadow_depth_bias;
-        sun.normal_bias = profile.shadow_normal_bias;
-        sun
+        Self {
+            num_cascades: profile.directional_cascades,
+            minimum_distance: profile.shadow_minimum_distance,
+            first_cascade_far_bound: profile.shadow_first_cascade_far_bound,
+            maximum_distance: profile.shadow_maximum_distance,
+            overlap_proportion: profile.shadow_cascade_overlap,
+            depth_bias: profile.shadow_depth_bias,
+            normal_bias: profile.shadow_normal_bias,
+            shadow_map_size: profile.directional_shadow_map_size,
+        }
     }
 
     /// Build the [`CascadeShadowConfig`] for this spec.
