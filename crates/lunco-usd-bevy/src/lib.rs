@@ -6916,27 +6916,31 @@ mod wrap_tests {
     #[test]
     fn usd_wrap_tokens_map_to_address_modes() {
         assert_eq!(
-            usd_wrap_to_address(Some("clamp")),
+            usd_wrap_to_address(Some("clamp"), "inputs:wrapS").expect("clamp"),
             ImageAddressMode::ClampToEdge
         );
         assert_eq!(
-            usd_wrap_to_address(Some("mirror")),
+            usd_wrap_to_address(Some("mirror"), "inputs:wrapS").expect("mirror"),
             ImageAddressMode::MirrorRepeat
         );
         assert_eq!(
-            usd_wrap_to_address(Some("black")),
+            usd_wrap_to_address(Some("black"), "inputs:wrapS").expect("black"),
             ImageAddressMode::ClampToBorder
         );
         assert_eq!(
-            usd_wrap_to_address(Some("repeat")),
+            usd_wrap_to_address(Some("repeat"), "inputs:wrapS").expect("repeat"),
             ImageAddressMode::Repeat
         );
         // "useMetadata" and absent both fall back to Repeat.
         assert_eq!(
-            usd_wrap_to_address(Some("useMetadata")),
+            usd_wrap_to_address(Some("useMetadata"), "inputs:wrapS").expect("metadata"),
             ImageAddressMode::Repeat
         );
-        assert_eq!(usd_wrap_to_address(None), ImageAddressMode::Repeat);
+        assert_eq!(
+            usd_wrap_to_address(None, "inputs:wrapS").expect("absent"),
+            ImageAddressMode::Repeat
+        );
+        assert!(usd_wrap_to_address(Some("invalid"), "inputs:wrapS").is_err());
     }
 }
 
