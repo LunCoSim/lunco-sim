@@ -19,8 +19,8 @@ pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{
-    scene_camera_look, scene_camera_look_with_profile, usd_default_perspective_projection,
-    BloomLook, GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
+    scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook,
+    GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
 };
 pub use quality::{
     estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, RenderQualityProfile,

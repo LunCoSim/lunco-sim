@@ -1099,6 +1099,7 @@ fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
 /// * `commands` — Bevy commands for entity spawning.
 /// * `grid_entity` — The big_space grid entity to parent the avatar to.
 /// * `initial_offset` — Starting position offset in grid-local coordinates.
+/// * `profile` — The already-resolved authoritative graphics profile.
 ///
 /// # Returns
 /// The spawned entity ID.
@@ -1106,6 +1107,7 @@ pub fn spawn_avatar_camera(
     commands: &mut Commands,
     grid_entity: Entity,
     initial_offset: DVec3,
+    profile: lunco_render::RenderQualityProfile,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
     // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
@@ -1121,18 +1123,15 @@ pub fn spawn_avatar_camera(
         .spawn((
             // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
             //
-            // `scene_camera_look(None)` — the SAME pair the USD camera projection
-            // uses, with no authored opinion to honour here. This camera used to
-            // spawn `SceneCamera::default()` and no `Exposure`, which left it at
-            // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
-            // surface white) and, because `project_env_settings` only writes
-            // cameras that already have the component, permanently uncorrectable.
+            // The same camera/exposure pair the USD camera projection uses, with
+            // no authored opinion to honour here. The caller supplies the
+            // authoritative graphics profile; this camera must not invent one.
             // `SceneCamera` is the render-free camera intent. The render-side
             // binder adds `Camera3d` and its complete render graph atomically;
             // inserting a bare `Camera` here would trigger Bevy's missing
             // render-graph warning before that binder runs.
             (
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(None, profile),
                 lunco_render::usd_default_perspective_projection(),
                 lunco_render::GraphicsCameraDefaults,
             ),
@@ -5632,7 +5631,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Camera::default(),
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(
+                    None,
+                    lunco_render::RenderingQuality::Balanced.profile(),
+                ),
                 lunco_core::Avatar,
                 LocalAvatar,
             ))
@@ -5648,7 +5650,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Camera::default(),
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(
+                    None,
+                    lunco_render::RenderingQuality::Balanced.profile(),
+                ),
                 lunco_core::Avatar,
                 LocalAvatar,
             ))

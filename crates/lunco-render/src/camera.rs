@@ -206,12 +206,6 @@ impl SceneCamera {
 /// only to cameras that already carry the component, so the avatar camera was
 /// unreachable by the very system meant to keep exposure consistent.
 ///
-/// `authored_ev100` is the scene's opinion (a `UsdGeomCamera`'s exposure attribute)
-/// and wins when present — engine calibration is the fallback, never an override.
-pub fn scene_camera_look(authored_ev100: Option<f32>) -> (SceneCamera, Exposure) {
-    scene_camera_look_with_profile(authored_ev100, crate::RenderingQuality::Balanced.profile())
-}
-
 /// Build the canonical camera look from the authoritative Graphics settings.
 ///
 /// USD owns camera exposure and environment bloom when those values are

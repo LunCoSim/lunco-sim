@@ -707,7 +707,7 @@ pub fn setup_big_space_hierarchy(
             // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
             // fix on main).
             // Grade + physical exposure from the ONE constructor every scene
-            // camera uses (`lunco_render::scene_camera_look`), paired with the
+            // camera uses (`lunco_render::scene_camera_look_with_profile`), paired with the
             // canonical sun illuminance (single source of truth —
             // lunco_environment::LunarSun).
             lunco_render::scene_camera_look_with_profile(Some(ls.exposure_ev100), sun_profile),
