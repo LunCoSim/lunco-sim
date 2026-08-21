@@ -1230,23 +1230,57 @@ fn process_usd_avian_prims(
 /// direction vector means "the stage's down axis". Honouring both is what lets a
 /// scene author only the half it cares about — a lunar scene names 1.62 and says
 /// nothing about direction.
+fn read_physics_scene_gravity(
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+) -> Result<(f64, DVec3), &'static str> {
+    let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
+        Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
+        Some(value) if value.is_finite() => {
+            let converted = lunco_usd_bevy::stage_convention(reader).length(value as f64);
+            if !converted.is_finite() {
+                return Err("gravity magnitude is not finite after stage-unit conversion");
+            }
+            converted
+        }
+        Some(_) => return Err("gravity magnitude must be finite or negative for Earth gravity"),
+        None if !reader.has_authored_attribute(sdf_path, ptok::A_GRAVITY_MAGNITUDE) => {
+            lunco_environment::EARTH_SURFACE_GRAVITY
+        }
+        None => return Err("gravity magnitude has an unsupported authored value type"),
+    };
+    let raw_direction = match reader.value::<[f32; 3]>(sdf_path, ptok::A_GRAVITY_DIRECTION) {
+        Some(value) => DVec3::new(value[0] as f64, value[1] as f64, value[2] as f64),
+        None if !reader.has_authored_attribute(sdf_path, ptok::A_GRAVITY_DIRECTION) => DVec3::ZERO,
+        None => return Err("gravity direction has an unsupported authored value type"),
+    };
+    if !raw_direction.is_finite() {
+        return Err("gravity direction must be finite");
+    }
+    let direction = if raw_direction == DVec3::ZERO {
+        DVec3::NEG_Y
+    } else {
+        lunco_usd_bevy::stage_convention(reader)
+            .dir_d(raw_direction)
+            .try_normalize()
+            .ok_or("gravity direction must not be degenerate")?
+    };
+    Ok((magnitude, direction))
+}
+
 fn apply_physics_scene_gravity(
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
-    let conv = lunco_usd_bevy::stage_convention(reader);
-
-    let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
-        Some(m) if m >= 0.0 => conv.length(m as f64),
-        _ => lunco_environment::EARTH_SURFACE_GRAVITY,
-    };
-    let direction = match reader.value::<[f32; 3]>(sdf_path, ptok::A_GRAVITY_DIRECTION) {
-        Some(d) => {
-            let v = conv.dir_d(DVec3::new(d[0] as f64, d[1] as f64, d[2] as f64));
-            v.try_normalize().unwrap_or(DVec3::NEG_Y)
+    let (magnitude, direction) = match read_physics_scene_gravity(reader, sdf_path) {
+        Ok(values) => values,
+        Err(reason) => {
+            error!(
+                "[usd-avian] {sdf_path} has malformed PhysicsScene gravity data ({reason}); refusing gravity projection"
+            );
+            return;
         }
-        None => DVec3::NEG_Y,
     };
 
     let prim = sdf_path.as_str().to_string();
@@ -4690,6 +4724,39 @@ def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
                 .is_empty(),
             "an invalid authored collisionEnabled must not become the schema default true"
         );
+    }
+
+    #[test]
+    fn malformed_physics_scene_gravity_does_not_fall_back_to_earth() {
+        let source = r#"#usda 1.0
+def PhysicsScene "Scene"
+{
+    string physics:gravityMagnitude = "not-a-number"
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
+            .expect("build stage");
+        let scene = SdfPath::new("/Scene").unwrap();
+        let error = read_physics_scene_gravity(&stage.view(), &scene)
+            .expect_err("an authored gravity value with the wrong type must be rejected");
+        assert!(error.contains("unsupported authored value type"));
+    }
+
+    #[test]
+    fn physics_scene_gravity_preserves_usd_sentinel_defaults() {
+        let source = r#"#usda 1.0
+def PhysicsScene "Scene"
+{
+    float physics:gravityMagnitude = -1.0
+    vector3f physics:gravityDirection = (0, 0, 0)
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("sentinel.usda", source))
+            .expect("build stage");
+        let scene = SdfPath::new("/Scene").unwrap();
+        let values = read_physics_scene_gravity(&stage.view(), &scene).expect("USD sentinels");
+        assert_eq!(values.0, lunco_environment::EARTH_SURFACE_GRAVITY);
+        assert_eq!(values.1, DVec3::NEG_Y);
     }
 
     /// A ground plane one level under a plain `Xform` (the shape every scene and
