@@ -735,30 +735,63 @@ fn process_usd_cosim_prim_read(
             );
             return;
         };
-        let Some(name) = reader.text(sdf_path, "lunco:event:name") else {
-            warn!(
-                "[usd-cosim] {}: LunCoEvent has no lunco:event:name",
-                sdf_path
-            );
-            return;
+        let name = match reader.attr_value(sdf_path, "lunco:event:name") {
+            Some(Value::Token(value)) if !value.as_str().is_empty() => value.to_string(),
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has no valid lunco:event:name",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let severity = match reader.attr_value(sdf_path, "lunco:event:severity") {
+            Some(Value::Token(value)) => match parse_event_severity(value.as_str()) {
+                Some(severity) => severity,
+                None => {
+                    warn!(
+                        "[usd-cosim] {}: LunCoEvent has invalid lunco:event:severity",
+                        sdf_path
+                    );
+                    return;
+                }
+            },
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has invalid lunco:event:severity",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let latched = match read_authored_bool_strict(reader, sdf_path, "lunco:event:latched") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has malformed lunco:event:latched",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let qualification_time_s = match reader.real(sdf_path, "lunco:event:qualificationTime") {
+            Some(value) if value.is_finite() && value >= 0.0 => value,
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has invalid lunco:event:qualificationTime",
+                    sdf_path
+                );
+                return;
+            }
         };
         commands.entity(entity).try_insert(EventBinding {
             source_path: source_path.to_string(),
             output: output.to_string(),
             name,
-            severity: parse_event_severity(
-                reader
-                    .text(sdf_path, "lunco:event:severity")
-                    .as_deref()
-                    .unwrap_or("info"),
-            ),
-            latched: reader
-                .boolean(sdf_path, "lunco:event:latched")
-                .unwrap_or(false),
-            qualification_time_s: reader
-                .scalar::<f64>(sdf_path, "lunco:event:qualificationTime")
-                .unwrap_or(0.0)
-                .max(0.0),
+            severity,
+            latched,
+            qualification_time_s,
             qualified_for_s: 0.0,
             armed: true,
         });
@@ -1682,13 +1715,14 @@ pub struct EventBinding {
     armed: bool,
 }
 
-fn parse_event_severity(value: &str) -> lunco_core::Severity {
+fn parse_event_severity(value: &str) -> Option<lunco_core::Severity> {
     match value {
-        "debug" => lunco_core::Severity::Debug,
-        "warning" => lunco_core::Severity::Warning,
-        "error" => lunco_core::Severity::Error,
-        "critical" => lunco_core::Severity::Critical,
-        _ => lunco_core::Severity::Info,
+        "debug" => Some(lunco_core::Severity::Debug),
+        "info" => Some(lunco_core::Severity::Info),
+        "warning" => Some(lunco_core::Severity::Warning),
+        "error" => Some(lunco_core::Severity::Error),
+        "critical" => Some(lunco_core::Severity::Critical),
+        _ => None,
     }
 }
 
@@ -5189,14 +5223,11 @@ mod tests {
     }
 
     #[test]
-    fn event_severity_defaults_to_info() {
-        assert_eq!(
-            parse_event_severity("not-a-severity"),
-            lunco_core::Severity::Info
-        );
+    fn event_severity_rejects_unknown_tokens() {
+        assert_eq!(parse_event_severity("not-a-severity"), None);
         assert_eq!(
             parse_event_severity("critical"),
-            lunco_core::Severity::Critical
+            Some(lunco_core::Severity::Critical)
         );
     }
 
