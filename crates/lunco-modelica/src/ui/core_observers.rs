@@ -251,85 +251,6 @@ pub fn drain_notices_to_console(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn standalone_modelica_entities_still_project_live_samples() {
-        let mut app = App::new();
-        app.init_resource::<crate::SimSampleStream>()
-            .init_resource::<SignalRegistry>()
-            .init_resource::<VisualizationRegistry>()
-            .add_systems(Update, drain_sim_samples_to_viz);
-
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<VisualizationRegistry>()
-            .insert(lunco_viz::VisualizationConfig {
-                id: crate::ui::viz::DEFAULT_MODELICA_GRAPH,
-                title: "Modelica".into(),
-                kind: lunco_viz::LINE_PLOT_KIND,
-                view: lunco_viz::ViewTarget::Panel2D,
-                inputs: vec![lunco_viz::SignalBinding::live(
-                    SignalRef::new(entity, "solar_power"),
-                    "y",
-                )],
-                style: serde_json::Value::Null,
-            });
-        app.world_mut()
-            .resource_mut::<crate::SimSampleStream>()
-            .batches
-            .push(crate::SimSampleBatch {
-                entity,
-                document: lunco_doc::DocumentId::default(),
-                time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
-                is_new_model: false,
-                is_parameter_update: false,
-            });
-
-        app.update();
-
-        let history = app
-            .world()
-            .resource::<SignalRegistry>()
-            .scalar_history(&SignalRef::new(entity, "solar_power"))
-            .expect("standalone Modelica output should still reach viz");
-        assert_eq!(history.len(), 1);
-    }
-
-    #[test]
-    fn unselected_modelica_state_is_not_retained() {
-        let mut app = App::new();
-        app.init_resource::<crate::SimSampleStream>()
-            .init_resource::<SignalRegistry>()
-            .add_systems(Update, drain_sim_samples_to_viz);
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<crate::SimSampleStream>()
-            .batches
-            .push(crate::SimSampleBatch {
-                entity,
-                document: lunco_doc::DocumentId::default(),
-                time: 1.0,
-                samples: vec![("solar_power".to_string(), 307.0)],
-                is_new_model: false,
-                is_parameter_update: false,
-            });
-
-        app.update();
-
-        assert!(
-            app.world()
-                .resource::<SignalRegistry>()
-                .scalar_history(&SignalRef::new(entity, "solar_power"))
-                .is_none(),
-            "the inspector exposes live state; history exists only after recording is selected"
-        );
-    }
-}
-
 /// Reactive UI: project core `SourceRootRegistry` load-state transitions into
 /// the status bar — progress while `Loading`, a completion entry on
 /// `Ready`/`Failed`. Core sets the registry state; it no longer touches the bus.
@@ -532,5 +453,84 @@ pub fn project_run_results_to_ui(
         if let Some(c) = console.as_mut() {
             c.info(format!("⊘ {run_name} cancelled"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_modelica_entities_still_project_live_samples() {
+        let mut app = App::new();
+        app.init_resource::<crate::SimSampleStream>()
+            .init_resource::<SignalRegistry>()
+            .init_resource::<VisualizationRegistry>()
+            .add_systems(Update, drain_sim_samples_to_viz);
+
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<VisualizationRegistry>()
+            .insert(lunco_viz::VisualizationConfig {
+                id: crate::ui::viz::DEFAULT_MODELICA_GRAPH,
+                title: "Modelica".into(),
+                kind: lunco_viz::LINE_PLOT_KIND,
+                view: lunco_viz::ViewTarget::Panel2D,
+                inputs: vec![lunco_viz::SignalBinding::live(
+                    SignalRef::new(entity, "solar_power"),
+                    "y",
+                )],
+                style: serde_json::Value::Null,
+            });
+        app.world_mut()
+            .resource_mut::<crate::SimSampleStream>()
+            .batches
+            .push(crate::SimSampleBatch {
+                entity,
+                document: lunco_doc::DocumentId::default(),
+                time: 1.0,
+                samples: vec![("solar_power".to_string(), 307.0)],
+                is_new_model: false,
+                is_parameter_update: false,
+            });
+
+        app.update();
+
+        let history = app
+            .world()
+            .resource::<SignalRegistry>()
+            .scalar_history(&SignalRef::new(entity, "solar_power"))
+            .expect("standalone Modelica output should still reach viz");
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn unselected_modelica_state_is_not_retained() {
+        let mut app = App::new();
+        app.init_resource::<crate::SimSampleStream>()
+            .init_resource::<SignalRegistry>()
+            .add_systems(Update, drain_sim_samples_to_viz);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<crate::SimSampleStream>()
+            .batches
+            .push(crate::SimSampleBatch {
+                entity,
+                document: lunco_doc::DocumentId::default(),
+                time: 1.0,
+                samples: vec![("solar_power".to_string(), 307.0)],
+                is_new_model: false,
+                is_parameter_update: false,
+            });
+
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&SignalRef::new(entity, "solar_power"))
+                .is_none(),
+            "the inspector exposes live state; history exists only after recording is selected"
+        );
     }
 }

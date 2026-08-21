@@ -4539,8 +4539,10 @@ mod macro_step_tests {
 
     #[test]
     fn communication_schedule_default_is_valid_and_reanchors_exactly() {
-        let mut model = ModelicaModel::default();
-        model.current_time = 3.25;
+        let mut model = ModelicaModel {
+            current_time: 3.25,
+            ..Default::default()
+        };
 
         assert_eq!(
             model.validated_communication_period_secs().unwrap(),
