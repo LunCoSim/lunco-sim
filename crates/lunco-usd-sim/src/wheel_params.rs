@@ -184,19 +184,9 @@ impl WheelParams {
                 DVec3::X
             }
         };
-        let mut req = |name: &'static str| -> f64 {
-            match reader.real(wheel, name) {
-                Some(v) => v,
-                None => {
-                    missing.push(name.to_owned());
-                    0.0
-                }
-            }
-        };
-
-        let radius = req("physxVehicleWheel:radius");
-        let width = req("physxVehicleWheel:width");
-        let mass = req("physxVehicleWheel:mass");
+        let radius = read_required_real(reader, wheel, "physxVehicleWheel:radius", &mut missing);
+        let width = read_required_real(reader, wheel, "physxVehicleWheel:width", &mut missing);
+        let mass = read_required_real(reader, wheel, "physxVehicleWheel:mass", &mut missing);
         // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
         // therefore no torque — that is a castor, not a wheel with a default torque.
         let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
@@ -206,26 +196,41 @@ impl WheelParams {
         // substitute for a malformed powertrain.
         let max_rotation_speed = powertrain.map_or(0.0, |p| p.axle_no_load_speed());
         let reflected_inertia = powertrain.map_or(0.0, |p| p.reflected_inertia());
-        let bearing_damping = req("physxVehicleWheel:dampingRate");
-        let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
-        let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
-        // NOT `req`: the PhysX schema declares this one with a `0.0` fallback, so
-        // it always composes to a value and there is nothing to report missing.
-        // Reading it any other way would invent a required-ness the schema does
-        // not state — see the field doc.
-        let cornering_stiffness = reader
-            .real(wheel, "physxVehicleTire:lateralStiffness")
-            .unwrap_or(0.0);
-        let min_validated_speed = reader
-            .real(wheel, "lunco:tire:minValidatedSpeed")
-            .unwrap_or(0.0);
-        let friction_mu = req("physics:dynamicFriction");
-        let drive_damping = req("lunco:wheel:driveDamping");
+        let bearing_damping =
+            read_required_real(reader, wheel, "physxVehicleWheel:dampingRate", &mut missing);
+        let brake_torque_max = read_required_real(
+            reader,
+            wheel,
+            "physxVehicleWheel:maxBrakeTorque",
+            &mut missing,
+        );
+        let slip_stiffness = read_required_real(
+            reader,
+            wheel,
+            "physxVehicleTire:longitudinalStiffness",
+            &mut missing,
+        );
+        // These two attributes have documented zero defaults. Preserve those
+        // defaults only when the scene omitted the property; a wrong authored
+        // type is still an asset error rather than an accidental zero-tire.
+        let cornering_stiffness = read_optional_real(
+            reader,
+            wheel,
+            "physxVehicleTire:lateralStiffness",
+            &mut missing,
+        );
+        let min_validated_speed =
+            read_optional_real(reader, wheel, "lunco:tire:minValidatedSpeed", &mut missing);
+        let friction_mu =
+            read_required_real(reader, wheel, "physics:dynamicFriction", &mut missing);
+        let drive_damping =
+            read_required_real(reader, wheel, "lunco:wheel:driveDamping", &mut missing);
 
         // A zero is an authored, documented solid-cylinder derivation. The
         // standard PhysX wheel attribute itself remains required, so an
         // omitted value is reported with the other missing contract fields.
-        let moment_of_inertia = req("physxVehicleWheel:moi");
+        let moment_of_inertia =
+            read_required_real(reader, wheel, "physxVehicleWheel:moi", &mut missing);
 
         let steer_axis = match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:steerAxis")
         {
@@ -254,6 +259,20 @@ impl WheelParams {
             friction_mu,
             steer_axis,
             drive_damping,
+        );
+        validate_wheel_schema_hints(
+            reader,
+            wheel,
+            &mut missing,
+            [
+                ("physxVehicleWheel:radius", radius),
+                ("physxVehicleWheel:moi", moment_of_inertia),
+                ("physxVehicleWheel:dampingRate", bearing_damping),
+                ("physxVehicleWheel:maxBrakeTorque", brake_torque_max),
+                ("physxVehicleTire:longitudinalStiffness", slip_stiffness),
+                ("lunco:tire:minValidatedSpeed", min_validated_speed),
+                ("lunco:wheel:driveDamping", drive_damping),
+            ],
         );
         if !missing.is_empty() {
             return Err(missing);
@@ -424,7 +443,7 @@ impl WheelParams {
     /// rover sinks through the one-sided terrain heightfield.
     pub fn wheel_density(&self) -> f32 {
         let volume = std::f64::consts::PI * self.radius.powi(2) * self.width;
-        (self.mass / volume.max(1e-6)) as f32
+        (self.mass / volume) as f32
     }
 }
 
@@ -466,6 +485,16 @@ fn read_suspension_attrs(
     };
     let mut invalid = Vec::new();
     validate_suspension_values(&mut invalid, rest_length, spring_k, damping_c);
+    validate_suspension_schema_hints(
+        reader,
+        prim,
+        &mut invalid,
+        [
+            ("lunco:suspension:restLength", rest_length),
+            ("physxVehicleSuspension:springStrength", spring_k),
+            ("physxVehicleSuspension:springDamperRate", damping_c),
+        ],
+    );
     if !invalid.is_empty() {
         return Err(invalid);
     }
@@ -477,27 +506,46 @@ fn read_suspension_attrs(
     })
 }
 
+fn read_optional_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    missing: &mut Vec<String>,
+) -> f64 {
+    match reader.real(prim, name) {
+        Some(value) => value,
+        None if reader.has_authored_attribute(prim, name) => {
+            missing.push(name.to_owned());
+            0.0
+        }
+        None => 0.0,
+    }
+}
+
+fn read_required_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    missing: &mut Vec<String>,
+) -> f64 {
+    match reader.real(prim, name) {
+        Some(value) => value,
+        None => {
+            missing.push(name.to_owned());
+            0.0
+        }
+    }
+}
+
 fn validate_suspension_values(
     errors: &mut Vec<String>,
     rest_length: f64,
     spring_k: f64,
     damping_c: f64,
 ) {
-    validate_range(errors, "lunco:suspension:restLength", rest_length, 0.0, 2.0);
-    validate_range(
-        errors,
-        "physxVehicleSuspension:springStrength",
-        spring_k,
-        0.0,
-        100_000.0,
-    );
-    validate_range(
-        errors,
-        "physxVehicleSuspension:springDamperRate",
-        damping_c,
-        0.0,
-        20_000.0,
-    );
+    validate_nonnegative(errors, "lunco:suspension:restLength", rest_length);
+    validate_nonnegative(errors, "physxVehicleSuspension:springStrength", spring_k);
+    validate_nonnegative(errors, "physxVehicleSuspension:springDamperRate", damping_c);
 }
 
 fn validate_wheel_values(
@@ -515,55 +563,77 @@ fn validate_wheel_values(
     steer_axis: DVec3,
     drive_damping: f64,
 ) {
-    validate_range(errors, "physxVehicleWheel:radius", radius, 0.05, 3.0);
+    validate_positive(errors, "physxVehicleWheel:radius", radius);
     validate_positive(errors, "physxVehicleWheel:width", width);
     validate_positive(errors, "physxVehicleWheel:mass", mass);
-    validate_range(
-        errors,
-        "physxVehicleWheel:moi",
-        moment_of_inertia,
-        0.0,
-        50.0,
-    );
-    validate_range(
-        errors,
-        "physxVehicleWheel:dampingRate",
-        bearing_damping,
-        0.0,
-        50.0,
-    );
-    validate_range(
-        errors,
-        "physxVehicleWheel:maxBrakeTorque",
-        brake_torque_max,
-        0.0,
-        5_000.0,
-    );
-    validate_range(
+    validate_nonnegative(errors, "physxVehicleWheel:moi", moment_of_inertia);
+    validate_nonnegative(errors, "physxVehicleWheel:dampingRate", bearing_damping);
+    validate_nonnegative(errors, "physxVehicleWheel:maxBrakeTorque", brake_torque_max);
+    validate_nonnegative(
         errors,
         "physxVehicleTire:longitudinalStiffness",
         slip_stiffness,
-        0.0,
-        30_000.0,
     );
     validate_nonnegative(
         errors,
         "physxVehicleTire:lateralStiffness",
         cornering_stiffness,
     );
-    validate_range(
-        errors,
-        "lunco:tire:minValidatedSpeed",
-        min_validated_speed,
-        0.0,
-        10.0,
-    );
+    validate_nonnegative(errors, "lunco:tire:minValidatedSpeed", min_validated_speed);
     validate_nonnegative(errors, "physics:dynamicFriction", friction_mu);
     validate_nonnegative(errors, "lunco:wheel:driveDamping", drive_damping);
     if !(steer_axis.is_finite() && steer_axis.length_squared() > 0.0) {
         errors.push(format!(
             "lunco:wheel:steerAxis must be finite and non-zero, got {steer_axis:?}"
         ));
+    }
+}
+
+fn validate_wheel_schema_hints(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    errors: &mut Vec<String>,
+    values: [(&str, f64); 7],
+) {
+    for (name, value) in values {
+        validate_schema_hint(reader, prim, name, value, errors);
+    }
+}
+
+fn validate_suspension_schema_hints(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    errors: &mut Vec<String>,
+    values: [(&str, f64); 3],
+) {
+    for (name, value) in values {
+        validate_schema_hint(reader, prim, name, value, errors);
+    }
+}
+
+fn validate_schema_hint(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    value: f64,
+    errors: &mut Vec<String>,
+) {
+    let Some(hint) = reader.attr_ui_hint(prim, name) else {
+        return;
+    };
+    if let Some(min) = hint.min {
+        if value < min {
+            errors.push(format!(
+                "{name} must be >= schema minimum {min}, got {value}"
+            ));
+        }
+    }
+    if let Some(max) = hint.max {
+        if value > max {
+            errors.push(format!(
+                "{name} must be <= schema maximum {max}, got {value}"
+            ));
+        }
     }
 }
 
@@ -576,14 +646,6 @@ fn validate_positive(errors: &mut Vec<String>, name: &str, value: f64) {
 fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
     if !(value.is_finite() && value >= 0.0) {
         errors.push(format!("{name} must be finite and >= 0, got {value}"));
-    }
-}
-
-fn validate_range(errors: &mut Vec<String>, name: &str, value: f64, min: f64, max: f64) {
-    if !(value.is_finite() && (min..=max).contains(&value)) {
-        errors.push(format!(
-            "{name} must be finite and in [{min}, {max}], got {value}"
-        ));
     }
 }
 
@@ -957,12 +1019,12 @@ mod tests {
             f64::NAN,
             0.0,
             f64::INFINITY,
-            51.0,
             -1.0,
-            5_001.0,
-            30_001.0,
             -1.0,
-            11.0,
+            -1.0,
+            -1.0,
+            -1.0,
+            -1.0,
             -0.1,
             DVec3::ZERO,
             -1.0,
@@ -991,7 +1053,7 @@ mod tests {
     #[test]
     fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
         let mut errors = Vec::new();
-        validate_suspension_values(&mut errors, -0.01, f64::NAN, 20_001.0);
+        validate_suspension_values(&mut errors, -0.01, f64::NAN, -1.0);
         assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
         assert!(errors[0].starts_with("lunco:suspension:restLength"));
         assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
