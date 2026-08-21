@@ -56,9 +56,9 @@ use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 pub use lunco_usd_bevy::{effective_purpose, Purpose};
 use lunco_usd_bevy::{
-    instance_key, local_transform_at, read_primitive_axis, read_shape_dims,
-    read_transform_from_usd, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView,
-    TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot, UsdVisualSynced,
+    instance_key, local_transform_at, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_quat, ShapeDims, StageView, TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot,
+    UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -671,8 +671,13 @@ fn collect_child_colliders_from_usd(
             }
         }
 
-        // Build collider from child's geometry
-        if let Some(collider) = build_collider_from_usd(reader, &child_path) {
+        // Build collider from the child's geometry. The candidate transform
+        // carries the complete scale from the body boundary to this prim;
+        // unlike a standalone collider, a compound child has no ECS entity on
+        // which Avian could propagate intermediate Xform scales.
+        if let Some(collider) =
+            build_collider_from_usd_at_scale(reader, &child_path, child_tf.scale)?
+        {
             let pos = Position(DVec3::new(
                 child_tf.translation.x as f64,
                 child_tf.translation.y as f64,
@@ -721,7 +726,8 @@ fn gather_compound_candidates(
         }
         // Local transform in the canonical decoder shared with usd-bevy, folded
         // into the accumulated root-relative frame.
-        let tf = acc.mul_transform(read_transform_from_usd(reader, &child)?);
+        let local = local_transform_at(reader, &child, 0.0)?.unwrap_or(Transform::IDENTITY);
+        let tf = acc.mul_transform(local);
         out.push((child.clone(), tf));
         gather_compound_candidates(reader, &child, tf, out)?;
     }
@@ -732,12 +738,12 @@ fn gather_compound_candidates(
 ///
 /// Builds an Avian collider from a USD shape prim.
 ///
-/// **Scaling is NOT done here — Avian owns it.** `update_collider_scale`
+/// **Scaling is NOT baked into the intrinsic shape here — Avian owns it.** `update_collider_scale`
 /// sets `collider.scale = world Transform.scale` every frame for *every*
 /// collider (measured: the ground collider's `scale` becomes (4000,0.2,4000)
-/// from its `xformOp:scale`). So each shape branch returns the **intrinsic,
+/// from its composed transform). So each shape branch returns the **intrinsic,
 /// unscaled** shape at its authored size, and the single [`apply_collider_scale`]
-/// tail pre-applies the prim's `xformOp:scale` once, uniformly.
+/// tail pre-applies the composed scale once, uniformly.
 ///
 /// Why pre-apply at all, if Avian re-applies it anyway: Avian's pass is
 /// DEFERRED, so for the first frames an un-pre-scaled collider is its tiny
@@ -759,8 +765,27 @@ fn gather_compound_candidates(
 ///
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
-fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option<Collider> {
-    let ty = reader.type_name(sdf_path)?;
+fn build_collider_from_usd(
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+) -> Result<Option<Collider>, TransformReadError> {
+    let scale =
+        local_transform_at(reader, sdf_path, 0.0)?.map_or(Vec3::ONE, |transform| transform.scale);
+    build_collider_from_usd_at_scale(reader, sdf_path, scale)
+}
+
+/// Build a collider with a scale already composed from the owning body frame to
+/// the geometry prim. Standalone colliders obtain this from their own local
+/// transform; compound children obtain it from [`gather_compound_candidates`],
+/// because intermediate USD Xforms have no corresponding Avian collider entity.
+fn build_collider_from_usd_at_scale(
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+    scale: Vec3,
+) -> Result<Option<Collider>, TransformReadError> {
+    let Some(ty) = reader.type_name(sdf_path) else {
+        return Ok(None);
+    };
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
     // SAME `points`/`faceVertexIndices` `lunco-usd-bevy` renders (one geometry
@@ -768,7 +793,9 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
     // scales its vertices exactly (no convex-hull tessellation), so the shared
     // scale tail applies unchanged.
     if ty == "Mesh" {
-        let (verts, tris) = read_usd_mesh_indexed(reader, sdf_path)?;
+        let Some((verts, tris)) = read_usd_mesh_indexed(reader, sdf_path) else {
+            return Ok(None);
+        };
         let verts: Vec<DVec3> = verts
             .into_iter()
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
@@ -787,23 +814,31 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
             .then(|| reader.text(sdf_path, ptok::A_APPROXIMATION))
             .flatten();
         let collider = match approximation.as_deref() {
-            Some("convexHull") => Collider::convex_hull(verts)?,
+            Some("convexHull") => {
+                let Some(collider) = Collider::convex_hull(verts) else {
+                    return Ok(None);
+                };
+                collider
+            }
             Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
             None | Some("none") => Collider::trimesh(verts, tris),
             // The authored approximation is a physical contract. Do not
             // silently replace an unsupported approximation with a different
             // shape, and do not turn a failed convex hull into a dynamic
             // triangle mesh that Avian cannot use as a moving body.
-            Some(_) => return None,
+            Some(_) => return Ok(None),
         };
-        return Some(apply_collider_scale(collider, reader, sdf_path));
+        return Ok(Some(apply_collider_scale(collider, scale)));
     }
 
     // Dimensions (+ their magic defaults) come from the canonical
     // `read_shape_dims` shared with usd-bevy's mesh builder, so the
     // collider can't desync from the visual mesh. Build the INTRINSIC
     // (unscaled) shape; the scale tail below owns scaling.
-    let collider = match read_shape_dims(reader, sdf_path, ty.as_str())? {
+    let Some(shape_dims) = read_shape_dims(reader, sdf_path, ty.as_str()) else {
+        return Ok(None);
+    };
+    let collider = match shape_dims {
         ShapeDims::Cube { size } => Collider::cuboid(size, size, size),
         ShapeDims::Sphere { radius } => Collider::sphere(radius),
         ShapeDims::Cylinder { radius, height } => Collider::cylinder(radius, height),
@@ -814,10 +849,10 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
         ShapeDims::Plane { width, length } => Collider::cuboid(width, 0.001, length),
     };
 
-    Some(apply_collider_scale(collider, reader, sdf_path))
+    Ok(Some(apply_collider_scale(collider, scale)))
 }
 
-/// Pre-applies a prim's `xformOp:scale` to a freshly-built intrinsic collider so
+/// Pre-applies a prim's composed USD scale to a freshly-built intrinsic collider so
 /// it is correct from frame 0, matching what Avian's `update_collider_scale` will
 /// compute. See [`build_collider_from_usd`] for why this is the *only* place
 /// scale touches a collider.
@@ -845,15 +880,8 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
 /// `set_scale` with the authored count (overriding Avian's `10` only for scaled
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
-fn apply_collider_scale(
-    mut collider: Collider,
-    reader: &StageView<'_>,
-    sdf_path: &SdfPath,
-) -> Collider {
-    let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
-        .map(|v| (v.x, v.y, v.z))
-        .unwrap_or((1.0, 1.0, 1.0));
-    collider.set_scale(bevy::math::DVec3::new(scale.0, scale.1, scale.2), 10);
+fn apply_collider_scale(mut collider: Collider, scale: Vec3) -> Collider {
+    collider.set_scale(scale.as_dvec3(), 10);
     collider
 }
 
@@ -863,10 +891,17 @@ fn add_collider_from_usd(
     entity: Entity,
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
-) {
-    if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
+) -> Result<(), TransformReadError> {
+    if let Some(collider) = build_collider_from_usd(reader, sdf_path)? {
         commands.entity(entity).try_insert(collider);
     }
+    Ok(())
+}
+
+fn log_malformed_collider_transform(sdf_path: &SdfPath, error: &TransformReadError) {
+    error!(
+        "[usd-avian] {sdf_path} has malformed collider transform; refusing collider projection: {error}"
+    );
 }
 
 /// True when some ancestor prim of `sdf_path` is a rigid body — i.e. this prim's
@@ -1301,10 +1336,16 @@ fn extract_avian_prim(
         // solver combines the ground's friction/restitution with the touching
         // body's material exactly as it does for a dynamic body.  Keeping this
         // on the classification branch avoids a scene-specific ground override.
-        if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
-            commands.entity(entity).try_insert(collider);
-        } else {
-            commands.entity(entity).try_insert(PendingTerrainCollider);
+        match build_collider_from_usd(reader, sdf_path) {
+            Ok(Some(collider)) => {
+                commands.entity(entity).try_insert(collider);
+            }
+            Ok(None) => {
+                commands.entity(entity).try_insert(PendingTerrainCollider);
+            }
+            Err(error) => {
+                log_malformed_collider_transform(sdf_path, &error);
+            }
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
@@ -1332,7 +1373,11 @@ fn extract_avian_prim(
                 LayerMask::ALL,
             ),
         ));
-        add_collider_from_usd(commands, entity, reader, sdf_path);
+        if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
+            log_malformed_collider_transform(sdf_path, &error);
+            commands.entity(entity).try_insert(UsdAvianProcessed);
+            return;
+        }
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
@@ -1397,7 +1442,11 @@ fn extract_avian_prim(
                 .entity(entity)
                 .try_insert(Collider::compound(compound_shapes));
         } else {
-            add_collider_from_usd(commands, entity, reader, sdf_path);
+            if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
+                log_malformed_collider_transform(sdf_path, &error);
+                commands.entity(entity).try_insert(UsdAvianProcessed);
+                return;
+            }
         }
         apply_collision_groups(commands, entity, groups, sdf_path);
 
@@ -1446,7 +1495,11 @@ fn extract_avian_prim(
             commands
                 .entity(entity)
                 .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
-            add_collider_from_usd(commands, entity, reader, sdf_path);
+            if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
+                log_malformed_collider_transform(sdf_path, &error);
+                commands.entity(entity).try_insert(UsdAvianProcessed);
+                return;
+            }
             apply_collision_groups(commands, entity, groups, sdf_path);
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
@@ -3617,6 +3670,7 @@ mod collider_parity_tests {
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
     use super::build_collider_from_usd;
+    use bevy::math::DVec3;
     use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
@@ -3658,8 +3712,10 @@ mod collider_parity_tests {
         let view = StageView::new(&stage);
 
         let trimesh = build_collider_from_usd(&view, &SdfPath::new("/Tri").unwrap())
+            .expect("valid transform")
             .expect("default mesh → trimesh collider");
         let hull = build_collider_from_usd(&view, &SdfPath::new("/Hull").unwrap())
+            .expect("valid transform")
             .expect("convexHull approximation → collider");
         assert_ne!(
             format!("{trimesh:?}"),
@@ -3667,13 +3723,48 @@ mod collider_parity_tests {
             "`physics:approximation = convexHull` must build a DIFFERENT collider than the default trimesh"
         );
         assert!(
-            build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap()).is_none(),
+            build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap())
+                .expect("valid transform")
+                .is_none(),
             "a failed authored convex hull must not silently become a triangle mesh"
         );
         assert!(
-            build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap()).is_none(),
+            build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap())
+                .expect("valid transform")
+                .is_none(),
             "an unsupported authored approximation must not silently become a triangle mesh"
         );
+    }
+
+    #[test]
+    fn collider_uses_composed_named_scale_and_rejects_malformed_scale() {
+        const SOURCE: &str = r#"#usda 1.0
+def Cube "Scaled" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+{
+    double size = 2
+    double3 xformOp:scale:wide = (2, 3, 4)
+    uniform token[] xformOpOrder = ["xformOp:scale:wide"]
+}
+def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+{
+    uniform token[] xformOpOrder = ["xformOp:scale:missing"]
+}
+"#;
+        let dir = std::env::temp_dir().join("lunco_collider_composed_scale");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scale.usda");
+        std::fs::write(&f, SOURCE).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let view = StageView::new(&stage);
+
+        let scaled = build_collider_from_usd(&view, &SdfPath::new("/Scaled").unwrap())
+            .expect("named scale is a valid composed transform")
+            .expect("scaled cube collider");
+        assert_eq!(scaled.scale(), DVec3::new(2.0, 3.0, 4.0));
+
+        let error = build_collider_from_usd(&view, &SdfPath::new("/Malformed").unwrap())
+            .expect_err("a transform that names a missing scale op must be rejected");
+        assert_eq!(error.prim, "/Malformed");
     }
 }
 
@@ -3683,7 +3774,7 @@ mod extract_parity_tests {
     //! End-to-end physics extraction off the live `StageView`: the REAL
     //! `extract_avian_prim` on a rover chassis with a child collider at an
     //! authored transform, exercising the whole read layer (schema detect →
-    //! compound collider → `collect_child_colliders` → `read_transform_from_usd`
+    //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
     use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
@@ -4799,7 +4890,9 @@ def Xform "Rig"
         assert!(collect_child_colliders_from_usd(&view, &lander)
             .expect("valid transforms")
             .is_empty());
-        assert!(build_collider_from_usd(&view, &lander).is_some());
+        assert!(build_collider_from_usd(&view, &lander)
+            .expect("valid transform")
+            .is_some());
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
             has_collider,

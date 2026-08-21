@@ -4024,14 +4024,17 @@ fn is_valid_xform_op_token(op: &str, index: usize) -> bool {
 
 /// Validate the structural part of an authored xform stack before delegating
 /// numeric composition to OpenUSD. OpenUSD currently ignores an unknown op
-/// token in this code path, which would turn malformed authored placement data
-/// into an identity transform. That is not a USD semantic default and is unsafe
-/// for physics/spawn consumers.
-fn valid_xform_op_order(order: &[String]) -> bool {
-    order
-        .iter()
-        .enumerate()
-        .all(|(index, op)| is_valid_xform_op_token(op, index))
+/// token or an op whose attribute is absent in this code path, which would turn
+/// malformed authored placement data into an identity transform. That is not a
+/// USD semantic default and is unsafe for physics/spawn consumers.
+fn valid_xform_op_order(reader: &StageView<'_>, path: &SdfPath, order: &[String]) -> bool {
+    order.iter().enumerate().all(|(index, op)| {
+        if !is_valid_xform_op_token(op, index) {
+            return false;
+        }
+        let base = op.strip_prefix("!invert!").unwrap_or(op);
+        base == RESET_XFORM_STACK || reader.has_authored_attribute(path, base)
+    })
 }
 
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
@@ -4300,7 +4303,7 @@ pub fn compose_xform_order_at(
             Ok(None)
         };
     };
-    if !valid_xform_op_order(&order) {
+    if !valid_xform_op_order(reader, path, &order) {
         return Err(malformed_transform(path));
     }
     let m = XformablePrim(reader.usd_stage().prim(path.clone()))
