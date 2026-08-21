@@ -38,10 +38,42 @@ use lunco_render::{CommunicationLineSettings, SceneCamera};
 /// The `info:id` the beam part authors.
 const DRIVER_ID: &str = "link_beams";
 
-// Fallbacks when the part authors no `lunco:param:*`.
-const DEF_WIDTH: f64 = 0.12;
-const DEF_NEAR_M: f64 = 50_000.0;
-const DEF_STUB: f64 = 20.0;
+/// Read a finite authored program parameter. Missing values are not replaced
+/// with renderer-owned tuning: the USD component owns its visual behavior.
+fn authored_param(params: Option<&ScriptParams>, key: &str) -> Option<f64> {
+    params
+        .and_then(|p| p.0.get(key).copied())
+        .filter(|value| value.is_finite())
+}
+
+fn authored_positive_param(params: Option<&ScriptParams>, key: &str) -> Option<f64> {
+    authored_param(params, key).filter(|value| *value > 0.0)
+}
+
+fn authored_positive_f32_param(params: Option<&ScriptParams>, key: &str) -> Option<f32> {
+    authored_positive_param(params, key)
+        .map(|value| value as f32)
+        .filter(|value| value.is_finite())
+}
+
+fn authored_nonnegative_param(params: Option<&ScriptParams>, key: &str) -> Option<f64> {
+    authored_param(params, key).filter(|value| *value >= 0.0)
+}
+
+fn authored_fraction_param(params: Option<&ScriptParams>, key: &str) -> Option<f32> {
+    authored_param(params, key)
+        .filter(|value| (0.0..=1.0).contains(value))
+        .map(|value| value as f32)
+}
+
+fn authored_binary_param(params: Option<&ScriptParams>, key: &str) -> Option<bool> {
+    match authored_param(params, key)? {
+        0.0 => Some(false),
+        1.0 => Some(true),
+        _ => None,
+    }
+}
+
 /// Far-peer beam length as a fraction of the camera's distance to the nearer endpoint.
 ///
 /// A fixed `stubLen` is a length in metres, so it only reads at ONE zoom. The
@@ -53,9 +85,8 @@ const DEF_STUB: f64 = 20.0;
 /// camera controls both endpoint-owned copies of the same link; applying a fixed metre
 /// floor to the remote endpoint makes an Earth station draw a huge ray across a lunar view.
 ///
-/// When a camera is available this replaces `stubLen`; `stubLen` remains the fallback for
-/// headless rendering, where there is no view-relative scale to measure.
-const DEF_STUB_CAM_FRAC: f64 = 0.35;
+/// When a camera is available this replaces `stubLen`; the authored `stubLen`
+/// is used when there is no view-relative scale to measure.
 
 /// Tags a spawned beam with its peer and the state it currently shows, so the reconciler
 /// can recolour it on a flip or despawn it when the peer drops out — and so
@@ -78,7 +109,7 @@ pub struct LinkBeamInstance {
     /// Per-node tuning, copied so aiming needs no template lookup.
     pub near_m: f64,
     pub stub: f32,
-    /// See [`DEF_STUB_CAM_FRAC`]. 0 disables the camera term entirely.
+    /// The authored fraction. Zero disables the camera term entirely.
     pub stub_cam_frac: f32,
     pub width: f32,
 }
@@ -106,9 +137,9 @@ struct NodeBeams {
 /// How long a beam to this peer should be.
 ///
 /// A NEAR peer gets a real cylinder that lands on it. A FAR one gets a ray whose
-/// camera-relative length is [`DEF_STUB_CAM_FRAC`]'s share of the distance to the
-/// nearer endpoint, so the link reads at surface zoom and at globe zoom without
-/// either being authored twice. The authored metre stub is used without a camera.
+/// camera-relative length is the authored fraction of the distance to the nearer
+/// endpoint, so the link reads at surface zoom and at globe zoom without either
+/// being authored twice. The authored metre stub is used without a camera.
 fn beam_len(
     dist: f64,
     near_m: f64,
@@ -218,7 +249,7 @@ fn aim_link_beams(
         };
         let world_dir = ppos - npos;
         let dist = world_dir.length();
-        if dist < 1.0 {
+        if !dist.is_finite() || dist < 1.0 {
             continue;
         }
         let dir_local = (nrot.0.inverse() * (world_dir / dist)).as_vec3();
@@ -232,6 +263,9 @@ fn aim_link_beams(
             inst.stub_cam_frac,
             camera_dists,
         );
+        if !len.is_finite() || len <= 0.0 {
+            continue;
+        }
         let want = beam_transform(dir_local, len, inst.width);
         // Compare-gated: an unconditional write marks the `Transform` `Changed`
         // and re-propagates the beam every frame even when both endpoints are
@@ -310,6 +344,7 @@ fn reconcile_link_beams(
 
     // Pass 1: gather the Up/Down templates + tuning per node.
     let mut nodes: HashMap<Entity, NodeBeams> = HashMap::new();
+    let mut invalid_sources = HashSet::new();
     for (tmpl, id, mesh, mat, params, vis, parent) in &q_templates {
         if id.0 != DRIVER_ID {
             continue;
@@ -342,20 +377,66 @@ fn reconcile_link_beams(
             .get(parent.parent())
             .map(ChildOf::parent)
             .unwrap_or_else(|_| parent.parent());
-        let get = |k: &str, d: f64| params.and_then(|p| p.0.get(k).copied()).unwrap_or(d);
+        let Some(params) = params else {
+            invalid_sources.insert(origin);
+            continue;
+        };
+        let Some(state) = authored_binary_param(Some(params), "state") else {
+            invalid_sources.insert(origin);
+            continue;
+        };
         let nb = nodes.entry(node).or_default();
         nb.origin = Some(origin);
-        if get("state", 0.0) >= 0.5 {
+        if state {
             nb.down = Some((mesh.clone(), mat.clone()));
         } else {
+            let Some(width) = authored_positive_f32_param(Some(params), "width") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(near_m) = authored_nonnegative_param(Some(params), "nearM") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(stub) = authored_positive_f32_param(Some(params), "stubLen") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(stub_cam_frac) = authored_fraction_param(Some(params), "stubCamFrac") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(mode) = authored_param(Some(params), "mode")
+                .filter(|value| *value == 0.0 || *value == 1.0 || *value == 2.0)
+            else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(show_down) = authored_binary_param(Some(params), "showDown") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
+            let Some(earth_only) = authored_binary_param(Some(params), "earthOnly") else {
+                invalid_sources.insert(origin);
+                continue;
+            };
             nb.up = Some((mesh.clone(), mat.clone()));
-            nb.width = get("width", DEF_WIDTH) as f32;
-            nb.near_m = get("nearM", DEF_NEAR_M);
-            nb.stub = get("stubLen", DEF_STUB) as f32;
-            nb.stub_cam_frac = get("stubCamFrac", DEF_STUB_CAM_FRAC) as f32;
-            nb.mode = get("mode", 0.0);
-            nb.show_down = get("showDown", 0.0) >= 0.5;
-            nb.earth_only = get("earthOnly", 0.0) >= 0.5;
+            nb.width = width;
+            nb.near_m = near_m;
+            nb.stub = stub;
+            nb.stub_cam_frac = stub_cam_frac;
+            nb.mode = mode;
+            nb.show_down = show_down;
+            nb.earth_only = earth_only;
+        }
+    }
+
+    // A previously valid node may still own cloned beams when a live USD edit
+    // removes or corrupts its required parameters. Retire those beams instead
+    // of leaving stale geometry alive under the old tuning.
+    for (beam, parent, _) in &q_beams {
+        if invalid_sources.contains(&parent.parent()) {
+            commands.entity(beam).try_despawn();
         }
     }
 
@@ -366,7 +447,7 @@ fn reconcile_link_beams(
             continue;
         };
         let Some(up) = nb.up.as_ref() else { continue };
-        let source = nb.origin.unwrap_or(node);
+        let Some(source) = nb.origin else { continue };
         let show_down = nb.show_down && nb.down.is_some();
 
         // Which (peer, is_up) pairs to draw. `off` draws nothing; `active` keeps only the
@@ -458,13 +539,16 @@ fn reconcile_link_beams(
             };
             let world_dir = ppos - npos;
             let dist = world_dir.length();
-            if dist < 1.0 {
+            if !dist.is_finite() || dist < 1.0 {
                 continue;
             }
             let dir_local = (nrot_inv * (world_dir / dist)).as_vec3();
             let camera_dists =
                 camera_distances(npos, ppos, &q_cam, &q_parents, &q_grids, &q_spatial);
             let len = beam_len(dist, nb.near_m, nb.stub, nb.stub_cam_frac, camera_dists);
+            if !len.is_finite() || len <= 0.0 {
+                continue;
+            }
             let tf = beam_transform(dir_local, len, nb.width);
             let (mesh, mat) = if is_up { up } else { nb.down.as_ref().unwrap() };
 
@@ -557,8 +641,42 @@ fn reconcile_link_beams(
 
 #[cfg(test)]
 mod tests {
-    use super::{beam_len, beam_transform};
+    use super::{
+        authored_binary_param, authored_fraction_param, authored_positive_param, beam_len,
+        beam_transform,
+    };
     use bevy::prelude::Vec3;
+    use lunco_core::ScriptParams;
+    use std::collections::HashMap;
+
+    fn params(values: [(&str, f64); 3]) -> ScriptParams {
+        ScriptParams(
+            values
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn link_visual_parameters_are_required_and_exact() {
+        let valid = params([("width", 0.04), ("stubCamFrac", 0.35), ("showDown", 1.0)]);
+        assert_eq!(authored_positive_param(Some(&valid), "width"), Some(0.04));
+        assert_eq!(
+            authored_fraction_param(Some(&valid), "stubCamFrac"),
+            Some(0.35)
+        );
+        assert_eq!(authored_binary_param(Some(&valid), "showDown"), Some(true));
+
+        let missing = ScriptParams(HashMap::new());
+        assert_eq!(authored_positive_param(Some(&missing), "width"), None);
+        assert_eq!(authored_fraction_param(Some(&missing), "stubCamFrac"), None);
+
+        let invalid = params([("width", -1.0), ("stubCamFrac", 1.1), ("showDown", 0.5)]);
+        assert_eq!(authored_positive_param(Some(&invalid), "width"), None);
+        assert_eq!(authored_fraction_param(Some(&invalid), "stubCamFrac"), None);
+        assert_eq!(authored_binary_param(Some(&invalid), "showDown"), None);
+    }
 
     #[test]
     fn far_stub_uses_the_nearest_camera_endpoint() {
