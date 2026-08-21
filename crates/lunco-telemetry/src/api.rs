@@ -128,6 +128,10 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
                     "description": meta.and_then(|m| m.description.clone()),
                     "provenance": meta.and_then(|m| m.provenance.clone()),
                     "group_path": meta.and_then(|m| m.group_path.clone()),
+                    "exposure": meta.map(|m| match m.exposure {
+                        lunco_signal::SignalExposure::Public => "public",
+                        lunco_signal::SignalExposure::Internal => "internal",
+                    }),
                     "active": signals.is_active(sig),
                     // What's actually retained RIGHT NOW — a client can use this to know
                     // how far back a history query can usefully reach.

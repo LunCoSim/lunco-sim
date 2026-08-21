@@ -254,6 +254,10 @@ impl Plugin for SandboxUiPlugin {
                 Startup,
                 |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
                     layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
+                    layout.open_instance(
+                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                    );
                 },
             )
             .add_systems(

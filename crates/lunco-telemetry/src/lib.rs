@@ -587,6 +587,7 @@ fn retain_sample(
                 unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
                 provenance: Some("telemetry".to_string()),
                 group_path: None,
+                exposure: Default::default(),
             },
         );
         commands.entity(s.channel).try_insert(expected_meta);

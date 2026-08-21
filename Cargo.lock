@@ -8187,6 +8187,7 @@ dependencies = [
  "egui_plot",
  "lunco-canvas",
  "lunco-core",
+ "lunco-settings",
  "lunco-signal",
  "lunco-theme",
  "lunco-usd-bevy",

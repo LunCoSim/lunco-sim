@@ -13,6 +13,25 @@ The one-line thesis: telemetry history is shared, bounded, and policy-driven. Mo
 state is retained by the render-free Modelica projection; authored channels use the same
 registry, so inspectors, APIs, recorders, and plots never depend on one another's UI state.
 
+### Identity, ownership, and labels
+
+`SignalRef { entity, path }` is the identity used by the registry, history, APIs, and saved
+bindings. It is never replaced by a display name. Producers attach `SignalMeta::group_path`
+from the composed USD ownership graph, so a generated solver variable can be shown under the
+authored prim that owns it without copying or renaming the model's state. `SignalExposure` then
+controls the normal operator catalog: canonical network values and authored member outputs are
+public, while complete runtime/model state remains available through the explicit model-variable
+inspection view. When a member output is also promoted to a network boundary, the boundary
+channel is the single public representation; its generated member alias stays internal so one
+physical value cannot appear twice.
+
+All operator-facing channel labels go through `lunco_viz::signal::display_channel_label`, which
+uses the same identifier humanizer and ownership-relative shortening in the telemetry browser,
+plot controls, legends, and exports. The generated-name setting only selects the presentation
+projection; it never changes identity, history, bindings, or the USD/Modelica model. A new
+producer therefore supplies ownership metadata once and does not need a second naming table in
+each UI surface.
+
 ---
 
 ## 0. What is true today (verify before trusting)

@@ -230,6 +230,24 @@ pub enum SignalType {
     Event,
 }
 
+/// Whether a signal is part of a model's operator-facing surface or is an
+/// implementation value retained for runtime inspection.
+///
+/// This is runtime metadata, not an authoring annotation.  A producer derives
+/// it from the ownership/projection it already owns.  In particular, a
+/// generated Modelica network marks its authored boundary outputs and promoted
+/// member outputs as [`Public`] and its copied inputs, connector values, and
+/// component state as [`Internal`].  The registry still retains both kinds;
+/// clients decide whether to show implementation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum SignalExposure {
+    /// A canonical value intended for the normal operator-facing catalog.
+    #[default]
+    Public,
+    /// Complete runtime state retained for model inspection and diagnostics.
+    Internal,
+}
+
 /// Descriptive metadata. Optional and non-load-bearing — viz kinds render without it,
 /// but tooltips, legends, and axis labels get better when it's populated.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +260,8 @@ pub struct SignalMeta {
     pub provenance: Option<String>,
     /// Runtime visual ownership path supplied by the producing model.
     pub group_path: Option<String>,
+    /// Runtime-derived operator/implementation classification.
+    pub exposure: SignalExposure,
 }
 
 /// One (time, value) pair for a [`SignalType::Scalar`] signal.

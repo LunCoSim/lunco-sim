@@ -161,6 +161,7 @@ pub fn retain_physics_telemetry(
                     unit: Some(unit.to_string()),
                     provenance: Some("avian".to_string()),
                     group_path: Some(prim.path.clone()),
+                    exposure: Default::default(),
                 },
             );
             if signals.retain_scalar_if_changed(

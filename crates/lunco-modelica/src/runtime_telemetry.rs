@@ -9,7 +9,7 @@
 //! visualization binding.
 
 use bevy::prelude::*;
-use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
+use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -42,6 +42,13 @@ pub struct ModelicaSignalLayout {
     /// unit/member instance variables use this form so newly exposed internal
     /// variables do not require another explicit telemetry declaration.
     pub prefixes: Vec<(String, String)>,
+    /// Generated wrapper variables that correspond to authored outputs of the
+    /// composed USD network. A member alias is public when it is the only
+    /// runtime representation of that authored output; aliases already
+    /// represented by a public network output remain internal to avoid a
+    /// duplicate row for the same physical value. Every other variable remains
+    /// available through the explicit model-variable inspection view.
+    pub public_exact_paths: HashSet<String>,
     /// Owner of a generated value for which the topology has no more specific
     /// member mapping.  This is the composed network scope, not a fabricated
     /// telemetry entity.
@@ -60,6 +67,17 @@ impl ModelicaSignalLayout {
             .max_by_key(|(prefix, _)| prefix.len())
             .map(|(_, path)| path.as_str())
             .or_else(|| (!self.root_path.is_empty()).then_some(self.root_path.as_str()))
+    }
+
+    /// Classify a generated solver variable without parsing its generated
+    /// spelling in a consumer.  The projection records the authored network
+    /// boundary once; copied unit variables and internal connector/state
+    /// variables are therefore unambiguously implementation values.
+    pub fn exposure(&self, variable: &str) -> SignalExposure {
+        self.public_exact_paths
+            .contains(variable)
+            .then_some(SignalExposure::Public)
+            .unwrap_or(SignalExposure::Internal)
     }
 }
 
@@ -188,6 +206,9 @@ fn model_signal_meta(
         group_path: layout
             .and_then(|layout| layout.group_path(name))
             .map(str::to_owned),
+        exposure: layout
+            .map(|layout| layout.exposure(name))
+            .unwrap_or_default(),
     }
 }
 

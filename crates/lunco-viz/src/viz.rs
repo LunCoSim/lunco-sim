@@ -83,7 +83,8 @@ pub struct SignalBinding {
     #[serde(default)]
     pub persisted_source: Option<PersistedSignalRef>,
     pub role: String,
-    /// Legend label override. Defaults to `source.path` when `None`.
+    /// Optional user-authored legend override. When `None`, every plot surface
+    /// derives the label from the shared telemetry naming policy and metadata.
     #[serde(default)]
     pub label: Option<String>,
     /// User-chosen line/marker color, if any. `None` means

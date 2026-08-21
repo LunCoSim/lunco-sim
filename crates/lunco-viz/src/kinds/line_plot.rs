@@ -24,7 +24,8 @@ use std::collections::HashMap;
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
 use crate::signal::{
-    PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
+    humanize_identifier, PersistedSignalRef, ScalarSample, SignalMeta, SignalRef, SignalRegistry,
+    SignalType,
 };
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
@@ -60,9 +61,9 @@ pub struct LinePlotStyle {
     /// phase-space plot survives the same scene reload as its Y bindings.
     #[serde(default)]
     pub x_persisted_signal: Option<PersistedSignalRef>,
-    /// Optional axis labels. If `None`, labels are auto-derived
-    /// from the X-signal path (or `"time (s)"`) and the first Y
-    /// binding's path.
+    /// Optional authored axis labels. When `None`, the shared signal naming
+    /// policy is used by controls, legends, and hover text; no raw generated
+    /// name is inserted into an axis-title row.
     #[serde(default)]
     pub x_label: Option<String>,
     #[serde(default)]
@@ -114,15 +115,32 @@ fn component_parameter_label(wb: &PanelCtx, signal: &SignalRef) -> String {
     let owner = wb
         .get::<Name>(signal.entity)
         .map(|name| {
-            name.as_str()
+            let leaf = name
+                .as_str()
                 .trim_matches('/')
                 .rsplit('/')
                 .next()
-                .unwrap_or(name.as_str())
-                .replace('_', " ")
+                .unwrap_or(name.as_str());
+            humanize_identifier(leaf)
         })
         .unwrap_or_else(|| format!("Entity {}", signal.entity));
-    format!("[{owner}.{}]", signal.path)
+    let meta = wb
+        .resource::<SignalRegistry>()
+        .and_then(|registry| registry.meta(signal));
+    let channel = crate::signal::display_channel_label(
+        &signal.path,
+        meta.and_then(|metadata| metadata.group_path.as_deref()),
+        wb.resource_expect::<crate::telemetry_browser::TelemetryDisplaySettings>()
+            .show_generated_names,
+    );
+    if meta
+        .and_then(|metadata| metadata.group_path.as_deref())
+        .is_some()
+    {
+        format!("{owner} · {channel}")
+    } else {
+        format!("[{owner}.{channel}]")
+    }
 }
 
 /// Operator-facing label for a binding, with its unit appended when the
@@ -501,36 +519,13 @@ impl LinePlot {
             ctx.wb.trigger(LinePlotFitRequested { viz: id });
         }
 
-        // Axis labels. Explicit user override → that; otherwise
-        // derive from the signal (X = signal path / "time (s)"; Y =
-        // first binding path when only one Y is bound, else
-        // "(see legend)" so the plot doesn't mislabel a multi-line
-        // chart with the first signal's name).
-        let x_label = style
-            .x_label
-            .clone()
-            .unwrap_or_else(|| match &style.x_signal {
-                None => "time (s)".to_string(),
-                Some(xs) => xs.path.clone(),
-            });
-        let mut y_label = style.y_label.unwrap_or_else(|| {
-            if y_bindings.len() == 1 {
-                // Resolve meta via a short-lived borrow so the long-lived
-                // `registry` (held since the top of the body) is not captured
-                // across the typed fit request below.
-                let meta = ctx
-                    .wb
-                    .resource::<SignalRegistry>()
-                    .and_then(|r| r.meta(&y_bindings[0].source));
-                binding_label(ctx.wb, y_bindings[0], meta)
-            } else {
-                "(see legend)".to_string()
-            }
-        });
+        // The toolbar names the X source and every Y binding, while hover
+        // labels carry the exact value and simulation time. Default axis-title
+        // strings duplicate that information and consume a full plot row, so
+        // only an explicit user-authored title is rendered.
+        let x_label = style.x_label.clone();
+        let y_label = style.y_label.clone();
         let log_y = style.log_y;
-        if log_y {
-            y_label = format!("{y_label} (log₁₀)");
-        }
 
         // `remaining` (computed above, before tessellation) is the
         // space left after the toolbar + separator; `max_rect()` would
@@ -538,8 +533,6 @@ impl LinePlot {
         let mut plot = Plot::new(("line_plot", config.id.raw()))
             .width(remaining.x)
             .height(remaining.y)
-            .x_axis_label(x_label)
-            .y_axis_label(y_label)
             .auto_bounds(bevy_egui::egui::emath::Vec2b::new(true, true))
             // Hover any line → name + time + de-logged value.
             .label_formatter(move |pos| {
@@ -553,12 +546,20 @@ impl LinePlot {
                     egui_plot::HoverPosition::Elsewhere { position } => ("", position),
                 };
                 Some(crate::plot_fmt::hover_label(name, point, log_y))
-            })
-            .legend(
+            });
+        if let Some(label) = x_label {
+            plot = plot.x_axis_label(label);
+        }
+        if let Some(label) = y_label {
+            plot = plot.y_axis_label(label);
+        }
+        if y_bindings.len() > 1 {
+            plot = plot.legend(
                 Legend::default()
                     .position(Corner::RightTop)
                     .background_alpha(0.7),
             );
+        }
         if log_y {
             // Grid marks live in log space; relabel them as real values.
             plot = plot.y_axis_formatter(|mark, _range| crate::plot_fmt::log_y_tick(mark.value));
@@ -649,7 +650,7 @@ fn render_toolbar(
         let x_current = style
             .x_signal
             .as_ref()
-            .map(|s| s.path.clone())
+            .map(|s| component_parameter_label(ctx.wb, s))
             .unwrap_or_else(|| "time".to_string());
         egui::ComboBox::from_id_salt(("lp_x", config.id.raw()))
             .selected_text(x_current)
@@ -664,14 +665,22 @@ fn render_toolbar(
                 }
                 for sig in &available {
                     let selected = style.x_signal.as_ref() == Some(sig);
-                    if ui.selectable_label(selected, &sig.path).clicked() && !selected {
+                    if ui
+                        .selectable_label(selected, component_parameter_label(ctx.wb, sig))
+                        .clicked()
+                        && !selected
+                    {
                         edit = Some(Edit::SetX(Some(sig.clone())));
                     }
                 }
             });
         ui.separator();
         ui.label(egui::RichText::new("Y:").size(11.0));
-        let y_width = (ui.available_width() * 0.42).clamp(120.0, 360.0);
+        // Reserve a compact action cluster on the right, and give the Y
+        // binding strip every remaining pixel. This keeps long canonical
+        // names readable without letting the action buttons drift into the
+        // middle of the toolbar.
+        let y_width = (ui.available_width() - 300.0).max(160.0);
         egui::ScrollArea::horizontal()
             .id_salt(("lp_y_bindings", config.id.raw()))
             .max_width(y_width)
@@ -696,50 +705,51 @@ fn render_toolbar(
                 });
             });
 
-        // Add remains outside the scrolling list so it is always reachable.
-        let addables: Vec<&SignalRef> = available
-            .iter()
-            .filter(|s| !current_y_paths.contains(s))
-            .collect();
-        if !addables.is_empty() {
-            egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
-                .selected_text("Add")
-                .width(120.0)
-                .show_ui(ui, |ui| {
-                    for sig in addables {
-                        let meta = meta_of(sig);
-                        let button = ui.button(component_parameter_label(ctx.wb, sig));
-                        let button = if let Some(hint) = signal_hint(meta) {
-                            button.on_hover_text(hint)
-                        } else {
-                            button
-                        };
-                        if button.clicked() {
-                            edit = Some(Edit::AddY(sig.clone()));
+        // Add/log/actions stay in a right-aligned cluster. Add remains
+        // outside the scrolling list so it is always reachable.
+        ui.add_space((ui.available_width() - 300.0).max(0.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            actions(ui, ctx.wb);
+            ui.separator();
+            let mut log_y = style.log_y;
+            if ui
+                .toggle_value(&mut log_y, "log Y")
+                .on_hover_text("Plot the Y axis on a log10 scale (drops values <= 0)")
+                .changed()
+            {
+                edit = Some(Edit::SetLogY(log_y));
+            }
+            ui.separator();
+            let addables: Vec<&SignalRef> = available
+                .iter()
+                .filter(|s| !current_y_paths.contains(s))
+                .collect();
+            if !addables.is_empty() {
+                egui::ComboBox::from_id_salt(("lp_add", config.id.raw()))
+                    .selected_text("Add")
+                    .width(120.0)
+                    .show_ui(ui, |ui| {
+                        for sig in addables {
+                            let meta = meta_of(sig);
+                            let button = ui.button(component_parameter_label(ctx.wb, sig));
+                            let button = if let Some(hint) = signal_hint(meta) {
+                                button.on_hover_text(hint)
+                            } else {
+                                button
+                            };
+                            if button.clicked() {
+                                edit = Some(Edit::AddY(sig.clone()));
+                            }
                         }
-                    }
-                });
-        } else if current_y_paths.is_empty() {
-            ui.label(
-                egui::RichText::new("no signals yet")
-                    .color(muted)
-                    .size(10.0),
-            );
-        }
-
-        ui.separator();
-        // Log-Y toggle. Mirrors the experiments plot's toggle so both
-        // surfaces feel the same.
-        let mut log_y = style.log_y;
-        if ui
-            .toggle_value(&mut log_y, "log Y")
-            .on_hover_text("Plot the Y axis on a log10 scale (drops values <= 0)")
-            .changed()
-        {
-            edit = Some(Edit::SetLogY(log_y));
-        }
-        ui.separator();
-        actions(ui, ctx.wb);
+                    });
+            } else if current_y_paths.is_empty() {
+                ui.label(
+                    egui::RichText::new("no signals yet")
+                        .color(muted)
+                        .size(10.0),
+                );
+            }
+        });
     });
     if let Some(r) = removed {
         edit = Some(Edit::RemoveY(r));

@@ -711,7 +711,10 @@ impl Perspective for BuildPerspective {
         "⚒ Build".into()
     }
     fn layout_revision(&self) -> u32 {
-        1
+        // Revision 2 adds the default Graphs instance to the bottom-center
+        // split. Existing cached Build layouts must be rebuilt once so the
+        // default is deterministic for every workspace.
+        2
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);

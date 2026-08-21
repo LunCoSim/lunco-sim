@@ -56,12 +56,16 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_settings::SettingsSection;
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
 use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
 use crate::registry::VisualizationRegistry;
-use crate::signal::{ScalarHistory, SignalRef, SignalRegistry, TelemetryFocus};
+use crate::signal::{
+    display_channel_label, humanize_identifier, ScalarHistory, SignalExposure, SignalRef,
+    SignalRegistry, TelemetryFocus,
+};
 use crate::view::ViewTarget;
 use crate::viz::{SignalBinding, VisualizationConfig, VizId};
 use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
@@ -79,6 +83,40 @@ pub const TELEMETRY_BROWSER_PANEL_ID: PanelId = PanelId("telemetry_browser");
 pub struct TelemetryBrowserView {
     pub filter: String,
     pub signal: String,
+}
+
+/// Presentation-only preferences for the telemetry browser.
+///
+/// These settings never change samples, deadbands, units, or plot data. They
+/// control only the compact latest-value cells in this panel, so the operator
+/// can suppress numerical noise without losing the underlying state in the
+/// shared registry or API.
+#[derive(Resource, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TelemetryDisplaySettings {
+    /// Number of significant digits used in a compact value cell.
+    pub significant_digits: u8,
+    /// Values below this magnitude are rendered as `0` in the compact cell.
+    /// The stored sample and detail/plot history remain unchanged.
+    pub zero_threshold: f64,
+    /// Use the exact producer-generated path in operator-facing labels. This
+    /// is a diagnostic presentation choice; signal identity and data remain
+    /// unchanged.
+    #[serde(default)]
+    pub show_generated_names: bool,
+}
+
+impl Default for TelemetryDisplaySettings {
+    fn default() -> Self {
+        Self {
+            significant_digits: 4,
+            zero_threshold: 1.0e-4,
+            show_generated_names: false,
+        }
+    }
+}
+
+impl SettingsSection for TelemetryDisplaySettings {
+    const KEY: &'static str = "telemetry_display";
 }
 
 #[Command(default)]
@@ -244,6 +282,8 @@ struct Row {
     unit: Option<String>,
     description: Option<String>,
     provenance: Option<String>,
+    group_path: Option<String>,
+    exposure: SignalExposure,
     in_focus: bool,
     active: bool,
 }
@@ -297,11 +337,7 @@ fn catalog_key(reg: &SignalRegistry) -> u64 {
 /// path remains available in the tooltip; the browser uses this label only to
 /// keep the live hierarchy readable in a narrow panel.
 fn display_entity_name(name: &str) -> String {
-    name.trim_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(name)
-        .replace('_', " ")
+    humanize_identifier(name.trim_matches('/').rsplit('/').next().unwrap_or(name))
 }
 
 /// Rebuild the catalog from the live ownership hierarchy. This deliberately
@@ -325,6 +361,8 @@ fn build_tree(
             unit: meta.and_then(|m| m.unit.clone()),
             description: meta.and_then(|m| m.description.clone()),
             provenance,
+            group_path: meta.and_then(|m| m.group_path.clone()),
+            exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
             in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
             active: reg.is_active(sig),
         };
@@ -337,7 +375,7 @@ fn build_tree(
                 .map(|segment| {
                     key.push('/');
                     key.push_str(segment);
-                    (key.clone(), segment.replace('_', " "))
+                    (key.clone(), humanize_identifier(segment))
                 })
                 .collect()
         } else {
@@ -480,15 +518,6 @@ fn filter_match(filter: &str, label: &str, path: &str, description: Option<&str>
         || description.is_some_and(|text| text.to_lowercase().contains(&f))
 }
 
-/// Compact channel label for a narrow telemetry pane. The registry path remains
-/// the stable identity and is always available in the row tooltip; this is only
-/// the operator-facing presentation of it.
-fn compact_channel_label(path: &str) -> String {
-    let decoded = path.replace("_x2f_", "/");
-    let readable = decoded.trim_matches('/').rsplit('/').next().unwrap_or(path);
-    readable.replace('_', " ")
-}
-
 /// Convert a signal identity into structural display nodes. Generated USD
 /// namespaces may encode separators as `_x2f_`; decoding is presentation-only,
 /// so registry identities and persistence remain untouched. The final dotted
@@ -524,7 +553,7 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         .into_iter()
         .filter(|segment| !segment.is_empty())
         .map(|segment| {
-            let label = segment.replace('_', " ");
+            let label = humanize_identifier(&segment);
             let id = if absolute {
                 authored_path.push('/');
                 authored_path.push_str(&segment);
@@ -537,8 +566,15 @@ fn signal_structure(path: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn row_visible(row: &Row, scoped: bool, filter: &str, label: &str) -> bool {
-    (!scoped || row.in_focus)
+fn row_visible(
+    row: &Row,
+    scoped: bool,
+    show_model_variables: bool,
+    filter: &str,
+    label: &str,
+) -> bool {
+    (show_model_variables || row.exposure == SignalExposure::Public)
+        && (!scoped || row.in_focus)
         && filter_match(filter, label, &row.sig.path, row.description.as_deref())
 }
 
@@ -550,15 +586,15 @@ fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> boo
             .any(|child| tree_any_row(child, predicate))
 }
 
-fn visible_count(node: &TreeNode, scoped: bool, filter: &str) -> usize {
+fn visible_count(node: &TreeNode, scoped: bool, show_model_variables: bool, filter: &str) -> usize {
     node.rows
         .iter()
-        .filter(|r| row_visible(r, scoped, filter, &node.label))
+        .filter(|r| row_visible(r, scoped, show_model_variables, filter, &node.label))
         .count()
         + node
             .children
             .values()
-            .map(|c| visible_count(c, scoped, filter))
+            .map(|c| visible_count(c, scoped, show_model_variables, filter))
             .sum::<usize>()
 }
 
@@ -579,12 +615,14 @@ fn render_tree_node(
     registry: &SignalRegistry,
     theme: &lunco_theme::Theme,
     scoped: bool,
+    show_model_variables: bool,
+    display_settings: &TelemetryDisplaySettings,
     filter: &str,
     selected: Option<&SignalRef>,
     depth: usize,
     clicked: &mut Option<SignalRef>,
 ) {
-    let visible = visible_count(node, scoped, filter);
+    let visible = visible_count(node, scoped, show_model_variables, filter);
     if visible == 0 {
         return;
     }
@@ -601,6 +639,8 @@ fn render_tree_node(
                 registry,
                 theme,
                 scoped,
+                show_model_variables,
+                display_settings,
                 filter,
                 selected,
                 depth + 1,
@@ -615,12 +655,17 @@ fn render_tree_node(
                 for row in node
                     .rows
                     .iter()
-                    .filter(|r| row_visible(r, scoped, filter, &node.label))
+                    .filter(|r| row_visible(r, scoped, show_model_variables, filter, &node.label))
                 {
                     let latest = registry
                         .scalar_history(&row.sig)
                         .and_then(|h| h.samples.back())
                         .map(|s| s.value);
+                    let channel_label = display_channel_label(
+                        &row.sig.path,
+                        row.group_path.as_deref(),
+                        display_settings.show_generated_names,
+                    );
                     let payload = ChannelDragPayload::from_signal(&row.sig);
                     let inner = ui.dnd_drag_source(
                         ui.id().with(("tb_row", &row.sig)),
@@ -629,9 +674,9 @@ fn render_tree_node(
                             ui.selectable_label(
                                 selected == Some(&row.sig),
                                 egui::RichText::new(if row.active {
-                                    compact_channel_label(&row.sig.path)
+                                    channel_label.clone()
                                 } else {
-                                    format!("{} (archived)", compact_channel_label(&row.sig.path))
+                                    format!("{channel_label} (archived)")
                                 })
                                 .color(if row.active {
                                     theme.tokens.text
@@ -645,7 +690,9 @@ fn render_tree_node(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(
-                                latest.map(fmt_value).unwrap_or_else(|| "—".into()),
+                                latest
+                                    .map(|value| fmt_value(value, display_settings))
+                                    .unwrap_or_else(|| "—".into()),
                             )
                             .monospace()
                             .color(if latest.is_some() {
@@ -759,8 +806,8 @@ struct PreviewCache {
 
 // ── Value formatting ─────────────────────────────────────────────────
 
-/// Latest-value formatter: **four significant digits, and the number is
-/// never rescaled**.
+/// Latest-value formatter: configurable significant digits, with an explicit
+/// display-only near-zero threshold. The number is never rescaled.
 ///
 /// It used to apply SI prefixes (`0.9` → `900.000m`), which is wrong the
 /// moment a value has a unit the prefix cannot legally attach to. A state
@@ -770,9 +817,9 @@ struct PreviewCache {
 /// function's job is to make the digits readable, not to reinterpret the
 /// quantity.
 ///
-/// Wide magnitudes fall back to scientific notation, so a diverged sim
-/// still shows `1.20e260` rather than a wall of digits.
-fn fmt_value(v: f64) -> String {
+/// Wide magnitudes fall back to scientific notation, so a diverged sim stays
+/// readable rather than becoming a wall of digits.
+fn fmt_value(v: f64, settings: &TelemetryDisplaySettings) -> String {
     if !v.is_finite() {
         return "—".to_string();
     }
@@ -780,13 +827,27 @@ fn fmt_value(v: f64) -> String {
         return "0".to_string();
     }
     let av = v.abs();
-    if !(1.0e-4..1.0e7).contains(&av) {
-        return format!("{v:.2e}");
+    if settings.zero_threshold > 0.0 && av < settings.zero_threshold {
+        return "0".to_string();
     }
-    // Four significant digits: enough to see a value move, few enough that
-    // the column stays a column.
-    let decimals = (3 - av.log10().floor() as i32).clamp(0, 6) as usize;
-    format!("{v:.decimals$}")
+    let significant_digits = settings.significant_digits.clamp(1, 8) as i32;
+    let exponent = av.log10().floor() as i32;
+    let decimals = (significant_digits - 1 - exponent).max(0) as usize;
+    let mut text = if exponent >= 7 || exponent < -4 {
+        format!(
+            "{v:.precision$e}",
+            precision = (significant_digits - 1) as usize
+        )
+    } else {
+        format!("{v:.decimals$}")
+    };
+    if let Some((mantissa, exponent)) = text.split_once('e') {
+        let trimmed = mantissa.trim_end_matches('0').trim_end_matches('.');
+        text = format!("{trimmed}e{exponent}");
+    } else {
+        text = text.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    text
 }
 
 /// How a channel's authored unit is DISPLAYED.
@@ -839,6 +900,10 @@ pub struct TelemetryBrowserPanel {
     /// checkbox disabled) while nothing is selected, so the panel never goes blank
     /// just because the user hasn't clicked anything yet.
     focus_only: bool,
+    /// Show the complete generated solver state in addition to canonical
+    /// USD-facing channels. The registry/API always retain both; this is only
+    /// the normal operator tree's presentation mode.
+    show_model_variables: bool,
 }
 
 impl Default for TelemetryBrowserPanel {
@@ -849,6 +914,7 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
+            show_model_variables: false,
         }
     }
 }
@@ -893,6 +959,8 @@ impl Panel for TelemetryBrowserPanel {
             return;
         };
         let subdued = theme.tokens.text_subdued;
+        let stored_display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
+        let mut display_settings = stored_display_settings.clone();
 
         // ── Filter box ───────────────────────────────────────────
         ui.add(
@@ -930,7 +998,48 @@ impl Panel for TelemetryBrowserPanel {
                         .color(subdued),
                 );
             }
+            ui.checkbox(&mut self.show_model_variables, "Model variables")
+                .on_hover_text(
+                    "Include generated Modelica inputs, connector values, and component state. \
+                     Canonical USD-facing channels stay visible when this is off.",
+                );
+            ui.menu_button("Display", |ui| {
+                ui.label("Latest-value formatting");
+                ui.add(
+                    egui::Slider::new(&mut display_settings.significant_digits, 1..=8)
+                        .text("significant digits"),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("near-zero as 0");
+                    ui.add(
+                        egui::DragValue::new(&mut display_settings.zero_threshold)
+                            .speed(1.0e-5)
+                            .range(0.0..=1.0e6),
+                    );
+                });
+                ui.checkbox(
+                    &mut display_settings.show_generated_names,
+                    "Show generated names",
+                )
+                .on_hover_text(
+                    "Use exact producer paths in the telemetry browser and graphs for diagnostics.",
+                );
+                ui.label(
+                    egui::RichText::new("Display only; stored samples and plot data stay exact.")
+                        .small()
+                        .color(subdued),
+                );
+            });
         });
+        if display_settings != stored_display_settings {
+            display_settings.significant_digits = display_settings.significant_digits.clamp(1, 8);
+            display_settings.zero_threshold = if display_settings.zero_threshold.is_finite() {
+                display_settings.zero_threshold.max(0.0)
+            } else {
+                TelemetryDisplaySettings::default().zero_threshold
+            };
+            ctx.set_resource(display_settings.clone());
+        }
         ui.separator();
 
         let Some(registry) = ctx.resource::<SignalRegistry>() else {
@@ -1012,6 +1121,22 @@ impl Panel for TelemetryBrowserPanel {
             );
             return;
         }
+        if visible_count(
+            &self.catalog.root,
+            scoped,
+            self.show_model_variables,
+            &self.filter,
+        ) == 0
+        {
+            ui.label(
+                egui::RichText::new(
+                    "No channels match the current display filters. Enable Model variables, \
+                     change the filter, or untick Selected only.",
+                )
+                .color(subdued),
+            );
+            return;
+        }
 
         // Deferred row actions — can't mutate `self.selected` while
         // iterating `self.catalog`.
@@ -1031,6 +1156,8 @@ impl Panel for TelemetryBrowserPanel {
                         registry,
                         &theme,
                         scoped,
+                        self.show_model_variables,
+                        &display_settings,
                         &self.filter,
                         self.selected.as_ref(),
                         0,
@@ -1049,6 +1176,12 @@ impl Panel for TelemetryBrowserPanel {
         };
         ui.separator();
         let metadata = registry.meta(&sel);
+        if !self.show_model_variables
+            && metadata.is_some_and(|meta| meta.exposure == SignalExposure::Internal)
+        {
+            self.selected = None;
+            return;
+        }
         let unit = metadata.and_then(|m| m.unit.clone());
         let description = metadata.and_then(|m| m.description.clone());
         let hist = registry.scalar_history(&sel);
@@ -1067,8 +1200,8 @@ impl Panel for TelemetryBrowserPanel {
                 let text = match latest {
                     Some(s) => {
                         let u = pretty_unit(unit.as_deref());
-                        let value = fmt_value(s.value);
-                        let t = fmt_value(s.time);
+                        let value = fmt_value(s.value, &display_settings);
+                        let t = fmt_value(s.time, &display_settings);
                         if u.is_empty() {
                             format!("{value}   t = {t} s")
                         } else {
@@ -1131,7 +1264,11 @@ impl Panel for TelemetryBrowserPanel {
             };
             let cfg = VisualizationConfig {
                 id: viz_registry.allocate_id(),
-                title: sel.path.clone(),
+                title: display_channel_label(
+                    &sel.path,
+                    metadata.and_then(|meta| meta.group_path.as_deref()),
+                    display_settings.show_generated_names,
+                ),
                 kind: LINE_PLOT_KIND,
                 view: ViewTarget::Panel2D,
                 inputs: vec![SignalBinding::live(sel.clone(), "y")],
@@ -1150,6 +1287,7 @@ impl Panel for TelemetryBrowserPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signal::compact_channel_label;
     use crate::signal::SignalRef;
 
     fn ent(n: u32) -> Entity {
@@ -1432,16 +1570,34 @@ mod tests {
 
     #[test]
     fn fmt_value_is_four_significant_digits_and_never_rescales() {
-        assert_eq!(fmt_value(0.0), "0");
+        let settings = TelemetryDisplaySettings::default();
+        assert_eq!(fmt_value(0.0, &settings), "0");
         // The bug this replaced: a state of charge is 0.9, NOT "900.000m".
-        assert_eq!(fmt_value(0.9), "0.9000");
-        assert_eq!(fmt_value(26_000.0), "26000");
-        assert_eq!(fmt_value(-0.0042), "-0.004200");
-        assert_eq!(fmt_value(1.234_5), "1.234");
-        assert_eq!(fmt_value(12.345), "12.35");
+        assert_eq!(fmt_value(0.9, &settings), "0.9");
+        assert_eq!(fmt_value(26_000.0, &settings), "26000");
+        assert_eq!(fmt_value(-0.0042, &settings), "-0.0042");
+        assert_eq!(fmt_value(1.234_5, &settings), "1.235");
+        assert_eq!(fmt_value(12.345, &settings), "12.35");
+        assert_eq!(fmt_value(9.67e-5, &settings), "0");
         // Wide magnitudes stay readable rather than becoming a wall of digits.
-        assert_eq!(fmt_value(1.2e260), "1.20e260");
-        assert_eq!(fmt_value(f64::NAN), "—");
+        assert_eq!(fmt_value(1.2e260, &settings), "1.2e260");
+        assert_eq!(fmt_value(f64::NAN, &settings), "—");
+    }
+
+    #[test]
+    fn channel_label_removes_the_owning_category_only_at_a_name_boundary() {
+        assert_eq!(
+            compact_channel_label("Motor__L0.electrical_power", "Motor L0"),
+            "electrical power"
+        );
+        assert_eq!(
+            compact_channel_label("Motor L0 terminal_voltage_v", "Motor L0"),
+            "terminal voltage v"
+        );
+        assert_eq!(
+            compact_channel_label("Motor L01.speed", "Motor L0"),
+            "Motor L01.speed"
+        );
     }
 
     #[test]

@@ -1343,8 +1343,18 @@ impl WorkbenchLayout {
                     _ => false,
                 })
             })
-            // Priority 4: any leaf at all.
-            .or_else(|| first_leaf(main))
+            // Priority 4: any leaf at all, except that a kind whose
+            // authoritative default is the Bottom dock must create a bottom
+            // split when no bottom singleton has reserved one. Otherwise the
+            // first leaf can be the left browser, making a default graph tab
+            // appear in the wrong surface.
+            .or_else(|| {
+                if preferred_slot != Some(PanelSlot::Bottom) {
+                    first_leaf(main)
+                } else {
+                    None
+                }
+            })
             // …but never the exclusive scene-viewport leaf.
             .filter(|n| Some(*n) != vp_leaf)
         };

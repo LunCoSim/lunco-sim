@@ -2253,22 +2253,23 @@ fn generated_signal_layout(
         root_path: root.to_string(),
         ..default()
     };
+    let mut public_member_outputs = BTreeSet::new();
 
     // Public network outputs retain the authored connection's physical owner.
-    // An alias promoted from a member is not an authored root attribute, so it
-    // is added from `member_output_aliases` below instead.
     for output in outputs {
         let attr = format!("outputs:{output}");
         let connections = view.connections(root_path, &attr);
         let Some(target) = connections.first() else {
             continue;
         };
-        let Some((target_prim, _)) = target.rsplit_once(".outputs:") else {
+        let Some((target_prim, target_output)) = target.rsplit_once(".outputs:") else {
             continue;
         };
+        public_member_outputs.insert(format!("{target_prim}.outputs:{target_output}"));
         layout
             .exact_paths
             .insert(output.clone(), target_prim.to_string());
+        layout.public_exact_paths.insert(output.clone());
     }
 
     // Boundary inputs are also solver variables.  Their authored source is
@@ -2294,8 +2295,16 @@ fn generated_signal_layout(
             .or_insert_with(|| target_prim.to_string());
     }
 
-    for (member, _, alias) in member_output_aliases {
+    for (member, output, alias) in member_output_aliases {
         layout.exact_paths.insert(alias.clone(), member.clone());
+        // A generated member alias is the canonical public projection for an
+        // authored component output unless the network already exposes that
+        // same USD port under a public boundary name. This is topology-derived
+        // and therefore applies equally to motors, batteries, panels, and
+        // future Modelica facets without a component-name classifier.
+        if !public_member_outputs.contains(&format!("{member}.outputs:{output}")) {
+            layout.public_exact_paths.insert(alias.clone());
+        }
     }
 
     // The synthesizer emits every component under a deterministic unit

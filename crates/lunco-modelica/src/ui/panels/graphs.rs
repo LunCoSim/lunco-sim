@@ -282,7 +282,15 @@ fn collect_live_extras(
                     .map(|t| lunco_viz::signal::color_for_signal(t, &b.source.path))
                     .unwrap_or(bevy_egui::egui::Color32::GRAY)
             });
-            let label = b.label.clone().unwrap_or_else(|| b.source.path.clone());
+            let label = b.label.clone().unwrap_or_else(|| {
+                lunco_viz::display_channel_label(
+                    &b.source.path,
+                    sigs.meta(&b.source)
+                        .and_then(|meta| meta.group_path.as_deref()),
+                    ctx.resource_expect::<lunco_viz::TelemetryDisplaySettings>()
+                        .show_generated_names,
+                )
+            });
             Some(crate::ui::panels::experiments::PlotExtraLine {
                 label,
                 color: (color.r(), color.g(), color.b()),
@@ -333,10 +341,20 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                 if show_live {
                     for binding in &cfg.inputs {
                         if let Some(hist) = reg.scalar_history(&binding.source) {
-                            let label = binding
-                                .label
-                                .clone()
-                                .unwrap_or_else(|| format!("Live · {}", binding.source.path));
+                            let label = binding.label.clone().unwrap_or_else(|| {
+                                let channel = lunco_viz::display_channel_label(
+                                    &binding.source.path,
+                                    reg.meta(&binding.source)
+                                        .and_then(|meta| meta.group_path.as_deref()),
+                                    world
+                                        .get_resource::<lunco_viz::TelemetryDisplaySettings>()
+                                        .expect(
+                                            "LuncoVizPlugin installs telemetry display settings",
+                                        )
+                                        .show_generated_names,
+                                );
+                                format!("Live · {channel}")
+                            });
                             let mut data = Vec::new();
                             for s in &hist.samples {
                                 all_times.push(s.time);
