@@ -1149,7 +1149,7 @@ fn passive_prismatic_suspension_from_usd(
             None => default.ok_or(()),
         }
     };
-    let (rest_position, spring_k, damping_c, yield_force, max_force) = (|| {
+    let parsed: Result<(f64, f64, f64, f64, f64), ()> = (|| {
         Ok((
             read_required_real("lunco:prismaticSuspension:restPosition", Some(0.0))?,
             read_required_real("lunco:prismaticSuspension:stiffness", None)?,
@@ -1157,7 +1157,8 @@ fn passive_prismatic_suspension_from_usd(
             read_required_real("lunco:prismaticSuspension:yieldForce", None)?,
             read_required_real("lunco:prismaticSuspension:maxForce", None)?,
         ))
-    })() else {
+    })();
+    let Ok((rest_position, spring_k, damping_c, yield_force, max_force)) = parsed else {
         warn!(
             "USD passive suspension {} has malformed or missing numeric attributes; suspension ignored",
             prim.as_str()
