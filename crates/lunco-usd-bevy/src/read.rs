@@ -109,6 +109,16 @@ fn dict_string(dict: &openusd::sdf::Dictionary, key: &str) -> Option<String> {
     dict.get(key).and_then(|v| v.clone().get::<String>())
 }
 
+fn numeric_value_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float(value) => Some(f64::from(*value)),
+        Value::Double(value) => Some(*value),
+        Value::Int(value) => Some(f64::from(*value)),
+        Value::Int64(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
 /// Composed, default-time reads served by the live canonical `StageView`.
 /// Extractors depend on this seam rather than reaching into OpenUSD directly.
 pub trait UsdRead {
@@ -188,18 +198,18 @@ pub trait UsdRead {
             .map(|a| a.into_string())
     }
 
-    /// A real scalar tolerant of `float` **or** `double` authoring, as `f64`.
+    /// A real scalar tolerant of `float`, `double`, `int`, or `int64` authoring,
+    /// as `f64`.
     ///
     /// `scalar::<f64>` matches only a `Double` opinion, so a value authored in the
     /// other precision — a gain authored `float` to match the `float` port it
-    /// scales, a georeference metre offset, a hand-authored `float radius` — reads
-    /// as `None` and is silently dropped. A real value is a real value regardless
-    /// of authored precision: this tries `f64`, then `f32`, so the opinion is never
-    /// lost on a type mismatch. Every real-valued read should use this, not
-    /// `scalar::<f64>`. Provided.
+    /// scales, a georeference metre offset, a hand-authored `float radius`, or
+    /// an integer-valued range — reads as `None` and is silently dropped. Every
+    /// real-valued read should use this, not `scalar::<f64>`. Provided.
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64> {
-        self.scalar::<f64>(prim, name)
-            .or_else(|| self.scalar::<f32>(prim, name).map(f64::from))
+        self.attr_value(prim, name)
+            .as_ref()
+            .and_then(numeric_value_as_f64)
     }
 
     /// The ARRAY counterpart of [`text`](Self::text): a `token[]` **or** `string[]`.
@@ -274,21 +284,13 @@ pub trait UsdRead {
     }
 
     /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
-    /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
-    /// `double`-authored value is not dropped by a strict `scalar::<f32>` — and of
-    /// integer authoring (`int`/`int64`), so a bare `rotateZ = 90` or an
-    /// integer-spelled intensity reads as the number it is instead of silently
-    /// `None`. The ONE tolerant scalar read: every float-like attribute goes
-    /// through here (or [`real_f32_at`](Self::real_f32_at) when animated).
+    /// params, physics gains). Tolerant of `double`/`float`/`int`/`int64`
+    /// authoring, so a value is not dropped by a strict typed scalar read. The
+    /// ONE tolerant scalar read: every float-like attribute goes through here
+    /// (or [`real_f32_at`](Self::real_f32_at) when animated).
     /// Provided.
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
-        match self.attr_value(prim, name)? {
-            Value::Float(v) => Some(v),
-            Value::Double(v) => Some(v as f32),
-            Value::Int(v) => Some(v as f32),
-            Value::Int64(v) => Some(v as f32),
-            _ => None,
-        }
+        self.real(prim, name).map(|value| value as f32)
     }
 
     /// Read a boolean attribute, accepting USD's native `bool` and integer
@@ -307,21 +309,16 @@ pub trait UsdRead {
     /// The timeSamples-or-default [`real`](Self::real) — precision-tolerant sibling
     /// of [`scalar_at`](Self::scalar_at) for animated real channels. Provided.
     fn real_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f64> {
-        self.scalar_at::<f64>(prim, name, time)
-            .or_else(|| self.scalar_at::<f32>(prim, name, time).map(f64::from))
+        self.attr_value_at(prim, name, time)
+            .as_ref()
+            .and_then(numeric_value_as_f64)
     }
 
     /// The `f32` timeSamples-or-default tolerant read — [`real_f32`](Self::real_f32)
     /// at a time code, with the same `float`/`double`/`int`/`int64` tolerance.
     /// Provided.
     fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32> {
-        match self.attr_value_at(prim, name, time)? {
-            Value::Float(v) => Some(v),
-            Value::Double(v) => Some(v as f32),
-            Value::Int(v) => Some(v as f32),
-            Value::Int64(v) => Some(v as f32),
-            _ => None,
-        }
+        self.real_at(prim, name, time).map(|value| value as f32)
     }
 
     /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —
@@ -743,11 +740,10 @@ impl UsdRead for StageView<'_> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod real_reader_tests {
-    //! The precision-tolerant [`real`](UsdRead::real) family reads a real value
-    //! regardless of whether it was authored `float` or `double`. This is the
-    //! guard against the silent-fallback bug: `scalar::<f64>` matches only a
-    //! `Double` opinion and `scalar::<f32>` only a `Float` one, so a value
-    //! authored in the other precision reads `None` and is silently dropped.
+    //! The precision-tolerant [`real`](UsdRead::real) family reads a numeric
+    //! value regardless of whether it was authored `float`, `double`, `int`,
+    //! or `int64`. This is the guard against the silent-fallback bug:
+    //! strict scalar reads match only one USD type and silently drop the rest.
 
     use super::UsdRead;
     use crate::canonical::{CanonicalStage, StageRecipe};
@@ -770,6 +766,16 @@ mod real_reader_tests {
             .create_attribute("/World.d_val", "double")
             .unwrap()
             .set(Value::Double(3.5))
+            .unwrap();
+        stage
+            .create_attribute("/World.i_val", "int")
+            .unwrap()
+            .set(Value::Int(4))
+            .unwrap();
+        stage
+            .create_attribute("/World.i64_val", "int64")
+            .unwrap()
+            .set(Value::Int64(5))
             .unwrap();
         cs
     }
@@ -869,6 +875,12 @@ mod real_reader_tests {
         // `real` (→ f64) reads BOTH a float- and a double-authored opinion.
         assert_eq!(view.real(&world, "f_val"), Some(2.5), "real reads float");
         assert_eq!(view.real(&world, "d_val"), Some(3.5), "real reads double");
+        assert_eq!(view.real(&world, "i_val"), Some(4.0), "real reads int");
+        assert_eq!(
+            view.real(&world, "i64_val"),
+            Some(5.0),
+            "real reads int64"
+        );
 
         // `real_f32` (→ f32) likewise reads either precision.
         assert_eq!(
@@ -881,6 +893,8 @@ mod real_reader_tests {
             Some(2.5),
             "real_f32 reads float"
         );
+        assert_eq!(view.real_f32(&world, "i_val"), Some(4.0));
+        assert_eq!(view.real_f32(&world, "i64_val"), Some(5.0));
 
         // The time-sampled variants fall back to the `default` opinion when a
         // channel has no `timeSamples`, and are precision-tolerant there too.
@@ -894,6 +908,8 @@ mod real_reader_tests {
             Some(3.5),
             "real_f32_at reads double default"
         );
+        assert_eq!(view.real_at(&world, "i_val", 0.0), Some(4.0));
+        assert_eq!(view.real_f32_at(&world, "i64_val", 0.0), Some(5.0));
 
         // A genuinely absent attribute is still `None` (tolerance ≠ fabrication).
         assert_eq!(view.real(&world, "missing"), None, "absent attr stays None");
