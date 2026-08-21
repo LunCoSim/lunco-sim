@@ -126,7 +126,11 @@ The consequence for the tester is not cosmetic. Shadows are off *for the rest of
 **Fix:**
 
 - **Log the requested allocation.** `describe()` in `crates/lunco-workbench/src/render_robustness.rs` walks the wgpu source chain, which gives `Not enough memory left` but not *how much* was asked for. Query `RenderDevice` limits and the atlas descriptor at the point of failure and print requested bytes vs. adapter budget. Without that number this stays unfixable-by-inspection.
-- **Budget before allocating, don't allocate and catch.** On `device_type == IntegratedGpu`, cap the shadow-caster count and cascade resolution up front — nearest-N casters to the active camera, reduced cascade count, half-resolution atlas. Degrading deliberately at startup beats a hard OOM plus a session-wide feature kill.
+- **The render settings now own the admission budget.** The earlier proposal to
+  impose hardcoded per-device byte ceilings was rejected: it silently rewrote
+  the user's requested quality and made adapter class a hidden preset selector.
+  `shadow_budget_bytes` is now the sole configured ceiling, while the recovery
+  ladder remains the explicit response to an adapter that cannot satisfy it.
 - **Make the degradation visible in the UI, not only in the log.** A workbench status chip ("shadows disabled — GPU memory") costs one line and saves a bug report.
 - **Re-arm on scene unload.** The warning already promises "reload after closing some scene content to get them back", but `Ladder` has no transition back to `Rung::Healthy`. Either implement it or fix the message.
 

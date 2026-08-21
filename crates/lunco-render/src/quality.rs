@@ -139,8 +139,8 @@ pub struct RenderQualityProfile {
 ///
 /// [`RenderingQuality`] supplies suggested values only. Once a preset is
 /// selected, these fields are the authoritative values used by the renderer;
-/// the runtime never silently replaces them with a lower preset because an
-/// adapter has less memory than requested.
+/// the runtime never silently replaces them with a lower preset because a
+/// scene or adapter cannot satisfy the request.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct RenderingQualitySettings {
     #[serde(default = "default_directional_shadow_map_size")]
@@ -399,25 +399,6 @@ impl SettingsSection for RenderingQualitySettings {
     const KEY: &'static str = "rendering_quality";
 }
 
-/// Main-world projection of the adapter's conservative shadow allocation limit.
-///
-/// This is a safety ceiling reported by the adapter probe, not a quality
-/// selector. It is combined with the user-authored
-/// [`RenderingQualitySettings::shadow_budget_bytes`] for admission control;
-/// neither value changes the requested map resolution or cascade count.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
-pub struct GpuShadowAdapterLimit {
-    pub limit_bytes: u64,
-}
-
-impl Default for GpuShadowAdapterLimit {
-    fn default() -> Self {
-        Self {
-            limit_bytes: 16 * 1024 * 1024,
-        }
-    }
-}
-
 /// Why a shadow map is temporarily suppressed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShadowMapSuppressionReason {
@@ -510,10 +491,8 @@ mod tests {
         let mut settings = RenderingQualitySettings::default();
         settings.apply_preset(RenderingQuality::High);
         assert_eq!(settings.profile().directional_shadow_map_size, 2048);
-        assert!(
-            estimate_directional_shadow_bytes(RenderingQuality::High, 1)
-                > GpuShadowAdapterLimit::default().limit_bytes
-        );
+        assert_eq!(settings.profile().shadow_budget_bytes, 64 * 1024 * 1024);
+        assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
     }
 
     #[test]

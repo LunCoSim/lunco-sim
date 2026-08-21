@@ -5200,7 +5200,7 @@ fn register_graphics_settings_menu(world: &mut World) {
                 }
                 ui.label(
                     egui::RichText::new(
-                        "The adapter safety ceiling may admit fewer casters, but it never changes these requested map sizes or cascade settings.",
+                        "This explicit ceiling admits only the configured number of casters; it never changes requested map sizes or cascade settings.",
                     )
                     .weak()
                     .small(),

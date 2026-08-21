@@ -66,12 +66,12 @@ use bevy::render::{
     init_gpu_resource,
     renderer::{RenderAdapterInfo, RenderDevice},
     settings::WgpuSettings,
-    ExtractSchedule, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
+    Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy_egui::{egui, EguiContexts};
 use lunco_render::{
-    estimate_shadow_allocation_bytes, GpuShadowAdapterLimit, RenderingQualitySettings,
-    ShadowMapSuppressed, ShadowMapSuppressionReason,
+    estimate_shadow_allocation_bytes, RenderingQualitySettings, ShadowMapSuppressed,
+    ShadowMapSuppressionReason,
 };
 use lunco_settings::AppSettingsExt;
 
@@ -164,53 +164,6 @@ pub struct RenderHealth {
     /// Last failure class observed by the callback. This keeps recovery aligned
     /// with the resource that actually failed instead of guessing from totals.
     last_failure_kind: AtomicU8,
-}
-
-/// Shared adapter-budget result. RenderStartup runs in the render world, while
-/// the quality projection runs in the main world, so the result crosses the
-/// existing ExtractSchedule boundary through this tiny atomic handle.
-#[derive(Resource, Clone, Debug)]
-struct ShadowAdapterLimitHandle {
-    limit_bytes: Arc<AtomicU64>,
-    revision: Arc<AtomicU64>,
-}
-
-impl Default for ShadowAdapterLimitHandle {
-    fn default() -> Self {
-        Self {
-            limit_bytes: Arc::new(AtomicU64::new(GpuShadowAdapterLimit::default().limit_bytes)),
-            revision: Arc::new(AtomicU64::new(0)),
-        }
-    }
-}
-
-impl ShadowAdapterLimitHandle {
-    fn publish(&self, limit_bytes: u64) {
-        self.limit_bytes.store(limit_bytes, Ordering::Release);
-        self.revision.fetch_add(1, Ordering::Release);
-    }
-
-    fn limit_bytes(&self) -> u64 {
-        self.limit_bytes.load(Ordering::Acquire)
-    }
-
-    fn revision(&self) -> u64 {
-        self.revision.load(Ordering::Acquire)
-    }
-}
-
-const INTEGRATED_SHADOW_ADAPTER_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
-const DISCRETE_SHADOW_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
-const CPU_SHADOW_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
-const UNKNOWN_SHADOW_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
-
-fn recommended_shadow_adapter_limit(info: &wgpu::AdapterInfo) -> u64 {
-    match info.device_type {
-        wgpu::DeviceType::IntegratedGpu => INTEGRATED_SHADOW_ADAPTER_LIMIT_BYTES,
-        wgpu::DeviceType::DiscreteGpu => DISCRETE_SHADOW_BUDGET_BYTES,
-        wgpu::DeviceType::Cpu => CPU_SHADOW_BUDGET_BYTES,
-        wgpu::DeviceType::Other | wgpu::DeviceType::VirtualGpu => UNKNOWN_SHADOW_BUDGET_BYTES,
-    }
 }
 
 impl RenderHealth {
@@ -491,7 +444,6 @@ impl Ladder {
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
 pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     app.register_settings_section::<RenderingQualitySettings>();
-    app.init_resource::<GpuShadowAdapterLimit>();
 
     if app.get_sub_app_mut(RenderApp).is_none() {
         return;
@@ -516,11 +468,8 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     // commands apply but before the render sub-app extracts lights.
     app.add_systems(PostUpdate, apply_shadow_budget_policy);
 
-    let adapter_limit = ShadowAdapterLimitHandle::default();
-    app.insert_resource(adapter_limit.clone());
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
-    render_app.insert_resource(adapter_limit);
     // Once the presentation decision is terminal, stop all render-stage work,
     // including `render_system`, whose only caller presents the swapchain.
     // Extraction may run one final time to propagate this resource; no render
@@ -543,14 +492,7 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
         )
             .run_if(presentation_is_active),
     );
-    render_app.add_systems(
-        RenderStartup,
-        (set_error_handler, configure_shadow_adapter_limit).chain(),
-    );
-    // RenderStartup cannot borrow the simulation world directly. Publish the
-    // adapter result on the normal extraction boundary so scene projectors see
-    // the safe budget before asynchronous USD lights arrive.
-    render_app.add_systems(ExtractSchedule, publish_shadow_adapter_limit);
+    render_app.add_systems(RenderStartup, set_error_handler);
     // This runs after Bevy has probed the adapter and initialized the resource.
     // It affects only the known-bad Quadro/Vulkan combination above.
     render_app.add_systems(
@@ -559,47 +501,11 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     );
 }
 
-fn configure_shadow_adapter_limit(
-    adapter: Res<RenderAdapterInfo>,
-    budget: Res<ShadowAdapterLimitHandle>,
-) {
-    let limit_bytes = recommended_shadow_adapter_limit(&adapter.0);
-    budget.publish(limit_bytes);
-    info!(
-        "rendering quality shadow budget: {} MiB for {} ({:?})",
-        limit_bytes / (1024 * 1024),
-        adapter.0.name,
-        adapter.0.device_type,
-    );
-}
-
-fn publish_shadow_adapter_limit(
-    mut main_world: ResMut<MainWorld>,
-    budget: Res<ShadowAdapterLimitHandle>,
-    mut published_revision: Local<u64>,
-) {
-    let revision = budget.revision();
-    if revision == *published_revision {
-        return;
-    }
-
-    let value = GpuShadowAdapterLimit {
-        limit_bytes: budget.limit_bytes(),
-    };
-    if let Some(mut current) = main_world.get_resource_mut::<GpuShadowAdapterLimit>() {
-        *current = value;
-    } else {
-        main_world.insert_resource(value);
-    }
-    *published_revision = revision;
-}
-
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
-    budget: Res<GpuShadowAdapterLimit>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
 ) -> bool {
-    settings.is_changed() || budget.is_changed() || directional_map.is_changed()
+    settings.is_changed() || directional_map.is_changed()
 }
 
 fn shadow_configuration_signature(
@@ -659,15 +565,12 @@ fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
 
 /// Project the persisted quality choice onto the live shadow resources.
 ///
-/// This is change-driven: settings, the adapter budget, or a newly authored
-/// directional-light map must change before it runs. The selected settings are
-/// applied exactly as authored. The adapter budget is only a safety ceiling for
-/// caster admission; it never selects a lower preset or rewrites map/cascade
-/// values. Changing a setting is also the explicit, safe re-arm after the
+/// This is change-driven: settings or a newly authored directional-light map
+/// must change before it runs. The selected settings are applied exactly as
+/// authored. Changing a setting is also the explicit, safe re-arm after the
 /// reactive error ladder has shed shadows.
 fn apply_render_quality(
     settings: Res<RenderingQualitySettings>,
-    budget: Res<GpuShadowAdapterLimit>,
     mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_map: ResMut<bevy::light::PointLightShadowMap>,
     mut directional_lights: Query<(
@@ -749,14 +652,6 @@ fn apply_render_quality(
             overlap_proportion: config.overlap_proportion,
         }
         .build();
-    }
-
-    if profile.shadow_budget_bytes > budget.limit_bytes && warning.is_none() {
-        warn!(
-            "configured shadow byte ceiling {} MiB exceeds the adapter safety ceiling of {} MiB; requested quality remains unchanged and caster admission will use the lower ceiling",
-            profile.shadow_budget_bytes / (1024 * 1024),
-            budget.limit_bytes / (1024 * 1024),
-        );
     }
 }
 
@@ -990,10 +885,9 @@ fn set_error_handler(
 
 /// Apply the explicitly configured shadow-admission policy before Bevy's PBR
 /// render preparation allocates its depth textures. The configured byte ceiling
-/// is combined with the adapter safety ceiling for admission only. The user's
-/// map sizes and cascade count remain unchanged; only casters beyond the
-/// explicitly configured class limits or byte ceiling are suppressed and
-/// reported.
+/// is the sole admission limit. The user's map sizes and cascade count remain
+/// unchanged; only casters beyond the explicitly configured class limits or
+/// byte ceiling are suppressed and reported.
 ///
 /// The selection is deliberately stable: directional casters are considered
 /// first, then point lights, then spot lights, and each class is ordered by
@@ -1006,7 +900,6 @@ fn apply_shadow_budget_policy(
     mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
-    budget: Res<GpuShadowAdapterLimit>,
     warning: Option<Res<RenderWarning>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_shadow_map: Res<bevy::light::PointLightShadowMap>,
@@ -1031,7 +924,7 @@ fn apply_shadow_budget_policy(
     if settings.validate().is_err() {
         return;
     }
-    let admission_budget = profile.shadow_budget_bytes.min(budget.limit_bytes);
+    let admission_budget = profile.shadow_budget_bytes;
     let policy_signature = shadow_policy_signature(profile);
 
     let admission_changed = state.policy_signature != Some(policy_signature)
@@ -1625,9 +1518,6 @@ mod tests {
         settings.max_point_shadow_casters = 4;
         settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
-        app.insert_resource(GpuShadowAdapterLimit {
-            limit_bytes: 16 * 1024 * 1024,
-        });
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
@@ -1673,9 +1563,6 @@ mod tests {
         settings.max_point_shadow_casters = 4;
         settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
-        app.insert_resource(GpuShadowAdapterLimit {
-            limit_bytes: 16 * 1024 * 1024,
-        });
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
@@ -1715,17 +1602,14 @@ mod tests {
     }
 
     #[test]
-    fn adapter_limit_increase_rearms_only_budget_suppressed_casters() {
+    fn user_budget_increase_rearms_only_budget_suppressed_casters() {
         let mut app = App::new();
         let mut settings = RenderingQualitySettings::default();
         settings.directional_shadow_map_size = 1024;
         settings.point_shadow_map_size = 512;
         settings.max_point_shadow_casters = 4;
-        settings.shadow_budget_bytes = 64 * 1024 * 1024;
+        settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
-        app.insert_resource(GpuShadowAdapterLimit {
-            limit_bytes: 16 * 1024 * 1024,
-        });
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
@@ -1748,8 +1632,8 @@ mod tests {
         assert_eq!(initially_enabled, 1);
 
         app.world_mut()
-            .resource_mut::<GpuShadowAdapterLimit>()
-            .limit_bytes = 64 * 1024 * 1024;
+            .resource_mut::<RenderingQualitySettings>()
+            .shadow_budget_bytes = 64 * 1024 * 1024;
         app.update();
 
         let enabled = {
