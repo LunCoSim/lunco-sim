@@ -383,6 +383,8 @@ impl Plugin for UsdBevyPlugin {
                             >,
                         )
                         .after(canonical::sync_canonical_stages),
+                    retry_awaiting_usd_visuals_after_quality_change
+                        .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
                     // The other half of the same queue: `sync_usd_visuals` drains
                     // prims whose stage arrived, this one drains prims whose stage
                     // never will. Both must exist or the queue has an outcome it
@@ -2036,6 +2038,92 @@ pub fn sync_usd_visuals(
                 requested_profile,
             );
         }
+    }
+}
+
+/// Retry USD prims that were deliberately parked because Graphics settings were
+/// invalid. The settings UI rejects such values before insertion, but scripts,
+/// tests, and a host may still mutate the resource directly. A corrected value
+/// is therefore a complete recovery event; requiring a scene reload here would
+/// turn a rejected edit into a lifecycle leak.
+fn retry_awaiting_usd_visuals_after_quality_change(
+    q: Query<
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&Visibility>,
+            Option<&Transform>,
+            Has<UsdInstanceRoot>,
+            Option<&UsdInstanceMember>,
+        ),
+        (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
+    >,
+    q_high_precision: Query<
+        (),
+        Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+        )>,
+    >,
+    q_child_of: Query<&ChildOf>,
+    q_scene_root: Query<(), With<UsdSceneRoot>>,
+    q_entities: Query<Entity>,
+    mount_state: Res<lunco_core::SceneMountState>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    mut commands: Commands,
+    stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+) {
+    let requested_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "[usd-bevy] invalid Graphics quality; USD visual projection remains parked: {reason}"
+            );
+            return;
+        }
+    };
+
+    for (entity, prim_path, vis, tf, is_instance_root, member) in &q {
+        if stages.get(&prim_path.stage_handle).is_none() {
+            continue;
+        }
+        let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
+        let stale_mount = match scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
+        {
+            Ok(Some(root)) => !mount_state.contains_root(root),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        if !preview_only && stale_mount {
+            continue;
+        }
+
+        commands.entity(entity).try_remove::<UsdAwaitingStage>();
+        let is_high_precision_parent = q_high_precision.contains(entity)
+            || q_child_of
+                .get(entity)
+                .ok()
+                .is_some_and(|c| q_high_precision.contains(c.parent()));
+        instantiate_usd_prim(
+            entity,
+            prim_path,
+            vis,
+            tf,
+            is_instance_root,
+            member,
+            is_high_precision_parent,
+            preview_only,
+            &mut commands,
+            &stages,
+            &mut canonical,
+            &asset_server,
+            &mut meshes,
+            requested_profile,
+        );
     }
 }
 
