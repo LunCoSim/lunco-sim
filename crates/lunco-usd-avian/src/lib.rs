@@ -1576,7 +1576,12 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // track is better still than swinging — needs a way to say so without editing
     // the component. `over "YawJoint" { uniform bool physics:jointEnabled = false }`
     // is that way, and it is stock UsdPhysics rather than anything invented here.
-    if !view.boolean(path, ptok::A_JOINT_ENABLED).unwrap_or(true) {
+    let joint_enabled = match view.boolean(path, ptok::A_JOINT_ENABLED) {
+        Some(value) => value,
+        None if !view.has_authored_attribute(path, ptok::A_JOINT_ENABLED) => true,
+        None => return None,
+    };
+    if !joint_enabled {
         return None;
     }
     // **Units/axes convert here** (doc 41). `axis` names an axis of the STAGE's
@@ -1585,19 +1590,23 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
     let conv = lunco_usd_bevy::stage_convention(&view);
-    let damping = view
-        .has_api_schema(path, "LunCoJointDampingAPI")
-        .then(|| JointDamping {
-            linear: view
-                .real_f32(path, "lunco:jointDamping:linear")
-                .unwrap_or(0.0) as f64,
-            angular: view
-                .real_f32(path, "lunco:jointDamping:angular")
-                .unwrap_or(0.0) as f64,
-        })
-        .filter(|d| {
-            d.linear.is_finite() && d.linear >= 0.0 && d.angular.is_finite() && d.angular >= 0.0
-        });
+    let read_real_or_default = |name: &str, default: f64| -> Option<f64> {
+        match view.real(path, name) {
+            Some(value) => Some(value),
+            None if !view.has_authored_attribute(path, name) => Some(default),
+            None => None,
+        }
+    };
+    let damping = if view.has_api_schema(path, "LunCoJointDampingAPI") {
+        let linear = read_real_or_default("lunco:jointDamping:linear", 0.0)?;
+        let angular = read_real_or_default("lunco:jointDamping:angular", 0.0)?;
+        if !(linear.is_finite() && linear >= 0.0 && angular.is_finite() && angular >= 0.0) {
+            return None;
+        }
+        Some(JointDamping { linear, angular })
+    } else {
+        None
+    };
     // A UsdPhysics joint is defined by a FRAME on each body: `physics:localPos0`
     // + `physics:localRot0` on body0, `localPos1` + `localRot1` on body1. The
     // joint constrains those two frames to each other, and `physics:axis` names a
@@ -1614,12 +1623,19 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // constrains its body to the OTHER body's orientation. Carrying the rake in
     // the axis alone would aim the slider correctly and still wrench the strut
     // square to the hull.
-    let axis_of = |ax: Option<JointAxis>| {
-        conv.dir_d(match ax.unwrap_or_default() {
+    let axis_of = |ax: JointAxis| {
+        conv.dir_d(match ax {
             JointAxis::X => DVec3::X,
             JointAxis::Y => DVec3::Y,
             JointAxis::Z => DVec3::Z,
         })
+    };
+    let read_axis = |attr: openusd::usd::Attribute| -> Option<JointAxis> {
+        match attr.get::<JointAxis>() {
+            Ok(Some(axis)) => Some(axis),
+            Ok(None) if !view.has_authored_attribute(path, ptok::A_AXIS) => Some(JointAxis::X),
+            _ => None,
+        }
     };
     /// A joint frame's basis in its body's local space, identity when unauthored.
     /// USD spells a `quatf` `(w, x, y, z)`.
@@ -1630,17 +1646,19 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     /// renderer never shows.
     fn local_rot_of(
         attr: openusd::usd::Attribute,
+        authored: bool,
         conv: &lunco_usd_bevy::ConventionTransform,
-    ) -> DQuat {
-        attr.get::<openusd::gf::Quatf>()
-            .ok()
-            .flatten()
-            .map(|q| {
-                conv.rotation_d(
-                    DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize(),
-                )
-            })
-            .unwrap_or(DQuat::IDENTITY)
+    ) -> Option<DQuat> {
+        if !authored {
+            return Some(DQuat::IDENTITY);
+        }
+        let q = attr.get::<openusd::gf::Quatf>().ok().flatten()?;
+        let q = DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64);
+        if !q.is_finite() || q.length_squared() <= f64::EPSILON {
+            return None;
+        }
+        let converted = conv.rotation_d(q.normalize());
+        converted.is_finite().then_some(converted)
     }
     // Shared JointBase reads (both bodies + local anchors). A rel left EMPTY is
     // the spec's way to anchor that side to the WORLD frame — carried through as
@@ -1655,10 +1673,20 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // here. A DERIVED one must not: `derive_joint_anchor` builds it from
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
-    fn base<J: JointBase>(j: &J, reader: &StageView<'_>) -> Option<JointBaseRead> {
+    fn base<J: JointBase>(j: &J, reader: &StageView<'_>, path: &SdfPath) -> Option<JointBaseRead> {
         let conv = lunco_usd_bevy::stage_convention(reader);
-        let to_dvec =
-            move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
+        let read_local_pos = |attr: openusd::usd::Attribute, name: &str| -> Option<Option<DVec3>> {
+            if !reader.has_authored_attribute(path, name) {
+                return Some(None);
+            }
+            let value = attr.get::<[f32; 3]>().ok().flatten()?;
+            let authored = DVec3::new(value[0] as f64, value[1] as f64, value[2] as f64);
+            if !authored.is_finite() {
+                return None;
+            }
+            let converted = conv.point_d(authored);
+            converted.is_finite().then_some(Some(converted))
+        };
         // An endpoint that names a prim which is not itself a body resolves to
         // the body that prim is rigidly part of — see [`nearest_body_path`].
         // This is what lets a mounted mechanism name its own root instead of its
@@ -1667,34 +1695,21 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             let p = SdfPath::new(&target.to_string()).ok()?;
             Some(nearest_body_path(reader, &p)?.to_string())
         };
-        let target0 = j
-            .body0_rel()
-            .targets()
-            .ok()
-            .and_then(|t| t.into_iter().next());
-        let target1 = j
-            .body1_rel()
-            .targets()
-            .ok()
-            .and_then(|t| t.into_iter().next());
+        let targets0 = j.body0_rel().targets().ok()?;
+        let targets1 = j.body1_rel().targets().ok()?;
+        if targets0.len() > 1 || targets1.len() > 1 {
+            return None;
+        }
+        let target0 = targets0.into_iter().next();
+        let target1 = targets1.into_iter().next();
         let (b0, b1) = match (target0, target1) {
             (Some(t0), Some(t1)) => (resolve(&t0)?, resolve(&t1)?),
             (Some(t0), None) => (resolve(&t0)?, String::new()),
             (None, Some(t1)) => (String::new(), resolve(&t1)?),
             (None, None) => return None,
         };
-        let lp0_auth = j
-            .local_pos0_attr()
-            .get::<[f32; 3]>()
-            .ok()
-            .flatten()
-            .map(to_dvec);
-        let lp1_auth = j
-            .local_pos1_attr()
-            .get::<[f32; 3]>()
-            .ok()
-            .flatten()
-            .map(to_dvec);
+        let lp0_auth = read_local_pos(j.local_pos0_attr(), ptok::A_LOCAL_POS_0)?;
+        let lp1_auth = read_local_pos(j.local_pos1_attr(), ptok::A_LOCAL_POS_1)?;
         let (lp0, lp1) = if let (Some(lp0), Some(lp1)) = (lp0_auth, lp1_auth) {
             (lp0, lp1)
         } else {
@@ -1711,14 +1726,26 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             body1: b1,
             local_pos0: lp0,
             local_pos1: lp1,
-            local_rot0: local_rot_of(j.local_rot0_attr(), &conv),
-            local_rot1: local_rot_of(j.local_rot1_attr(), &conv),
+            local_rot0: local_rot_of(
+                j.local_rot0_attr(),
+                reader.has_authored_attribute(path, ptok::A_LOCAL_ROT_0),
+                &conv,
+            )?,
+            local_rot1: local_rot_of(
+                j.local_rot1_attr(),
+                reader.has_authored_attribute(path, ptok::A_LOCAL_ROT_1),
+                &conv,
+            )?,
         })
     }
-    let read_drive = |ns: &str, body1: &str| -> Option<JointDrive> {
+    let read_drive = |ns: &str, body1: &str| -> Result<Option<JointDrive>, ()> {
+        let api_name = format!("PhysicsDriveAPI:{ns}");
+        if !view.has_api_schema(path, &api_name) {
+            return Ok(None);
+        }
         let d = physics::DriveAPI::get(stage, path.clone(), ns)
-            .ok()
-            .flatten()?;
+            .map_err(|_| ())?
+            .ok_or(())?;
         // Drive quantities convert by their SPEC units, per instance. An angular
         // drive authors DEGREES (`targetPosition` deg, `targetVelocity` deg/s,
         // stiffness/damping per degree) and its torques carry distance² — so
@@ -1748,37 +1775,30 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
                 conv.length(v)
             }
         };
-        let tp = d
-            .target_position_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| target(v as f64));
-        let tv = d
-            .target_velocity_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| target(v as f64));
-        let mf = d
-            .max_force_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| force(v as f64));
-        let k = d
-            .stiffness_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| gain(v as f64));
-        let c = d
-            .damping_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| gain(v as f64));
-        let ty = d.type_attr().get::<DriveType>().ok().flatten();
+        let read_value = |attr: openusd::usd::Attribute, name: &str| -> Result<Option<f64>, ()> {
+            match attr.get::<f32>() {
+                Ok(Some(value)) if !value.is_nan() => Ok(Some(value as f64)),
+                Ok(None) if !view.has_authored_attribute(path, name) => Ok(None),
+                _ => Err(()),
+            }
+        };
+        let property = |sub: &str| format!("drive:{ns}:physics:{sub}");
+        let target_position_name = property(ptok::DRIVE_SUB_TARGET_POSITION);
+        let target_velocity_name = property(ptok::DRIVE_SUB_TARGET_VELOCITY);
+        let max_force_name = property(ptok::DRIVE_SUB_MAX_FORCE);
+        let stiffness_name = property(ptok::DRIVE_SUB_STIFFNESS);
+        let damping_name = property(ptok::DRIVE_SUB_DAMPING);
+        let tp = read_value(d.target_position_attr(), &target_position_name)?.map(target);
+        let tv = read_value(d.target_velocity_attr(), &target_velocity_name)?.map(target);
+        let mf = read_value(d.max_force_attr(), &max_force_name)?.map(force);
+        let k = read_value(d.stiffness_attr(), &stiffness_name)?.map(gain);
+        let c = read_value(d.damping_attr(), &damping_name)?.map(gain);
+        let type_name = property(ptok::DRIVE_SUB_TYPE);
+        let ty = match d.type_attr().get::<DriveType>() {
+            Ok(Some(value)) => Some(value),
+            Ok(None) if !view.has_authored_attribute(path, &type_name) => None,
+            _ => return Err(()),
+        };
         // The driven body's authored mass, for the force-spring → SpringDamper
         // conversion. Read from USD (not avian's computed `Mass`, which does not
         // exist yet at spec-read time). `None` when the body leaves it to density.
@@ -1803,17 +1823,27 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
                 })
             })
             .flatten();
-        (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
-            JointDrive {
-                target_position: tp,
-                target_velocity: tv,
-                max_force: mf,
-                stiffness: k,
-                damping: c,
-                drive_type: ty,
-                driven_mass,
-            },
+        Ok(
+            (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
+                JointDrive {
+                    target_position: tp,
+                    target_velocity: tv,
+                    max_force: mf,
+                    stiffness: k,
+                    damping: c,
+                    drive_type: ty,
+                    driven_mass,
+                },
+            ),
         )
+    };
+
+    let read_limit = |attr: openusd::usd::Attribute, name: &str, default: f64| -> Option<f64> {
+        match attr.get::<f32>() {
+            Ok(Some(value)) if !value.is_nan() => Some(value as f64),
+            Ok(None) if !view.has_authored_attribute(path, name) => Some(default),
+            _ => None,
+        }
     };
 
     // Every arm builds the same `PendingUsdJoint` shape off the shared
@@ -1844,63 +1874,45 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         .ok()
         .flatten()
     {
-        let b = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
-        let lo = j
-            .lower_limit_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|d| (d as f64).to_radians())
-            .unwrap_or(f64::NEG_INFINITY);
-        let hi = j
-            .upper_limit_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|d| (d as f64).to_radians())
-            .unwrap_or(f64::INFINITY);
-        let drive = read_drive("angular", &b.body1);
+        let b = base(&j, &view, path)?;
+        let axis = axis_of(read_axis(j.axis_attr())?);
+        let lo =
+            read_limit(j.lower_limit_attr(), ptok::A_LOWER_LIMIT, f64::NEG_INFINITY)?.to_radians();
+        let hi = read_limit(j.upper_limit_attr(), ptok::A_UPPER_LIMIT, f64::INFINITY)?.to_radians();
+        let drive = read_drive("angular", &b.body1).ok()?;
         pending_from(b, axis, lo, hi, "PhysicsRevoluteJoint", None, drive)
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone())
         .ok()
         .flatten()
     {
-        let b = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let b = base(&j, &view, path)?;
+        let axis = axis_of(read_axis(j.axis_attr())?);
         // Linear limits are authored in scene units, like the anchors.
-        let lo = j
-            .lower_limit_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| conv.length(v as f64))
-            .unwrap_or(f64::NEG_INFINITY);
-        let hi = j
-            .upper_limit_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| conv.length(v as f64))
-            .unwrap_or(f64::INFINITY);
-        let drive = read_drive("linear", &b.body1);
+        let lo = conv.length(read_limit(
+            j.lower_limit_attr(),
+            ptok::A_LOWER_LIMIT,
+            f64::NEG_INFINITY,
+        )?);
+        let hi = conv.length(read_limit(
+            j.upper_limit_attr(),
+            ptok::A_UPPER_LIMIT,
+            f64::INFINITY,
+        )?);
+        let drive = read_drive("linear", &b.body1).ok()?;
         pending_from(b, axis, lo, hi, "PhysicsPrismaticJoint", None, drive)
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone())
         .ok()
         .flatten()
     {
-        let b = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let b = base(&j, &view, path)?;
+        let axis = axis_of(read_axis(j.axis_attr())?);
         // `physics:coneAngle{0,1}Limit` is in DEGREES, like every other angular
         // quantity UsdPhysics authors (and like the revolute limits above);
         // avian's `AngleLimit` is in radians.
-        let swing = j
-            .cone_angle0_limit_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
-            .map(|(a, b)| ((a as f64).to_radians(), (b as f64).to_radians()));
+        let cone0 = read_limit(j.cone_angle0_limit_attr(), ptok::A_CONE_ANGLE_0_LIMIT, -1.0)?;
+        let cone1 = read_limit(j.cone_angle1_limit_attr(), ptok::A_CONE_ANGLE_1_LIMIT, -1.0)?;
+        let swing = (cone0 >= 0.0 || cone1 >= 0.0)
+            .then_some((cone0.max(0.0).to_radians(), cone1.max(0.0).to_radians()));
         pending_from(
             b,
             axis,
@@ -1911,7 +1923,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             None,
         )
     } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
-        let b = base(&j, &view)?;
+        let b = base(&j, &view, path)?;
         pending_from(
             b,
             DVec3::Y,
@@ -1925,29 +1937,25 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         .ok()
         .flatten()
     {
-        let b = base(&j, &view)?;
+        let b = base(&j, &view, path)?;
         // Distances are scene units; a NEGATIVE authored value is the schema's
         // "limit disabled" sentinel and survives the (positive) unit scale for
         // the build arm to honour.
-        let lo = j
-            .min_distance_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| conv.length(v as f64))
-            .unwrap_or(f64::NEG_INFINITY);
-        let hi = j
-            .max_distance_attr()
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .map(|v| conv.length(v as f64))
-            .unwrap_or(f64::INFINITY);
+        let lo = conv.length(read_limit(
+            j.min_distance_attr(),
+            ptok::A_MIN_DISTANCE,
+            -1.0,
+        )?);
+        let hi = conv.length(read_limit(
+            j.max_distance_attr(),
+            ptok::A_MAX_DISTANCE,
+            -1.0,
+        )?);
         pending_from(b, DVec3::Y, lo, hi, "PhysicsDistanceJoint", None, None)
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
         // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
-        let b = base(&j, &view)?;
-        let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint_typed(stage, path)?;
+        let b = base(&j, &view, path)?;
+        let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint_typed(stage, path, &view)?;
         // Same two conversions every typed arm applies: the cardinal axis is named
         // in the STAGE's frame, and an angular limit is authored in degrees while a
         // linear one is in scene units. `to_radians`/`length` leave an infinite
@@ -1987,6 +1995,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
 fn reduce_generic_joint_typed(
     stage: &Stage,
     path: &SdfPath,
+    view: &StageView<'_>,
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     use openusd::schemas::physics;
     const DOFS: [(&str, DVec3, bool); 6] = [
@@ -2000,24 +2009,32 @@ fn reduce_generic_joint_typed(
     let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
     let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
     for (inst, axis, is_rot) in DOFS {
-        let (low, high) = match physics::LimitAPI::get(stage, path.clone(), inst)
-            .ok()
-            .flatten()
-        {
-            Some(l) => (
-                l.low_attr().get::<f32>().ok().flatten().map(|v| v as f64),
-                l.high_attr().get::<f32>().ok().flatten().map(|v| v as f64),
+        let api_name = format!("PhysicsLimitAPI:{inst}");
+        let api = match physics::LimitAPI::get(stage, path.clone(), inst) {
+            Ok(Some(api)) => Some(api),
+            Ok(None) if !view.has_api_schema(path, &api_name) => None,
+            _ => return None,
+        };
+        let property = |bound: &str| format!("limit:{inst}:physics:{bound}");
+        let read_bound =
+            |attr: openusd::usd::Attribute, name: &str, default: f64| match attr.get::<f32>() {
+                Ok(Some(value)) if !value.is_nan() => Some(value as f64),
+                Ok(None) if !view.has_authored_attribute(path, name) => Some(default),
+                _ => None,
+            };
+        let low_name = property(ptok::LIMIT_SUB_LOW);
+        let high_name = property(ptok::LIMIT_SUB_HIGH);
+        let (low, high) = match api {
+            Some(api) => (
+                read_bound(api.low_attr(), &low_name, f64::NEG_INFINITY)?,
+                read_bound(api.high_attr(), &high_name, f64::INFINITY)?,
             ),
-            None => (None, None),
+            None => (f64::NEG_INFINITY, f64::INFINITY),
         };
         match (low, high) {
-            (Some(l), Some(h)) if l > h => {} // locked
+            (l, h) if l > h => {} // locked
             (l, h) => {
-                let entry = (
-                    axis,
-                    l.unwrap_or(f64::NEG_INFINITY),
-                    h.unwrap_or(f64::INFINITY),
-                );
+                let entry = (axis, l, h);
                 if is_rot {
                     free_rot.push(entry)
                 } else {
@@ -3783,6 +3800,130 @@ def PhysicsPrismaticJoint "Spring" (
         std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
+    }
+
+    #[test]
+    fn authored_joint_fields_do_not_degrade_to_physics_defaults() {
+        let cases = [
+            (
+                "bad_local_rotation",
+                FIXTURE.replace(
+                    "point3f physics:localPos0 = (1, 0, 0)",
+                    "float physics:localRot0 = 1.0\n    point3f physics:localPos0 = (1, 0, 0)",
+                ),
+            ),
+            (
+                "bad_local_position",
+                FIXTURE.replace(
+                    "point3f physics:localPos0 = (1, 0, 0)",
+                    "float physics:localPos0 = 1.0",
+                ),
+            ),
+            (
+                "bad_axis",
+                FIXTURE.replace(
+                    "uniform token physics:axis = \"Y\"",
+                    "uniform token physics:axis = \"diagonal\"",
+                ),
+            ),
+            (
+                "bad_limit",
+                FIXTURE.replace(
+                    "float physics:lowerLimit = -45",
+                    "string physics:lowerLimit = \"not-a-limit\"",
+                ),
+            ),
+            (
+                "bad_drive",
+                FIXTURE.replace(
+                    "float drive:angular:physics:targetVelocity = 2.5",
+                    "string drive:angular:physics:targetVelocity = \"not-a-velocity\"",
+                ),
+            ),
+            (
+                "bad_joint_enabled",
+                FIXTURE.replace(
+                    "uniform token physics:axis = \"Y\"",
+                    "uniform token physics:axis = \"Y\"\n    string physics:jointEnabled = \"false\"",
+                ),
+            ),
+        ];
+
+        for (name, source) in cases {
+            let stage = write_and_compose(&format!("{name}.usda"), &source);
+            assert!(
+                read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap()).is_none(),
+                "authored malformed field in {name} must reject the joint"
+            );
+        }
+    }
+
+    #[test]
+    fn a_joint_with_multiple_body_targets_is_rejected() {
+        const MULTIPLE_TARGETS: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsRevoluteJoint "Hinge"
+{
+    rel physics:body0 = [</Chassis>, </Wheel>]
+    rel physics:body1 = </Wheel>
+}
+"#;
+        let stage = write_and_compose("multiple_body_targets.usda", MULTIPLE_TARGETS);
+        assert!(
+            read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap()).is_none(),
+            "a joint endpoint must name exactly one body target"
+        );
+    }
+
+    #[test]
+    fn omitted_spherical_cone_limits_remain_unlimited() {
+        const SPHERICAL: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsSphericalJoint "Ball"
+{
+    rel physics:body0 = </Chassis>
+    rel physics:body1 = </Wheel>
+}
+"#;
+        let stage = write_and_compose("unlimited_spherical.usda", SPHERICAL);
+        let joint = read_joint_spec_typed(&stage, &SdfPath::new("/Ball").unwrap())
+            .expect("spherical joint reads");
+        assert_eq!(
+            joint.swing_limit, None,
+            "UsdPhysics negative cone defaults mean unlimited, not a one-degree cone"
+        );
+    }
+
+    #[test]
+    fn an_unconfigured_generic_joint_does_not_become_fixed() {
+        const GENERIC: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsJoint "Generic"
+{
+    rel physics:body0 = </Chassis>
+    rel physics:body1 = </Wheel>
+}
+"#;
+        let stage = write_and_compose("unconfigured_generic.usda", GENERIC);
+        assert!(
+            read_joint_spec_typed(&stage, &SdfPath::new("/Generic").unwrap()).is_none(),
+            "an unconstrained generic joint has multiple free DOFs and cannot reduce to fixed"
+        );
     }
 
     /// A Z-up / centimetre stage — the Omniverse and Isaac Sim default — must
