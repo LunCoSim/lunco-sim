@@ -76,7 +76,17 @@ pub struct UsdSensorCamera;
 /// cameras: a camera's ISO, shutter time and f-stop have one USD spelling and
 /// therefore one conversion. `exposure` is a post-photographic compensation in
 /// USD, so positive compensation opens the effective exposure (lowers EV).
-pub fn read_camera_exposure_ev100(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<f32> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CameraExposureError {
+    /// An authored exposure field is not a finite value of the required sign,
+    /// has an unsupported type, or produces a non-finite EV.
+    InvalidAuthoredValue,
+}
+
+pub fn read_camera_exposure_ev100(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<f32>, CameraExposureError> {
     let authored = [
         "exposure:iso",
         "exposure:time",
@@ -85,34 +95,52 @@ pub fn read_camera_exposure_ev100(reader: &crate::StageView<'_>, path: &SdfPath)
         "exposure",
     ]
     .iter()
-    .any(|name| reader.real_f32(path, name).is_some());
+    .any(|name| reader.has_authored_attribute(path, name));
     if !authored {
-        return None;
+        // The standard USD schema's fallback values are not a photographic
+        // override. The renderer calibrates omitted exposure against the active
+        // physical sun instead.
+        return Ok(None);
     }
 
-    let iso = reader.real_f32(path, "exposure:iso").unwrap_or(100.0);
-    let time = reader.real_f32(path, "exposure:time").unwrap_or(1.0);
-    let f_stop = reader.real_f32(path, "exposure:fStop").unwrap_or(1.0);
-    let responsivity = reader
-        .real_f32(path, "exposure:responsivity")
-        .unwrap_or(1.0);
-    let compensation = reader.real_f32(path, "exposure").unwrap_or(0.0);
-    if !(iso.is_finite()
-        && time.is_finite()
-        && f_stop.is_finite()
-        && responsivity.is_finite()
-        && compensation.is_finite()
-        && iso > 0.0
-        && time > 0.0
-        && f_stop > 0.0
-        && responsivity > 0.0)
-    {
-        warn!(
-            "[usd-bevy] {path} has invalid UsdGeomCamera exposure; using calibrated scene exposure"
-        );
-        return None;
+    let iso = read_camera_exposure_real(reader, path, "exposure:iso", 100.0, true)?;
+    let time = read_camera_exposure_real(reader, path, "exposure:time", 1.0, true)?;
+    let f_stop = read_camera_exposure_real(reader, path, "exposure:fStop", 1.0, true)?;
+    let responsivity = read_camera_exposure_real(reader, path, "exposure:responsivity", 1.0, true)?;
+    let compensation = read_camera_exposure_real(reader, path, "exposure", 0.0, false)?;
+    let ev100 = (f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation;
+    if !ev100.is_finite() {
+        error!("[usd-bevy] {path} has an authored camera exposure that produces a non-finite EV");
+        return Err(CameraExposureError::InvalidAuthoredValue);
     }
-    Some((f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation)
+    Ok(Some(ev100))
+}
+
+fn read_camera_exposure_real(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    schema_default: f32,
+    must_be_positive: bool,
+) -> Result<f32, CameraExposureError> {
+    let value = match reader.real_f32(path, name) {
+        Some(value) => value,
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {path} has an authored camera exposure {name} with an unsupported value type"
+            );
+            return Err(CameraExposureError::InvalidAuthoredValue);
+        }
+        None => schema_default,
+    };
+    if !(value.is_finite() && (!must_be_positive || value > 0.0)) {
+        error!(
+            "[usd-bevy] {path} has invalid camera exposure {name} = {value}; expected a finite {} value",
+            if must_be_positive { "positive" } else { "real" }
+        );
+        return Err(CameraExposureError::InvalidAuthoredValue);
+    }
+    Ok(value)
 }
 
 /// If `prim_type` is `Camera`, attach the camera intent to `entity` and return
@@ -225,6 +253,15 @@ pub(crate) fn instantiate_camera_prim(
         }
     };
 
+    let camera_exposure = if is_viewport {
+        match read_camera_exposure_ev100(reader, sdf_path) {
+            Ok(exposure) => exposure,
+            Err(_) => return true,
+        }
+    } else {
+        None
+    };
+
     // A scene camera is an intent until the render binding runs.  Do not add a
     // bare `Camera` here: Bevy 0.19 validates `Camera` at insertion time and
     // emits a missing-render-graph warning before `lunco-render-bevy` can add
@@ -236,10 +273,7 @@ pub(crate) fn instantiate_camera_prim(
     camera.try_insert((projection, pose));
     if is_viewport {
         camera.try_insert((
-            lunco_render::scene_camera_look_with_profile(
-                read_camera_exposure_ev100(reader, sdf_path),
-                quality,
-            ),
+            lunco_render::scene_camera_look_with_profile(camera_exposure, quality),
             lunco_render::GraphicsCameraDefaults,
         ));
     }
@@ -534,6 +568,59 @@ mod tests {
         let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
+    }
+
+    #[test]
+    fn omitted_camera_exposure_uses_scene_calibration() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert_eq!(read_camera_exposure_ev100(&stage.view(), &path), Ok(None));
+    }
+
+    #[test]
+    fn authored_camera_exposure_converts_once_from_usd_fields() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        let ev100 = read_camera_exposure_ev100(&stage.view(), &path)
+            .expect("valid exposure")
+            .expect("authored exposure");
+        assert!((ev100 + 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn invalid_authored_camera_exposure_is_rejected() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert_eq!(
+            read_camera_exposure_ev100(&stage.view(), &path),
+            Err(CameraExposureError::InvalidAuthoredValue)
+        );
+    }
+
+    #[test]
+    fn authored_camera_exposure_with_wrong_type_is_rejected() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert_eq!(
+            read_camera_exposure_ev100(&stage.view(), &path),
+            Err(CameraExposureError::InvalidAuthoredValue)
+        );
     }
 
     #[test]

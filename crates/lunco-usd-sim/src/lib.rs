@@ -1197,6 +1197,21 @@ fn process_usd_sim_prim_read(
     commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
+    let is_avatar = reader.boolean(&sdf_path, "lunco:avatar").unwrap_or(false);
+    let avatar_exposure = if is_avatar {
+        match lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path) {
+            Ok(exposure) => exposure,
+            Err(_) => {
+                // An invalid authored exposure is a broken camera contract, not
+                // an invitation to replace it with a calibrated value. Mark the
+                // prim complete so the scene does not retry the same bad opinion.
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        }
+    } else {
+        None
+    };
 
     // A passive landing suspension is a physical capability claimed by an
     // applied USD API on the joint. It is not inferred from a prim name,
@@ -1374,12 +1389,8 @@ fn process_usd_sim_prim_read(
     // `project_celestial_comms_prims` system, NOT here — see its doc. Bundling it
     // in this system made a cosim prim, which skips this system, lose its LinkNode.)
 
-    // 0. Detect Avatar prim. `lunco:avatar` is a marker flag, but scenes author it
-    // with EITHER type — `bool true` (moonbase) or `string "true"` (sandbox). A
-    // `scalar::<String>` read silently misses the `bool`, so the avatar's camera is
-    // never set up and the viewport is blank after a scene swap. Read it
-    // type-tolerantly (same principle as the `text`/`real` reader family).
-    let is_avatar = reader.boolean(&sdf_path, "lunco:avatar").unwrap_or(false);
+    // 0. Avatar role and photographic exposure were validated before any
+    // per-prim simulation components were projected.
     if is_avatar {
         info!(
             "Detected Avatar prim at {}, setting up camera",
@@ -1502,7 +1513,7 @@ fn process_usd_sim_prim_read(
         // An authored camera is authoritative over the calibrated scene default.
         // Both paths use the one USD photographic conversion, so ISO/shutter/
         // f-stop never acquire a second spelling at the avatar boundary.
-        let ev100 = lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path)
+        let ev100 = avatar_exposure
             .unwrap_or_else(|| active_sun.copied().unwrap_or_default().exposure_ev100);
         // AgX tonemapping: a filmic curve that rolls off the blown highlights
         // and lifts the toe of the brutal grazing-sun terminator (vs the hard

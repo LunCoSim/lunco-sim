@@ -57,7 +57,7 @@ pub mod dome;
 mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
-pub use camera::{read_camera_exposure_ev100, UsdCameraPose, UsdSensorCamera};
+pub use camera::{read_camera_exposure_ev100, CameraExposureError, UsdCameraPose, UsdSensorCamera};
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod camera_path;
