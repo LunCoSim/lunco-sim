@@ -417,9 +417,20 @@ fn bind_dome_to_cameras(
     bound: Query<Entity, (With<DomeBoundCamera>, With<Camera3d>)>,
 ) {
     // One sky. A second textured dome is a scene-authoring error, not a feature
-    // to blend — say so once rather than silently letting iteration order pick.
-    let mut iter = domes.iter();
-    let Some((dome, cube, xform)) = iter.next() else {
+    // to blend. Bevy exposes one environment-map view per camera, so choosing
+    // one by ECS iteration order would make the result depend on spawn order.
+    if domes.iter().count() > 1 {
+        warn_once!(
+            "[usd-bevy] scene authors more than one textured DomeLight; refusing ambiguous environment binding"
+        );
+        for camera in &bound {
+            commands
+                .entity(camera)
+                .remove::<(Skybox, GeneratedEnvironmentMapLight, DomeBoundCamera)>();
+        }
+        return;
+    }
+    let Some((dome, cube, xform)) = domes.iter().next() else {
         for camera in &bound {
             commands
                 .entity(camera)
@@ -427,9 +438,6 @@ fn bind_dome_to_cameras(
         }
         return;
     };
-    if iter.next().is_some() {
-        warn_once!("[usd-bevy] scene authors more than one textured DomeLight — using the first");
-    }
     if cube.0 == Handle::default() {
         return;
     }
@@ -729,5 +737,42 @@ mod tests {
         let src = Equirect::from_texels(4, 2, vec![[1.0; 4]; 8]);
         assert!(equirect_to_cubemap(&src, 0, LinearRgba::WHITE).is_none());
         assert!(equirect_to_cubemap(&src, 100, LinearRgba::WHITE).is_none());
+    }
+
+    #[test]
+    fn multiple_textured_domes_are_not_selected_by_iteration_order() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        let cube = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let dome = || UsdDomeEnvironment {
+            texture: Handle::default(),
+            format: DomeFormat::LatLong,
+            intensity: 1.0,
+            tint: LinearRgba::WHITE,
+            face_size: 1,
+            skybox: true,
+        };
+        app.world_mut().spawn((dome(), DomeCubemap(cube.clone())));
+        app.world_mut().spawn((dome(), DomeCubemap(cube)));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                SceneCamera::default(),
+                DomeBoundCamera,
+                Skybox::default(),
+                GeneratedEnvironmentMapLight::default(),
+            ))
+            .id();
+        app.add_systems(Update, bind_dome_to_cameras);
+        app.update();
+
+        let world = app.world();
+        assert!(world.get::<Skybox>(camera).is_none());
+        assert!(world.get::<GeneratedEnvironmentMapLight>(camera).is_none());
+        assert!(world.get::<DomeBoundCamera>(camera).is_none());
     }
 }
