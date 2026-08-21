@@ -128,10 +128,10 @@ pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, 
 /// the COMPOSED prim, so a glTF `payload`/`reference` authored inside a
 /// referenced `.usda` wrapper surfaces on the composed prim — not only arcs
 /// authored directly in the root layer.
-pub(crate) type BinarySites = HashMap<(String, SdfPath), String>;
+pub(crate) type BinarySites = HashMap<(String, SdfPath), Vec<String>>;
 
 pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
-    let mut sites: HashMap<(String, SdfPath), String> = HashMap::new();
+    let mut sites: BinarySites = HashMap::new();
     // Force every reachable reference/payload layer to load so `layer_identifiers()`
     // sees the whole stack. A caller that already traversed gets this for free;
     // called standalone (canonical build) a binary arc authored in a referenced /
@@ -169,10 +169,10 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
             }
             for ap in arcs {
                 if is_binary_asset(&ap) {
-                    sites.insert(
-                        (layer_id.clone(), path.clone()),
-                        canonicalize_at(&ap, Some(&anchor)),
-                    );
+                    sites
+                        .entry((layer_id.clone(), path.clone()))
+                        .or_default()
+                        .push(canonicalize_at(&ap, Some(&anchor)));
                 }
             }
         }
@@ -352,5 +352,27 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             resolved.ends_with("model.glb"),
             "resolvedAsset should point at the wrapper-co-located glb, got {resolved}"
         );
+    }
+
+    #[test]
+    fn binary_site_discovery_preserves_multiple_authored_arcs() {
+        let source = "#usda 1.0\n\
+def Xform \"Visual\" (\n\
+    prepend payload = @model.glb@\n\
+    prepend references = @alternate.glb@\n\
+)\n\
+{\n\
+}\n";
+        let stage =
+            build_stage_from_closure(&crate::StageRecipe::from_source("scene.usda", source))
+                .expect("compose binary arcs");
+
+        let sites = discover_binary_sites(&stage);
+        let assets = sites
+            .values()
+            .find(|assets| assets.len() == 2)
+            .expect("both binary arcs must remain attached to their authoring site");
+        assert!(assets.iter().any(|asset| asset.ends_with("model.glb")));
+        assert!(assets.iter().any(|asset| asset.ends_with("alternate.glb")));
     }
 }

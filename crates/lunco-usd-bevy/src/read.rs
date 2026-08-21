@@ -552,7 +552,24 @@ impl UsdRead for StageView<'_> {
         }
         let sites = self.binary_sites()?;
         let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
-        stack.iter().find_map(|site| sites.get(site)).cloned()
+        let matches = stack
+            .iter()
+            .filter_map(|site| sites.get(site))
+            .flat_map(|assets| assets.iter())
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [asset] => Some((*asset).clone()),
+            [] => None,
+            _ => {
+                bevy::log::error!(
+                    target: "usd-bevy",
+                    prim = %prim.as_str(),
+                    assets = ?matches,
+                    "ambiguous binary payload/reference set; author exactly one binary asset or lunco:resolvedAsset"
+                );
+                None
+            }
+        }
     }
 
     fn is_active(&self, prim: &SdfPath) -> bool {
