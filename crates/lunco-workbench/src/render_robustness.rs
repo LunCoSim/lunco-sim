@@ -492,8 +492,15 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
+    directionals: Query<(), Added<bevy::light::DirectionalLight>>,
+    points: Query<(), Added<bevy::light::PointLight>>,
+    spots: Query<(), Added<bevy::light::SpotLight>>,
 ) -> bool {
-    settings.is_changed() || directional_map.is_changed()
+    settings.is_changed()
+        || directional_map.is_changed()
+        || !directionals.is_empty()
+        || !points.is_empty()
+        || !spots.is_empty()
 }
 
 #[derive(Clone, Debug)]
@@ -1549,7 +1556,7 @@ mod tests {
     }
 
     #[test]
-    fn quality_bias_changes_update_existing_directional_and_local_lights() {
+    fn quality_settings_apply_to_existing_and_late_lights() {
         let mut app = App::new();
         app.insert_resource(RenderingQualitySettings::default());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
@@ -1580,6 +1587,9 @@ mod tests {
         app.world_mut()
             .resource_mut::<RenderingQualitySettings>()
             .shadow_normal_bias = 7.25;
+        app.world_mut()
+            .resource_mut::<RenderingQualitySettings>()
+            .directional_cascades = 3;
         app.update();
 
         let directional_light = app
@@ -1594,6 +1604,50 @@ mod tests {
         let spot_light = app.world().get::<bevy::light::SpotLight>(spot).unwrap();
         assert_eq!(spot_light.shadow_depth_bias, 0.37);
         assert_eq!(spot_light.shadow_normal_bias, 7.25);
+
+        let late_directional = app
+            .world_mut()
+            .spawn((
+                bevy::light::DirectionalLight::default(),
+                bevy::light::CascadeShadowConfig::default(),
+            ))
+            .id();
+        let late_point = app
+            .world_mut()
+            .spawn(bevy::light::PointLight::default())
+            .id();
+        let late_spot = app
+            .world_mut()
+            .spawn(bevy::light::SpotLight::default())
+            .id();
+        app.update();
+
+        let late_directional_light = app
+            .world()
+            .get::<bevy::light::DirectionalLight>(late_directional)
+            .unwrap();
+        assert_eq!(late_directional_light.shadow_depth_bias, 0.37);
+        assert_eq!(late_directional_light.shadow_normal_bias, 7.25);
+        assert_eq!(
+            app.world()
+                .get::<bevy::light::CascadeShadowConfig>(late_directional)
+                .unwrap()
+                .bounds
+                .len(),
+            3
+        );
+        let late_point_light = app
+            .world()
+            .get::<bevy::light::PointLight>(late_point)
+            .unwrap();
+        assert_eq!(late_point_light.shadow_depth_bias, 0.37);
+        assert_eq!(late_point_light.shadow_normal_bias, 7.25);
+        let late_spot_light = app
+            .world()
+            .get::<bevy::light::SpotLight>(late_spot)
+            .unwrap();
+        assert_eq!(late_spot_light.shadow_depth_bias, 0.37);
+        assert_eq!(late_spot_light.shadow_normal_bias, 7.25);
     }
 
     #[test]
