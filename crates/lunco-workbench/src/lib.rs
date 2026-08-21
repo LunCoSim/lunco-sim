@@ -5261,6 +5261,19 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .prefix("Rect-light default: ")
                         .suffix(" lm"),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.dome_default_intensity)
+                        .speed(100.0)
+                        .prefix("Textured-dome default: ")
+                        .suffix(" cd/m²"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.dome_cubemap_face_size)
+                        .speed(128.0)
+                        .range(1..=4096)
+                        .prefix("Dome cubemap face size: ")
+                        .suffix(" px (power of two)"),
+                );
             });
             ui.collapsing("Parametric surfaces", |ui| {
                 ui.label(

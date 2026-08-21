@@ -1386,8 +1386,8 @@ pub struct SetDomeLight {
     /// `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves
     /// the sky black. The lunar case: real bounce light, no visible sky.
     pub skybox: Option<bool>,
-    /// `lunco:dome:faceSize` — cubemap face resolution. Rounded up to a power
-    /// of two.
+    /// `lunco:dome:faceSize` — cubemap face resolution. Must be a positive
+    /// power of two because the environment-map projection requires it.
     pub face_size: Option<u32>,
 }
 
@@ -1400,6 +1400,15 @@ fn on_set_dome_light(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+
+    if let Some(face_size) = cmd.face_size {
+        if !face_size.is_power_of_two() {
+            bevy::log::warn!(
+                "[SetDomeLight] face_size must be a positive power of two; refusing {face_size}"
+            );
+            return;
+        }
+    }
 
     // The running scene's root is the single entity that knows both things this
     // command needs: which document to author into, and which prim to author

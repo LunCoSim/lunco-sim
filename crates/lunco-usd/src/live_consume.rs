@@ -492,6 +492,10 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
         return;
     };
+    let quality = world
+        .get_resource::<lunco_render::RenderingQualitySettings>()
+        .map(|settings| settings.profile())
+        .unwrap_or_else(|| lunco_render::RenderingQuality::Balanced.profile());
 
     // Re-read the intent under one short borrow of the `!Send` stage.
     let domes: Vec<(String, Option<dome::UsdDomeEnvironment>, f32)> = {
@@ -507,7 +511,13 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 if view.type_name(&sp).as_deref() != Some("DomeLight") {
                     return None;
                 }
-                let env = match dome::read_dome_environment(&view, &sp, &asset_server, id) {
+                let env = match dome::read_dome_environment(
+                    &view,
+                    &sp,
+                    &asset_server,
+                    id,
+                    quality,
+                ) {
                     Ok(env) => env,
                     Err(_) => {
                         bevy::log::error!(

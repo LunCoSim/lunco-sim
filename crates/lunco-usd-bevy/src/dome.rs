@@ -55,32 +55,10 @@ use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_render::SceneCamera;
+use lunco_render::{RenderQualityProfile, SceneCamera};
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
-
-/// Default cubemap face resolution. Native gets 1024 (a visibly sharp skybox);
-/// wasm gets 512 because `AsyncComputeTaskPool` runs on the main thread there,
-/// so the projection cost is a frame hitch rather than background work.
-#[cfg(not(target_arch = "wasm32"))]
-pub const DEFAULT_FACE_SIZE: u32 = 1024;
-#[cfg(target_arch = "wasm32")]
-pub const DEFAULT_FACE_SIZE: u32 = 512;
-
-/// Intensity for a dome that authors none, in **cd/m²**.
-///
-/// UsdLux's spec default is `1.0`, and we deliberately ignore it — for exactly
-/// the reason `DistantLight` above ignores the same spec default of 1 lx. This
-/// app runs its cameras at a physically-calibrated EV100 ≈ 15 (a 128 klx sun),
-/// where 1 cd/m² is *indistinguishable from black*. A dome authored with a
-/// texture and no intensity plainly means "light my scene with this sky", and
-/// honouring the spec there yields a black screen and a bug report.
-///
-/// 1000 cd/m² lands a typical HDRI sky in the middle of that exposure. Authors
-/// tune from there: a few hundred for a dim/overcast sky, a few thousand for a
-/// bright one. Above ~10 000 the sky clips to white at this exposure.
-const DEFAULT_DOME_INTENSITY: f32 = 1000.0;
 
 /// `inputs:texture:format` — how to interpret the dome's image.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -124,7 +102,7 @@ pub struct DomeCubemap(pub Handle<Image>);
 /// `Without<DomeProjection>` guard on [`project_dome_textures`] is what makes
 /// the work fire exactly once.
 #[derive(Component)]
-pub struct DomeProjection(Task<Image>);
+pub struct DomeProjection(Task<Option<Image>>);
 
 /// The dome's authored image/tint/size changed and its [`DomeCubemap`] is now
 /// stale. Set by [`refresh_dome_entity`] on a live edit.
@@ -168,8 +146,8 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 
 /// Read a `DomeLight` prim's HDRI intent. `Ok(None)` when the prim authors no
 /// `inputs:texture:file` — that dome is a plain scalar ambient (`light.rs`).
-/// `Err(())` means an authored photometric value was malformed and the existing
-/// live state must remain untouched.
+/// `Err` means an authored value was malformed and the existing live state must
+/// remain untouched.
 ///
 /// The single definition of how a dome's attributes are read, shared by the
 /// load path (`instantiate_light_prim`) and the live-edit path
@@ -180,6 +158,7 @@ pub fn read_dome_environment(
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
+    quality: RenderQualityProfile,
 ) -> Result<Option<UsdDomeEnvironment>, crate::LightReadError> {
     let texture_path = reader
         .asset(sdf_path, "inputs:texture:file")
@@ -194,15 +173,15 @@ pub fn read_dome_environment(
     // this starts as LatLong and is corrected there if the image turns out to
     // carry 6 layers.
     match reader.text(sdf_path, "inputs:texture:format").as_deref() {
-        Some("cubeMapVerticalCross") | Some("angular") | Some("mirroredBall") => {
+        Some("latlong") | Some("automatic") | None => {}
+        Some(format) => {
             warn!(
-                "[usd-bevy] {} DomeLight inputs:texture:format is unsupported (only \
-                 `latlong`/`automatic`, plus a .ktx2 cubemap) — reading the image as \
-                 equirectangular, which will look wrong",
-                sdf_path.as_str(),
+                "[usd-bevy] {} DomeLight inputs:texture:format `{format}` is unsupported; \
+                 the textured dome was not instantiated",
+                sdf_path.as_str()
             );
+            return Err(crate::LightReadError);
         }
-        _ => {}
     }
 
     Ok(Some(UsdDomeEnvironment {
@@ -211,20 +190,48 @@ pub fn read_dome_environment(
         intensity: crate::light::read_intensity_with_exposure(
             reader,
             sdf_path,
-            DEFAULT_DOME_INTENSITY,
+            quality.dome_default_intensity,
         )?,
         tint: {
             let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)
         },
-        face_size: reader
-            .real_f32(sdf_path, "lunco:dome:faceSize")
-            .map(|f| f as u32)
-            .unwrap_or(DEFAULT_FACE_SIZE),
-        skybox: reader
-            .boolean(sdf_path, "lunco:dome:skybox")
+        face_size: read_face_size(reader, sdf_path, quality.dome_cubemap_face_size)?,
+        skybox: crate::light::read_authored_bool(reader, sdf_path, "lunco:dome:skybox")?
             .unwrap_or(true),
     }))
+}
+
+/// Read the renderer-specific dome face size without rounding an authored
+/// request into a different quality level. The generated environment-map path
+/// requires a positive power of two, so invalid values are rejected before an
+/// async allocation begins.
+fn read_face_size(
+    reader: &crate::StageView<'_>,
+    path: &openusd::sdf::Path,
+    default: u32,
+) -> Result<u32, crate::LightReadError> {
+    let authored = reader.has_authored_attribute(path, "lunco:dome:faceSize")
+        || !reader.connections(path, "lunco:dome:faceSize").is_empty();
+    if !authored {
+        return Ok(default);
+    }
+    let Some(value) = reader.scalar::<i32>(path, "lunco:dome:faceSize") else {
+        error!(
+            "[usd-bevy] {} has authored lunco:dome:faceSize with an unsupported type",
+            path.as_str()
+        );
+        return Err(crate::LightReadError);
+    };
+    if value <= 0 || !(value as u32).is_power_of_two() {
+        error!(
+            "[usd-bevy] {} has invalid authored lunco:dome:faceSize = {}; expected a positive power of two",
+            path.as_str(),
+            value
+        );
+        return Err(crate::LightReadError);
+    }
+    Ok(value as u32)
 }
 
 impl UsdDomeEnvironment {
@@ -308,6 +315,17 @@ fn project_dome_textures(
 
     for (entity, dome, mut proj) in &mut running {
         let Some(cube) = block_on(future::poll_once(&mut proj.0)) else {
+            continue;
+        };
+        let Some(cube) = cube else {
+            warn!(
+                "[usd-bevy] dome projection rejected face size {}; keeping the previous environment",
+                dome.face_size
+            );
+            commands
+                .entity(entity)
+                .remove::<DomeProjection>()
+                .remove::<DomeDirty>();
             continue;
         };
         info!(
@@ -547,8 +565,11 @@ fn face_dir(face: usize, px: u32, py: u32, size: u32) -> Vec3 {
 /// filterable, and IBL needs values well above 1.0 (a sun disc in an HDRI is
 /// hundreds of nits; clamping it to LDR is what makes image-based lighting look
 /// flat and grey).
-pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> Image {
-    let size = face_size.max(1).next_power_of_two();
+pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> Option<Image> {
+    if face_size == 0 || !face_size.is_power_of_two() {
+        return None;
+    }
+    let size = face_size;
     let tint = tint.to_f32_array();
     let mut data: Vec<u8> = Vec::with_capacity((size as usize).pow(2) * 6 * 4 * 2);
 
@@ -575,7 +596,7 @@ pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> 
         }
     }
 
-    Image {
+    Some(Image {
         texture_view_descriptor: Some(TextureViewDescriptor {
             dimension: Some(TextureViewDimension::Cube),
             ..default()
@@ -591,7 +612,7 @@ pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> 
             TextureFormat::Rgba16Float,
             RenderAssetUsages::RENDER_WORLD,
         )
-    }
+    })
 }
 
 #[cfg(test)]
@@ -630,7 +651,7 @@ mod tests {
     fn projection_preserves_direction() {
         let src = direction_probe(256, 128);
         let size = 16u32;
-        let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE);
+        let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE).expect("valid face size");
 
         assert_eq!(img.texture_descriptor.size.depth_or_array_layers, 6);
         assert_eq!(img.texture_descriptor.size.width, size);
@@ -671,7 +692,7 @@ mod tests {
     #[test]
     fn preserves_hdr_range() {
         let src = Equirect::from_texels(4, 2, vec![[50.0, 25.0, 10.0, 1.0]; 8]);
-        let img = equirect_to_cubemap(&src, 4, LinearRgba::WHITE);
+        let img = equirect_to_cubemap(&src, 4, LinearRgba::WHITE).expect("valid face size");
         let data = img.data.as_ref().unwrap();
         let r = half::f16::from_le_bytes([data[0], data[1]]).to_f32();
         assert!((r - 50.0).abs() < 0.1, "expected ~50.0, got {r}");
@@ -681,7 +702,8 @@ mod tests {
     #[test]
     fn tint_multiplies_image() {
         let src = Equirect::from_texels(4, 2, vec![[1.0, 1.0, 1.0, 1.0]; 8]);
-        let img = equirect_to_cubemap(&src, 4, LinearRgba::rgb(0.5, 0.25, 0.0));
+        let img =
+            equirect_to_cubemap(&src, 4, LinearRgba::rgb(0.5, 0.25, 0.0)).expect("valid face size");
         let data = img.data.as_ref().unwrap();
         let px = |ch: usize| half::f16::from_le_bytes([data[ch * 2], data[ch * 2 + 1]]).to_f32();
         assert!((px(0) - 0.5).abs() < 0.01);
@@ -689,13 +711,12 @@ mod tests {
         assert!(px(2).abs() < 0.01);
     }
 
-    /// A non-power-of-two `lunco:dome:faceSize` is rounded up rather than
-    /// rejected: `GeneratedEnvironmentMapLight` requires power-of-two and
-    /// panics deep in the render graph otherwise.
+    /// The projection API rejects invalid sizes too, so callers cannot bypass
+    /// the USD reader and silently request a different allocation.
     #[test]
-    fn face_size_is_forced_power_of_two() {
+    fn invalid_face_sizes_are_rejected() {
         let src = Equirect::from_texels(4, 2, vec![[1.0; 4]; 8]);
-        let img = equirect_to_cubemap(&src, 100, LinearRgba::WHITE);
-        assert_eq!(img.texture_descriptor.size.width, 128);
+        assert!(equirect_to_cubemap(&src, 0, LinearRgba::WHITE).is_none());
+        assert!(equirect_to_cubemap(&src, 100, LinearRgba::WHITE).is_none());
     }
 }

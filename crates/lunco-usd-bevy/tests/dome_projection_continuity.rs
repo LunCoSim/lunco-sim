@@ -75,7 +75,7 @@ fn face_dir_at(face: usize, px: u32, py: u32, size: u32) -> Vec3 {
 fn projection_matches_the_analytic_sky_everywhere() {
     let src = make_equirect(4096, 2048);
     let size = 256;
-    let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE);
+    let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE).expect("valid face size");
     let data = img.data.as_ref().expect("cubemap has CPU data");
 
     // Compare EVERY face texel against the analytic value in its own direction.
@@ -109,7 +109,7 @@ fn projection_matches_the_analytic_sky_everywhere() {
 fn adjacent_faces_agree_across_their_shared_edge() {
     let src = make_equirect(4096, 2048);
     let size = 256;
-    let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE);
+    let img = equirect_to_cubemap(&src, size, LinearRgba::WHITE).expect("valid face size");
     let data = img.data.as_ref().expect("cubemap has CPU data");
 
     // Walk the +X / +Z shared edge. The last column of +Z and the first column

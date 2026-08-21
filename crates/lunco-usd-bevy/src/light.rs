@@ -305,7 +305,7 @@ pub(crate) fn read_light_color(
 
 /// Read an authored USD boolean, preserving the distinction between an omitted
 /// attribute and a malformed value.
-fn read_authored_bool(
+pub(crate) fn read_authored_bool(
     reader: &crate::StageView<'_>,
     path: &SdfPath,
     name: &str,
@@ -626,7 +626,13 @@ pub(crate) fn instantiate_light_prim(
             // A textured dome deliberately contributes NO `UsdDomeAmbient`. The
             // IBL is a strictly better version of the same quantity; summing
             // both would count the sky twice and wash out every shadow.
-            let env = match dome::read_dome_environment(reader, sdf_path, asset_server, stage_id) {
+            let env = match dome::read_dome_environment(
+                reader,
+                sdf_path,
+                asset_server,
+                stage_id,
+                quality,
+            ) {
                 Ok(Some(env)) => env,
                 Ok(None) => {
                     let Ok(intensity) = read_intensity_with_exposure(reader, sdf_path, 1.0) else {

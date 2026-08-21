@@ -58,8 +58,10 @@ impl RenderingQuality {
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
+                dome_default_intensity: 1_000.0,
                 local_light_default_range: 30.0,
                 local_shadow_map_near_z: 0.1,
+                dome_cubemap_face_size: balanced_dome_face_size(),
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
                 terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
@@ -97,8 +99,10 @@ impl RenderingQuality {
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
+                dome_default_intensity: 1_000.0,
                 local_light_default_range: 20.0,
                 local_shadow_map_near_z: 0.2,
+                dome_cubemap_face_size: low_dome_face_size(),
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
                 terrain_lod_tile_resolution: 33,
                 terrain_lod_cinematic_resolution: 1025,
@@ -136,8 +140,10 @@ impl RenderingQuality {
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
+                dome_default_intensity: 1_000.0,
                 local_light_default_range: 50.0,
                 local_shadow_map_near_z: 0.05,
+                dome_cubemap_face_size: high_dome_face_size(),
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
                 terrain_lod_tile_resolution: 65,
                 terrain_lod_cinematic_resolution: 2049,
@@ -194,11 +200,18 @@ pub struct RenderQualityProfile {
     pub local_light_default_intensity: f32,
     /// Luminous power used when a RectLight omits `inputs:intensity`.
     pub rect_light_default_intensity: f32,
+    /// Luminance used when a textured DomeLight omits `inputs:intensity`, in
+    /// cd/m². This replaces UsdLux's 1.0 schema default because it is invisible
+    /// at the calibrated scene exposure; authors can override it in USD.
+    pub dome_default_intensity: f32,
     /// Range used when a local light leaves `lunco:light:range` at its schema
     /// default of zero (the explicit USD meaning is engine default).
     pub local_light_default_range: f32,
     /// Near Z plane used by local-light shadow maps.
     pub local_shadow_map_near_z: f32,
+    /// Cubemap face size used when a textured USD dome omits its authored
+    /// renderer-specific face-size override.
+    pub dome_cubemap_face_size: u32,
     /// Maximum estimated GPU upload footprint retained by streamed terrain
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
@@ -258,7 +271,7 @@ impl RenderQualityProfile {
     }
 }
 
-/// Persisted user settings for shadow and local-light presentation quality.
+/// Persisted user settings for shadow and light presentation quality.
 ///
 /// [`RenderingQuality`] supplies suggested values only. Once a preset is
 /// selected, these fields are the authoritative values used by the renderer;
@@ -306,10 +319,14 @@ pub struct RenderingQualitySettings {
     pub local_light_default_intensity: f32,
     #[serde(default = "default_rect_light_default_intensity")]
     pub rect_light_default_intensity: f32,
+    #[serde(default = "default_dome_default_intensity")]
+    pub dome_default_intensity: f32,
     #[serde(default = "default_local_light_default_range")]
     pub local_light_default_range: f32,
     #[serde(default = "default_local_shadow_map_near_z")]
     pub local_shadow_map_near_z: f32,
+    #[serde(default = "default_dome_cubemap_face_size")]
+    pub dome_cubemap_face_size: u32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
     #[serde(default = "default_terrain_lod_tile_resolution")]
@@ -420,6 +437,38 @@ const fn default_rect_light_default_intensity() -> f32 {
 
 const fn default_local_shadow_map_near_z() -> f32 {
     balanced_profile().local_shadow_map_near_z
+}
+
+const fn default_dome_default_intensity() -> f32 {
+    balanced_profile().dome_default_intensity
+}
+
+const fn balanced_dome_face_size() -> u32 {
+    if cfg!(target_arch = "wasm32") {
+        512
+    } else {
+        1024
+    }
+}
+
+const fn low_dome_face_size() -> u32 {
+    if cfg!(target_arch = "wasm32") {
+        256
+    } else {
+        512
+    }
+}
+
+const fn high_dome_face_size() -> u32 {
+    if cfg!(target_arch = "wasm32") {
+        1024
+    } else {
+        2048
+    }
+}
+
+const fn default_dome_cubemap_face_size() -> u32 {
+    balanced_profile().dome_cubemap_face_size
 }
 
 const fn balanced_camera_msaa() -> MsaaLevel {
@@ -534,8 +583,10 @@ impl RenderingQualitySettings {
             distant_light_default_illuminance: self.distant_light_default_illuminance,
             local_light_default_intensity: self.local_light_default_intensity,
             rect_light_default_intensity: self.rect_light_default_intensity,
+            dome_default_intensity: self.dome_default_intensity,
             local_light_default_range: self.local_light_default_range,
             local_shadow_map_near_z: self.local_shadow_map_near_z,
+            dome_cubemap_face_size: self.dome_cubemap_face_size,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
@@ -585,8 +636,10 @@ impl RenderingQualitySettings {
         self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
         self.local_light_default_intensity = profile.local_light_default_intensity;
         self.rect_light_default_intensity = profile.rect_light_default_intensity;
+        self.dome_default_intensity = profile.dome_default_intensity;
         self.local_light_default_range = profile.local_light_default_range;
         self.local_shadow_map_near_z = profile.local_shadow_map_near_z;
+        self.dome_cubemap_face_size = profile.dome_cubemap_face_size;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
         self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
         self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
@@ -681,6 +734,13 @@ impl RenderingQualitySettings {
         if !profile.local_shadow_map_near_z.is_finite() || profile.local_shadow_map_near_z < 0.0 {
             return Err("local shadow-map near Z must be finite and non-negative");
         }
+        if !profile.dome_default_intensity.is_finite() || profile.dome_default_intensity < 0.0 {
+            return Err("dome default intensity must be finite and non-negative");
+        }
+        if profile.dome_cubemap_face_size == 0 || !profile.dome_cubemap_face_size.is_power_of_two()
+        {
+            return Err("dome cubemap face size must be a non-zero power of two");
+        }
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
         }
@@ -761,8 +821,10 @@ impl Default for RenderingQualitySettings {
             distant_light_default_illuminance: profile.distant_light_default_illuminance,
             local_light_default_intensity: profile.local_light_default_intensity,
             rect_light_default_intensity: profile.rect_light_default_intensity,
+            dome_default_intensity: profile.dome_default_intensity,
             local_light_default_range: profile.local_light_default_range,
             local_shadow_map_near_z: profile.local_shadow_map_near_z,
+            dome_cubemap_face_size: profile.dome_cubemap_face_size,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
             terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
@@ -909,12 +971,33 @@ mod tests {
         );
         assert_eq!(settings.profile().local_light_default_intensity, 700.0);
         assert_eq!(settings.profile().rect_light_default_intensity, 4_000.0);
+        assert_eq!(settings.profile().dome_default_intensity, 1_000.0);
         assert!(settings.validate().is_ok());
 
         settings.local_light_default_intensity = 0.0;
         assert_eq!(
             settings.validate(),
             Err("local-light default intensity must be finite and greater than zero")
+        );
+
+        settings.local_light_default_intensity = 700.0;
+        settings.dome_default_intensity = f32::NAN;
+        assert_eq!(
+            settings.validate(),
+            Err("dome default intensity must be finite and non-negative")
+        );
+    }
+
+    #[test]
+    fn dome_face_size_is_explicit_and_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        assert!(settings.dome_cubemap_face_size.is_power_of_two());
+        assert!(settings.validate().is_ok());
+
+        settings.dome_cubemap_face_size = 1000;
+        assert_eq!(
+            settings.validate(),
+            Err("dome cubemap face size must be a non-zero power of two")
         );
     }
 
