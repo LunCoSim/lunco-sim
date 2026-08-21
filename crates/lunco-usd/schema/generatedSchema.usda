@@ -1415,6 +1415,9 @@ class "LunCoTelemetryAPI" (
     string lunco:telemetry:unit = "" (
         doc = "Display unit string; empty = unitless."
     )
+    string lunco:telemetry:description = "" (
+        doc = "Human-facing explanation shown with the retained signal."
+    )
     double lunco:telemetry:rateHz = 0 (
         doc = "Sampling rate, Hz. 0/unauthored = the engine's default cadence."
     )
@@ -1427,9 +1430,6 @@ class "LunCoTelemetryAPI" (
     )
     int64 lunco:telemetry:retention = 0 (
         doc = "Ring-buffer sample count to retain. 0/unauthored = engine default."
-    )
-    rel lunco:telemetry:owner (
-        doc = "Composed USD part that presents this component's generated telemetry. Absent means this prim itself."
     )
 }
 

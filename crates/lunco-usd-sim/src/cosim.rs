@@ -49,10 +49,10 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
-    UsdSceneRoot, UsdStageAsset,
+    read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
+    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
 };
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
 use crate::domain_projection::GeneratedModelicaSource;
@@ -541,6 +541,34 @@ fn reset_python_unavailable(mut diagnostics: ResMut<PythonUnavailablePrograms>) 
     *diagnostics = PythonUnavailablePrograms::default();
 }
 
+fn read_authored_telemetry_string(
+    view: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, ()> {
+    if !view.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match view.attr_value(path, attribute) {
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
+fn read_authored_telemetry_real(
+    view: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f64>, ()> {
+    if !view.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match view.real(path, attribute) {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
 /// Project the standard LunCo telemetry declaration attributes into the shared
 /// telemetry sampler. The declaration stays in USD; this is only the runtime
 /// projection, so descriptions and units remain authored data all the way to
@@ -570,14 +598,84 @@ fn project_usd_telemetry(
             continue;
         };
         let view = stage.view();
-        let authored = view.boolean(&path, "lunco:telemetry").unwrap_or(false);
+        let authored = match read_authored_bool_strict(&view, &path, "lunco:telemetry") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "[usd-cosim] {} has malformed `lunco:telemetry`; declaration ignored",
+                    path.as_str()
+                );
+                false
+            }
+        };
         if authored {
-            let port = view.text(&path, "lunco:telemetry:port");
-            let name = view.text(&path, "lunco:telemetry:name");
-            if let (Some(port), Some(name)) = (
-                port.filter(|p| !p.is_empty()),
-                name.filter(|n| !n.is_empty()),
-            ) {
+            let declaration = (|| {
+                let port = read_authored_telemetry_string(&view, &path, "lunco:telemetry:port")?
+                    .filter(|value| !value.is_empty());
+                let reflect =
+                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:reflect")?
+                        .filter(|value| !value.is_empty());
+                let source = match (port, reflect) {
+                    (Some(port), _) => ChannelSource::Port(port),
+                    (None, Some(reflect)) => ChannelSource::Reflect(reflect),
+                    (None, None) => return Err(()),
+                };
+                let source_name = match &source {
+                    ChannelSource::Port(name) => name.rsplit('.').next().unwrap_or(name.as_str()),
+                    ChannelSource::Reflect(path) => {
+                        path.rsplit('.').next().unwrap_or(path.as_str())
+                    }
+                    ChannelSource::Diagnostic(path) => path,
+                };
+                let name = read_authored_telemetry_string(&view, &path, "lunco:telemetry:name")?
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| source_name.to_string());
+                let unit = read_authored_telemetry_string(&view, &path, "lunco:telemetry:unit")?
+                    .unwrap_or_default();
+                let description =
+                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:description")?;
+                let rate_hz =
+                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:rateHz")? {
+                        None | Some(0.0) => None,
+                        Some(value) if value > 0.0 => Some(value),
+                        Some(_) => return Err(()),
+                    };
+                let enabled =
+                    match read_authored_bool_strict(&view, &path, "lunco:telemetry:enabled") {
+                        Ok(Some(value)) => value,
+                        Ok(None) => true,
+                        Err(()) => return Err(()),
+                    };
+                let deadband =
+                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:deadband")? {
+                        None | Some(0.0) => None,
+                        Some(value) if value > 0.0 => Some(value),
+                        Some(_) => return Err(()),
+                    };
+                let retention = match view.scalar::<i64>(&path, "lunco:telemetry:retention") {
+                    Some(0) | None
+                        if !view.has_authored_attribute(&path, "lunco:telemetry:retention") =>
+                    {
+                        None
+                    }
+                    Some(0) => None,
+                    Some(value) if value > 0 => Some(usize::try_from(value).map_err(|_| ())?),
+                    _ => return Err(()),
+                };
+                Ok(Parameter {
+                    name,
+                    unit,
+                    description,
+                    source,
+                    target: Some(entity),
+                    rate_hz,
+                    enabled,
+                    deadband,
+                    retention,
+                })
+            })();
+            if let Ok(parameter) = declaration {
                 // A generated domain root is projected one Update before its
                 // Modelica wrapper can publish SimComponent. Publish the typed
                 // lifecycle fact before the first FixedUpdate so the sampler
@@ -591,17 +689,15 @@ fn project_usd_telemetry(
                         .try_insert(lunco_core::PortSurfacePending);
                 }
                 commands.spawn((
-                    Name::new(format!("telemetry:{name}")),
+                    Name::new(format!("telemetry:{}", parameter.name)),
                     ChildOf(entity),
-                    Parameter {
-                        name,
-                        unit: view.text(&path, "lunco:telemetry:unit").unwrap_or_default(),
-                        description: view.text(&path, "lunco:telemetry:description"),
-                        source: ChannelSource::Port(port),
-                        target: Some(entity),
-                        ..default()
-                    },
+                    parameter,
                 ));
+            } else {
+                warn!(
+                    "[usd-cosim] {} has invalid telemetry attributes; declaration ignored",
+                    path.as_str()
+                );
             }
         }
         commands.entity(entity).try_insert(UsdTelemetryProjected);
