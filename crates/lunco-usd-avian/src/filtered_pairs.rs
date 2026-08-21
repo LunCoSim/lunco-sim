@@ -366,7 +366,7 @@ pub fn enable_static_friction_contact_hooks(
         let current = hooks.copied().unwrap_or_default();
         commands
             .entity(entity)
-            .insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
+            .try_insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
     }
 }
 

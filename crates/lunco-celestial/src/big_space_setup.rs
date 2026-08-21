@@ -572,7 +572,7 @@ pub fn setup_big_space_hierarchy(
     // `adopt_authored_body_look`.
     let earth_blueprint =
         blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5);
-    commands.entity(earth_body).insert((
+    commands.entity(earth_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: earth.radius_m,
             surface_grid: earth_surface_grid,
@@ -665,7 +665,7 @@ pub fn setup_big_space_hierarchy(
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
     let moon_blueprint =
         blueprint_tile_look_untextured(MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9);
-    commands.entity(moon_body).insert((
+    commands.entity(moon_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: moon.radius_m,
             surface_grid: moon_surface_grid,
