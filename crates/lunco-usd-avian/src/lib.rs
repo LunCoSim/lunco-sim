@@ -55,9 +55,9 @@ use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 use lunco_usd_bevy::{
-    instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
-    UsdSceneRoot, UsdVisualSynced,
+    instance_key, local_transform_at, read_primitive_axis, read_shape_dims,
+    read_transform_from_usd, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView,
+    UsdAnimated, UsdRead, UsdSceneRoot, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -655,9 +655,9 @@ fn collect_child_colliders_from_usd(
         // for the entity Transform — same canonical `usd_axis_to_quat`).
         if let Some(ty) = reader.type_name(&child_path) {
             if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                let axis_tok = reader
-                    .text(&child_path, "axis")
-                    .unwrap_or_else(|| "Z".to_string());
+                let Some(axis_tok) = read_primitive_axis(reader, &child_path, &ty) else {
+                    continue;
+                };
                 // Pre-rotate by the stage convention: the `axis` token names an
                 // axis of the STAGE's frame while the collider is built in the
                 // canonical one (identical to what usd-bevy does for the visual

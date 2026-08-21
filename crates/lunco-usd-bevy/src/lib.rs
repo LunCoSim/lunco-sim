@@ -1424,26 +1424,28 @@ fn instantiate_usd_prim_from_stage(
             prim_type.as_deref(),
             Some("Cylinder" | "Cone" | "Capsule" | "Plane")
         ) {
-            let axis = reader
-                .text(&sdf_path, "axis")
-                .unwrap_or_else(|| "Z".to_string());
-            // The `axis` token names an axis of the STAGE's frame, while the Bevy
-            // primitive is generated in the canonical one — so the axis rotation is
-            // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
-            // `axis = "Z"` cylinder therefore stands up along canonical +Y, as it
-            // did along the stage's +Z. Identity on a Y-up stage.
-            let conv = stage_convention(reader);
-            let q_axis = conv.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
-            if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
-                transform.rotation *= q_axis;
+            if let Some(axis) = prim_type
+                .as_deref()
+                .and_then(|type_name| read_primitive_axis(reader, &sdf_path, type_name))
+            {
+                // The `axis` token names an axis of the STAGE's frame, while the Bevy
+                // primitive is generated in the canonical one — so the axis rotation is
+                // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
+                // `axis = "Z"` cylinder therefore stands up along canonical +Y, as it
+                // did along the stage's +Z. Identity on a Y-up stage.
+                let conv = stage_convention(reader);
+                let q_axis = conv.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                    transform.rotation *= q_axis;
+                }
+                info!(
+                    "[usd-bevy] {} {} axis={} rot={:?}",
+                    sdf_path.as_str(),
+                    prim_type.as_deref().unwrap_or(""),
+                    axis,
+                    transform.rotation
+                );
             }
-            info!(
-                "[usd-bevy] {} {} axis={} rot={:?}",
-                sdf_path.as_str(),
-                prim_type.as_deref().unwrap_or(""),
-                axis,
-                transform.rotation
-            );
         }
         // UsdGeomCamera aim by target point: when a `def Camera` authors
         // `lunco:cameraLookAt` (double3, in the camera's PARENT-local space),
@@ -4106,10 +4108,8 @@ fn local_shape_corners(
         ),
     };
     let axis_q = if axial {
-        reader
-            .text(path, "axis")
-            .as_deref()
-            .and_then(usd_axis_to_quat)
+        read_primitive_axis(reader, path, ty)
+            .and_then(|axis| usd_axis_to_quat(&axis))
             .unwrap_or(Quat::IDENTITY)
     } else {
         Quat::IDENTITY
@@ -4141,6 +4141,41 @@ pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
         "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
         "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
         _ => None,
+    }
+}
+
+/// Read the standard `UsdGeom` axis token for a primitive. The schema fallback
+/// is `Z`; an authored value outside the schema's allowed tokens is invalid and
+/// must not silently become an identity rotation.
+pub fn read_primitive_axis(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    type_name: &str,
+) -> Option<String> {
+    if !matches!(type_name, "Cylinder" | "Cone" | "Capsule" | "Plane") {
+        return Some("Z".to_string());
+    }
+    match reader.text(path, "axis") {
+        Some(axis) if matches!(axis.as_str(), "X" | "Y" | "Z") => Some(axis),
+        Some(axis) => {
+            error!(
+                "[usd-bevy] {} has invalid {} axis token `{axis}`; expected X, Y, or Z",
+                path.as_str(),
+                type_name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, "axis")
+            || !reader.connections(path, "axis").is_empty() =>
+        {
+            error!(
+                "[usd-bevy] {} has an authored {} axis with an unsupported value type",
+                path.as_str(),
+                type_name
+            );
+            None
+        }
+        None => Some("Z".to_string()),
     }
 }
 
@@ -4282,6 +4317,70 @@ mod primitive_mesh_quality_tests {
     }
 }
 
+#[cfg(test)]
+mod primitive_attribute_tests {
+    use super::*;
+
+    fn parse(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("primitive.usda", source))
+            .expect("build primitive stage")
+    }
+
+    #[test]
+    fn omitted_dimensions_use_usd_defaults_but_invalid_authored_values_are_rejected() {
+        let stage = parse(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def Xform "World"
+{
+    def Sphere "Default" {}
+    def Cylinder "Negative"
+    {
+        double radius = -1
+        double height = 2
+    }
+    def Cylinder "WrongType"
+    {
+        string radius = "not a number"
+        double height = 2
+    }
+    def Cylinder "BadAxis"
+    {
+        double radius = 1
+        double height = 2
+        token axis = "Q"
+    }
+}
+"#,
+        );
+        let reader = stage.view();
+        assert_eq!(
+            read_shape_dims(&reader, &SdfPath::new("/World/Default").unwrap(), "Sphere"),
+            Some(ShapeDims::Sphere { radius: 1.0 })
+        );
+        assert!(read_shape_dims(
+            &reader,
+            &SdfPath::new("/World/Negative").unwrap(),
+            "Cylinder"
+        )
+        .is_none());
+        assert!(read_shape_dims(
+            &reader,
+            &SdfPath::new("/World/WrongType").unwrap(),
+            "Cylinder"
+        )
+        .is_none());
+        assert!(read_shape_dims(
+            &reader,
+            &SdfPath::new("/World/BadAxis").unwrap(),
+            "Cylinder"
+        )
+        .is_none());
+    }
+}
+
 /// Read the dimensions of a USD primitive shape prim, **in metres**. `type_name`
 /// is the prim's `typeName` token (callers already have it). Returns `None` for
 /// an unsupported type. **The defaults here are the single source of
@@ -4331,32 +4430,69 @@ fn read_shape_dims_raw(
     path: &SdfPath,
     type_name: &str,
 ) -> Option<ShapeDims> {
+    if read_primitive_axis(reader, path, type_name).is_none() {
+        return None;
+    }
     let dims = match type_name {
         "Cube" => ShapeDims::Cube {
-            size: reader.real(path, "size").unwrap_or(2.0),
+            size: read_shape_dimension(reader, path, "size", 2.0)?,
         },
         "Sphere" => ShapeDims::Sphere {
-            radius: reader.real(path, "radius").unwrap_or(1.0),
+            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
         },
         "Cylinder" => ShapeDims::Cylinder {
-            radius: reader.real(path, "radius").unwrap_or(1.0),
-            height: reader.real(path, "height").unwrap_or(2.0),
+            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
+            height: read_shape_dimension(reader, path, "height", 2.0)?,
         },
         "Cone" => ShapeDims::Cone {
-            radius: reader.real(path, "radius").unwrap_or(1.0),
-            height: reader.real(path, "height").unwrap_or(2.0),
+            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
+            height: read_shape_dimension(reader, path, "height", 2.0)?,
         },
         "Capsule" => ShapeDims::Capsule {
-            radius: reader.real(path, "radius").unwrap_or(0.5),
-            height: reader.real(path, "height").unwrap_or(1.0),
+            radius: read_shape_dimension(reader, path, "radius", 0.5)?,
+            height: read_shape_dimension(reader, path, "height", 1.0)?,
         },
         "Plane" => ShapeDims::Plane {
-            width: reader.real(path, "width").unwrap_or(2.0),
-            length: reader.real(path, "length").unwrap_or(2.0),
+            width: read_shape_dimension(reader, path, "width", 2.0)?,
+            length: read_shape_dimension(reader, path, "length", 2.0)?,
         },
         _ => return None,
     };
     Some(dims)
+}
+
+/// Read one positive USD primitive dimension, keeping omitted schema defaults
+/// distinct from malformed authored values. A wrong type, non-finite value, or
+/// non-positive size rejects the primitive instead of creating a plausible but
+/// different mesh/collider.
+fn read_shape_dimension(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    schema_default: f64,
+) -> Option<f64> {
+    let authored =
+        reader.has_authored_attribute(path, name) || !reader.connections(path, name).is_empty();
+    match reader.real(path, name) {
+        Some(value) if value.is_finite() && value > 0.0 => Some(value),
+        Some(value) => {
+            error!(
+                "[usd-bevy] {} has invalid primitive {} = {value}; expected a finite positive value",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if authored => {
+            error!(
+                "[usd-bevy] {} has authored primitive {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => Some(schema_default),
+    }
 }
 
 /// Reads an `int[]` / `int64[]` USD array attribute (`Value::IntVec` /
