@@ -396,7 +396,7 @@ impl Panel for WelcomePanel {
                                 painter.text(
                                     rect.min + egui::vec2(14.0, 8.0),
                                     egui::Align2::LEFT_TOP,
-                                    format!("{}", display),
+                                    display.to_string(),
                                     egui::FontId::proportional(13.5),
                                     title_tint,
                                 );

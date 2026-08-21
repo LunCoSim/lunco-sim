@@ -159,7 +159,7 @@ pub fn drain_sim_samples_to_viz(
         let deadband = telemetry_settings
             .as_deref()
             .map(|settings| settings.default_deadband)
-            .unwrap_or_else(TelemetryDeadband::default);
+            .unwrap_or_default();
         if batch.is_new_model {
             for (name, _) in &batch.samples {
                 sigs.clear_history(&SignalRef::new(batch.entity, name.clone()));
