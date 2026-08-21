@@ -76,7 +76,7 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
 /// again. A drive-qualified Windows path is already absolute and passes through.
 pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
     match parse_lunco_uri(id) {
-        Some(rel) => Some(assets_root?.join(rel)),
+        Some(rel) => Some(assets_root?.join(crate::asset_path::relative_path(rel)?)),
         None => {
             let p = PathBuf::from(id);
             Some(if p.is_absolute() {
@@ -120,18 +120,12 @@ pub fn read_asset_bytes_with_twin_root(
                 format!("Twin asset `{id}` has no composing Twin root"),
             )
         })?;
-        let mut relative = PathBuf::new();
-        for component in Path::new(rel).components() {
-            match component {
-                std::path::Component::Normal(part) => relative.push(part),
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Twin asset `{id}` escapes its root"),
-                    ));
-                }
-            }
-        }
+        let relative = crate::asset_path::relative_path(rel).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Twin asset `{id}` is not a portable path below its root"),
+            )
+        })?;
         let authored = root.join(&relative);
         if authored.is_file() {
             return std::fs::read(authored);
@@ -295,5 +289,30 @@ impl AssetReader for FallbackReader {
             }
         }
         last
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reads_a_windows_authored_twin_uri_below_its_registered_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let scene = root.path().join("sim/scenes/traverse.usda");
+        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+            .expect("create scene parent");
+        std::fs::write(&scene, "#usda 1.0\n").expect("write scene");
+
+        assert_eq!(
+            read_asset_bytes_with_twin_root(
+                r"twin://SummerSpaceSchool\sim\scenes\traverse.usda",
+                None,
+                Some(root.path())
+            )
+            .expect("Windows-authored Twin URI resolves through the Twin root"),
+            b"#usda 1.0\n"
+        );
     }
 }

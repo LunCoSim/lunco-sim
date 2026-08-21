@@ -69,14 +69,14 @@ pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
 /// Twin name and the Twin-relative path. [`parse_twin_uri`] for callers that
 /// hold the full URI.
 pub fn split_twin_rel(rest: &str) -> Option<(&str, &str)> {
-    rest.split_once('/')
+    rest.split_once(|separator| separator == '/' || separator == '\\')
 }
 
 /// The key an overlay is stored under — the reader-facing relative path
 /// `<name>/<rel>`, matching what [`AssetReader::read`] receives once the
 /// `twin://` scheme is stripped.
-fn overlay_key(name: &str, rel: &str) -> PathBuf {
-    Path::new(name).join(rel)
+fn overlay_key(name: &str, rel: &str) -> Option<PathBuf> {
+    Some(Path::new(name).join(crate::asset_path::relative_path(rel)?))
 }
 
 /// Registry of open Twin roots, keyed by Twin name. Cloneable handle over two
@@ -162,23 +162,27 @@ impl TwinRoots {
     /// world; pass the same `(name, rel)` to [`clear_overlay`](Self::clear_overlay)
     /// to fall back to disk.
     pub fn set_overlay(&self, name: &str, rel: &str, bytes: Arc<Vec<u8>>) {
-        if let Ok(mut m) = self.overlays.write() {
-            m.insert(overlay_key(name, rel), bytes);
+        if let (Some(key), Ok(mut m)) = (overlay_key(name, rel), self.overlays.write()) {
+            m.insert(key, bytes);
         }
     }
 
     /// Drop the in-memory overlay for `twin://<name>/<rel>` so reads fall back
     /// to the on-disk file again.
     pub fn clear_overlay(&self, name: &str, rel: &str) {
-        if let Ok(mut m) = self.overlays.write() {
-            m.remove(&overlay_key(name, rel));
+        if let (Some(key), Ok(mut m)) = (overlay_key(name, rel), self.overlays.write()) {
+            m.remove(&key);
         }
     }
 
     /// Overlay bytes registered for the reader-facing relative `path`
     /// (`<name>/<rel>`), if any.
     fn overlay_for(&self, path: &Path) -> Option<Arc<Vec<u8>>> {
-        self.overlays.read().ok().and_then(|m| m.get(path).cloned())
+        let path = PathBuf::from(crate::asset_path::slashed(path));
+        self.overlays
+            .read()
+            .ok()
+            .and_then(|m| m.get(&path).cloned())
     }
 
     /// Absolute root folder of an open Twin, by `twin://` authority. Public
@@ -275,16 +279,10 @@ impl TwinReader {
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
-        let mut comps = path.components();
-        let name = comps.next()?.as_os_str().to_str()?;
+        let path = crate::asset_path::slashed(path);
+        let (name, rel) = path.split_once('/')?;
         let root = self.roots.root_for(name)?;
-        let mut rel = PathBuf::new();
-        for comp in comps {
-            match comp {
-                std::path::Component::Normal(seg) => rel.push(seg),
-                _ => return None,
-            }
-        }
+        let rel = crate::asset_path::relative_path(rel)?;
         let authored = root.join(&rel);
         if authored.exists() {
             return Some(authored);
@@ -353,6 +351,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parses_a_windows_authored_twin_uri() {
+        assert_eq!(
+            parse_twin_uri(r"twin://SummerSpaceSchool\sim\scenes\traverse.usda"),
+            Some(("SummerSpaceSchool", r"sim\scenes\traverse.usda"))
+        );
+    }
+
     /// The overlay must be keyed identically to the path the `AssetReader`
     /// receives for `twin://<name>/<rel>` (scheme stripped) — otherwise an
     /// `AssetServer` load would miss it and read the on-disk file.
@@ -369,6 +375,13 @@ mod tests {
                 .as_deref(),
             Some(&*bytes),
             "overlay hit for the exact reader-facing path"
+        );
+        assert_eq!(
+            roots
+                .overlay_for(Path::new(r"moonbase\scenes\luncosim.usda"))
+                .as_deref(),
+            Some(&*bytes),
+            "a Windows reader-facing path finds the slash-normalized overlay"
         );
         assert!(
             roots
