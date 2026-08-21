@@ -5644,6 +5644,12 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .range(1..=8192)
                         .prefix("Selected tile budget: "),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_cover_edits_per_frame)
+                        .speed(4.0)
+                        .range(1..=4096)
+                        .prefix("Cover edits per frame: "),
+                );
                 ui.label(
                     egui::RichText::new(
                         "These are explicit terrain rendering controls. A custom value is applied as authored; the renderer does not silently choose a lower preset.",

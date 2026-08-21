@@ -92,6 +92,7 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 24,
                 terrain_lod_max_inflight_bakes: 64,
                 terrain_lod_tile_budget: 768,
+                terrain_lod_cover_edits_per_frame: 64,
                 nurbs_surface_samples_per_control_span: 6,
                 nurbs_surface_minimum_subdivisions: 8,
                 nurbs_surface_maximum_subdivisions: 128,
@@ -156,6 +157,7 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 8,
                 terrain_lod_max_inflight_bakes: 16,
                 terrain_lod_tile_budget: 256,
+                terrain_lod_cover_edits_per_frame: 16,
                 nurbs_surface_samples_per_control_span: 3,
                 nurbs_surface_minimum_subdivisions: 6,
                 nurbs_surface_maximum_subdivisions: 64,
@@ -220,6 +222,7 @@ impl RenderingQuality {
                 terrain_lod_bakes_per_frame: 48,
                 terrain_lod_max_inflight_bakes: 128,
                 terrain_lod_tile_budget: 1536,
+                terrain_lod_cover_edits_per_frame: 128,
                 nurbs_surface_samples_per_control_span: 10,
                 nurbs_surface_minimum_subdivisions: 12,
                 nurbs_surface_maximum_subdivisions: 256,
@@ -345,6 +348,8 @@ pub struct RenderQualityProfile {
     pub terrain_lod_max_inflight_bakes: usize,
     /// Maximum selected streamed terrain tiles per terrain.
     pub terrain_lod_tile_budget: usize,
+    /// Maximum persistent-cover split/merge edits applied per terrain per frame.
+    pub terrain_lod_cover_edits_per_frame: usize,
     /// Samples per control-point span used for untrimmed NURBS surfaces.
     pub nurbs_surface_samples_per_control_span: usize,
     /// Minimum samples per direction used for untrimmed NURBS surfaces.
@@ -517,6 +522,8 @@ pub struct RenderingQualitySettings {
     pub terrain_lod_max_inflight_bakes: usize,
     #[serde(default = "default_terrain_lod_tile_budget")]
     pub terrain_lod_tile_budget: usize,
+    #[serde(default = "default_terrain_lod_cover_edits_per_frame")]
+    pub terrain_lod_cover_edits_per_frame: usize,
     #[serde(default = "default_nurbs_surface_samples_per_control_span")]
     pub nurbs_surface_samples_per_control_span: usize,
     #[serde(default = "default_nurbs_surface_minimum_subdivisions")]
@@ -795,6 +802,10 @@ const fn default_terrain_lod_tile_budget() -> usize {
     balanced_profile().terrain_lod_tile_budget
 }
 
+const fn default_terrain_lod_cover_edits_per_frame() -> usize {
+    balanced_profile().terrain_lod_cover_edits_per_frame
+}
+
 const fn default_nurbs_surface_samples_per_control_span() -> usize {
     balanced_profile().nurbs_surface_samples_per_control_span
 }
@@ -886,6 +897,7 @@ impl RenderingQualitySettings {
             terrain_lod_bakes_per_frame: self.terrain_lod_bakes_per_frame,
             terrain_lod_max_inflight_bakes: self.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: self.terrain_lod_tile_budget,
+            terrain_lod_cover_edits_per_frame: self.terrain_lod_cover_edits_per_frame,
             nurbs_surface_samples_per_control_span: self.nurbs_surface_samples_per_control_span,
             nurbs_surface_minimum_subdivisions: self.nurbs_surface_minimum_subdivisions,
             nurbs_surface_maximum_subdivisions: self.nurbs_surface_maximum_subdivisions,
@@ -971,6 +983,7 @@ impl RenderingQualitySettings {
         self.terrain_lod_bakes_per_frame = profile.terrain_lod_bakes_per_frame;
         self.terrain_lod_max_inflight_bakes = profile.terrain_lod_max_inflight_bakes;
         self.terrain_lod_tile_budget = profile.terrain_lod_tile_budget;
+        self.terrain_lod_cover_edits_per_frame = profile.terrain_lod_cover_edits_per_frame;
         self.nurbs_surface_samples_per_control_span =
             profile.nurbs_surface_samples_per_control_span;
         self.nurbs_surface_minimum_subdivisions = profile.nurbs_surface_minimum_subdivisions;
@@ -1190,6 +1203,11 @@ impl RenderingQualitySettings {
         if profile.terrain_lod_tile_budget == 0 {
             return Err("terrain LOD tile budget must be greater than zero");
         }
+        if profile.terrain_lod_cover_edits_per_frame == 0
+            || profile.terrain_lod_cover_edits_per_frame > 4096
+        {
+            return Err("terrain LOD cover edits per frame must be between 1 and 4096");
+        }
         if profile.nurbs_surface_samples_per_control_span == 0 {
             return Err("NURBS surface samples per control span must be greater than zero");
         }
@@ -1285,6 +1303,7 @@ impl Default for RenderingQualitySettings {
             terrain_lod_bakes_per_frame: profile.terrain_lod_bakes_per_frame,
             terrain_lod_max_inflight_bakes: profile.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: profile.terrain_lod_tile_budget,
+            terrain_lod_cover_edits_per_frame: profile.terrain_lod_cover_edits_per_frame,
             nurbs_surface_samples_per_control_span: profile.nurbs_surface_samples_per_control_span,
             nurbs_surface_minimum_subdivisions: profile.nurbs_surface_minimum_subdivisions,
             nurbs_surface_maximum_subdivisions: profile.nurbs_surface_maximum_subdivisions,
@@ -1594,6 +1613,7 @@ mod tests {
                 .profile()
                 .terrain_lod_tile_resolution
         );
+        assert_eq!(settings.profile().terrain_lod_cover_edits_per_frame, 64);
 
         settings.terrain_lod_tile_resolution = 2;
         assert_eq!(
@@ -1654,6 +1674,13 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain rock LOD fade distance must be finite and greater than zero")
+        );
+
+        settings.terrain_rock_lod_fade_distance = 500.0;
+        settings.terrain_lod_cover_edits_per_frame = 0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain LOD cover edits per frame must be between 1 and 4096")
         );
     }
 

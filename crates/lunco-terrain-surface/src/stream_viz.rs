@@ -460,10 +460,8 @@ fn wanted_parent_fallbacks(wanted: &HashSet<QuadCoord>, parents: &mut HashSet<Qu
 /// stale deep tile and a fresh coarse one as re-bakes landed, and looked worse.
 /// Substituting a DIFFERENT node is the thing that fails; keeping the SAME node on
 /// screen until it is replaced is what works.
-/// Cover edits (splits + merges) applied per frame. Bounds churn: the cover is
-/// PERSISTENT state now, so a frame changes a handful of nodes instead of
-/// re-deriving hundreds. High enough that a fast camera converges in a few frames.
-const MAX_COVER_EDITS: usize = 64;
+#[cfg(test)]
+const TEST_MAX_COVER_EDITS: usize = 64;
 
 /// The up-to-4 same-depth edge-neighbour coords of `c` (clipped at the root square).
 fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
@@ -594,6 +592,7 @@ fn evolve_cover_for_foci(
         foci,
         node_error,
         budget,
+        TEST_MAX_COVER_EDITS,
         &|_, _| false,
         &mut CoverScratch::default(),
     )
@@ -602,7 +601,7 @@ fn evolve_cover_for_foci(
 
 /// Reused candidate collections for [`evolve_cover_for_foci_with_retention`] —
 /// previously three fresh heap collections per terrain per frame, allocated to
-/// apply at most [`MAX_COVER_EDITS`] edits.
+/// apply the configured cover-edit budget.
 #[derive(Default)]
 struct CoverScratch {
     parents: HashSet<QuadCoord>,
@@ -624,6 +623,7 @@ fn evolve_cover_for_foci_with_retention(
     foci: &[([f64; 2], f64)],
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
+    max_cover_edits: usize,
     retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
     scratch: &mut CoverScratch,
 ) -> (usize, usize) {
@@ -705,7 +705,7 @@ fn evolve_cover_for_foci_with_retention(
     // 1. Voluntary merges — the node is genuinely past the hysteresis band
     //    (the sorted prefix holds exactly those, farthest first).
     for &(_, p) in merges.iter().take(band) {
-        if edits >= MAX_COVER_EDITS {
+        if edits >= max_cover_edits {
             break;
         }
         // Restriction guard — also what makes cascade splits STABLE: a node
@@ -729,7 +729,7 @@ fn evolve_cover_for_foci_with_retention(
     //    Not bounded by `MAX_COVER_EDITS`: being over budget is a frame-rate problem,
     //    and unlike a global metric change this only touches the quads it drops.
     // Forced merges count toward the RETURNED edit total (a pass that shrank
-    // the cover is not a fixed point) but not toward `MAX_COVER_EDITS` — being
+    // the cover is not a fixed point) but not toward the cover-edit setting — being
     // over budget is a frame-rate problem the pass must fully resolve.
     let mut forced = 0usize;
     if cover.len() > budget {
@@ -788,7 +788,7 @@ fn evolve_cover_for_foci_with_retention(
     // consumed cascades leave edit budget unspent — so the visit order, the
     // applied edits and the `budget_refused` count are all identical to the
     // full sort.
-    let prefix = MAX_COVER_EDITS.saturating_sub(edits).min(splits.len());
+    let prefix = max_cover_edits.saturating_sub(edits).min(splits.len());
     if prefix > 0 && prefix < splits.len() {
         splits.select_nth_unstable_by(prefix - 1, split_order);
     }
@@ -796,7 +796,7 @@ fn evolve_cover_for_foci_with_retention(
     let mut sorted_upto = prefix;
     let mut next = 0;
     while next < splits.len() {
-        if edits >= MAX_COVER_EDITS {
+        if edits >= max_cover_edits {
             break;
         }
         if next == sorted_upto {
@@ -841,7 +841,7 @@ fn evolve_cover_for_foci_with_retention(
         // The whole chain lands or none of it does — a partial cascade would leave
         // the violation it exists to prevent. `continue`, not `break`: a later,
         // cheaper split (no cascade) may still fit the remaining budget.
-        if edits + chain.len() > MAX_COVER_EDITS {
+        if edits + chain.len() > max_cover_edits {
             continue; // transient: retried next pass once the edit budget frees up
         }
         if cover.len() + 3 * chain.len() > budget {
@@ -1193,6 +1193,7 @@ pub struct SetTerrainRenderingQuality {
     pub bakes_per_frame: Option<usize>,
     pub max_inflight_bakes: Option<usize>,
     pub tile_budget: Option<usize>,
+    pub cover_edits_per_frame: Option<usize>,
 }
 
 #[on_command(SetTerrainRenderingQuality)]
@@ -1225,6 +1226,9 @@ fn on_set_terrain_rendering_quality(
     }
     if let Some(value) = event.tile_budget {
         candidate.terrain_lod_tile_budget = value;
+    }
+    if let Some(value) = event.cover_edits_per_frame {
+        candidate.terrain_lod_cover_edits_per_frame = value;
     }
     if let Err(reason) = candidate.validate() {
         bevy::log::error!(target: "terrain", "rejected terrain rendering quality: {reason}");
@@ -2198,6 +2202,7 @@ pub fn update_lod_tiles(
             sig.write_u64(profile.terrain_lod_tile_resolution as u64);
             sig.write_u64(profile.terrain_lod_cinematic_resolution as u64);
             sig.write_u64(profile.terrain_lod_probe_resolution as u64);
+            sig.write_u64(profile.terrain_lod_cover_edits_per_frame as u64);
             sig.finish()
         };
         {
@@ -2351,6 +2356,7 @@ pub fn update_lod_tiles(
                             focus_metric,
                             &node_error,
                             budget,
+                            profile.terrain_lod_cover_edits_per_frame,
                             &|_, region| near_field_retains_refinement(region, visual_foci),
                             cover_scratch,
                         );
@@ -2375,6 +2381,7 @@ pub fn update_lod_tiles(
                         focus_metric,
                         &node_error,
                         budget,
+                        profile.terrain_lod_cover_edits_per_frame,
                         &|_, region| near_field_retains_refinement(region, visual_foci),
                         cover_scratch,
                     );
@@ -4071,6 +4078,7 @@ mod draw_partition_tests {
                 &[([x, 0.0], 2.0)],
                 &err,
                 64,
+                TEST_MAX_COVER_EDITS,
                 &|_, _| false,
                 &mut reused,
             );
@@ -4080,6 +4088,7 @@ mod draw_partition_tests {
                 &[([x, 0.0], 2.0)],
                 &err,
                 64,
+                TEST_MAX_COVER_EDITS,
                 &|_, _| false,
                 &mut CoverScratch::default(),
             );
@@ -4108,6 +4117,7 @@ mod draw_partition_tests {
                 &[([0.0, 0.0], 5.0)],
                 &err,
                 16,
+                TEST_MAX_COVER_EDITS,
                 &|_, _| false,
                 &mut scratch,
             )
@@ -4203,6 +4213,7 @@ mod draw_partition_tests {
             &[([-700.0, -700.0], 5.0)],
             &err,
             13,
+            TEST_MAX_COVER_EDITS,
             &|coord, _| coord == retained,
             &mut CoverScratch::default(),
         );
