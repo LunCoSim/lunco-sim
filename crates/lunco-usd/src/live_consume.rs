@@ -490,10 +490,13 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
         return;
     };
-    let quality = world
+    let Some(quality) = world
         .get_resource::<lunco_render::RenderingQualitySettings>()
         .map(|settings| settings.profile())
-        .unwrap_or_else(|| lunco_render::RenderingQuality::Balanced.profile());
+    else {
+        warn!("cannot refresh USD domes without graphics settings");
+        return;
+    };
 
     // Re-read the intent under one short borrow of the `!Send` stage.
     let domes: Vec<(String, Option<dome::UsdDomeEnvironment>, f32)> = {
@@ -947,7 +950,7 @@ mod tests {
         use bevy::prelude::*;
         use lunco_usd_bevy::{CanonicalStages, StageRecipe};
 
-        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
