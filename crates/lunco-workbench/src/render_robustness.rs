@@ -634,18 +634,19 @@ fn apply_render_quality(
         commands.remove_resource::<RenderWarning>();
     }
 
-    let profile = settings.profile();
-
-    if let Err(reason) = settings.validate() {
-        if warning.is_none() {
-            commands.insert_resource(RenderWarning {
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            if warning.is_none() {
+                commands.insert_resource(RenderWarning {
                 message: format!(
                     "Invalid graphics shadow settings: {reason}. The requested settings were not applied until corrected."
                 ),
             });
+            }
+            return;
         }
-        return;
-    }
+    };
 
     if directional_map.size != profile.directional_shadow_map_size as usize {
         directional_map.size = profile.directional_shadow_map_size as usize;
@@ -1001,17 +1002,19 @@ fn apply_shadow_caster_policy(
         Option<&Name>,
     )>,
 ) {
-    let profile = settings.profile();
-    if let Err(reason) = settings.validate() {
-        if warning.is_none() {
-            commands.insert_resource(RenderWarning {
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            if warning.is_none() {
+                commands.insert_resource(RenderWarning {
                 message: format!(
                     "Invalid graphics shadow settings: {reason}. Shadow caster limits were not changed."
                 ),
             });
+            }
+            return;
         }
-        return;
-    }
+    };
     let admission_budget = profile.shadow_budget_bytes;
     if let Some(health) = health.as_ref() {
         health

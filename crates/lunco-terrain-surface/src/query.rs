@@ -404,7 +404,15 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "TerrainLodStatus: rendering quality settings are unavailable".to_string(),
             );
         };
-        let profile = settings.profile();
+        let profile = match settings.validated_profile() {
+            Ok(profile) => profile,
+            Err(reason) => {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    format!("TerrainLodStatus: rendering quality settings are invalid: {reason}"),
+                );
+            }
+        };
         let Some(demands) = world.get_resource::<TerrainDetailDemands>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,

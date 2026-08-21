@@ -115,11 +115,13 @@ fn apply_graphics_camera_quality(
     bloom_override: Res<lunco_render::SceneBloomOverride>,
     mut cameras: Query<&mut SceneCamera, With<lunco_render::GraphicsCameraDefaults>>,
 ) {
-    if let Err(reason) = settings.validate() {
-        warn!("invalid Graphics camera settings: {reason}; preserving current camera intent");
-        return;
-    }
-    let profile = settings.profile();
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("invalid Graphics camera settings: {reason}; preserving current camera intent");
+            return;
+        }
+    };
     for mut camera in &mut cameras {
         apply_camera_quality(&mut camera, profile, bloom_override.intensity);
     }
@@ -136,11 +138,15 @@ fn sync_new_scene_camera(
         ),
     >,
 ) {
-    if let Err(reason) = settings.validate() {
-        warn!("invalid Graphics camera settings: {reason}; new camera keeps its authored intent");
-        return;
-    }
-    let profile = settings.profile();
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "invalid Graphics camera settings: {reason}; new camera keeps its authored intent"
+            );
+            return;
+        }
+    };
     for mut camera in &mut cameras {
         apply_camera_quality(&mut camera, profile, bloom_override.intensity);
     }

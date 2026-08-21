@@ -41,10 +41,17 @@ fn on_set_environment_light_bloom(
         warn!("SetEnvironmentLight rejected non-finite or negative bloom intensity");
         return;
     }
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("SetEnvironmentLight rejected while Graphics settings are invalid: {reason}");
+            return;
+        }
+    };
     bloom_override.intensity = Some(intensity);
     for mut cam in &mut cams {
         let low_frequency_boost = cam.bloom.map_or_else(
-            || settings.profile().camera_bloom_low_frequency_boost,
+            || profile.camera_bloom_low_frequency_boost,
             |bloom| bloom.low_frequency_boost,
         );
         let next = (intensity > 0.0).then(|| BloomLook::new(intensity, low_frequency_boost));

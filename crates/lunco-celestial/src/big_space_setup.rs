@@ -243,6 +243,15 @@ pub fn setup_big_space_hierarchy(
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
+    let sun_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            error!(
+                "[celestial] invalid Graphics quality; refusing to build celestial lighting hierarchy: {reason}"
+            );
+            return;
+        }
+    };
     // Every grid in the live hierarchy uses the same precision contract as the
     // persistent world shell.  A child with a different cell edge has a
     // different rebranch boundary and therefore can move relative to its
@@ -431,7 +440,6 @@ pub fn setup_big_space_hierarchy(
     // sun frozen at its authored rotation.
     //
     // Physical/render lighting STATE is established here; the LIGHT is not.
-    let sun_profile = quality.profile();
     let sun = lunco_render::LunarSunShadow::for_profile(sun_profile);
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.

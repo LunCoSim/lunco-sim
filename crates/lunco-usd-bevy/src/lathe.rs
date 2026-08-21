@@ -564,7 +564,13 @@ pub fn regenerate_patch_meshes(
     q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>), Changed<NurbsSurface>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
-    let profile = quality.profile();
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics NURBS quality; retaining current meshes: {reason}");
+            return;
+        }
+    };
     for (surface, handle, name) in &q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(
@@ -592,7 +598,13 @@ pub fn retessellate_patch_meshes_on_quality_change(
     if !quality.is_changed() {
         return;
     }
-    let profile = quality.profile();
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics NURBS quality; retaining current meshes: {reason}");
+            return;
+        }
+    };
     for (surface, handle, name) in &q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(

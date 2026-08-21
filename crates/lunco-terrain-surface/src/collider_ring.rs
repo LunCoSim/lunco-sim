@@ -252,13 +252,15 @@ pub fn sync_ring_quality(
     settings: Res<lunco_render::RenderingQualitySettings>,
     mut q: Query<(&DemHeightField, &mut TerrainColliderRing)>,
 ) {
-    if let Err(reason) = settings.validate() {
-        warn!(
-            "[terrain] invalid Graphics terrain quality; preserving collider-ring quality: {reason}"
-        );
-        return;
-    }
-    let profile = settings.profile();
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "[terrain] invalid Graphics terrain quality; preserving collider-ring quality: {reason}"
+            );
+            return;
+        }
+    };
     for (height_field, mut ring) in &mut q {
         let next = TerrainColliderRing::for_profile(profile, height_field.0.half_extent() as f64);
         if *ring != next {

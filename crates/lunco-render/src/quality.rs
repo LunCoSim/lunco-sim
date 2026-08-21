@@ -752,6 +752,13 @@ impl RenderingQualitySettings {
         }
     }
 
+    /// Return the authoritative profile only when every setting is usable by
+    /// its runtime consumers. Runtime systems must use this boundary instead
+    /// of turning an invalid setting into a different quality profile.
+    pub fn validated_profile(self) -> Result<RenderQualityProfile, &'static str> {
+        self.validate().map(|()| self.profile())
+    }
+
     /// Identify whether the current values still equal one of the suggestions.
     pub fn preset(self) -> Option<RenderingQuality> {
         RenderingQuality::all()
@@ -1199,6 +1206,21 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("shadow byte ceiling is below the configured maximum shadow allocation")
+        );
+    }
+
+    #[test]
+    fn validated_profile_never_exposes_invalid_quality_to_runtime() {
+        let valid = RenderingQualitySettings::default();
+        assert_eq!(valid.validated_profile(), Ok(valid.profile()));
+
+        let invalid = RenderingQualitySettings {
+            primitive_radial_segments: 2,
+            ..valid
+        };
+        assert_eq!(
+            invalid.validated_profile(),
+            Err("primitive mesh tessellation values are below their minimum")
         );
     }
 

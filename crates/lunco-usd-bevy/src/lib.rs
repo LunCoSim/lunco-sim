@@ -1877,7 +1877,14 @@ fn on_usd_prim_added(
             .ok()
             .is_some_and(|c| q_high_precision.contains(c.parent()));
     let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-    let requested_profile = quality.profile();
+    let requested_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics quality; deferring USD visual projection: {reason}");
+            commands.entity(entity).try_insert(UsdAwaitingStage);
+            return;
+        }
+    };
 
     instantiate_usd_prim(
         entity,
@@ -1973,7 +1980,15 @@ pub fn sync_usd_visuals(
         return;
     }
 
-    let requested_profile = quality.profile();
+    let requested_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "[usd-bevy] invalid Graphics quality; retaining USD prims awaiting visual projection: {reason}"
+            );
+            return;
+        }
+    };
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
         if !loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
@@ -4973,7 +4988,15 @@ fn retessellate_primitive_meshes_on_quality_change(
     if !quality.is_changed() {
         return;
     }
-    let profile = quality.profile();
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "[usd-bevy] invalid Graphics primitive quality; retaining current meshes: {reason}"
+            );
+            return;
+        }
+    };
     for (primitive, handle, name) in &q {
         let Some(mesh) = build_primitive_mesh(primitive.0, profile) else {
             warn!(
@@ -5001,7 +5024,13 @@ fn retessellate_curve_meshes_on_quality_change(
     if !quality.is_changed() {
         return;
     }
-    let profile = quality.profile();
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics curve quality; retaining current meshes: {reason}");
+            return;
+        }
+    };
     for (prim_path, handle, name) in &q {
         let Some(stage) = canonical.get(prim_path.stage_handle.id()) else {
             continue;

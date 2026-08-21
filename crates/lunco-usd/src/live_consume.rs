@@ -502,12 +502,16 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
         return;
     };
-    let Some(quality) = world
-        .get_resource::<lunco_render::RenderingQualitySettings>()
-        .map(|settings| settings.profile())
-    else {
+    let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
         warn!("cannot refresh USD domes without graphics settings");
         return;
+    };
+    let quality = match settings.validated_profile() {
+        Ok(quality) => quality,
+        Err(reason) => {
+            warn!("cannot refresh USD domes while Graphics settings are invalid: {reason}");
+            return;
+        }
     };
 
     // Re-read the intent under one short borrow of the `!Send` stage.

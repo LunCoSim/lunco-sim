@@ -64,15 +64,17 @@ fn sync_horizon_quality_settings(
     settings: Res<lunco_render::RenderingQualitySettings>,
     mut cfg: ResMut<HorizonShadowCacheConfig>,
 ) {
-    let Err(reason) = settings.validate() else {
-        let profile = settings.profile();
-        cfg.enabled = profile.horizon_shadow_cache_enabled;
-        cfg.sun_threshold_deg = profile.horizon_shadow_cache_sun_threshold_deg;
-        cfg.march_steps = profile.horizon_march_steps;
-        cfg.samples_per_axis = profile.horizon_cache_samples_per_axis;
-        return;
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration");
+            return;
+        }
     };
-    warn!("invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration");
+    cfg.enabled = profile.horizon_shadow_cache_enabled;
+    cfg.sun_threshold_deg = profile.horizon_shadow_cache_sun_threshold_deg;
+    cfg.march_steps = profile.horizon_march_steps;
+    cfg.samples_per_axis = profile.horizon_cache_samples_per_axis;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

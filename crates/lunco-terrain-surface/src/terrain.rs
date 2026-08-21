@@ -1439,6 +1439,14 @@ fn finish_dem_builds(
 ) {
     use bevy::tasks::futures_lite::future;
 
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[dem-terrain] invalid Graphics quality; retaining pending DEM builds: {reason}");
+            return;
+        }
+    };
+
     for (entity, mut task, req) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
@@ -1469,7 +1477,7 @@ fn finish_dem_builds(
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
-            quality.profile(),
+            profile,
         );
     }
 }
@@ -1652,6 +1660,15 @@ fn finish_dem_worker(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            bevy::log::error!(
+                "[dem-terrain] invalid Graphics quality; retaining pending worker builds: {reason}"
+            );
+            return;
+        }
+    };
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
@@ -1709,7 +1726,7 @@ fn finish_dem_worker(
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
-                    quality.profile(),
+                    profile,
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
@@ -1791,7 +1808,7 @@ fn finish_dem_worker(
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
-                        quality.profile(),
+                        profile,
                     );
                     any_full = true;
                     full_terrain_entities.push(entity);

@@ -1921,11 +1921,13 @@ pub fn update_lod_tiles(
     mut looks: Query<&mut ShaderLook>,
     mut scratch: Local<StreamScratch>,
 ) {
-    if let Err(reason) = quality.validate() {
-        bevy::log::error!(target: "terrain", "terrain rendering quality is invalid: {reason}");
-        return;
-    }
-    let profile = quality.profile();
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            bevy::log::error!(target: "terrain", "terrain rendering quality is invalid: {reason}");
+            return;
+        }
+    };
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = overlay_params.uniforms();
@@ -2893,7 +2895,7 @@ pub fn update_lod_tiles(
         // cost a re-bake on a much later re-selection, never a visible hole.)
         mesh_cache.trim(
             mesh_cache_entry_cap(profile.terrain_lod_tile_budget.max(16), terrain_count),
-            quality.profile().terrain_mesh_cache_bytes,
+            profile.terrain_mesh_cache_bytes,
             |(e, c, _)| {
                 *e == terrain
                     && (wanted.contains(c)
