@@ -1518,8 +1518,7 @@ fn bridge_dem_prim_read(
     // (`size`). The namespace split is now by prim: a LAYER prim carries
     // `lunco:layer:*`, the terrain SURFACE carries `lunco:terrain:*`.
     use lunco_terrain_surface::LayerAttrSource;
-    let dem = dem_layer_sdf.clone();
-    let dem_attrs = dem.as_ref().map(|d| UsdLayerAttrs {
+    let dem_attrs = dem_layer_sdf.as_ref().map(|d| UsdLayerAttrs {
         reader,
         sdf: d.clone(),
         ns: NS_LAYER,
@@ -1561,7 +1560,7 @@ fn bridge_dem_prim_read(
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
     let half_window = match attr_f32("windowM") {
-        Some(w) if w == 0.0 => f64::INFINITY,
+        Some(0.0) => f64::INFINITY,
         Some(w) if w > 0.0 => (w * 0.5) as f64,
         _ => 2048.0,
     };
