@@ -58,7 +58,7 @@ use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 /// persisted in [`lunco_render::RenderingQualitySettings`]. Keeping them there
 /// makes the Graphics menu the sole owner of render-quality policy; this module
 /// only consumes the selected profile.
-
+///
 /// Marks a perspective camera as a visual terrain-detail authority.
 ///
 /// Every active marked camera contributes one stable, camera-centred detail cover.
@@ -195,10 +195,11 @@ pub(crate) fn collect_terrain_detail_demands(
                         let viewport = camera.physical_viewport_size()?;
                         let screen_height_px = viewport.y as f64;
                         let fov_y_rad = perspective.fov as f64;
-                        if screen_height_px <= 0.0
-                            || !screen_height_px.is_finite()
-                            || !(0.0 < fov_y_rad && fov_y_rad < std::f64::consts::PI)
-                            || !fov_y_rad.is_finite()
+                        if !(screen_height_px > 0.0
+                            && screen_height_px.is_finite()
+                            && 0.0 < fov_y_rad
+                            && fov_y_rad < std::f64::consts::PI
+                            && fov_y_rad.is_finite())
                         {
                             return None;
                         }
