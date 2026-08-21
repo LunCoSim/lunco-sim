@@ -323,7 +323,7 @@ mod tests {
             .unwrap()
             .bloom
             .is_none());
-        assert!(a.world().entity(owned).get::<SceneCamera>().unwrap().hdr == false);
+        assert!(!a.world().entity(owned).get::<SceneCamera>().unwrap().hdr);
         assert_eq!(
             a.world()
                 .entity(explicit)
@@ -358,7 +358,7 @@ mod tests {
 
     fn despawn_scene_cameras(mut commands: Commands, cameras: Query<Entity, With<SceneCamera>>) {
         for entity in &cameras {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 

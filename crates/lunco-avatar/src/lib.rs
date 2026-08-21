@@ -5055,7 +5055,7 @@ mod tests {
                 OrbitViewReturn {
                     parent_grid: surface_grid,
                     cell: return_cell,
-                    transform: return_transform.clone(),
+                    transform: return_transform,
                     behavior: OrbitReturnBehavior::Surface(return_surface.clone()),
                     gravity_body: Some(GravityBody { body_entity: body }),
                     surface_relative: true,
@@ -5133,7 +5133,7 @@ mod tests {
                     ..default()
                 },
                 original_cell,
-                original_transform.clone(),
+                original_transform,
                 ChildOf(surface_grid),
                 original_surface.clone(),
                 GravityBody { body_entity: moon },
@@ -5239,7 +5239,7 @@ mod tests {
                     ..default()
                 },
                 original_cell,
-                original_transform.clone(),
+                original_transform,
                 ChildOf(surface_grid),
                 original_spring.clone(),
                 ControllerLink {
