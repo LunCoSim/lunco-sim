@@ -591,12 +591,19 @@ pub(crate) fn instantiate_light_prim(
             let Ok(casts_shadows) = read_shadow_enable(reader, sdf_path) else {
                 return false;
             };
+            let Some(cascade_config) = sun.cascade_config() else {
+                error!(
+                    "[usd-bevy] {} has invalid resolved shadow cascade settings; refusing the DistantLight",
+                    sdf_path.as_str()
+                );
+                return false;
+            };
 
             commands.insert_resource(sun.shadow_map());
             commands.entity(entity).try_insert((
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
                 sun.directional_light(color, illuminance_lux, casts_shadows),
-                sun.cascade_config(),
+                cascade_config,
                 ShadowRangeAuthorship {
                     first_cascade_far_bound: first_cascade_authored,
                     maximum_distance: maximum_authored,

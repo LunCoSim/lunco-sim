@@ -149,15 +149,33 @@ impl LunarSunShadow {
     }
 
     /// Build the [`CascadeShadowConfig`] for this spec.
-    pub fn cascade_config(&self) -> CascadeShadowConfig {
-        CascadeShadowConfigBuilder {
-            num_cascades: self.num_cascades.max(1),
-            minimum_distance: self.minimum_distance,
-            first_cascade_far_bound: self.first_cascade_far_bound,
-            maximum_distance: self.maximum_distance,
-            overlap_proportion: self.overlap_proportion,
+    ///
+    /// Invalid values are rejected rather than normalized. The caller owns the
+    /// policy for reporting an invalid Graphics profile or authored range; this
+    /// boundary must not turn it into a different shadow configuration.
+    pub fn cascade_config(&self) -> Option<CascadeShadowConfig> {
+        if self.num_cascades == 0
+            || !self.minimum_distance.is_finite()
+            || self.minimum_distance < 0.0
+            || !self.first_cascade_far_bound.is_finite()
+            || self.first_cascade_far_bound <= self.minimum_distance
+            || !self.maximum_distance.is_finite()
+            || self.maximum_distance <= self.first_cascade_far_bound
+            || !self.overlap_proportion.is_finite()
+            || !(0.0..=1.0).contains(&self.overlap_proportion)
+        {
+            return None;
         }
-        .build()
+        Some(
+            CascadeShadowConfigBuilder {
+                num_cascades: self.num_cascades,
+                minimum_distance: self.minimum_distance,
+                first_cascade_far_bound: self.first_cascade_far_bound,
+                maximum_distance: self.maximum_distance,
+                overlap_proportion: self.overlap_proportion,
+            }
+            .build(),
+        )
     }
 
     /// Build the [`DirectionalLight`] with the given color and illuminance
@@ -193,5 +211,29 @@ impl LunarSunShadow {
         DirectionalLightShadowMap {
             size: self.shadow_map_size as usize,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_cascade_settings_are_rejected_without_normalization() {
+        let mut sun = LunarSunShadow::default();
+        sun.num_cascades = 0;
+        assert!(sun.cascade_config().is_none());
+
+        let mut sun = LunarSunShadow::default();
+        sun.first_cascade_far_bound = sun.maximum_distance;
+        assert!(sun.cascade_config().is_none());
+    }
+
+    #[test]
+    fn balanced_cascade_settings_build() {
+        let config = LunarSunShadow::default()
+            .cascade_config()
+            .expect("balanced shadow settings");
+        assert_eq!(config.bounds.len(), 2);
     }
 }
