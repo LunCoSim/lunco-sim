@@ -5526,6 +5526,47 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
+            ui.collapsing("Terrain rocks", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_max_instances)
+                        .speed(128.0)
+                        .range(1..=1_000_000)
+                        .prefix("Maximum rock instances: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_mesh_buckets)
+                        .speed(1.0)
+                        .range(2..=64)
+                        .prefix("Rock size buckets: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_mesh_cube_count)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("Boxes per rock mesh: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_lod_start_distance)
+                        .speed(10.0)
+                        .range(0.0..=100_000.0)
+                        .prefix("Rock LOD start: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_lod_fade_distance)
+                        .speed(10.0)
+                        .range(0.1..=100_000.0)
+                        .prefix("Rock LOD fade: ")
+                        .suffix(" m"),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The instance limit is explicit: authored density is never silently reduced by a hidden renderer cap. Mesh detail and native visibility distances are Graphics settings.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Terrain LOD", |ui| {
                 ui.add(
                     egui::DragValue::new(&mut settings.terrain_lod_tile_resolution)

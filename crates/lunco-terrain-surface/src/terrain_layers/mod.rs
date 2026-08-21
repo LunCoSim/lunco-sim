@@ -358,6 +358,8 @@ pub trait LayerAttrSource {
 /// are `None` headless (server builds colliders only; visuals are client-side).
 pub struct LayerScatterCx<'a, 'w, 's> {
     pub terrain: Entity,
+    /// Authoritative Graphics quality for generated visual geometry.
+    pub quality: lunco_render::RenderQualityProfile,
     /// The composed surface (rocks resolve ground height off this).
     pub oracle: &'a crate::oracle::SurfaceOracle,
     pub commands: &'a mut Commands<'w, 's>,
@@ -398,6 +400,48 @@ pub struct SharedRockAssets {
     /// reuse the same field without rerunning the sampler.
     pub placements:
         std::collections::HashMap<u64, std::sync::Arc<[lunco_obstacle_field::sampler::Placement]>>,
+}
+
+/// Rock-specific Graphics inputs that require existing scatter entities and
+/// shared meshes to be rebuilt. Other quality edits leave terrain layers alone.
+#[derive(Resource, Default)]
+pub(crate) struct TerrainScatterQualitySignature(Option<(usize, usize, usize, u32, u32)>);
+
+fn terrain_scatter_quality_signature(
+    profile: lunco_render::RenderQualityProfile,
+) -> (usize, usize, usize, u32, u32) {
+    (
+        profile.terrain_rock_max_instances,
+        profile.terrain_rock_mesh_buckets,
+        profile.terrain_rock_mesh_cube_count,
+        profile.terrain_rock_lod_start_distance.to_bits(),
+        profile.terrain_rock_lod_fade_distance.to_bits(),
+    )
+}
+
+/// Reapply authored rock layers when their Graphics geometry policy changes.
+/// Existing entities are recycled by the ordinary scatter path, and the shared
+/// mesh cache is keyed to the new geometry policy rather than serving stale
+/// meshes built with the previous cube count.
+pub(crate) fn mark_terrain_scatter_quality_changed(
+    mut commands: Commands,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+    mut signature: ResMut<TerrainScatterQualitySignature>,
+    mut rock_assets: ResMut<SharedRockAssets>,
+    terrains: Query<Entity, With<TerrainLayerStack>>,
+) {
+    let Ok(profile) = quality.validated_profile() else {
+        return;
+    };
+    let next = terrain_scatter_quality_signature(profile);
+    if signature.0 == Some(next) {
+        return;
+    }
+    signature.0 = Some(next);
+    rock_assets.meshes.clear();
+    for entity in &terrains {
+        commands.entity(entity).try_insert(TerrainScatterRefresh);
+    }
 }
 
 /// A geometry/material layer on a DEM terrain. Implement + register a parser (in its
@@ -580,6 +624,7 @@ pub(crate) fn scatter_terrain_layers(
     meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Res<AssetServer>,
     mut rock_assets: ResMut<SharedRockAssets>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     q: Query<
         (Entity, &DemHeightField, &TerrainLayerStack),
         Or<(Without<TerrainLayersApplied>, With<TerrainScatterRefresh>)>,
@@ -592,6 +637,13 @@ pub(crate) fn scatter_terrain_layers(
     if q.is_empty() {
         return;
     }
+    let quality = match quality.validated_profile() {
+        Ok(quality) => quality,
+        Err(reason) => {
+            warn!("[terrain-layer] invalid Graphics quality; retaining current scatter: {reason}");
+            return;
+        }
+    };
     let mut meshes = meshes;
     for (entity, dem, stack) in &q {
         // A scatter refresh deliberately keeps the height products alive. Generated
@@ -626,6 +678,7 @@ pub(crate) fn scatter_terrain_layers(
         // …then scatter layers spawn their entities.
         let mut cx = LayerScatterCx {
             terrain: entity,
+            quality,
             oracle: &dem.0,
             commands: &mut commands,
             meshes: meshes.as_deref_mut(),

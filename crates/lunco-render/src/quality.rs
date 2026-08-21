@@ -75,6 +75,11 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 1024,
                 terrain_derived_ao_directions: 8,
                 terrain_derived_ao_steps: 8,
+                terrain_rock_max_instances: 6_000,
+                terrain_rock_mesh_buckets: 6,
+                terrain_rock_mesh_cube_count: 4,
+                terrain_rock_lod_start_distance: 2_500.0,
+                terrain_rock_lod_fade_distance: 500.0,
                 terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
                 terrain_lod_pixel_error: 2.0,
@@ -130,6 +135,11 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 512,
                 terrain_derived_ao_directions: 4,
                 terrain_derived_ao_steps: 4,
+                terrain_rock_max_instances: 2_000,
+                terrain_rock_mesh_buckets: 3,
+                terrain_rock_mesh_cube_count: 2,
+                terrain_rock_lod_start_distance: 1_500.0,
+                terrain_rock_lod_fade_distance: 300.0,
                 terrain_lod_tile_resolution: 33,
                 terrain_lod_cinematic_resolution: 1025,
                 terrain_lod_pixel_error: 4.0,
@@ -185,6 +195,11 @@ impl RenderingQuality {
                 terrain_derived_map_resolution: 2048,
                 terrain_derived_ao_directions: 16,
                 terrain_derived_ao_steps: 16,
+                terrain_rock_max_instances: 12_000,
+                terrain_rock_mesh_buckets: 12,
+                terrain_rock_mesh_cube_count: 8,
+                terrain_rock_lod_start_distance: 4_000.0,
+                terrain_rock_lod_fade_distance: 800.0,
                 terrain_lod_tile_resolution: 65,
                 terrain_lod_cinematic_resolution: 2049,
                 terrain_lod_pixel_error: 1.0,
@@ -284,6 +299,16 @@ pub struct RenderQualityProfile {
     pub terrain_derived_ao_directions: usize,
     /// March samples per azimuth for terrain-derived ambient occlusion.
     pub terrain_derived_ao_steps: usize,
+    /// Maximum procedural rock entities admitted from an authored density.
+    pub terrain_rock_max_instances: usize,
+    /// Number of shared size buckets used by procedural and placed rocks.
+    pub terrain_rock_mesh_buckets: usize,
+    /// Number of merged boxes used to build each shared faceted rock mesh.
+    pub terrain_rock_mesh_cube_count: usize,
+    /// Native distance at which procedural rocks begin their visibility fade.
+    pub terrain_rock_lod_start_distance: f32,
+    /// Native distance over which procedural rocks fade out.
+    pub terrain_rock_lod_fade_distance: f32,
     /// Vertices per side of one streamed terrain tile.
     pub terrain_lod_tile_resolution: usize,
     /// Vertices per side of a frozen/cinematic terrain tile.
@@ -438,6 +463,16 @@ pub struct RenderingQualitySettings {
     pub terrain_derived_ao_directions: usize,
     #[serde(default = "default_terrain_derived_ao_steps")]
     pub terrain_derived_ao_steps: usize,
+    #[serde(default = "default_terrain_rock_max_instances")]
+    pub terrain_rock_max_instances: usize,
+    #[serde(default = "default_terrain_rock_mesh_buckets")]
+    pub terrain_rock_mesh_buckets: usize,
+    #[serde(default = "default_terrain_rock_mesh_cube_count")]
+    pub terrain_rock_mesh_cube_count: usize,
+    #[serde(default = "default_terrain_rock_lod_start_distance")]
+    pub terrain_rock_lod_start_distance: f32,
+    #[serde(default = "default_terrain_rock_lod_fade_distance")]
+    pub terrain_rock_lod_fade_distance: f32,
     #[serde(default = "default_terrain_lod_tile_resolution")]
     pub terrain_lod_tile_resolution: usize,
     #[serde(default = "default_terrain_lod_cinematic_resolution")]
@@ -550,6 +585,26 @@ const fn default_terrain_derived_ao_directions() -> usize {
 
 const fn default_terrain_derived_ao_steps() -> usize {
     balanced_profile().terrain_derived_ao_steps
+}
+
+const fn default_terrain_rock_max_instances() -> usize {
+    balanced_profile().terrain_rock_max_instances
+}
+
+const fn default_terrain_rock_mesh_buckets() -> usize {
+    balanced_profile().terrain_rock_mesh_buckets
+}
+
+const fn default_terrain_rock_mesh_cube_count() -> usize {
+    balanced_profile().terrain_rock_mesh_cube_count
+}
+
+const fn default_terrain_rock_lod_start_distance() -> f32 {
+    balanced_profile().terrain_rock_lod_start_distance
+}
+
+const fn default_terrain_rock_lod_fade_distance() -> f32 {
+    balanced_profile().terrain_rock_lod_fade_distance
 }
 
 const fn default_shadow_depth_bias() -> f32 {
@@ -769,6 +824,11 @@ impl RenderingQualitySettings {
             terrain_derived_map_resolution: self.terrain_derived_map_resolution,
             terrain_derived_ao_directions: self.terrain_derived_ao_directions,
             terrain_derived_ao_steps: self.terrain_derived_ao_steps,
+            terrain_rock_max_instances: self.terrain_rock_max_instances,
+            terrain_rock_mesh_buckets: self.terrain_rock_mesh_buckets,
+            terrain_rock_mesh_cube_count: self.terrain_rock_mesh_cube_count,
+            terrain_rock_lod_start_distance: self.terrain_rock_lod_start_distance,
+            terrain_rock_lod_fade_distance: self.terrain_rock_lod_fade_distance,
             terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
             terrain_lod_pixel_error: self.terrain_lod_pixel_error,
@@ -844,6 +904,11 @@ impl RenderingQualitySettings {
         self.terrain_derived_map_resolution = profile.terrain_derived_map_resolution;
         self.terrain_derived_ao_directions = profile.terrain_derived_ao_directions;
         self.terrain_derived_ao_steps = profile.terrain_derived_ao_steps;
+        self.terrain_rock_max_instances = profile.terrain_rock_max_instances;
+        self.terrain_rock_mesh_buckets = profile.terrain_rock_mesh_buckets;
+        self.terrain_rock_mesh_cube_count = profile.terrain_rock_mesh_cube_count;
+        self.terrain_rock_lod_start_distance = profile.terrain_rock_lod_start_distance;
+        self.terrain_rock_lod_fade_distance = profile.terrain_rock_lod_fade_distance;
         self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
         self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
         self.terrain_lod_pixel_error = profile.terrain_lod_pixel_error;
@@ -996,6 +1061,26 @@ impl RenderingQualitySettings {
         {
             return Err("terrain derived ambient-occlusion samples must be between 1 and 64");
         }
+        if profile.terrain_rock_max_instances == 0 || profile.terrain_rock_max_instances > 1_000_000
+        {
+            return Err("terrain rock maximum instances must be between 1 and 1000000");
+        }
+        if profile.terrain_rock_mesh_buckets < 2 || profile.terrain_rock_mesh_buckets > 64 {
+            return Err("terrain rock mesh buckets must be between 2 and 64");
+        }
+        if profile.terrain_rock_mesh_cube_count == 0 || profile.terrain_rock_mesh_cube_count > 64 {
+            return Err("terrain rock mesh cube count must be between 1 and 64");
+        }
+        if !profile.terrain_rock_lod_start_distance.is_finite()
+            || profile.terrain_rock_lod_start_distance < 0.0
+        {
+            return Err("terrain rock LOD start distance must be finite and non-negative");
+        }
+        if !profile.terrain_rock_lod_fade_distance.is_finite()
+            || profile.terrain_rock_lod_fade_distance <= 0.0
+        {
+            return Err("terrain rock LOD fade distance must be finite and greater than zero");
+        }
         if profile.terrain_lod_tile_resolution < 3 || profile.terrain_lod_tile_resolution > 4097 {
             return Err("terrain tile resolution must be between 3 and 4097");
         }
@@ -1101,6 +1186,11 @@ impl Default for RenderingQualitySettings {
             terrain_derived_map_resolution: profile.terrain_derived_map_resolution,
             terrain_derived_ao_directions: profile.terrain_derived_ao_directions,
             terrain_derived_ao_steps: profile.terrain_derived_ao_steps,
+            terrain_rock_max_instances: profile.terrain_rock_max_instances,
+            terrain_rock_mesh_buckets: profile.terrain_rock_mesh_buckets,
+            terrain_rock_mesh_cube_count: profile.terrain_rock_mesh_cube_count,
+            terrain_rock_lod_start_distance: profile.terrain_rock_lod_start_distance,
+            terrain_rock_lod_fade_distance: profile.terrain_rock_lod_fade_distance,
             terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
             terrain_lod_pixel_error: profile.terrain_lod_pixel_error,
@@ -1398,6 +1488,11 @@ mod tests {
         assert_eq!(settings.profile().terrain_derived_map_resolution, 1024);
         assert_eq!(settings.profile().terrain_derived_ao_directions, 8);
         assert_eq!(settings.profile().terrain_derived_ao_steps, 8);
+        assert_eq!(settings.profile().terrain_rock_max_instances, 6_000);
+        assert_eq!(settings.profile().terrain_rock_mesh_buckets, 6);
+        assert_eq!(settings.profile().terrain_rock_mesh_cube_count, 4);
+        assert_eq!(settings.profile().terrain_rock_lod_start_distance, 2_500.0);
+        assert_eq!(settings.profile().terrain_rock_lod_fade_distance, 500.0);
         assert_eq!(
             settings.profile().terrain_lod_tile_resolution,
             RenderingQuality::Balanced
@@ -1436,6 +1531,20 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain derived ambient-occlusion samples must be between 1 and 64")
+        );
+
+        settings.terrain_derived_ao_steps = 8;
+        settings.terrain_rock_mesh_buckets = 1;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain rock mesh buckets must be between 2 and 64")
+        );
+
+        settings.terrain_rock_mesh_buckets = 6;
+        settings.terrain_rock_lod_fade_distance = 0.0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain rock LOD fade distance must be finite and greater than zero")
         );
     }
 

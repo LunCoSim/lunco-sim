@@ -129,6 +129,13 @@ impl Plugin for TerrainSurfacePlugin {
         // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
         // adding a draw call + a bind group.
         app.init_resource::<crate::terrain_layers::SharedRockAssets>();
+        app.init_resource::<crate::terrain_layers::TerrainScatterQualitySignature>();
+        app.add_systems(
+            Update,
+            crate::terrain_layers::mark_terrain_scatter_quality_changed
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
+                .before(crate::terrain_layers::scatter_terrain_layers),
+        );
         app.add_systems(
             Update,
             crate::terrain_layers::scatter_terrain_layers
