@@ -1320,6 +1320,95 @@ fn read_authored_camera_look_at(
     }
 }
 
+fn read_raycast_observation(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<RaycastObservation, ()> {
+    let axis = match reader.text(path, "lunco:raycast:axis").as_deref() {
+        Some("X") => DVec3::X,
+        Some("-X") => DVec3::NEG_X,
+        Some("Y") => DVec3::Y,
+        Some("-Y") => DVec3::NEG_Y,
+        Some("Z") => DVec3::Z,
+        Some("-Z") => DVec3::NEG_Z,
+        Some(_) | None => return Err(()),
+    };
+    let max_distance = match reader.real(path, "lunco:raycast:maxDistance") {
+        Some(value) if value.is_finite() && value > 0.0 => value,
+        Some(_) | None => return Err(()),
+    };
+    let offset = match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:raycast:offset") {
+        Some(value) if value.iter().all(|value| value.is_finite()) => {
+            DVec3::new(value[0], value[1], value[2])
+        }
+        Some(_) | None => return Err(()),
+    };
+    Ok(RaycastObservation {
+        offset,
+        axis,
+        max_distance,
+        ..default()
+    })
+}
+
+#[cfg(test)]
+mod raycast_tests {
+    use super::read_raycast_observation;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    fn read(source: &str) -> Result<lunco_cosim::avian_queries::RaycastObservation, ()> {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("ray.usda", source))
+            .expect("raycast fixture composes");
+        let path = SdfPath::new("/Sensor").expect("raycast path");
+        read_raycast_observation(&stage.view(), &path)
+    }
+
+    #[test]
+    fn malformed_authored_offset_is_rejected() {
+        assert!(read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    string lunco:raycast:offset = "bad"
+}
+"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn non_positive_authored_distance_is_rejected() {
+        assert!(read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    float lunco:raycast:maxDistance = 0.0
+}
+"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn standard_defaults_and_authored_values_are_read_together() {
+        let observation = read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    token lunco:raycast:axis = "Z"
+    float lunco:raycast:maxDistance = 12.5
+    double3 lunco:raycast:offset = (1.0, 2.0, 3.0)
+}
+"#,
+        )
+        .expect("valid raycast");
+        assert_eq!(observation.axis, bevy::math::DVec3::Z);
+        assert_eq!(observation.max_distance, 12.5);
+        assert_eq!(observation.offset, bevy::math::DVec3::new(1.0, 2.0, 3.0));
+    }
+}
+
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -1578,33 +1667,16 @@ fn process_usd_sim_prim_read(
     // that the result is an altimeter, range sensor, or touchdown detector;
     // those conversions are ordinary Modelica scopes authored in USD.
     if reader.has_api_schema(&sdf_path, "LunCoRaycastAPI") {
-        let axis = reader
-            .text(&sdf_path, "lunco:raycast:axis")
-            .and_then(|axis| match axis.as_str() {
-                "X" => Some(DVec3::X),
-                "-X" => Some(DVec3::NEG_X),
-                "Y" => Some(DVec3::Y),
-                "-Y" => Some(DVec3::NEG_Y),
-                "Z" => Some(DVec3::Z),
-                "-Z" => Some(DVec3::NEG_Z),
-                _ => None,
-            });
-        let max_distance = reader.real(&sdf_path, "lunco:raycast:maxDistance");
-        if let (Some(axis), Some(max_distance)) = (axis, max_distance) {
-            let offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:raycast:offset")
-                .map(|v| DVec3::new(v[0], v[1], v[2]))
-                .unwrap_or_default();
-            commands.entity(entity).try_insert(RaycastObservation {
-                offset,
-                axis,
-                max_distance,
-                ..default()
-            });
-        } else {
-            warn!(
-                "USD raycast {} is missing a valid axis or maxDistance",
-                sdf_path
-            );
+        match read_raycast_observation(reader, &sdf_path) {
+            Ok(observation) => {
+                commands.entity(entity).try_insert(observation);
+            }
+            Err(()) => {
+                warn!(
+                    "USD raycast {} has malformed or invalid axis, offset, or maxDistance",
+                    sdf_path
+                );
+            }
         }
     }
 
