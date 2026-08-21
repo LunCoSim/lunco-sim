@@ -1330,8 +1330,6 @@ fn extract_avian_prim(
     }
 
     if has_rigid_body_api {
-        // Always insert a Mass (default 1000 kg) — gravity filters on `With<Mass>`.
-        //
         // FIRST, before the `Collider` and `RigidBody` below, and that order is
         // load-bearing. `Commands` apply in insertion order and observers fire at
         // apply time, so avian's `On<Add, RigidBody>` mass observer (avian3d
@@ -1341,7 +1339,39 @@ fn extract_avian_prim(
         // `ComputedAngularInertia` from collider geometry at `ColliderDensity` 1.0
         // and the authored values never take effect. Authoring the overrides first
         // means the observer's very first pass sees `NoAuto*` and honours them.
-        apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
+        let simulated =
+            match read_authored_bool_or_default(reader, sdf_path, ptok::A_RIGID_BODY_ENABLED, true)
+            {
+                Ok(value) => value,
+                Err(()) => {
+                    error!(
+                        "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
+                        ptok::A_RIGID_BODY_ENABLED
+                    );
+                    commands.entity(entity).try_insert(UsdAvianProcessed);
+                    return;
+                }
+            };
+        let kinematic =
+            match read_authored_bool_or_default(reader, sdf_path, ptok::A_KINEMATIC_ENABLED, false)
+            {
+                Ok(value) => value,
+                Err(()) => {
+                    error!(
+                        "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
+                        ptok::A_KINEMATIC_ENABLED
+                    );
+                    commands.entity(entity).try_insert(UsdAvianProcessed);
+                    return;
+                }
+            };
+        if apply_rigid_body_mass_props(commands, entity, reader, sdf_path).is_err() {
+            error!(
+                "[usd-avian] {sdf_path} has malformed rigid-body mass properties — refusing projection"
+            );
+            commands.entity(entity).try_insert(UsdAvianProcessed);
+            return;
+        }
 
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
         let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
@@ -1356,14 +1386,8 @@ fn extract_avian_prim(
 
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
-        let simulated = reader
-            .boolean(sdf_path, ptok::A_RIGID_BODY_ENABLED)
-            .unwrap_or(true);
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
-        let kinematic = reader
-            .boolean(sdf_path, ptok::A_KINEMATIC_ENABLED)
-            .unwrap_or(false);
         let (body, mobility) = if !simulated {
             (RigidBody::Static, lunco_core::Mobility::Static)
         } else if kinematic {
@@ -3115,6 +3139,68 @@ fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Op
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }
 
+/// Read a scalar only when its authored value is readable. `None` is reserved
+/// for an omitted attribute, so a wrong USD type cannot become a schema default
+/// at a physics boundary.
+fn read_authored_real(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<f64>, ()> {
+    match reader.real(path, attr) {
+        Some(value) => Ok(Some(value)),
+        None if !reader.has_authored_attribute(path, attr) => Ok(None),
+        None => Err(()),
+    }
+}
+
+/// Read an authored vector without treating a malformed value as an omitted
+/// override. Physics vectors must also remain finite after the read.
+fn read_authored_vec3(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<DVec3>, ()> {
+    if !reader.has_authored_attribute(path, attr) {
+        return Ok(None);
+    }
+    let value = read_vec3_attribute(reader, path, attr).ok_or(())?;
+    value.is_finite().then_some(Some(value)).ok_or(())
+}
+
+/// Read an authored quaternion, rejecting wrong types, non-finite values and
+/// the zero quaternion rather than silently using identity.
+fn read_authored_quat(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<DQuat>, ()> {
+    if !reader.has_authored_attribute(path, attr) {
+        return Ok(None);
+    }
+    let q = reader.scalar::<openusd::gf::Quatf>(path, attr).ok_or(())?;
+    let q = DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64);
+    if !q.is_finite() || q.length_squared() <= f64::EPSILON {
+        return Err(());
+    }
+    Ok(Some(q.normalize()))
+}
+
+/// Read a boolean while preserving the distinction between an omitted standard
+/// default and an authored value of the wrong type.
+fn read_authored_bool_or_default(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+    default: bool,
+) -> Result<bool, ()> {
+    match reader.boolean(path, attr) {
+        Some(value) => Ok(value),
+        None if !reader.has_authored_attribute(path, attr) => Ok(default),
+        None => Err(()),
+    }
+}
+
 /// Read mass, principal inertia, COM, damping, and friction from a rigid-body
 /// prim and insert the corresponding Avian *override* components.
 ///
@@ -3122,18 +3208,17 @@ fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Op
 /// mass-properties (`physics:diagonalInertia` / `physics:centerOfMass`) are read,
 /// so every body gets them the same way.
 ///
-/// Mass defaults to 1000 kg (canonical rover mass) when unauthored — keeping
-/// gravity alive even when openusd-rs's resolver can't compose `physics:mass`
-/// across a reference. Inertia/COM are inserted only when explicitly authored;
-/// otherwise Avian derives them from collider geometry. These are the same
-/// *override* components the runtime mass-props cosim ports write
-/// (`lunco-cosim`), so authored and model-driven values share one path.
+/// An authored mass is an override; when it is omitted Avian computes total mass
+/// from the collider tree and density. Inertia/COM are likewise inserted only
+/// when explicitly authored. These are the same override components the runtime
+/// mass-props cosim ports write (`lunco-cosim`), so authored and model-driven
+/// values share one path.
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
-) {
+) -> Result<(), ()> {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
     // matching `NoAuto*` marker is present. Without it Avian recomputes the
     // `Computed*` component from collider geometry and density and throws the
@@ -3156,44 +3241,98 @@ fn apply_rigid_body_mass_props(
     // collider-derived inertia to the authored mass. So a body that authors only
     // `physics:mass` still gets a consistent tensor, which is the UsdPhysics
     // expectation.
-    // `NoAutoMass` goes on ONLY when the mass was actually authored. The 1000 kg
-    // fallback is a "keep gravity alive" SEED, not a statement about the body:
-    // avian recomputes it from collider geometry and density at its first pass,
-    // and marking it authoritative would pin that number onto every rigid body that
-    // never asked for one — wheels included — overriding the mass Avian derives from
-    // their colliders and collapsing raycast-wheel suspensions. Authored mass wins;
-    // unauthored mass stays automatic, exactly as before.
+    // `NoAutoMass` goes on ONLY when the mass was actually authored. An omitted
+    // mass stays automatic, exactly as the UsdPhysics/Avian contract specifies.
     //
     // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
     // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
     // them as overrides hands the solver a degenerate body.
     let conv = lunco_usd_bevy::stage_convention(reader);
     let mpu = conv.length(1.0);
-    match reader.real_f32(sdf_path, ptok::A_MASS).filter(|m| *m > 0.0) {
-        Some(mass) => {
-            commands.entity(entity).try_insert((Mass(mass), NoAutoMass));
+    if !mpu.is_finite() || mpu <= 0.0 {
+        return Err(());
+    }
+    let mass = match read_authored_real(reader, sdf_path, ptok::A_MASS)? {
+        None | Some(0.0) => None,
+        Some(value) if value.is_finite() && value > 0.0 && value <= f32::MAX as f64 => {
+            Some(value as f32)
         }
-        None => {
-            commands.entity(entity).try_insert(Mass(1000.0));
+        Some(_) => return Err(()),
+    };
+    let body_density = match read_authored_real(reader, sdf_path, ptok::A_DENSITY)? {
+        None | Some(0.0) => None,
+        Some(value) if value.is_finite() && value > 0.0 => Some(value),
+        Some(_) => return Err(()),
+    };
+    let diagonal_inertia = match read_authored_vec3(reader, sdf_path, ptok::A_DIAGONAL_INERTIA)? {
+        None => None,
+        Some(value) if value == DVec3::ZERO => None,
+        Some(value) if value.x > 0.0 && value.y > 0.0 && value.z > 0.0 => Some(value),
+        Some(_) => return Err(()),
+    };
+    let principal_axes = read_authored_quat(reader, sdf_path, ptok::A_PRINCIPAL_AXES)?;
+    let center_of_mass = read_authored_vec3(reader, sdf_path, ptok::A_CENTER_OF_MASS)?;
+    let linear_damping = match read_authored_real(reader, sdf_path, PHYSX_LINEAR_DAMPING)? {
+        None => None,
+        Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+        Some(_) => return Err(()),
+    };
+    let angular_damping = match read_authored_real(reader, sdf_path, PHYSX_ANGULAR_DAMPING)? {
+        None => None,
+        Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+        Some(_) => return Err(()),
+    };
+    let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::A_VELOCITY)? {
+        Some(vel) => {
+            let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel));
+            if !vel.is_finite() {
+                return Err(());
+            }
+            Some(vel)
         }
+        None => None,
+    };
+    let authored_angular = match read_authored_vec3(reader, sdf_path, ptok::A_ANGULAR_VELOCITY)? {
+        Some(ang) => {
+            let ang = local_vector_to_world(
+                reader,
+                sdf_path,
+                conv.dir_d(ang) * std::f64::consts::PI / 180.0,
+            );
+            if !ang.is_finite() {
+                return Err(());
+            }
+            Some(ang)
+        }
+        None => None,
+    };
+    let collider_density = if let Some(density) = body_density.or_else(|| {
+        read_physics_material(reader, sdf_path)
+            .and_then(|pm| pm.density)
+            .filter(|d| *d > 0.0)
+            .map(f64::from)
+    }) {
+        let collider_density = density / (mpu * mpu * mpu);
+        if !collider_density.is_finite() || collider_density > f32::MAX as f64 {
+            return Err(());
+        }
+        Some(collider_density as f32)
+    } else {
+        None
+    };
+
+    if let Some(mass) = mass {
+        commands.entity(entity).try_insert((Mass(mass), NoAutoMass));
     }
 
     // `physics:density` — on the body's MassAPI, else on the bound physics
     // material — feeds avian's collider-mass derivation. Precedence is the
     // spec's: authored mass > body density > material density (an authored mass
     // still wins via `NoAutoMass` above). Stage units are mass per unit³.
-    if let Some(density) = reader
-        .real_f32(sdf_path, ptok::A_DENSITY)
-        .filter(|d| *d > 0.0)
-        .or_else(|| {
-            read_physics_material(reader, sdf_path)
-                .and_then(|pm| pm.density)
-                .filter(|d| *d > 0.0)
-        })
-    {
+    if let Some(collider_density) = collider_density {
         commands
             .entity(entity)
-            .try_insert(ColliderDensity((density as f64 / (mpu * mpu * mpu)) as f32));
+            .try_insert(ColliderDensity(collider_density));
     }
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
@@ -3202,21 +3341,22 @@ fn apply_rigid_body_mass_props(
     // not representable here (Avian stores principal + frame), matching the
     // UsdPhysics schema. Units are mass · distance², and the diagonal permutes
     // with the stage's axes exactly as a direction does.
-    if let Some(diag) = read_vec3_attribute(reader, sdf_path, ptok::A_DIAGONAL_INERTIA)
-        .filter(|d| *d != DVec3::ZERO)
-    {
-        let local_frame = reader
-            .scalar::<openusd::gf::Quatf>(sdf_path, ptok::A_PRINCIPAL_AXES)
-            .map(|q| {
-                conv.rotation_d(
-                    DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize(),
-                )
-                .as_quat()
-            })
+    if let Some(diag) = diagonal_inertia {
+        let local_frame = principal_axes
+            .map(|q| conv.rotation_d(q).as_quat())
             .unwrap_or(Quat::IDENTITY);
+        let principal = (conv.dir_d(diag).abs() * (mpu * mpu)).as_vec3();
+        if !principal.is_finite()
+            || principal.x <= 0.0
+            || principal.y <= 0.0
+            || principal.z <= 0.0
+            || !local_frame.is_finite()
+        {
+            return Err(());
+        }
         commands.entity(entity).try_insert((
             AngularInertia {
-                principal: (conv.dir_d(diag).abs() * (mpu * mpu)).as_vec3(),
+                principal,
                 local_frame,
             },
             NoAutoAngularInertia,
@@ -3224,18 +3364,21 @@ fn apply_rigid_body_mass_props(
     }
 
     // G2 — authored centre of mass (body-frame offset, a POINT in stage units).
-    if let Some(com) = read_vec3_attribute(reader, sdf_path, ptok::A_CENTER_OF_MASS) {
-        commands.entity(entity).try_insert((
-            CenterOfMass(conv.point_d(com).as_vec3()),
-            NoAutoCenterOfMass,
-        ));
+    if let Some(com) = center_of_mass {
+        let com = conv.point_d(com).as_vec3();
+        if !com.is_finite() {
+            return Err(());
+        }
+        commands
+            .entity(entity)
+            .try_insert((CenterOfMass(com), NoAutoCenterOfMass));
     }
 
-    if let Some(d) = reader.real_f32(sdf_path, PHYSX_LINEAR_DAMPING) {
-        commands.entity(entity).try_insert(LinearDamping(d as f64));
+    if let Some(d) = linear_damping {
+        commands.entity(entity).try_insert(LinearDamping(d));
     }
-    if let Some(d) = reader.real_f32(sdf_path, PHYSX_ANGULAR_DAMPING) {
-        commands.entity(entity).try_insert(AngularDamping(d as f64));
+    if let Some(d) = angular_damping {
+        commands.entity(entity).try_insert(AngularDamping(d));
     }
     apply_physics_material(commands, entity, reader, sdf_path);
     // The spec frames both velocities in the BODY's local space: convert the
@@ -3243,37 +3386,13 @@ fn apply_rigid_body_mass_props(
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
     // then carry them into the world frame through the body's composed rotation
     // — avian's velocity components are world-frame.
-    let authored_linear = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY)
-        .map(|vel| local_vector_to_world(reader, sdf_path, conv.point_d(vel)));
-    let authored_angular =
-        read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY).map(|ang| {
-            local_vector_to_world(
-                reader,
-                sdf_path,
-                conv.dir_d(ang) * std::f64::consts::PI / 180.0,
-            )
-        });
     if authored_linear.is_some() || authored_angular.is_some() {
-        let dynamic = reader
-            .boolean(sdf_path, ptok::A_RIGID_BODY_ENABLED)
-            .unwrap_or(true)
-            && !reader
-                .boolean(sdf_path, ptok::A_KINEMATIC_ENABLED)
-                .unwrap_or(false);
-        if dynamic {
-            commands.entity(entity).try_insert(AuthoredInitialVelocity {
-                linear: authored_linear,
-                angular: authored_angular,
-            });
-        } else {
-            if let Some(vel) = authored_linear {
-                commands.entity(entity).try_insert(LinearVelocity(vel));
-            }
-            if let Some(ang) = authored_angular {
-                commands.entity(entity).try_insert(AngularVelocity(ang));
-            }
-        }
+        commands.entity(entity).try_insert(AuthoredInitialVelocity {
+            linear: authored_linear,
+            angular: authored_angular,
+        });
     }
+    Ok(())
 }
 
 /// Project the surface properties of the USD physics material bound to a prim.
@@ -3617,6 +3736,83 @@ mod extract_parity_tests {
             "live: authored mass read off the stage"
         );
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
+    }
+
+    #[test]
+    fn omitted_mass_is_left_to_avian_computed_mass() {
+        let source = FIXTURE.replace("    double physics:mass = 500\n", "");
+        let dir = std::env::temp_dir().join("lunco_extract_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("rover_automatic_mass.usda");
+        std::fs::write(&f, source).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let view = StageView::new(&stage);
+
+        let live = run_extract(&view, &SdfPath::new("/Rover").unwrap());
+
+        assert_eq!(
+            live.0,
+            Some(RigidBody::Kinematic),
+            "an omitted mass must not prevent body extraction"
+        );
+        assert!(
+            live.1.is_some(),
+            "collider remains available for Avian mass derivation"
+        );
+        assert_eq!(
+            live.2, None,
+            "the USD projector must not invent the old 1000 kg mass seed"
+        );
+    }
+
+    #[test]
+    fn malformed_rigid_body_mass_properties_refuse_projection() {
+        let cases = [
+            (
+                "bad_mass",
+                FIXTURE.replace(
+                    "double physics:mass = 500",
+                    "string physics:mass = \"not-a-mass\"",
+                ),
+            ),
+            (
+                "bad_inertia",
+                FIXTURE.replace(
+                    "double physics:mass = 500",
+                    "double physics:mass = 500\n    float physics:diagonalInertia = 1.0",
+                ),
+            ),
+            (
+                "bad_velocity",
+                FIXTURE.replace(
+                    "double physics:mass = 500",
+                    "double physics:mass = 500\n    string physics:velocity = \"not-a-vector\"",
+                ),
+            ),
+        ];
+
+        for (name, source) in cases {
+            let dir = std::env::temp_dir().join("lunco_extract_parity");
+            std::fs::create_dir_all(&dir).unwrap();
+            let f = dir.join(format!("rover_{name}.usda"));
+            std::fs::write(&f, source).unwrap();
+            let stage = compose_file_to_stage(&f).expect("compose stage");
+            let view = StageView::new(&stage);
+
+            let live = run_extract(&view, &SdfPath::new("/Rover").unwrap());
+            assert_eq!(
+                live.0, None,
+                "malformed rigid-body field in {name} must not create a body"
+            );
+            assert_eq!(
+                live.1, None,
+                "malformed rigid-body field in {name} must not create a collider"
+            );
+            assert_eq!(
+                live.2, None,
+                "malformed rigid-body field in {name} must not create mass"
+            );
+        }
     }
 }
 

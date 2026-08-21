@@ -8,7 +8,7 @@
 //! Currently implements **gravity only**. Other domains follow the same
 //! pattern — see the README for templates.
 
-use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
+use avian3d::prelude::{ComputedMass, Forces, RigidBody, WriteRigidBodyForces};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -285,14 +285,16 @@ pub fn compute_local_gravity(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Applies the cached [`LocalGravity`] vector as a force on every entity that
-/// has a [`RigidBody`] and a [`Mass`].
+/// has a [`RigidBody`] and Avian's computed total mass. `ComputedMass` includes
+/// collider-derived mass, authored `Mass`, density, and compound descendants;
+/// using it keeps gravity on the same mass authority as the solver.
 ///
 /// Replaces the recomputing-each-tick `gravity_system` that previously lived
 /// in `lunco-celestial`. Reading `LocalGravity` instead of recomputing means
 /// every consumer (this system, cosim injection, future systems) sees the same
 /// authoritative value with no duplicated work.
 pub fn apply_gravity_to_rigid_bodies(
-    q: Query<(Entity, &LocalGravity, &Mass), With<RigidBody>>,
+    q: Query<(Entity, &LocalGravity, &ComputedMass), With<RigidBody>>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -300,7 +302,7 @@ pub fn apply_gravity_to_rigid_bodies(
     mut forces: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (entity, gravity, mass) in &q {
-        let force = gravity.0 * mass.0 as f64;
+        let force = gravity.0 * mass.value();
         if let Ok(mut f) = forces.get_mut(entity) {
             f.apply_force(force);
         }
