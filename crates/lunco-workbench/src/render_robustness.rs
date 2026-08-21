@@ -74,8 +74,8 @@ use lunco_render::{
 };
 use lunco_settings::AppSettingsExt;
 
-/// How long a failure must persist after the applicable recovery decision
-/// before presentation is abandoned.
+/// How long a failure must persist after the first observed error before
+/// presentation is abandoned.
 ///
 /// Measured in wall-clock, not frames, deliberately: the failure mode this exists
 /// for renders nothing and therefore runs *fast* (~339 fps was measured), so a
@@ -151,7 +151,7 @@ pub struct RenderHealth {
     /// matters is "did the count move this frame", not which kind moved it.
     total: AtomicU64,
     /// Errors naming a shadow-map resource — the reported Windows failure.
-    /// Recorded to make the log say *why* shadow maps were turned off.
+    /// Recorded to make the log identify the failed resource class.
     shadow: AtomicU64,
     /// Out-of-memory specifically. Distinguished because it is a resource
     /// exhaustion the app can act on, not a bug in what we submitted.
@@ -454,7 +454,7 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
     // Shadow allocation happens during render extraction. The preflight must
     // observe the fully materialised scene in PostUpdate, after scene-load
     // commands apply but before the render sub-app extracts lights.
-    app.add_systems(PostUpdate, apply_shadow_budget_policy);
+    app.add_systems(PostUpdate, apply_shadow_caster_policy);
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
@@ -964,10 +964,10 @@ fn set_error_handler(
 /// identity, or its authored `Name`). Anonymous local lights use an ECS key
 /// only as a final tie-break because they have no semantic identity. There is
 /// no camera-distance heuristic whose result can change merely because the
-/// viewer moved. The shared byte estimate is the admission test for every
-/// individual caster, so the resulting set is guaranteed to fit the published
+/// viewer moved. The shared byte estimate is the admission test for the complete
+/// configured caster set, so the resulting set is guaranteed to fit the published
 /// budget rather than merely fit three unrelated per-class caps.
-fn apply_shadow_budget_policy(
+fn apply_shadow_caster_policy(
     mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
@@ -1114,6 +1114,87 @@ fn apply_shadow_budget_policy(
         state.directional_map_size = Some(directional_shadow_map.size);
         state.point_map_size = Some(point_shadow_map.size);
         state.directional_cascade_layers = Some(0);
+        state.budget_bytes = Some(admission_budget);
+        state.configuration_signature = Some(configuration_signature);
+        state.policy_signature = Some(policy_signature);
+        return;
+    }
+
+    // Validate the effective configured caster set before mutating any light.
+    // `settings.validate()` proves the ceiling covers the profile's nominal
+    // cascade count, but an authored malformed cascade configuration may still
+    // have more bounds than the profile could ever request. That is an invalid
+    // effective scene, not permission to silently shed another caster or lower
+    // quality. Leave the scene untouched and require an explicit correction.
+    let required_bytes = directional_entities
+        .iter()
+        .take(profile.max_directional_shadow_casters)
+        .map(|candidate| {
+            estimate_shadow_allocation_bytes(
+                directional_shadow_map.size,
+                point_shadow_map.size,
+                candidate.cascade_layers,
+                1,
+                0,
+                0,
+            )
+        })
+        .chain(
+            point_entities
+                .iter()
+                .take(profile.max_point_shadow_casters)
+                .map(|_| {
+                    estimate_shadow_allocation_bytes(
+                        directional_shadow_map.size,
+                        point_shadow_map.size,
+                        0,
+                        0,
+                        1,
+                        0,
+                    )
+                }),
+        )
+        .chain(
+            spot_entities
+                .iter()
+                .take(profile.max_spot_shadow_casters)
+                .map(|_| {
+                    estimate_shadow_allocation_bytes(
+                        directional_shadow_map.size,
+                        point_shadow_map.size,
+                        0,
+                        0,
+                        0,
+                        1,
+                    )
+                }),
+        )
+        .fold(0_u64, u64::saturating_add);
+    if required_bytes > admission_budget {
+        if let Some(health) = health.as_ref() {
+            health
+                .0
+                .shadow_estimated_bytes
+                .store(required_bytes, Ordering::Relaxed);
+        }
+        if warning.is_none() {
+            commands.insert_resource(RenderWarning {
+                message: format!(
+                    "Configured shadow caster set requires {} bytes, above the explicit byte ceiling of {} bytes; no caster or quality changes were applied.",
+                    required_bytes, admission_budget
+                ),
+            });
+        }
+        state.light_count = Some(light_count);
+        state.enabled_caster_count = Some(enabled_caster_count);
+        state.directional_map_size = Some(directional_shadow_map.size);
+        state.point_map_size = Some(point_shadow_map.size);
+        state.directional_cascade_layers = Some(
+            directional_entities
+                .iter()
+                .map(|candidate| candidate.cascade_layers)
+                .sum(),
+        );
         state.budget_bytes = Some(admission_budget);
         state.configuration_signature = Some(configuration_signature);
         state.policy_signature = Some(policy_signature);
@@ -1308,7 +1389,7 @@ fn apply_shadow_budget_policy(
 
 /// Scene teardown is the explicit re-arm boundary for presentation recovery.
 /// A new scene gets fresh lights and cameras, so clearing the old ladder and
-/// shadow-budget bookkeeping is safe. A lost device remains terminal because
+/// shadow-admission bookkeeping is safe. A lost device remains terminal because
 /// no scene reload can recreate the adapter in-process.
 pub(crate) fn reset_render_recovery(
     health: Res<RenderHealthHandle>,
@@ -1376,7 +1457,7 @@ fn escalate_render_recovery(
     if action.is_none() && ladder.rung == Rung::PersistentFailure && warning.is_none() {
         commands.insert_resource(RenderWarning {
             message: format!(
-                "Rendering is failing because of {}. No shadow fallback was applied; presentation will stop if it does not recover.",
+                "Rendering is failing because of {}. No automatic quality fallback was applied; presentation will stop if it does not recover.",
                 kind.label()
             ),
         });
@@ -1765,7 +1846,7 @@ mod tests {
         app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
         for _ in 0..5 {
             app.world_mut().spawn((bevy::light::PointLight {
                 shadow_maps_enabled: true,
@@ -1824,7 +1905,7 @@ mod tests {
         app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
         app.world_mut().spawn(bevy::light::PointLight {
             shadow_maps_enabled: true,
             ..default()
@@ -1841,7 +1922,53 @@ mod tests {
     }
 
     #[test]
-    fn shadow_budget_orders_casters_by_canonical_identity_not_spawn_order() {
+    fn effective_cascade_overflow_does_not_shed_or_lower_quality() {
+        let mut app = App::new();
+        app.insert_resource(RenderingQualitySettings::default());
+        app.init_resource::<ShadowAdmissionState>();
+        let health = Arc::new(RenderHealth::default());
+        app.insert_resource(RenderHealthHandle(health.clone()));
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
+
+        let light = app
+            .world_mut()
+            .spawn((
+                bevy::light::DirectionalLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                bevy::light::CascadeShadowConfig {
+                    bounds: (0..64).map(|index| index as f32 + 1.0).collect(),
+                    overlap_proportion: 0.2,
+                    minimum_distance: 0.1,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<bevy::light::DirectionalLight>(light)
+                .unwrap()
+                .shadow_maps_enabled,
+            "an effective scene overflow must not be hidden by disabling the caster"
+        );
+        let required = health.shadow_estimated_bytes.load(Ordering::Relaxed);
+        assert!(
+            required > RenderingQualitySettings::default().shadow_budget_bytes,
+            "the fixture must exceed the explicit byte ceiling"
+        );
+        let warning = app.world().resource::<RenderWarning>();
+        assert!(warning
+            .message
+            .contains("no caster or quality changes were applied"));
+    }
+
+    #[test]
+    fn shadow_caster_admission_orders_by_canonical_identity_not_spawn_order() {
         let mut app = App::new();
         let settings = RenderingQualitySettings {
             directional_shadow_map_size: 1024,
@@ -1856,7 +1983,7 @@ mod tests {
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
 
         // The first entity has the lower ECS allocation key but the higher
         // canonical identity. The later-spawned entity must win admission.
@@ -1915,7 +2042,7 @@ mod tests {
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
         for _ in 0..2 {
             app.world_mut().spawn((bevy::light::PointLight {
                 shadow_maps_enabled: true,
@@ -1966,7 +2093,7 @@ mod tests {
         app.init_resource::<ShadowAdmissionState>();
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+        app.add_systems(PostUpdate, apply_shadow_caster_policy);
         for _ in 0..4 {
             app.world_mut().spawn((bevy::light::PointLight {
                 shadow_maps_enabled: true,
