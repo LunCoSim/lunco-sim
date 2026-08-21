@@ -126,6 +126,14 @@ class). `info:sourceAsset:subIdentifier` selects a definition when a source cont
 several; no class name is guessed from an asset path. A source that is still loading
 keeps the network pending, and a source that fails becomes a terminal projection error.
 
+The transient generated document is also a standard Modelica visual document. The root
+class carries an `Icon` and a `Diagram`, and each generated synthesis unit is a placed
+child instance with its own `Icon`/`Diagram`; the unit class contains the placed member
+instances that its equations actually execute. The workbench reads these annotations and
+the `connect()` equations from the same generated AST, so opening the root shows the
+runtime unit topology and drilling into a unit shows its real member topology. This is
+inspection of the executable projection, not a second visual-only network.
+
 ## 2a. Authoring a device model: the four rules that are not obvious
 
 Every rule below was learned by breaking it, and each break was silent — a compiled,

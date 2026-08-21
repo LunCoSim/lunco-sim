@@ -8160,6 +8160,7 @@ dependencies = [
  "lunco-usd-avian",
  "lunco-usd-bevy",
  "openusd",
+ "rumoca-phase-parse",
  "serde_json",
 ]
 

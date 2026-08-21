@@ -533,6 +533,30 @@ pub fn import_model_to_diagram_from_ast(
                         );
                     }
                 }
+            } else {
+                // Generated composite documents put the runtime root and
+                // every synthesis unit in one top-level Modelica document.
+                // The root is the active target, while its sibling unit
+                // classes carry the actual member diagrams. Register those
+                // siblings from the same AST so the root canvas renders the
+                // authored unit icons and double-click can drill into the
+                // exact executable child class.
+                let target_leaf = target.rsplit('.').next().unwrap_or(target);
+                for (sibling_name, sibling_class) in ast.classes.iter() {
+                    if sibling_name != target_leaf
+                        && !matches!(
+                            sibling_class.class_type,
+                            rumoca_compile::parsing::ClassType::Package
+                        )
+                    {
+                        register_local_class(
+                            &mut local_classes_by_short,
+                            sibling_name.as_str(),
+                            sibling_class,
+                            &ast,
+                        );
+                    }
+                }
             }
             for (nested_name, nested_class) in target_class_def.classes.iter() {
                 register_local_class(
@@ -1640,6 +1664,58 @@ mod composite_slim_slice_tests {
         );
         let n = diagram.as_ref().map(|d| d.nodes.len()).unwrap_or(0);
         assert!(n >= 4, "expected >=4 component nodes, got {n}");
+    }
+
+    #[test]
+    fn generated_root_projects_sibling_unit_as_visual_class() {
+        let source = r#"
+model GeneratedRoot
+  Unit_One unit annotation(Placement(transformation(origin={0,0}, extent={{-55,-35},{55,35}})));
+equation
+  unit.input_a = 1.0;
+annotation(
+  Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Rectangle(extent={{-80,-50},{80,50}})}),
+  Diagram(coordinateSystem(extent={{-200,-150},{200,150}}), graphics={Text(extent={{-180,120},{180,140}}, textString="Generated root")})
+);
+end GeneratedRoot;
+
+model Unit_One
+  input Real input_a;
+  output Real output_b;
+equation
+  output_b = input_a;
+annotation(
+  Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Rectangle(extent={{-80,-50},{80,50}})}),
+  Diagram(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Text(extent={{-90,70},{90,90}}, textString="Unit")})
+);
+end Unit_One;
+"#;
+        let ast = std::sync::Arc::new(
+            rumoca_phase_parse::parse_to_ast(source, "generated.mo")
+                .expect("generated source fixture must parse"),
+        );
+        let diagram = import_model_to_diagram_from_ast(
+            ast,
+            source,
+            DEFAULT_MAX_DIAGRAM_NODES,
+            Some("GeneratedRoot"),
+            &DiagramAutoLayoutSettings::default(),
+        )
+        .expect("root containing a generated unit must project");
+
+        assert_eq!(diagram.nodes.len(), 1);
+        let node = &diagram.nodes[0];
+        assert_eq!(node.component_def.name, "Unit_One");
+        assert!(node.component_def.icon.is_some());
+        assert!(node.component_def.diagram_graphics.is_some());
+        assert_eq!(
+            node.component_def
+                .ports
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["input_a", "output_b"]
+        );
     }
 
     #[test]
