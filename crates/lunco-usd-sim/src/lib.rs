@@ -83,7 +83,7 @@ use lunco_mobility::{
     WheelRaycast,
 };
 use lunco_render::{PbrLook, SceneCamera};
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
 pub mod wheel_params;
@@ -1176,6 +1176,19 @@ fn passive_prismatic_suspension_from_usd(
     })
 }
 
+fn read_authored_camera_look_at(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<[f64; 3]>, ()> {
+    if !reader.has_authored_attribute(path, "lunco:cameraLookAt") {
+        return Ok(None);
+    }
+    match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:cameraLookAt") {
+        Some(value) if value.iter().all(|value| value.is_finite()) => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -1197,7 +1210,19 @@ fn process_usd_sim_prim_read(
     commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
-    let is_avatar = reader.boolean(&sdf_path, "lunco:avatar").unwrap_or(false);
+    let is_avatar =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:avatar`; prim ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
     let avatar_exposure = if is_avatar {
         match lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path) {
             Ok(exposure) => exposure,
@@ -1243,21 +1268,70 @@ fn process_usd_sim_prim_read(
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
     // never make an existing scene sprout labels.
-    if reader.boolean(&sdf_path, "lunco:billboard") == Some(true) {
+    let billboard_enabled =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:billboard`; label ignored",
+                    prim_path.path
+                );
+                false
+            }
+        };
+    if billboard_enabled {
         let default = billboard::UsdBillboard::default();
-        commands.entity(entity).try_insert(billboard::UsdBillboard {
-            template: reader
-                .text(&sdf_path, "lunco:billboard:text")
-                .unwrap_or(default.template),
-            offset_y: reader
-                .real_f32(&sdf_path, "lunco:billboard:offsetY")
-                .unwrap_or(default.offset_y),
-            fade_end: reader
-                .real_f32(&sdf_path, "lunco:billboard:fadeEnd")
-                .unwrap_or(default.fade_end),
-        });
+        let billboard = (|| {
+            let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
+                Some(Value::String(value)) => value,
+                Some(_) if reader.has_authored_attribute(&sdf_path, "lunco:billboard:text") => {
+                    return Err(())
+                }
+                _ => default.template.clone(),
+            };
+            let read_real = |name: &str, default_value: f32| -> Result<f32, ()> {
+                match reader.real_f32(&sdf_path, name) {
+                    Some(value) if value.is_finite() => Ok(value),
+                    Some(_) => Err(()),
+                    None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
+                    None => Ok(default_value),
+                }
+            };
+            let offset_y = read_real("lunco:billboard:offsetY", default.offset_y)?;
+            let fade_end = read_real("lunco:billboard:fadeEnd", default.fade_end)?;
+            if fade_end <= 0.0 {
+                return Err(());
+            }
+            Ok(billboard::UsdBillboard {
+                template,
+                offset_y,
+                fade_end,
+            })
+        })();
+        match billboard {
+            Ok(billboard) => {
+                commands.entity(entity).try_insert(billboard);
+            }
+            Err(()) => warn!(
+                "USD prim {} has invalid billboard attributes; label ignored",
+                prim_path.path
+            ),
+        }
     }
-    if reader.boolean(&sdf_path, "lunco:waypoint").unwrap_or(false) {
+    let waypoint =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:waypoint") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:waypoint`; marker ignored",
+                    prim_path.path
+                );
+                false
+            }
+        };
+    if waypoint {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
     // Pointer behavior is scene intent, not a picking-backend concern.  The
@@ -1285,16 +1359,34 @@ fn process_usd_sim_prim_read(
     // Screen-constant marker, keyed on the size that IS the request: a prim
     // authoring no `angularSizeDeg` is not a half-declared marker, it is simply
     // not one. Same opt-in shape as the billboard above.
-    if let Some(angular_deg) = reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
+    if reader.has_authored_attribute(&sdf_path, "lunco:marker:angularSizeDeg") {
         let default = marker::ScreenConstantMarker::default();
-        commands
-            .entity(entity)
-            .try_insert(marker::ScreenConstantMarker {
+        let marker = (|| {
+            let angular_deg = match reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
+                Some(value) if value.is_finite() && value > 0.0 => value,
+                _ => return Err(()),
+            };
+            let show_beyond_m = match reader.real_f32(&sdf_path, "lunco:marker:showBeyondM") {
+                Some(value) if value.is_finite() && value >= 0.0 => value,
+                None if !reader.has_authored_attribute(&sdf_path, "lunco:marker:showBeyondM") => {
+                    default.show_beyond_m
+                }
+                _ => return Err(()),
+            };
+            Ok(marker::ScreenConstantMarker {
                 angular_deg,
-                show_beyond_m: reader
-                    .real_f32(&sdf_path, "lunco:marker:showBeyondM")
-                    .unwrap_or(default.show_beyond_m),
-            });
+                show_beyond_m,
+            })
+        })();
+        match marker {
+            Ok(marker) => {
+                commands.entity(entity).try_insert(marker);
+            }
+            Err(()) => warn!(
+                "USD prim {} has invalid screen marker attributes; marker ignored",
+                prim_path.path
+            ),
+        }
     }
 
     let net_replicate = reader.boolean(&sdf_path, "lunco:net:replicate");
@@ -1422,15 +1514,68 @@ fn process_usd_sim_prim_read(
         // `LunCoAvatarAPI` declares `freeflight` as the USD schema fallback.
         // That is an authored semantic default, not a Rust recovery path: a
         // malformed token must remain an explicit scene error below.
-        let camera_mode = reader
-            .text(&sdf_path, "lunco:cameraMode")
-            .unwrap_or_else(|| "freeflight".to_string());
-        let mut yaw = reader
-            .real_f32(&sdf_path, "lunco:cameraYaw")
-            .unwrap_or(std::f32::consts::PI * 0.8);
-        let mut pitch = reader
-            .real_f32(&sdf_path, "lunco:cameraPitch")
-            .unwrap_or(-0.3);
+        let camera_mode = match reader.attr_value(&sdf_path, "lunco:cameraMode") {
+            Some(Value::Token(value)) => {
+                let value = value.to_string();
+                if matches!(value.as_str(), "freeflight" | "orbit" | "springarm") {
+                    value
+                } else {
+                    warn!(
+                        "USD avatar {} has unsupported camera mode `{}`; avatar ignored",
+                        prim_path.path, value
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            }
+            Some(_) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+            None if reader.has_authored_attribute(&sdf_path, "lunco:cameraMode") => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+            None => "freeflight".to_string(),
+        };
+        let read_camera_real = |name: &str, default_value: f32| -> Result<f32, ()> {
+            match reader.real_f32(&sdf_path, name) {
+                Some(value) if value.is_finite() => Ok(value),
+                Some(_) => Err(()),
+                None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
+                None => Ok(default_value),
+            }
+        };
+        let mut yaw = match read_camera_real("lunco:cameraYaw", std::f32::consts::PI * 0.8) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraYaw`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+        let mut pitch = match read_camera_real("lunco:cameraPitch", -0.3) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraPitch`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
 
         // `lunco:cameraLookAt` (double3, scene-local): when authored,
         // derive yaw/pitch so the camera aims from its USD
@@ -1442,9 +1587,18 @@ fn process_usd_sim_prim_read(
         // `Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0)`, whose forward
         // is `(-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch))`:
         //   pitch = asin(dir.y),  yaw = atan2(-dir.x, -dir.z).
-        if let Some([lx, ly, lz]) =
-            lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt")
-        {
+        let look_at = match read_authored_camera_look_at(reader, &sdf_path) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraLookAt`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+        if let Some([lx, ly, lz]) = look_at {
             // The EYE must be the avatar's authored position, not `existing_tf`:
             // `maybe_tf` is `None` on this path, so `existing_tf` defaults to the
             // origin, and aiming from (0,0,0) instead of (e.g.) (14,6,12) points the
@@ -4457,5 +4611,47 @@ mod proxy_wheel_tests {
             (p - p0).length() < 1e-12,
             "steer moved the hub: {p:?} vs {p0:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod authored_camera_tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+
+    fn stage_view(source: &str) -> (CanonicalStage, SdfPath) {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("camera.usda", source))
+            .expect("camera fixture composes");
+        let path = SdfPath::new("/World/Avatar").expect("camera path");
+        (stage, path)
+    }
+
+    #[test]
+    fn omitted_camera_look_at_does_not_override_authored_angles() {
+        let (stage, path) = stage_view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Avatar" {}
+}
+"#,
+        );
+        assert_eq!(read_authored_camera_look_at(&stage.view(), &path), Ok(None));
+    }
+
+    #[test]
+    fn malformed_authored_camera_look_at_is_rejected() {
+        let (stage, path) = stage_view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Avatar"
+    {
+        string lunco:cameraLookAt = "origin"
+    }
+}
+"#,
+        );
+        assert!(read_authored_camera_look_at(&stage.view(), &path).is_err());
     }
 }
