@@ -20,7 +20,7 @@
 //! so a newly-introduced divergence fails here by existing — nobody has to have
 //! predicted it.
 
-use lunco_usd_bevy::{compose_file_to_stage, CanonicalStage, UsdRead};
+use lunco_usd_bevy::{compose_file_to_stage, CanonicalStage, StageRecipe, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
 /// The two rover prims in `scenes/tests/drivetrain_parity.usda` — the SAME
@@ -247,11 +247,13 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
             &view,
             &raycast_path,
             Some(&raycast_path),
+            Some(&raycast_path),
             None,
         );
         let pb = lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
             &physical_path,
+            Some(&physical_path),
             Some(&physical_path),
             None,
         );
@@ -286,4 +288,59 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
         }
     }
     assert_eq!(checked, 4, "expected four wheels, compared {checked}");
+}
+
+#[test]
+fn wheel_params_reads_tire_values_from_a_separate_attachment_target() {
+    let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+        "separate_tire.usda",
+        r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
+    token axis = "X"
+    float physxVehicleWheel:radius = 0.4
+    float physxVehicleWheel:width = 0.3
+    float physxVehicleWheel:mass = 25.0
+    float physxVehicleWheel:moi = 2.0
+    float physxVehicleWheel:dampingRate = 0.45
+    float physxVehicleWheel:maxBrakeTorque = 1500.0
+    double3 lunco:wheel:steerAxis = (0, 1, 0)
+    double lunco:wheel:driveDamping = 30.0
+}
+def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {
+    float physxVehicleTire:longitudinalStiffness = 9876.0
+    float physxVehicleTire:lateralStiffness = 6.5
+    float lunco:tire:minValidatedSpeed = 1.25
+    float physics:dynamicFriction = 0.73
+}
+def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {
+    float lunco:suspension:restLength = 0.6
+    float physxVehicleSuspension:springStrength = 1000.0
+    float physxVehicleSuspension:springDamperRate = 30.0
+}
+def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
+    rel physxVehicleWheelAttachment:wheel = </Wheel>
+    rel physxVehicleWheelAttachment:tire = </Tire>
+    rel physxVehicleWheelAttachment:suspension = </Suspension>
+    int physxVehicleWheelAttachment:index = 0
+}
+"#,
+    ))
+    .expect("separate tire fixture composes");
+    let view = stage.view();
+    let wheel = SdfPath::new("/Wheel").unwrap();
+    let tire = SdfPath::new("/Tire").unwrap();
+    let suspension = SdfPath::new("/Suspension").unwrap();
+
+    let params = lunco_usd_sim::wheel_params::WheelParams::read(
+        &view,
+        &wheel,
+        Some(&suspension),
+        Some(&tire),
+        None,
+    )
+    .expect("separate tire target is a supported standard composition");
+    assert_eq!(params.slip_stiffness, 9876.0);
+    assert_eq!(params.cornering_stiffness, 6.5);
+    assert_eq!(params.min_validated_speed, 1.25);
+    assert!((params.friction_mu - 0.73).abs() < 1e-6);
 }

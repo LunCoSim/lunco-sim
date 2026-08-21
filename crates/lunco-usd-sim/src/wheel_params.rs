@@ -27,7 +27,7 @@
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
-//! | cornering stiffness, N/rad | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
+//! | cornering stiffness, N/rad | `physxVehicleTire:lateralStiffness` | no (schema default 0.0) |
 //! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
 //! | motor damping | `lunco:wheel:driveDamping` | yes |
@@ -158,11 +158,12 @@ pub struct WheelParams {
 }
 
 impl WheelParams {
-    /// Read every wheel attribute off the composed prim, collecting ALL missing
-    /// required names into the error. `attachment_suspension` is the suspension
-    /// prim selected by the standard `PhysxVehicleWheelAttachmentAPI`; direct
-    /// wheel/suspension API composition passes the wheel itself. A wheel without
-    /// an attachment is under-authored and is rejected.
+    /// Read wheel, tire, and suspension attributes from their standard composed
+    /// prims, collecting ALL missing required names into the error.
+    /// `attachment_suspension` and `attachment_tire` are selected by the
+    /// standard `PhysxVehicleWheelAttachmentAPI`; direct API composition passes
+    /// the wheel itself for each. A wheel without an attachment is
+    /// under-authored and is rejected.
     ///
     /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
     /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
@@ -172,9 +173,16 @@ impl WheelParams {
         reader: &lunco_usd_bevy::StageView<'_>,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
+        attachment_tire: Option<&SdfPath>,
         powertrain: Option<&crate::powertrain::PowertrainParams>,
     ) -> Result<WheelParams, Vec<String>> {
         let mut missing = Vec::new();
+        let tire = attachment_tire.unwrap_or(wheel);
+        if attachment_tire.is_none() {
+            missing.push("PhysxVehicleTireAPI".to_owned());
+        } else if !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
+            missing.push("PhysxVehicleTireAPI".to_owned());
+        }
         let axle_axis = match reader.text(wheel, "axis").as_deref() {
             Some("X") => DVec3::X,
             Some("Y") => DVec3::Y,
@@ -206,7 +214,7 @@ impl WheelParams {
         );
         let slip_stiffness = read_required_real(
             reader,
-            wheel,
+            tire,
             "physxVehicleTire:longitudinalStiffness",
             &mut missing,
         );
@@ -215,14 +223,13 @@ impl WheelParams {
         // type is still an asset error rather than an accidental zero-tire.
         let cornering_stiffness = read_optional_real(
             reader,
-            wheel,
+            tire,
             "physxVehicleTire:lateralStiffness",
             &mut missing,
         );
         let min_validated_speed =
-            read_optional_real(reader, wheel, "lunco:tire:minValidatedSpeed", &mut missing);
-        let friction_mu =
-            read_required_real(reader, wheel, "physics:dynamicFriction", &mut missing);
+            read_optional_real(reader, tire, "lunco:tire:minValidatedSpeed", &mut missing);
+        let friction_mu = read_required_real(reader, tire, "physics:dynamicFriction", &mut missing);
         let drive_damping =
             read_required_real(reader, wheel, "lunco:wheel:driveDamping", &mut missing);
 
@@ -269,9 +276,16 @@ impl WheelParams {
                 ("physxVehicleWheel:moi", moment_of_inertia),
                 ("physxVehicleWheel:dampingRate", bearing_damping),
                 ("physxVehicleWheel:maxBrakeTorque", brake_torque_max),
+                ("lunco:wheel:driveDamping", drive_damping),
+            ],
+        );
+        validate_wheel_schema_hints(
+            reader,
+            tire,
+            &mut missing,
+            [
                 ("physxVehicleTire:longitudinalStiffness", slip_stiffness),
                 ("lunco:tire:minValidatedSpeed", min_validated_speed),
-                ("lunco:wheel:driveDamping", drive_damping),
             ],
         );
         if !missing.is_empty() {
@@ -459,6 +473,18 @@ pub(crate) fn attachment_suspension_path(
         .and_then(|s| SdfPath::new(s).ok())
 }
 
+/// Resolve a wheel's attachment tire prim via the standard attachment
+/// topology. The map belongs to one composed stage, so its keys are stage-local
+/// paths; independent instances retain independent topology maps.
+pub(crate) fn attachment_tire_path(
+    wheel_path: &str,
+    wheel_attachment_tires: &HashMap<String, String>,
+) -> Option<SdfPath> {
+    wheel_attachment_tires
+        .get(wheel_path)
+        .and_then(|s| SdfPath::new(s).ok())
+}
+
 /// Read the three suspension attrs off one prim. `None` unless all three are
 /// authored — partial authoring is treated as missing (no per-field defaults).
 fn read_suspension_attrs(
@@ -593,7 +619,7 @@ fn validate_wheel_schema_hints(
     reader: &lunco_usd_bevy::StageView<'_>,
     prim: &SdfPath,
     errors: &mut Vec<String>,
-    values: [(&str, f64); 7],
+    values: impl IntoIterator<Item = (&'static str, f64)>,
 ) {
     for (name, value) in values {
         validate_schema_hint(reader, prim, name, value, errors);
@@ -675,15 +701,26 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
-    const WHEEL_ONLY_PREFIXES: [&str; 5] = [
-        "lunco:wheel:",
-        "lunco:suspension:",
-        "lunco:tire:",
-        "physxVehicleTire:",
-        "physxVehicleSuspension:",
-    ];
-    if WHEEL_ONLY_PREFIXES.iter().any(|p| attr.starts_with(p)) {
-        return true;
+    if attr.starts_with("lunco:wheel:") {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
+    }
+    if attr.starts_with("lunco:suspension:") || attr.starts_with("physxVehicleSuspension:") {
+        return reader.has_api_schema(prim, "PhysxVehicleSuspensionAPI");
+    }
+    if attr.starts_with("lunco:tire:") || attr.starts_with("physxVehicleTire:") {
+        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
+    }
+    if matches!(attr, "physics:dynamicFriction" | "physics:staticFriction") {
+        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
+    }
+    if matches!(
+        attr,
+        "physxVehicleWheelAttachment:wheel"
+            | "physxVehicleWheelAttachment:tire"
+            | "physxVehicleWheelAttachment:suspension"
+            | "physxVehicleWheelAttachment:index"
+    ) {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAttachmentAPI");
     }
     // Torque and speed belong to the composed motor/gearbox parts.  A live edit
     // on either part must re-read every wheel that consumes that powertrain, but
@@ -794,8 +831,19 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         crate::collect_joint_scan_read(&view, &mut topology);
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
+            if topology.invalid_wheel_attachments.contains(path) {
+                warn!(
+                    "[wheel resync] {} has malformed or ambiguous wheel attachment topology — keeping the spawned values",
+                    path
+                );
+                continue;
+            }
             let susp = topology
                 .wheel_attachment_targets
+                .get(path)
+                .and_then(|s| SdfPath::new(s).ok());
+            let tire = topology
+                .wheel_attachment_tires
                 .get(path)
                 .and_then(|s| SdfPath::new(s).ok());
             let powertrain = match crate::powertrain::find_for_wheel(&view, &sp) {
@@ -809,7 +857,13 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                     continue;
                 }
             };
-            match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
+            match WheelParams::read(
+                &view,
+                &sp,
+                susp.as_ref(),
+                tire.as_ref(),
+                powertrain.as_ref(),
+            ) {
                 Ok(params) => {
                     let (max_steer_angle, ackermann_strength) = match crate::steering_vehicle_of(
                         &view, path,

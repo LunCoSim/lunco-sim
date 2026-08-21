@@ -293,6 +293,15 @@ struct StageJointTopology {
     authored_joints: HashMap<String, (String, String)>,
     articulation_roots: HashSet<String>,
     wheel_attachment_targets: HashMap<String, String>,
+    /// Standard attachment tire bindings, keyed by the referenced wheel path.
+    /// The tire may be a separate prim named by the attachment relationship or
+    /// the attachment itself when the standard direct-API form is authored.
+    wheel_attachment_tires: HashMap<String, String>,
+    /// Wheels whose attachment topology is malformed or ambiguous. Keeping the
+    /// rejection in the composed-stage scan prevents a first-target or
+    /// last-attachment heuristic from silently selecting different tire and
+    /// suspension data.
+    invalid_wheel_attachments: HashSet<String>,
     /// Standard attachment index, keyed by the referenced wheel path. The
     /// index is authored on the attachment prim, never inferred from wheel
     /// order or copied into a wheel-local field.
@@ -329,7 +338,9 @@ impl JointTopologyIndex {
         topology.authored_joints.clear();
         topology.articulation_roots.clear();
         topology.wheel_attachment_targets.clear();
+        topology.wheel_attachment_tires.clear();
         topology.wheel_attachment_indices.clear();
+        topology.invalid_wheel_attachments.clear();
         collect_joint_scan_read(reader, topology);
         topology.canonical_generation = Some(generation);
         topology.projection_revision = Some(projection_revision);
@@ -988,7 +999,10 @@ fn process_usd_sim_prims(
 /// `body0` targets (articulation roots) only when `body1` is a declared vehicle wheel.
 /// Generic revolute mechanisms must not change a host's vehicle classification.
 /// Also collects the canonical
-/// `PhysxVehicleWheelAttachmentAPI` wheel→suspension bindings (doc 53 §3.2).
+/// `PhysxVehicleWheelAttachmentAPI` wheel→tire/suspension bindings (doc 53 §3.2).
+/// Every relationship is required to resolve to at most one target. A USD
+/// relationship is a list-op, so taking `rel_target` here would silently turn
+/// malformed fan-out authoring into a first-target choice.
 fn collect_joint_scan_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     topology: &mut StageJointTopology,
@@ -1054,45 +1068,157 @@ fn collect_joint_scan_read(
                 }
             }
         }
-        // Canonical wheel-attachment binding: an attachment prim names its wheel
-        // (`physxVehicleWheelAttachment:wheel`) and its suspension
-        // (`physxVehicleWheelAttachment:suspension`) via USD relationships. The
-        // standard schema also permits wheel/tire/suspension APIs directly on the
-        // attachment prim; that direct form is explicit and is handled by mapping
-        // the attachment to itself. There is no flat legacy fallback.
+        // Canonical wheel-attachment binding: an attachment prim names its wheel,
+        // tire, and suspension via USD relationships. The standard schema also
+        // permits those APIs directly on the attachment prim; that direct form is
+        // explicit and is handled by mapping the attachment to itself. There is
+        // no flat legacy fallback.
         if reader.has_api_schema(&path, "PhysxVehicleWheelAttachmentAPI") {
-            let wheel = reader
-                .rel_target(&path, "physxVehicleWheelAttachment:wheel")
-                .or_else(|| {
-                    reader
-                        .has_api_schema(&path, "PhysxVehicleWheelAPI")
-                        .then(|| path.as_str().to_string())
-                });
-            let suspension = reader
-                .rel_target(&path, "physxVehicleWheelAttachment:suspension")
-                .or_else(|| {
-                    reader
-                        .has_api_schema(&path, "PhysxVehicleSuspensionAPI")
-                        .then(|| path.as_str().to_string())
-                });
-            if let (Some(wheel), Some(suspension)) = (wheel, suspension) {
-                debug!(
-                    "USD wheel attachment: wheel {} → suspension {} (via {})",
-                    wheel,
-                    suspension,
-                    path.as_str()
-                );
-                topology
-                    .wheel_attachment_targets
-                    .insert(wheel.clone(), suspension);
-                if let Some(index) =
-                    reader.scalar::<i32>(&path, "physxVehicleWheelAttachment:index")
-                {
-                    topology.wheel_attachment_indices.insert(wheel, index);
+            let attachment = path.as_str().to_string();
+            let endpoint = |relationship: &str, api: &str| {
+                attachment_endpoint(reader, &path, relationship, api)
+            };
+            let wheel = match endpoint("physxVehicleWheelAttachment:wheel", "PhysxVehicleWheelAPI")
+            {
+                Ok(Some(target)) => target,
+                Ok(None) => {
+                    error!(
+                        "USD wheel attachment {} has neither a wheel relationship nor a direct PhysxVehicleWheelAPI",
+                        attachment
+                    );
+                    topology.invalid_wheel_attachments.insert(attachment);
+                    continue;
                 }
+                Err(reason) => {
+                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                    topology.invalid_wheel_attachments.insert(attachment);
+                    continue;
+                }
+            };
+            let suspension = match endpoint(
+                "physxVehicleWheelAttachment:suspension",
+                "PhysxVehicleSuspensionAPI",
+            ) {
+                Ok(Some(target)) => target,
+                Ok(None) => {
+                    error!(
+                        "USD wheel attachment {} for {} has neither a suspension relationship nor a direct PhysxVehicleSuspensionAPI",
+                        attachment, wheel
+                    );
+                    topology.invalid_wheel_attachments.insert(wheel.clone());
+                    continue;
+                }
+                Err(reason) => {
+                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                    topology.invalid_wheel_attachments.insert(wheel.clone());
+                    continue;
+                }
+            };
+            let tire = match endpoint("physxVehicleWheelAttachment:tire", "PhysxVehicleTireAPI") {
+                Ok(Some(target)) => target,
+                Ok(None) => {
+                    error!(
+                        "USD wheel attachment {} for {} has neither a tire relationship nor a direct PhysxVehicleTireAPI",
+                        attachment, wheel
+                    );
+                    topology.invalid_wheel_attachments.insert(wheel.clone());
+                    continue;
+                }
+                Err(reason) => {
+                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                    topology.invalid_wheel_attachments.insert(wheel.clone());
+                    continue;
+                }
+            };
+
+            let Some(index) = reader.scalar::<i32>(&path, "physxVehicleWheelAttachment:index")
+            else {
+                error!(
+                    "USD wheel attachment {} has no valid physxVehicleWheelAttachment:index",
+                    attachment
+                );
+                topology.invalid_wheel_attachments.insert(wheel.clone());
+                continue;
+            };
+
+            if topology.wheel_attachment_targets.contains_key(&wheel)
+                || topology.wheel_attachment_tires.contains_key(&wheel)
+                || topology.wheel_attachment_indices.contains_key(&wheel)
+            {
+                error!(
+                    "USD wheel {} is targeted by more than one PhysxVehicleWheelAttachmentAPI; one attachment is required",
+                    wheel
+                );
+                topology.wheel_attachment_targets.remove(&wheel);
+                topology.wheel_attachment_tires.remove(&wheel);
+                topology.wheel_attachment_indices.remove(&wheel);
+                topology.invalid_wheel_attachments.insert(wheel);
+                continue;
             }
+
+            debug!(
+                "USD wheel attachment: wheel {} → tire {} / suspension {} (via {})",
+                wheel, tire, suspension, attachment
+            );
+            topology
+                .wheel_attachment_targets
+                .insert(wheel.clone(), suspension);
+            topology.wheel_attachment_tires.insert(wheel.clone(), tire);
+            topology.wheel_attachment_indices.insert(wheel, index);
         }
     }
+}
+
+/// Resolve a composed relationship only when it has exactly one target. The
+/// standard wheel attachment relationships are singular links; accepting the
+/// first element of a multi-target list would make topology depend on list-op
+/// ordering rather than authored intent.
+fn one_attachment_target(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+) -> Result<Option<String>, usize> {
+    let targets = reader.rel_targets(prim, name);
+    match targets.as_slice() {
+        [] => Ok(None),
+        [target] => Ok(Some(target.as_str().to_string())),
+        _ => Err(targets.len()),
+    }
+}
+
+/// Resolve one standard attachment endpoint. A relationship target is
+/// authoritative when present; the standard schema's direct-API form uses the
+/// attachment prim itself when the relationship is omitted. In both cases the
+/// resolved prim must carry the API that defines the endpoint.
+fn attachment_endpoint(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    attachment: &SdfPath,
+    relationship: &str,
+    api_schema: &str,
+) -> Result<Option<String>, String> {
+    let target = one_attachment_target(reader, attachment, relationship).map_err(|count| {
+        format!(
+            "{} has {} relationship targets; exactly one is required",
+            relationship, count
+        )
+    })?;
+    let target = target.or_else(|| {
+        reader
+            .has_api_schema(attachment, api_schema)
+            .then(|| attachment.as_str().to_string())
+    });
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let target_path = SdfPath::new(&target)
+        .map_err(|_| format!("{} resolves to invalid target {}", relationship, target))?;
+    if !reader.has_api_schema(&target_path, api_schema) {
+        return Err(format!(
+            "{} targets {} without {}",
+            relationship, target, api_schema
+        ));
+    }
+    Ok(Some(target))
 }
 
 /// Per-prim sim-schema extractor (Pass 2) over the live composed [`UsdRead`]
@@ -2220,6 +2346,14 @@ fn process_usd_sim_prim_read(
     // "happens to carry a wheel-ish attr" — any prim with a stray radius was
     // a wheel, and a wheel could not be authored without one.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleWheelAPI") {
+        if topology.invalid_wheel_attachments.contains(&prim_path.path) {
+            error!(
+                "USD wheel {} has malformed or ambiguous PhysxVehicleWheelAttachmentAPI topology — refusing to spawn",
+                prim_path.path
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        }
         // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
         // this prim. We'll retry next frame (not marking UsdSimProcessed).
         // Headless (no renderer) or recovered (watchdog): the mesh never
@@ -2267,6 +2401,8 @@ fn process_usd_sim_prim_read(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
+        let attachment_tire =
+            wheel_params::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
         let powertrain = match powertrain::find_binding_for_wheel(reader, &sdf_path) {
             Ok(binding) => binding,
             Err(missing) => {
@@ -2301,6 +2437,7 @@ fn process_usd_sim_prim_read(
             reader,
             &sdf_path,
             attachment_susp.as_ref(),
+            attachment_tire.as_ref(),
             powertrain.as_ref().map(|binding| &binding.params),
         ) {
             Ok(p) => p,
@@ -4329,10 +4466,12 @@ def Xform "Rover" {
     }
     def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
         rel physxVehicleWheelAttachment:wheel = </Rover/Wheel>
+        rel physxVehicleWheelAttachment:tire = </Rover/Tire>
         rel physxVehicleWheelAttachment:suspension = </Rover/Suspension>
         int physxVehicleWheelAttachment:index = 7
     }
-    def Xform "Suspension" {}
+    def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {}
+    def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
 }
 "#;
 
@@ -4354,6 +4493,10 @@ def Xform "Rover" {
         assert_eq!(
             topology.wheel_attachment_targets.get("/Rover/Wheel"),
             Some(&"/Rover/Suspension".to_string())
+        );
+        assert_eq!(
+            topology.wheel_attachment_tires.get("/Rover/Wheel"),
+            Some(&"/Rover/Tire".to_string())
         );
         assert_eq!(
             topology.wheel_attachment_indices.get("/Rover/Wheel"),
@@ -4395,6 +4538,66 @@ def Xform "Rover" {
             Some(&"/Rover/WheelJoint".to_string()),
             "a projection revision must rebuild a replacement stage"
         );
+    }
+
+    #[test]
+    fn topology_index_supports_the_standard_direct_api_attachment_form() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "direct_attachment.usda",
+            r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = [
+    "PhysxVehicleWheelAttachmentAPI",
+    "PhysxVehicleWheelAPI",
+    "PhysxVehicleTireAPI",
+    "PhysxVehicleSuspensionAPI"
+]) {
+    int physxVehicleWheelAttachment:index = 2
+}
+"#,
+        ))
+        .expect("direct attachment fixture composes");
+        let id = Handle::<UsdStageAsset>::default().id();
+        let mut index = JointTopologyIndex::default();
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        let topology = index.get(id).expect("direct attachment is indexed");
+
+        assert_eq!(
+            topology.wheel_attachment_targets.get("/Wheel"),
+            Some(&"/Wheel".to_string())
+        );
+        assert_eq!(
+            topology.wheel_attachment_tires.get("/Wheel"),
+            Some(&"/Wheel".to_string())
+        );
+        assert_eq!(topology.wheel_attachment_indices.get("/Wheel"), Some(&2));
+        assert!(topology.invalid_wheel_attachments.is_empty());
+    }
+
+    #[test]
+    fn topology_index_rejects_multi_target_tire_relationships() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "ambiguous_attachment.usda",
+            r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {}
+def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {}
+def Xform "TireA" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
+def Xform "TireB" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
+def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
+    rel physxVehicleWheelAttachment:wheel = </Wheel>
+    rel physxVehicleWheelAttachment:tire = [</TireA>, </TireB>]
+    rel physxVehicleWheelAttachment:suspension = </Suspension>
+    int physxVehicleWheelAttachment:index = 0
+}
+"#,
+        ))
+        .expect("ambiguous attachment fixture composes");
+        let id = Handle::<UsdStageAsset>::default().id();
+        let mut index = JointTopologyIndex::default();
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        let topology = index.get(id).expect("ambiguous attachment is indexed");
+
+        assert!(topology.invalid_wheel_attachments.contains("/Wheel"));
+        assert!(!topology.wheel_attachment_tires.contains_key("/Wheel"));
     }
 }
 
