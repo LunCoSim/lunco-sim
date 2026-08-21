@@ -72,6 +72,9 @@ impl RenderingQuality {
                 primitive_capsule_longitudes: 32,
                 primitive_capsule_latitudes: 16,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
+                terrain_derived_map_resolution: 1024,
+                terrain_derived_ao_directions: 8,
+                terrain_derived_ao_steps: 8,
                 terrain_lod_tile_resolution: 49,
                 terrain_lod_cinematic_resolution: 2049,
                 terrain_lod_pixel_error: 2.0,
@@ -124,6 +127,9 @@ impl RenderingQuality {
                 primitive_capsule_longitudes: 16,
                 primitive_capsule_latitudes: 8,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+                terrain_derived_map_resolution: 512,
+                terrain_derived_ao_directions: 4,
+                terrain_derived_ao_steps: 4,
                 terrain_lod_tile_resolution: 33,
                 terrain_lod_cinematic_resolution: 1025,
                 terrain_lod_pixel_error: 4.0,
@@ -176,6 +182,9 @@ impl RenderingQuality {
                 primitive_capsule_longitudes: 64,
                 primitive_capsule_latitudes: 32,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
+                terrain_derived_map_resolution: 2048,
+                terrain_derived_ao_directions: 16,
+                terrain_derived_ao_steps: 16,
                 terrain_lod_tile_resolution: 65,
                 terrain_lod_cinematic_resolution: 2049,
                 terrain_lod_pixel_error: 1.0,
@@ -269,6 +278,12 @@ pub struct RenderQualityProfile {
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
     pub terrain_mesh_cache_bytes: u64,
+    /// Texels per side of terrain-derived roughness/AO/normal maps.
+    pub terrain_derived_map_resolution: usize,
+    /// Azimuth samples per texel for terrain-derived ambient occlusion.
+    pub terrain_derived_ao_directions: usize,
+    /// March samples per azimuth for terrain-derived ambient occlusion.
+    pub terrain_derived_ao_steps: usize,
     /// Vertices per side of one streamed terrain tile.
     pub terrain_lod_tile_resolution: usize,
     /// Vertices per side of a frozen/cinematic terrain tile.
@@ -417,6 +432,12 @@ pub struct RenderingQualitySettings {
     pub primitive_capsule_latitudes: u32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
+    #[serde(default = "default_terrain_derived_map_resolution")]
+    pub terrain_derived_map_resolution: usize,
+    #[serde(default = "default_terrain_derived_ao_directions")]
+    pub terrain_derived_ao_directions: usize,
+    #[serde(default = "default_terrain_derived_ao_steps")]
+    pub terrain_derived_ao_steps: usize,
     #[serde(default = "default_terrain_lod_tile_resolution")]
     pub terrain_lod_tile_resolution: usize,
     #[serde(default = "default_terrain_lod_cinematic_resolution")]
@@ -517,6 +538,18 @@ const fn default_shadow_cascade_overlap() -> f32 {
 
 const fn default_terrain_mesh_cache_bytes() -> u64 {
     balanced_profile().terrain_mesh_cache_bytes
+}
+
+const fn default_terrain_derived_map_resolution() -> usize {
+    balanced_profile().terrain_derived_map_resolution
+}
+
+const fn default_terrain_derived_ao_directions() -> usize {
+    balanced_profile().terrain_derived_ao_directions
+}
+
+const fn default_terrain_derived_ao_steps() -> usize {
+    balanced_profile().terrain_derived_ao_steps
 }
 
 const fn default_shadow_depth_bias() -> f32 {
@@ -733,6 +766,9 @@ impl RenderingQualitySettings {
             primitive_capsule_longitudes: self.primitive_capsule_longitudes,
             primitive_capsule_latitudes: self.primitive_capsule_latitudes,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
+            terrain_derived_map_resolution: self.terrain_derived_map_resolution,
+            terrain_derived_ao_directions: self.terrain_derived_ao_directions,
+            terrain_derived_ao_steps: self.terrain_derived_ao_steps,
             terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
             terrain_lod_pixel_error: self.terrain_lod_pixel_error,
@@ -805,6 +841,9 @@ impl RenderingQualitySettings {
         self.primitive_capsule_longitudes = profile.primitive_capsule_longitudes;
         self.primitive_capsule_latitudes = profile.primitive_capsule_latitudes;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
+        self.terrain_derived_map_resolution = profile.terrain_derived_map_resolution;
+        self.terrain_derived_ao_directions = profile.terrain_derived_ao_directions;
+        self.terrain_derived_ao_steps = profile.terrain_derived_ao_steps;
         self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
         self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
         self.terrain_lod_pixel_error = profile.terrain_lod_pixel_error;
@@ -944,6 +983,19 @@ impl RenderingQualitySettings {
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
         }
+        if profile.terrain_derived_map_resolution == 0
+            || !profile.terrain_derived_map_resolution.is_power_of_two()
+            || profile.terrain_derived_map_resolution > 4096
+        {
+            return Err("terrain derived-map resolution must be a power of two between 1 and 4096");
+        }
+        if profile.terrain_derived_ao_directions == 0
+            || profile.terrain_derived_ao_directions > 64
+            || profile.terrain_derived_ao_steps == 0
+            || profile.terrain_derived_ao_steps > 64
+        {
+            return Err("terrain derived ambient-occlusion samples must be between 1 and 64");
+        }
         if profile.terrain_lod_tile_resolution < 3 || profile.terrain_lod_tile_resolution > 4097 {
             return Err("terrain tile resolution must be between 3 and 4097");
         }
@@ -1046,6 +1098,9 @@ impl Default for RenderingQualitySettings {
             primitive_capsule_longitudes: profile.primitive_capsule_longitudes,
             primitive_capsule_latitudes: profile.primitive_capsule_latitudes,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
+            terrain_derived_map_resolution: profile.terrain_derived_map_resolution,
+            terrain_derived_ao_directions: profile.terrain_derived_ao_directions,
+            terrain_derived_ao_steps: profile.terrain_derived_ao_steps,
             terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
             terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
             terrain_lod_pixel_error: profile.terrain_lod_pixel_error,
@@ -1340,6 +1395,9 @@ mod tests {
     fn terrain_quality_is_authoritative_and_validated() {
         let mut settings = RenderingQualitySettings::default();
         assert!(settings.validate().is_ok());
+        assert_eq!(settings.profile().terrain_derived_map_resolution, 1024);
+        assert_eq!(settings.profile().terrain_derived_ao_directions, 8);
+        assert_eq!(settings.profile().terrain_derived_ao_steps, 8);
         assert_eq!(
             settings.profile().terrain_lod_tile_resolution,
             RenderingQuality::Balanced
@@ -1364,6 +1422,20 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain LOD pixel error must be finite and in [0.1, 32]")
+        );
+
+        settings.terrain_lod_pixel_error = 2.0;
+        settings.terrain_derived_map_resolution = 1000;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain derived-map resolution must be a power of two between 1 and 4096")
+        );
+
+        settings.terrain_derived_map_resolution = 1024;
+        settings.terrain_derived_ao_steps = 65;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain derived ambient-occlusion samples must be between 1 and 64")
         );
     }
 

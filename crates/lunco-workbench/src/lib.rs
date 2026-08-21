@@ -5498,6 +5498,34 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
+            ui.collapsing("Terrain derived maps", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_map_resolution)
+                        .speed(128.0)
+                        .range(1..=4096)
+                        .prefix("Map resolution: ")
+                        .suffix(" px/side (power of two)"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_directions)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("AO directions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_steps)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("AO steps per direction: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control the baked terrain roughness, ambient-occlusion, and normal textures. Changes rebake off-thread and keep the previous maps visible until ready.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Terrain LOD", |ui| {
                 ui.add(
                     egui::DragValue::new(&mut settings.terrain_lod_tile_resolution)
