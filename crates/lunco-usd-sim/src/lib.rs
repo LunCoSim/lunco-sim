@@ -547,6 +547,12 @@ mod wheel_wiring_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        // `try_wire_wheel` is part of this plugin's unconditional schedule and
+        // records malformed authored topology as a scene-terminal fault.  Do
+        // not make callers depend on the unrelated full core plugin merely to
+        // satisfy that system parameter; the plugin owns the system and must
+        // establish its shared fault resource when used on its own.
+        app.init_resource::<lunco_core::RuntimeFaults>();
         crate::shader_ports::build(app);
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
             .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
@@ -3597,7 +3603,7 @@ fn setup_physical_wheel(
         radius: params.radius,
         axle_inertia: params.axle_inertia(),
         slip_stiffness: params.slip_stiffness,
-        cornering_stiffness: params.cornering_stiffness,
+        lateral_stiffness_graph: params.lateral_stiffness_graph,
         min_validated_speed: params.min_validated_speed,
         friction_mu: params.friction_mu,
         bearing_damping: params.bearing_damping,
