@@ -108,6 +108,7 @@ struct CachedFootprint {
 enum FootprintState {
     Pending,
     Ready(Option<lunco_usd_bevy::ObjectAabb>),
+    Invalid,
 }
 
 /// Placement data after resolving derived-vs-authored: the footprint half-
@@ -152,7 +153,7 @@ impl FootprintCache {
                 half_l: 1.0,
                 lift: c.spawn_lift as f64,
             }),
-            FootprintState::Pending => None,
+            FootprintState::Pending | FootprintState::Invalid => None,
         }
     }
 }
@@ -196,17 +197,27 @@ fn ensure_footprint(
                 }
             }
             if let Some(stage) = canonical.get(id) {
-                let footprint = lunco_usd_bevy::collision_aabb(&stage.view(), &cached.root_prim);
-                if let Some(aabb) = footprint {
-                    info!(
-                        "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
-                        entry_id,
-                        aabb.half_w(),
-                        aabb.half_l(),
-                        aabb.rest_depth()
-                    );
+                match lunco_usd_bevy::collision_aabb(&stage.view(), &cached.root_prim) {
+                    Ok(footprint) => {
+                        if let Some(aabb) = footprint {
+                            info!(
+                                "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
+                                entry_id,
+                                aabb.half_w(),
+                                aabb.half_l(),
+                                aabb.rest_depth()
+                            );
+                        }
+                        cached.footprint = FootprintState::Ready(footprint);
+                    }
+                    Err(error) => {
+                        error!(
+                            entry_id,
+                            "[spawn] rejected malformed collision placement data: {error}"
+                        );
+                        cached.footprint = FootprintState::Invalid;
+                    }
                 }
-                cached.footprint = FootprintState::Ready(footprint);
             }
         }
     }

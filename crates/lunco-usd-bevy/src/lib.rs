@@ -3925,6 +3925,52 @@ fn read_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<Str
     (!order.is_empty()).then_some(order)
 }
 
+/// Return whether an ordered USD xform token names a standard `UsdGeomXformOp`
+/// type. Suffixes are legal and identify independent ops of the same type, so
+/// validation checks the type prefix rather than accepting only the handful of
+/// unsuffixed spellings emitted by our authoring helpers.
+fn is_valid_xform_op_token(op: &str, index: usize) -> bool {
+    let (inverted, base) = match op.strip_prefix("!invert!") {
+        Some(base) => (true, base),
+        None => (false, op),
+    };
+    if base == RESET_XFORM_STACK {
+        return !inverted && index == 0;
+    }
+    if inverted && base.starts_with('!') {
+        return false;
+    }
+    [
+        "xformOp:translate",
+        "xformOp:scale",
+        "xformOp:transform",
+        "xformOp:orient",
+        "xformOp:rotateX",
+        "xformOp:rotateY",
+        "xformOp:rotateZ",
+        "xformOp:rotateXYZ",
+        "xformOp:rotateXZY",
+        "xformOp:rotateYXZ",
+        "xformOp:rotateYZX",
+        "xformOp:rotateZXY",
+        "xformOp:rotateZYX",
+    ]
+    .iter()
+    .any(|kind| base == *kind || base.strip_prefix(kind).is_some_and(|s| s.starts_with(':')))
+}
+
+/// Validate the structural part of an authored xform stack before delegating
+/// numeric composition to OpenUSD. OpenUSD currently ignores an unknown op
+/// token in this code path, which would turn malformed authored placement data
+/// into an identity transform. That is not a USD semantic default and is unsafe
+/// for physics/spawn consumers.
+fn valid_xform_op_order(order: &[String]) -> bool {
+    order
+        .iter()
+        .enumerate()
+        .all(|(index, op)| is_valid_xform_op_token(op, index))
+}
+
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
 /// is defined by the ordered op stack, not the implicit TRS fallback).
 fn has_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool {
@@ -4162,7 +4208,10 @@ pub fn compose_xform_order_at(
     time: f64,
 ) -> Option<Transform> {
     use openusd::schemas::geom::Xformable as _;
-    read_xform_op_order(reader, path)?;
+    let order = read_xform_op_order(reader, path)?;
+    if !valid_xform_op_order(&order) {
+        return None;
+    }
     let m = XformablePrim(reader.usd_stage().prim(path.clone()))
         .local_to_parent_transform(time)
         .ok()?;
@@ -4239,11 +4288,14 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 /// Axis-aligned bounding box of an asset's COLLISION geometry, in the asset's own
 /// root reference frame — the general, wheel-free basis for spawn placement.
 ///
-/// Walks the composed USD stage from `root_prim` and, for every active gprim whose
-/// `physics:collisionEnabled` is not `false`, folds that shape's local bounding box
-/// (its 8 corners transformed into the root frame) into a running min/max. Shape
-/// dimensions come from the shared [`read_shape_dims`], so the box can't drift from
-/// the avian collider built off the same attributes. The result's
+/// Walks the composed USD stage from `root_prim` and, for every active gprim that
+/// applies the standard `UsdPhysicsCollisionAPI` and whose
+/// `physics:collisionEnabled` is not `false`, folds that shape's local bounding
+/// box (its 8 corners transformed into the root frame) into a running min/max.
+/// Nested rigid bodies and authored vehicle wheels are ownership boundaries and
+/// are not folded into the root body. Shape dimensions come from the shared
+/// [`read_shape_dims`], so the box can't drift from the avian collider built off
+/// the same attributes. The result's
 /// [`rest_depth`](ObjectAabb::rest_depth) (`-min.y`) is the distance from the root
 /// origin down to the lowest collision point: lift a spawn by it and the object
 /// rests ON the ground with no part buried — for ANY asset (lander, rover, prop),
@@ -4251,14 +4303,43 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 /// same composed stage the live entity is instantiated from, so the placement
 /// solver and the physics body can never disagree.
 ///
-/// Returns `None` when no collision geometry is found (a pure-visual prop, or a
-/// mesh-only asset whose shape this reader doesn't dimension) — the caller then
-/// falls back to the authored `lunco:spawnLift`.
+/// Returns `Ok(None)` when no collision geometry is found (a pure-visual prop,
+/// or a mesh-only asset whose shape this reader doesn't dimension). Malformed
+/// authored collision data is an error, not an empty footprint: callers must
+/// not replace it with a spawn heuristic.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ObjectAabb {
     pub min: bevy::math::DVec3,
     pub max: bevy::math::DVec3,
 }
+
+/// A composed collision tree could not provide a trustworthy placement AABB.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollisionAabbError {
+    InvalidRootPath(String),
+    MalformedTransform { prim: String },
+    InvalidCollisionEnabled { prim: String },
+    MalformedPrimitive { prim: String, type_name: String },
+}
+
+impl std::fmt::Display for CollisionAabbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRootPath(path) => write!(f, "invalid collision root path {path}"),
+            Self::MalformedTransform { prim } => {
+                write!(f, "malformed authored transform at {prim}")
+            }
+            Self::InvalidCollisionEnabled { prim } => {
+                write!(f, "invalid authored physics:collisionEnabled at {prim}")
+            }
+            Self::MalformedPrimitive { prim, type_name } => {
+                write!(f, "malformed {type_name} collision data at {prim}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CollisionAabbError {}
 
 impl ObjectAabb {
     /// Half-width along X (metres) — the placement solver samples terrain at
@@ -4279,12 +4360,49 @@ impl ObjectAabb {
 
 /// Derive the [`ObjectAabb`] of an asset by walking the composed USD stage from
 /// `root_prim` (e.g. `"/DescentLander"`). See [`ObjectAabb`].
-pub fn collision_aabb(reader: &StageView<'_>, root_prim: &str) -> Option<ObjectAabb> {
-    let root = SdfPath::new(root_prim).ok()?;
-    let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
+pub fn collision_aabb(
+    reader: &StageView<'_>,
+    root_prim: &str,
+) -> Result<Option<ObjectAabb>, CollisionAabbError> {
+    let root = SdfPath::new(root_prim)
+        .map_err(|_| CollisionAabbError::InvalidRootPath(root_prim.to_owned()))?;
+    let root_tf = collision_local_transform(reader, &root)?;
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
-    accumulate_collision_aabb(reader, &root, root_tf, &mut acc);
-    acc.map(|(min, max)| ObjectAabb { min, max })
+    accumulate_collision_aabb(reader, &root, root_tf, &mut acc)?;
+    Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
+}
+
+/// Read a collision-tree transform while distinguishing USD's identity for an
+/// unauthored xform stack from a malformed authored stack. The latter must not
+/// become identity: doing so changes the computed rest depth and can bury a
+/// spawned body while the malformed asset appears loadable.
+fn collision_local_transform(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Transform, CollisionAabbError> {
+    match local_transform_at(reader, path, 0.0) {
+        Some(transform) => Ok(transform),
+        None if reader.has_authored_attribute(path, "xformOpOrder")
+            && !authored_empty_xform_op_order(reader, path) =>
+        {
+            Err(CollisionAabbError::MalformedTransform {
+                prim: path.as_str().to_owned(),
+            })
+        }
+        None => Ok(Transform::IDENTITY),
+    }
+}
+
+/// An authored empty `xformOpOrder` is the valid USD identity stack. It must be
+/// distinguished from an authored value of the wrong type, which is malformed.
+fn authored_empty_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool {
+    match reader.attr_value(path, "xformOpOrder") {
+        Some(Value::TokenVec(values)) => values.is_empty(),
+        Some(Value::StringVec(values)) => values.is_empty(),
+        Some(Value::TokenListOp(op)) => op.flatten().is_empty(),
+        Some(Value::StringListOp(op)) => op.flatten().is_empty(),
+        _ => false,
+    }
 }
 
 /// DFS helper for [`collision_aabb`]: compose transforms down the tree (Bevy
@@ -4296,26 +4414,40 @@ fn accumulate_collision_aabb(
     path: &SdfPath,
     world_tf: Transform,
     acc: &mut Option<(bevy::math::DVec3, bevy::math::DVec3)>,
-) {
+) -> Result<(), CollisionAabbError> {
     // Fold this prim's own geometry if it is a collision-enabled shape. A child
     // that explicitly sets `physics:collisionEnabled = false` (a visual-only part
     // like an antenna or solar panel with no collider) is skipped, so the AABB
     // tracks the physical footprint — exactly the shapes the avian compound
     // collider is assembled from.
-    if let Some(ty) = reader.type_name(path) {
-        let collides = reader
-            .boolean(path, "physics:collisionEnabled")
-            .unwrap_or(true);
-        if collides {
-            if let Some(corners) = local_shape_corners(reader, path, &ty) {
-                for c in corners {
-                    let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
-                    match acc {
-                        Some((min, max)) => {
-                            *min = min.min(w);
-                            *max = max.max(w);
+    if reader.has_api_schema(path, openusd::schemas::physics::tokens::API_COLLISION) {
+        if let Some(ty) = reader.type_name(path) {
+            let collides = match reader.boolean(path, "physics:collisionEnabled") {
+                Some(value) => value,
+                None if reader.has_authored_attribute(path, "physics:collisionEnabled") => {
+                    return Err(CollisionAabbError::InvalidCollisionEnabled {
+                        prim: path.as_str().to_owned(),
+                    });
+                }
+                None => true,
+            };
+            if collides {
+                if is_collision_primitive_type(&ty) {
+                    let corners = local_shape_corners(reader, path, &ty).ok_or_else(|| {
+                        CollisionAabbError::MalformedPrimitive {
+                            prim: path.as_str().to_owned(),
+                            type_name: ty.clone(),
                         }
-                        None => *acc = Some((w, w)),
+                    })?;
+                    for c in corners {
+                        let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
+                        match acc {
+                            Some((min, max)) => {
+                                *min = min.min(w);
+                                *max = max.max(w);
+                            }
+                            None => *acc = Some((w, w)),
+                        }
                     }
                 }
             }
@@ -4325,9 +4457,121 @@ fn accumulate_collision_aabb(
         if !reader.is_active(&child) {
             continue;
         }
-        let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
+        if reader.has_api_schema(&child, openusd::schemas::physics::tokens::API_RIGID_BODY)
+            || reader
+                .real_f32(&child, "physxVehicleWheel:radius")
+                .is_some()
+        {
+            continue;
+        }
+        let local = collision_local_transform(reader, &child)?;
         let child_world = world_tf * local;
-        accumulate_collision_aabb(reader, &child, child_world, acc);
+        accumulate_collision_aabb(reader, &child, child_world, acc)?;
+    }
+    Ok(())
+}
+
+fn is_collision_primitive_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Cube" | "Sphere" | "Cylinder" | "Cone" | "Capsule" | "Plane"
+    )
+}
+
+#[cfg(test)]
+mod collision_aabb_tests {
+    use super::*;
+
+    fn parse(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("collision.usda", source))
+            .expect("build collision stage")
+    }
+
+    #[test]
+    fn unauthored_transforms_use_usd_identity() {
+        let stage = parse(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def Xform "Root"
+{
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 2
+    }
+}
+"#,
+        );
+        let aabb = collision_aabb(&stage.view(), "/Root")
+            .expect("collision AABB derivation")
+            .expect("cube collision AABB");
+        assert_eq!(aabb.min, bevy::math::DVec3::splat(-1.0));
+        assert_eq!(aabb.max, bevy::math::DVec3::splat(1.0));
+    }
+
+    #[test]
+    fn visual_primitive_without_collision_api_is_not_a_collision_aabb() {
+        let stage = parse(
+            r#"#usda 1.0
+def Xform "Root"
+{
+    def Cube "Visual"
+    {
+        double size = 2
+    }
+}
+"#,
+        );
+        assert!(
+            collision_aabb(&stage.view(), "/Root")
+                .expect("collision AABB derivation")
+                .is_none(),
+            "visual geometry without UsdPhysicsCollisionAPI must not affect placement"
+        );
+    }
+
+    #[test]
+    fn malformed_authored_transform_is_not_replaced_with_identity() {
+        let stage = parse(
+            r#"#usda 1.0
+def Xform "Root"
+{
+    uniform token[] xformOpOrder = ["xformOp:unsupported"]
+    def Cube "Body"
+    {
+        double size = 2
+    }
+}
+"#,
+        );
+        assert!(
+            collision_aabb(&stage.view(), "/Root").is_err(),
+            "a malformed authored transform must reject spawn AABB derivation"
+        );
+    }
+
+    #[test]
+    fn malformed_authored_collision_data_is_not_treated_as_omitted() {
+        let stage = parse(
+            r#"#usda 1.0
+def Xform "Root"
+{
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        string size = "not a number"
+    }
+}
+"#,
+        );
+        assert!(
+            collision_aabb(&stage.view(), "/Root").is_err(),
+            "malformed authored dimensions must reject spawn AABB derivation"
+        );
     }
 }
 
