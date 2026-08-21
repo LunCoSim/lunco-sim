@@ -1920,7 +1920,8 @@ fn project_env_settings(
                 continue;
             }
             if view.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
-                if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100")
+                if let Some(ev) = view
+                    .value::<f32>(&prim, "lunco:env:exposureEv100")
                     .filter(|ev| ev.is_finite())
                 {
                     // RECORD it — `apply_authored_env` owns getting it onto cameras,
