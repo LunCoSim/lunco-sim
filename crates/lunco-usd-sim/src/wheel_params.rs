@@ -587,95 +587,6 @@ fn validate_range(errors: &mut Vec<String>, name: &str, value: f64, min: f64, ma
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{validate_suspension_values, validate_wheel_values};
-    use bevy::math::DVec3;
-
-    #[test]
-    fn authored_wheel_values_accept_the_documented_contract() {
-        let mut errors = Vec::new();
-        validate_wheel_values(
-            &mut errors,
-            0.3,
-            0.2,
-            12.0,
-            0.54,
-            0.5,
-            120.0,
-            14_000.0,
-            8_000.0,
-            0.0,
-            1.5,
-            DVec3::Y,
-            30.0,
-        );
-        assert!(
-            errors.is_empty(),
-            "unexpected validation errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn authored_wheel_values_reject_nonfinite_and_out_of_contract_numbers() {
-        let mut errors = Vec::new();
-        validate_wheel_values(
-            &mut errors,
-            f64::NAN,
-            0.0,
-            f64::INFINITY,
-            51.0,
-            -1.0,
-            5_001.0,
-            30_001.0,
-            -1.0,
-            11.0,
-            -0.1,
-            DVec3::ZERO,
-            -1.0,
-        );
-        for name in [
-            "physxVehicleWheel:radius",
-            "physxVehicleWheel:width",
-            "physxVehicleWheel:mass",
-            "physxVehicleWheel:moi",
-            "physxVehicleWheel:dampingRate",
-            "physxVehicleWheel:maxBrakeTorque",
-            "physxVehicleTire:longitudinalStiffness",
-            "physxVehicleTire:lateralStiffness",
-            "lunco:tire:minValidatedSpeed",
-            "physics:dynamicFriction",
-            "lunco:wheel:driveDamping",
-            "lunco:wheel:steerAxis",
-        ] {
-            assert!(
-                errors.iter().any(|error| error.starts_with(name)),
-                "missing validation error for {name}: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
-        let mut errors = Vec::new();
-        validate_suspension_values(&mut errors, -0.01, f64::NAN, 20_001.0);
-        assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
-        assert!(errors[0].starts_with("lunco:suspension:restLength"));
-        assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
-        assert!(errors[2].starts_with("physxVehicleSuspension:springDamperRate"));
-    }
-
-    #[test]
-    fn zero_suspension_rest_length_is_valid_only_as_an_authored_rigid_mount() {
-        let mut errors = Vec::new();
-        validate_suspension_values(&mut errors, 0.0, 15_000.0, 5_000.0);
-        assert!(
-            errors.is_empty(),
-            "unexpected validation errors: {errors:?}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Live resync — the USD-based update path for spawned wheels.
 //
@@ -1007,4 +918,93 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         wheel_count,
         vehicles.len()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_suspension_values, validate_wheel_values};
+    use bevy::math::DVec3;
+
+    #[test]
+    fn authored_wheel_values_accept_the_documented_contract() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            0.3,
+            0.2,
+            12.0,
+            0.54,
+            0.5,
+            120.0,
+            14_000.0,
+            8_000.0,
+            0.0,
+            1.5,
+            DVec3::Y,
+            30.0,
+        );
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn authored_wheel_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            f64::NAN,
+            0.0,
+            f64::INFINITY,
+            51.0,
+            -1.0,
+            5_001.0,
+            30_001.0,
+            -1.0,
+            11.0,
+            -0.1,
+            DVec3::ZERO,
+            -1.0,
+        );
+        for name in [
+            "physxVehicleWheel:radius",
+            "physxVehicleWheel:width",
+            "physxVehicleWheel:mass",
+            "physxVehicleWheel:moi",
+            "physxVehicleWheel:dampingRate",
+            "physxVehicleWheel:maxBrakeTorque",
+            "physxVehicleTire:longitudinalStiffness",
+            "physxVehicleTire:lateralStiffness",
+            "lunco:tire:minValidatedSpeed",
+            "physics:dynamicFriction",
+            "lunco:wheel:driveDamping",
+            "lunco:wheel:steerAxis",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.starts_with(name)),
+                "missing validation error for {name}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, -0.01, f64::NAN, 20_001.0);
+        assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
+        assert!(errors[0].starts_with("lunco:suspension:restLength"));
+        assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
+        assert!(errors[2].starts_with("physxVehicleSuspension:springDamperRate"));
+    }
+
+    #[test]
+    fn zero_suspension_rest_length_is_valid_only_as_an_authored_rigid_mount() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, 0.0, 15_000.0, 5_000.0);
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
 }

@@ -1806,8 +1806,10 @@ def Xform \"Traverse\"\n{\n}\n"
 
     #[test]
     fn rock_authoring_preserves_a_layer_local_seed() {
-        let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
-        spec.seed = 99;
+        let spec = lunco_obstacle_field::spec::ObstacleFieldSpec {
+            seed: 99,
+            ..Default::default()
+        };
         let mut ops = Vec::new();
         super::author_rock_layer_attrs(&mut ops, "/Terrain/Rocks", &spec, 1234);
         let seed = ops.iter().find_map(|op| match op {
