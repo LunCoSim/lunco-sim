@@ -354,8 +354,8 @@ fn read_projection(
     // canonical metre frame, so the resolved USD range (including a schema
     // fallback) is scaled from the stage's declared units.
     let [near, far] = clipping
-        .map(|[near, far]| [near * meters_per_unit, far * meters_per_unit])
-        .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR]);
+        .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR])
+        .map(|value| value * meters_per_unit);
     if !(near.is_finite() && far.is_finite() && near > 0.0 && far > near) {
         error!(
             "[usd-bevy] {} has invalid camera clippingRange ({near}, {far}); expected finite 0 < near < far",
@@ -611,6 +611,22 @@ mod tests {
         };
         assert!((perspective.near - 0.1).abs() < 1e-6);
         assert!((perspective.far - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn omitted_clipping_range_uses_usd_defaults_in_stage_units() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
+        let Projection::Perspective(perspective) = projection else {
+            panic!("camera defaults to perspective");
+        };
+        assert!((perspective.near - 0.01).abs() < 1e-6);
+        assert!((perspective.far - 10_000.0).abs() < 1e-3);
     }
 
     #[test]
