@@ -5268,6 +5268,81 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .suffix(" lm"),
                 );
             });
+            ui.collapsing("Camera look", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings apply to scene cameras when USD does not author an environment bloom override.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                egui::ComboBox::from_id_salt("graphics.camera_tone_map")
+                    .selected_text(match settings.camera_tone_map {
+                        lunco_render::ToneMap::None => "None",
+                        lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
+                        lunco_render::ToneMap::AgX => "AgX",
+                        lunco_render::ToneMap::AcesFitted => "ACES fitted",
+                        lunco_render::ToneMap::Reinhard => "Reinhard",
+                    })
+                    .show_ui(ui, |ui| {
+                        for tone_map in [
+                            lunco_render::ToneMap::None,
+                            lunco_render::ToneMap::TonyMcMapface,
+                            lunco_render::ToneMap::AgX,
+                            lunco_render::ToneMap::AcesFitted,
+                            lunco_render::ToneMap::Reinhard,
+                        ] {
+                            let label = match tone_map {
+                                lunco_render::ToneMap::None => "None",
+                                lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
+                                lunco_render::ToneMap::AgX => "AgX",
+                                lunco_render::ToneMap::AcesFitted => "ACES fitted",
+                                lunco_render::ToneMap::Reinhard => "Reinhard",
+                            };
+                            ui.selectable_value(&mut settings.camera_tone_map, tone_map, label);
+                        }
+                    });
+                egui::ComboBox::from_id_salt("graphics.camera_msaa")
+                    .selected_text(match settings.camera_msaa {
+                        lunco_render::MsaaLevel::Off => "Off",
+                        lunco_render::MsaaLevel::X2 => "2x",
+                        lunco_render::MsaaLevel::X4 => "4x",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::Off,
+                            "Off",
+                        );
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::X2,
+                            "2x",
+                        );
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::X4,
+                            "4x",
+                        );
+                    });
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_bloom_intensity)
+                        .speed(0.01)
+                        .prefix("Bloom intensity: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_bloom_low_frequency_boost)
+                        .speed(0.01)
+                        .prefix("Bloom low-frequency boost: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "A positive bloom intensity enables HDR. An authored USD environment value wins over this default; no automatic quality downgrade is applied.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Terrain mesh cache", |ui| {
                 let mut cache_mib = (settings.terrain_mesh_cache_bytes / (1024 * 1024)).max(1);
                 if ui

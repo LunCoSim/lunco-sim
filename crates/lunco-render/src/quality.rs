@@ -5,6 +5,8 @@ use bevy::prelude::{Component, Resource};
 use lunco_settings::SettingsSection;
 use serde::{Deserialize, Serialize};
 
+use crate::camera::{MsaaLevel, ToneMap};
+
 /// The user-facing rendering-quality choices.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RenderingQuality {
@@ -49,6 +51,10 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.06,
                 shadow_normal_bias: 2.5,
+                camera_tone_map: ToneMap::AgX,
+                camera_msaa: balanced_camera_msaa(),
+                camera_bloom_intensity: 0.15,
+                camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
@@ -78,6 +84,10 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.1,
                 shadow_normal_bias: 4.0,
+                camera_tone_map: ToneMap::AgX,
+                camera_msaa: MsaaLevel::Off,
+                camera_bloom_intensity: 0.0,
+                camera_bloom_low_frequency_boost: 0.0,
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
@@ -107,6 +117,10 @@ impl RenderingQuality {
                 shadow_cascade_overlap: 0.1,
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
+                camera_tone_map: ToneMap::AgX,
+                camera_msaa: high_camera_msaa(),
+                camera_bloom_intensity: 0.15,
+                camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
                 local_light_default_intensity: 1_000.0,
                 rect_light_default_intensity: 10_000.0,
@@ -148,6 +162,14 @@ pub struct RenderQualityProfile {
     pub shadow_depth_bias: f32,
     /// Normal bias, in shadow texels, used to suppress grazing-angle acne.
     pub shadow_normal_bias: f32,
+    /// Tonemapping curve for scene cameras.
+    pub camera_tone_map: ToneMap,
+    /// Multisampling level for scene cameras.
+    pub camera_msaa: MsaaLevel,
+    /// Bloom intensity used when the USD environment omits bloom.
+    pub camera_bloom_intensity: f32,
+    /// Bloom low-frequency boost used when the USD environment omits bloom.
+    pub camera_bloom_low_frequency_boost: f32,
     /// Illuminance used when a DistantLight omits `inputs:intensity`.
     pub distant_light_default_illuminance: f32,
     /// Luminous power used when a local SphereLight omits `inputs:intensity`.
@@ -215,6 +237,14 @@ pub struct RenderingQualitySettings {
     pub shadow_depth_bias: f32,
     #[serde(default = "default_shadow_normal_bias")]
     pub shadow_normal_bias: f32,
+    #[serde(default = "default_camera_tone_map")]
+    pub camera_tone_map: ToneMap,
+    #[serde(default = "default_camera_msaa")]
+    pub camera_msaa: MsaaLevel,
+    #[serde(default = "default_camera_bloom_intensity")]
+    pub camera_bloom_intensity: f32,
+    #[serde(default = "default_camera_bloom_low_frequency_boost")]
+    pub camera_bloom_low_frequency_boost: f32,
     #[serde(default = "default_distant_light_default_illuminance")]
     pub distant_light_default_illuminance: f32,
     #[serde(default = "default_local_light_default_intensity")]
@@ -325,6 +355,38 @@ const fn default_local_shadow_map_near_z() -> f32 {
     balanced_profile().local_shadow_map_near_z
 }
 
+const fn balanced_camera_msaa() -> MsaaLevel {
+    if cfg!(target_arch = "wasm32") {
+        MsaaLevel::Off
+    } else {
+        MsaaLevel::X2
+    }
+}
+
+const fn high_camera_msaa() -> MsaaLevel {
+    if cfg!(target_arch = "wasm32") {
+        MsaaLevel::Off
+    } else {
+        MsaaLevel::X4
+    }
+}
+
+const fn default_camera_tone_map() -> ToneMap {
+    balanced_profile().camera_tone_map
+}
+
+const fn default_camera_msaa() -> MsaaLevel {
+    balanced_profile().camera_msaa
+}
+
+const fn default_camera_bloom_intensity() -> f32 {
+    balanced_profile().camera_bloom_intensity
+}
+
+const fn default_camera_bloom_low_frequency_boost() -> f32 {
+    balanced_profile().camera_bloom_low_frequency_boost
+}
+
 const fn default_terrain_lod_tile_resolution() -> usize {
     balanced_profile().terrain_lod_tile_resolution
 }
@@ -374,6 +436,10 @@ impl RenderingQualitySettings {
             shadow_cascade_overlap: self.shadow_cascade_overlap,
             shadow_depth_bias: self.shadow_depth_bias,
             shadow_normal_bias: self.shadow_normal_bias,
+            camera_tone_map: self.camera_tone_map,
+            camera_msaa: self.camera_msaa,
+            camera_bloom_intensity: self.camera_bloom_intensity,
+            camera_bloom_low_frequency_boost: self.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: self.distant_light_default_illuminance,
             local_light_default_intensity: self.local_light_default_intensity,
             rect_light_default_intensity: self.rect_light_default_intensity,
@@ -415,6 +481,10 @@ impl RenderingQualitySettings {
         self.shadow_cascade_overlap = profile.shadow_cascade_overlap;
         self.shadow_depth_bias = profile.shadow_depth_bias;
         self.shadow_normal_bias = profile.shadow_normal_bias;
+        self.camera_tone_map = profile.camera_tone_map;
+        self.camera_msaa = profile.camera_msaa;
+        self.camera_bloom_intensity = profile.camera_bloom_intensity;
+        self.camera_bloom_low_frequency_boost = profile.camera_bloom_low_frequency_boost;
         self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
         self.local_light_default_intensity = profile.local_light_default_intensity;
         self.rect_light_default_intensity = profile.rect_light_default_intensity;
@@ -475,6 +545,14 @@ impl RenderingQualitySettings {
         }
         if !profile.shadow_normal_bias.is_finite() || profile.shadow_normal_bias < 0.0 {
             return Err("shadow normal bias must be finite and non-negative");
+        }
+        if !profile.camera_bloom_intensity.is_finite() || profile.camera_bloom_intensity < 0.0 {
+            return Err("camera bloom intensity must be finite and non-negative");
+        }
+        if !profile.camera_bloom_low_frequency_boost.is_finite()
+            || profile.camera_bloom_low_frequency_boost < 0.0
+        {
+            return Err("camera bloom boost must be finite and non-negative");
         }
         if !profile.distant_light_default_illuminance.is_finite()
             || profile.distant_light_default_illuminance <= 0.0
@@ -549,6 +627,10 @@ impl Default for RenderingQualitySettings {
             shadow_cascade_overlap: profile.shadow_cascade_overlap,
             shadow_depth_bias: profile.shadow_depth_bias,
             shadow_normal_bias: profile.shadow_normal_bias,
+            camera_tone_map: profile.camera_tone_map,
+            camera_msaa: profile.camera_msaa,
+            camera_bloom_intensity: profile.camera_bloom_intensity,
+            camera_bloom_low_frequency_boost: profile.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: profile.distant_light_default_illuminance,
             local_light_default_intensity: profile.local_light_default_intensity,
             rect_light_default_intensity: profile.rect_light_default_intensity,
@@ -714,6 +796,38 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain tile resolution must be between 3 and 4097")
+        );
+    }
+
+    #[test]
+    fn camera_quality_is_explicit_and_preset_only() {
+        let mut settings = RenderingQualitySettings::default();
+        assert_eq!(settings.profile().camera_tone_map, ToneMap::AgX);
+        assert!(settings.profile().camera_bloom_intensity > 0.0);
+
+        settings.camera_bloom_intensity = 0.0;
+        assert!(settings.validate().is_ok());
+        assert!(settings.preset().is_none());
+
+        settings.apply_preset(RenderingQuality::Low);
+        assert_eq!(settings.profile().camera_bloom_intensity, 0.0);
+        assert_eq!(settings.profile().camera_msaa, MsaaLevel::Off);
+        assert_eq!(settings.preset(), Some(RenderingQuality::Low));
+    }
+
+    #[test]
+    fn camera_bloom_rejects_invalid_values_without_clamping() {
+        let mut settings = RenderingQualitySettings::default();
+        settings.camera_bloom_intensity = f32::NAN;
+        assert_eq!(
+            settings.validate(),
+            Err("camera bloom intensity must be finite and non-negative")
+        );
+
+        settings.camera_bloom_intensity = -1.0;
+        assert_eq!(
+            settings.validate(),
+            Err("camera bloom intensity must be finite and non-negative")
         );
     }
 

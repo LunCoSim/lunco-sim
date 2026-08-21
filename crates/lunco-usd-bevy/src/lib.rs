@@ -1026,6 +1026,7 @@ fn instantiate_usd_prim_from_stage(
                 prim_type.as_deref(),
                 commands,
                 entity,
+                quality,
             );
         }
 

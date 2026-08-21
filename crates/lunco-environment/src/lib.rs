@@ -394,14 +394,13 @@ pub struct SetEnvironmentLight {
     /// [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).
     /// `None` keeps current.
     pub earthshine_color: Option<[f32; 3]>,
-    /// Bloom intensity on the scene cameras (airless ⇒ low, ~0.15). `None`
-    /// keeps current.
+    /// Bloom intensity on the scene cameras. `None` keeps current; zero disables
+    /// bloom and a non-zero value enables the HDR target required by the effect.
     ///
     /// **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is
     /// `bevy_post_process`, and this crate must not name it. That observer
-    /// writes `lunco_render::SceneCamera::bloom`, whose binder REFUSES bloom on
-    /// a non-HDR camera (review `R4`) — and `hdr` is deliberately still off
-    /// everywhere, so this knob renders nothing today, exactly as before.
+    /// writes the render intent, whose binder owns the concrete post-process
+    /// component.
     pub bloom_intensity: Option<f32>,
 }
 

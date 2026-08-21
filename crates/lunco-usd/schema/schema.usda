@@ -80,8 +80,8 @@ class LunCoEnvironment "LunCoEnvironment" (
         difference between them is the difference between a lit scene and a black
         one."""
     )
-    float lunco:env:bloomIntensity = 0 (
-        doc = "Bloom intensity, 0 = off."
+    float lunco:env:bloomIntensity (
+        doc = "Optional authored bloom intensity; 0 = off. When omitted, Graphics settings supply the renderer default."
     )
     # `lunco:env:ambientBrightness` was REMOVED, not deprecated. UsdLux already
     # standardises uniform environment illumination as an untextured

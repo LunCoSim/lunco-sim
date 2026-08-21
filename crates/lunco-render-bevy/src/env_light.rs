@@ -7,22 +7,12 @@
 //! must be applied from this side of the boundary. A command may carry as many
 //! observers as it has effects; the second one lives here.
 //!
-//! # Why this writes `SceneCamera` and not `Bloom` (review `R4`)
+//! # Why this writes `SceneCamera` and not `Bloom`
 //!
-//! `hdr` is set true NOWHERE in this repo. Bloom on a non-HDR view renders
-//! **nothing** while still paying for a downsample/upsample chain — the command has
-//! been quietly buying that cost for as long as it has existed.
-//!
-//! So this observer writes [`SceneCamera::bloom`] rather than inserting a raw
-//! `Bloom`, and it deliberately **does not** turn `hdr` on. `scene_camera.rs`'s
-//! binder then refuses the bloom and warns. That warning is the point: today's
-//! visual output is preserved byte-for-byte (bloom rendered nothing before; it
-//! renders nothing now), and the previously-silent bug becomes audible.
-//!
-//! Turning bloom on for real is a separate, deliberate visual decision — call
-//! [`SceneCamera::with_bloom`], which enables `hdr` for you so the broken
-//! combination stays unrepresentable. It is not something a decoupling refactor
-//! whose whole premise is "zero behaviour change" gets to do by accident.
+//! [`SceneCamera`] is the render intent and the binder is the sole writer of the
+//! concrete post-process component. This observer therefore records the authored
+//! environment override on the intent, where it can be applied consistently to
+//! cameras that exist now and cameras spawned later.
 
 use bevy::prelude::*;
 use lunco_environment::SetEnvironmentLight;
@@ -34,33 +24,35 @@ pub(crate) fn build(app: &mut App) {
 
 /// Apply `SetEnvironmentLight::bloom_intensity` to every scene camera's look.
 ///
-/// Only the intensity is authored — `low_frequency_boost` keeps whatever the
-/// camera already had (or the [`BloomLook`] default on a camera that had no bloom
-/// at all), mirroring the old `for mut bloom in &mut q_bloom { bloom.intensity = i }`.
+/// Only the intensity is authored — `low_frequency_boost` keeps the current
+/// Graphics camera setting (or the camera's existing value), matching the USD
+/// environment contract.
 fn on_set_environment_light_bloom(
     trigger: On<SetEnvironmentLight>,
     mut cams: Query<&mut SceneCamera>,
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut bloom_override: ResMut<lunco_render::SceneBloomOverride>,
 ) {
     let cmd = trigger.event();
     let Some(intensity) = cmd.bloom_intensity else {
         return;
     };
+    if !intensity.is_finite() || intensity < 0.0 {
+        warn!("SetEnvironmentLight rejected non-finite or negative bloom intensity");
+        return;
+    }
+    bloom_override.intensity = Some(intensity);
     for mut cam in &mut cams {
-        let low_frequency_boost = cam
-            .bloom
-            .map(|b| b.low_frequency_boost)
-            .unwrap_or_else(|| BloomLook::default().low_frequency_boost);
-        let next = BloomLook {
-            intensity,
-            low_frequency_boost,
-        };
+        let low_frequency_boost = cam.bloom.map_or(
+            settings.profile().camera_bloom_low_frequency_boost,
+            |bloom| bloom.low_frequency_boost,
+        );
+        let next = (intensity > 0.0).then(|| BloomLook::new(intensity, low_frequency_boost));
         // Change-guarded: `SceneCamera` is `Changed`-driven on the binder side, so a
-        // blind write would re-run `apply` (and re-log the no-hdr warning) on every
-        // slider frame even when the value is identical.
-        if cam.bloom != Some(next) {
-            cam.bloom = Some(next);
+        // blind write would re-run the pipeline binding on every identical command.
+        if cam.bloom != next {
+            cam.bloom = next;
         }
-        // NOTE: `hdr` is left alone ON PURPOSE — see the module docs. The binder
-        // refuses bloom without it, which is exactly today's rendered result.
+        cam.hdr = cam.bloom.is_some();
     }
 }

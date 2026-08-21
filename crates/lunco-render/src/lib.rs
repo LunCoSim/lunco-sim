@@ -19,8 +19,8 @@ pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{
-    scene_camera_look, usd_default_perspective_projection, BloomLook, MsaaLevel, SceneCamera,
-    ToneMap, WorldLabel,
+    scene_camera_look, scene_camera_look_with_profile, usd_default_perspective_projection,
+    BloomLook, GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
 };
 pub use quality::{
     estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, RenderQualityProfile,
@@ -42,6 +42,14 @@ pub struct CommunicationLineSettings {
     /// Show runtime-generated communication lines.
     #[serde(default)]
     pub show: bool,
+}
+
+/// Scene-authored bloom override, if the composed USD environment provides one.
+/// `None` means the Graphics bloom setting remains authoritative; `Some(0.0)`
+/// is an explicit authored request to disable bloom.
+#[derive(bevy::prelude::Resource, Clone, Copy, PartialEq, Debug, Default)]
+pub struct SceneBloomOverride {
+    pub intensity: Option<f32>,
 }
 
 impl Default for CommunicationLineSettings {

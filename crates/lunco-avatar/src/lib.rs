@@ -1138,6 +1138,7 @@ pub fn spawn_avatar_camera(
             (
                 lunco_render::scene_camera_look(None),
                 lunco_render::usd_default_perspective_projection(),
+                lunco_render::GraphicsCameraDefaults,
             ),
             FreeFlightCamera {
                 yaw,

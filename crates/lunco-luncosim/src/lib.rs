@@ -1837,8 +1837,7 @@ fn project_usd_policies(
 /// and syncs to peers (the prim rides the USD journal → each peer recomposes →
 /// each peer's projector applies) with no bespoke broadcast. Change-gated on
 /// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
-/// knobs are render/camera state (`Bloom` lives in `bevy_post_process`, under
-/// `ui`); the headless server has no cameras to apply to.
+/// knobs are render/camera state; the headless server has no cameras to apply to.
 /// What the scene AUTHORED, held independently of what currently exists to
 /// apply it to.
 ///
@@ -1853,10 +1852,9 @@ fn project_usd_policies(
 #[derive(Resource, Default, Clone, Copy)]
 pub struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
-    pub bloom_intensity: Option<f32>,
 }
 
-/// Apply [`AuthoredEnv`] to every camera/bloom that exists RIGHT NOW.
+/// Apply the authored environment exposure to every camera that exists RIGHT NOW.
 ///
 /// Runs every frame and is a no-op when the values already match, so a camera
 /// spawned (or respawned, or reparented on possession) long after the scene
@@ -1865,20 +1863,12 @@ pub struct AuthoredEnv {
 fn apply_authored_env(
     authored: Option<Res<AuthoredEnv>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
 ) {
     let Some(authored) = authored else { return };
     if let Some(ev) = authored.exposure_ev100 {
         for mut e in &mut q_exposure {
             if e.ev100 != ev {
                 e.ev100 = ev;
-            }
-        }
-    }
-    if let Some(bi) = authored.bloom_intensity {
-        for mut b in &mut q_bloom {
-            if b.intensity != bi {
-                b.intensity = bi;
             }
         }
     }
@@ -1889,7 +1879,7 @@ fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut authored: ResMut<AuthoredEnv>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
+    bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
@@ -1908,6 +1898,7 @@ fn project_env_settings(
     }
     *last = Some(signal);
 
+    let mut scene_bloom = None;
     for (_, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
@@ -1932,9 +1923,13 @@ fn project_env_settings(
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
-                authored.bloom_intensity = Some(bi);
-                for mut b in &mut q_bloom {
-                    b.intensity = bi;
+                if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity")
+                    && bi.is_finite()
+                    && bi >= 0.0
+                {
+                    scene_bloom = Some(bi);
+                } else if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
+                    warn!("ignoring invalid authored lunco:env:bloomIntensity on {prim}");
                 }
             }
             // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
@@ -1957,6 +1952,11 @@ fn project_env_settings(
             // `DistantLight` under the body it reflects from, so its brightness
             // and tint are `inputs:intensity` / `inputs:color` on that prim,
             // read by the standard light loader.
+        }
+    }
+    if let Some(mut override_value) = bloom_override {
+        if override_value.intensity != scene_bloom {
+            override_value.intensity = scene_bloom;
         }
     }
 }

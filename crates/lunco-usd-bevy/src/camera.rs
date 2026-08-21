@@ -125,6 +125,7 @@ pub(crate) fn instantiate_camera_prim(
     prim_type: Option<&str>,
     commands: &mut Commands,
     entity: Entity,
+    quality: lunco_render::RenderQualityProfile,
 ) -> bool {
     if prim_type != Some("Camera") {
         return false;
@@ -230,9 +231,13 @@ pub(crate) fn instantiate_camera_prim(
     let mut camera = commands.entity(entity);
     camera.try_insert((projection, pose));
     if is_viewport {
-        camera.try_insert(lunco_render::scene_camera_look(read_camera_exposure_ev100(
-            reader, sdf_path,
-        )));
+        camera.try_insert((
+            lunco_render::scene_camera_look_with_profile(
+                read_camera_exposure_ev100(reader, sdf_path),
+                quality,
+            ),
+            lunco_render::GraphicsCameraDefaults,
+        ));
     }
     if is_sensor {
         camera.try_insert(UsdSensorCamera);

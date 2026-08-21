@@ -16,8 +16,21 @@ use crate::RenderProfile;
 
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<RenderProfile>()
+        .init_resource::<lunco_render::RenderingQualitySettings>()
+        .init_resource::<lunco_render::SceneBloomOverride>()
         .add_observer(bind_scene_camera)
-        .add_systems(Update, rebind_changed_scene_camera);
+        .add_systems(
+            Update,
+            (
+                sync_new_scene_camera,
+                apply_graphics_camera_quality.run_if(
+                    resource_changed::<lunco_render::RenderingQualitySettings>
+                        .or_else(resource_changed::<lunco_render::SceneBloomOverride>),
+                ),
+                rebind_changed_scene_camera,
+            )
+                .chain(),
+        );
 }
 
 fn tonemapping_of(t: ToneMap) -> Tonemapping {
@@ -39,11 +52,6 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 }
 
 /// Attach the pipeline components a `SceneCamera` describes.
-///
-/// Note `Camera.hdr` is set from the intent BEFORE bloom is considered — bloom on a
-/// non-HDR target is a no-op that still pays for a downsample/upsample chain, which
-/// is precisely the bug (`R4`) four crates in this repo shipped. Here it is refused,
-/// loudly, instead of silently wasting the passes.
 fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderProfile) {
     let mut ec = commands.entity(e);
     let (tonemapping, msaa) = if profile.is_fast() {
@@ -93,6 +101,63 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera, profile: RenderP
             ec.try_remove::<Bloom>();
         }
     }
+}
+
+/// Apply the persisted Graphics camera settings to existing scene-camera intent.
+///
+/// Environment bloom is a USD-owned override in [`SceneBloomOverride`]. Its
+/// intensity survives a Graphics edit while the renderer-owned bloom shape still
+/// follows the current settings. Unauthored cameras are rebuilt from the same
+/// profile used by new USD/avatar cameras, so the menu is live rather than a
+/// startup-only write.
+fn apply_graphics_camera_quality(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    bloom_override: Res<lunco_render::SceneBloomOverride>,
+    mut cameras: Query<&mut SceneCamera, With<lunco_render::GraphicsCameraDefaults>>,
+) {
+    if let Err(reason) = settings.validate() {
+        warn!("invalid Graphics camera settings: {reason}; preserving current camera intent");
+        return;
+    }
+    let profile = settings.profile();
+    for mut camera in &mut cameras {
+        apply_camera_quality(&mut camera, profile, bloom_override.intensity);
+    }
+}
+
+fn sync_new_scene_camera(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    bloom_override: Res<lunco_render::SceneBloomOverride>,
+    mut cameras: Query<
+        &mut SceneCamera,
+        (
+            With<lunco_render::GraphicsCameraDefaults>,
+            Added<SceneCamera>,
+        ),
+    >,
+) {
+    if let Err(reason) = settings.validate() {
+        warn!("invalid Graphics camera settings: {reason}; new camera keeps its authored intent");
+        return;
+    }
+    let profile = settings.profile();
+    for mut camera in &mut cameras {
+        apply_camera_quality(&mut camera, profile, bloom_override.intensity);
+    }
+}
+
+fn apply_camera_quality(
+    camera: &mut SceneCamera,
+    profile: lunco_render::RenderQualityProfile,
+    bloom_override: Option<f32>,
+) {
+    camera.tone_map = profile.camera_tone_map;
+    camera.msaa = profile.camera_msaa;
+    let bloom_intensity = bloom_override.unwrap_or(profile.camera_bloom_intensity);
+    camera.bloom = (bloom_intensity > 0.0).then(|| {
+        lunco_render::BloomLook::new(bloom_intensity, profile.camera_bloom_low_frequency_boost)
+    });
+    camera.hdr = camera.bloom.is_some();
 }
 
 /// Configure the existing camera while it is still borrowed by this system.
@@ -187,7 +252,7 @@ mod tests {
         let e = a
             .world_mut()
             .spawn((SceneCamera {
-                bloom: Some(BloomLook::default()),
+                bloom: Some(BloomLook::new(0.15, 0.7)),
                 hdr: false,
                 ..Default::default()
             },))
@@ -205,7 +270,7 @@ mod tests {
         let mut a = app();
         let e = a
             .world_mut()
-            .spawn(SceneCamera::default().with_bloom(BloomLook::default()))
+            .spawn(SceneCamera::default().with_bloom(BloomLook::new(0.15, 0.7)))
             .id();
         a.update();
         assert!(a.world().entity(e).contains::<Bloom>());
@@ -218,7 +283,7 @@ mod tests {
         a.insert_resource(RenderProfile::Fast);
         let e = a
             .world_mut()
-            .spawn(SceneCamera::default().with_bloom(BloomLook::default()))
+            .spawn(SceneCamera::default().with_bloom(BloomLook::new(0.15, 0.7)))
             .id();
         a.update();
 
@@ -227,6 +292,68 @@ mod tests {
         assert_eq!(entity.get::<Tonemapping>(), Some(&Tonemapping::None));
         assert!(!entity.contains::<Hdr>());
         assert!(!entity.contains::<Bloom>());
+    }
+
+    #[test]
+    fn graphics_settings_update_only_engine_owned_cameras() {
+        let mut a = app();
+        let owned = a
+            .world_mut()
+            .spawn((SceneCamera::default(), lunco_render::GraphicsCameraDefaults))
+            .id();
+        let explicit = a
+            .world_mut()
+            .spawn(SceneCamera {
+                bloom: Some(BloomLook::new(0.4, 0.2)),
+                hdr: false,
+                ..Default::default()
+            })
+            .id();
+        a.update();
+
+        a.world_mut()
+            .resource_mut::<lunco_render::RenderingQualitySettings>()
+            .camera_bloom_intensity = 0.0;
+        a.update();
+
+        assert!(a
+            .world()
+            .entity(owned)
+            .get::<SceneCamera>()
+            .unwrap()
+            .bloom
+            .is_none());
+        assert!(a.world().entity(owned).get::<SceneCamera>().unwrap().hdr == false);
+        assert_eq!(
+            a.world()
+                .entity(explicit)
+                .get::<SceneCamera>()
+                .unwrap()
+                .bloom,
+            Some(BloomLook::new(0.4, 0.2))
+        );
+        assert!(!a.world().entity(explicit).get::<SceneCamera>().unwrap().hdr);
+    }
+
+    #[test]
+    fn authored_scene_bloom_overrides_graphics_default() {
+        let mut a = app();
+        let e = a
+            .world_mut()
+            .spawn((SceneCamera::default(), lunco_render::GraphicsCameraDefaults))
+            .id();
+        a.update();
+
+        a.world_mut()
+            .resource_mut::<lunco_render::SceneBloomOverride>()
+            .intensity = Some(0.42);
+        a.update();
+
+        assert_eq!(
+            a.world().entity(e).get::<SceneCamera>().unwrap().bloom,
+            Some(BloomLook::new(0.42, 0.7))
+        );
+        assert!(a.world().entity(e).get::<SceneCamera>().unwrap().hdr);
     }
 
     fn despawn_scene_cameras(mut commands: Commands, cameras: Query<Entity, With<SceneCamera>>) {

@@ -704,24 +704,17 @@ pub fn setup_big_space_hierarchy(
             // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
             // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
             //
-            // BLOOM IS DELIBERATELY OFF. This spawn used to carry a tuned `Bloom`, but
-            // `hdr` is set true NOWHERE in this repo (review finding `R4`), so that bloom
-            // rendered NOTHING while still paying for its downsample/upsample chain.
-            // Keeping it off is therefore what preserves today's actual output; turning it
-            // on would be a visual change smuggled in by a decoupling pass. If someone
-            // wants real bloom, that is a separate, deliberate decision:
-            // `SceneCamera::default().with_bloom(..)` — which turns HDR on for you, because
-            // bloom without HDR is exactly the bug `SceneCamera` exists to make
-            // unrepresentable.
-            //
-            // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
+            // Tone mapping, MSAA, and the unauthored bloom look come from the
+            // persisted Graphics profile. An authored LunCoEnvironment bloom value
+            // is applied later as the scene-owned override. SMAA was already
             // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
             // fix on main).
             // Grade + physical exposure from the ONE constructor every scene
             // camera uses (`lunco_render::scene_camera_look`), paired with the
             // canonical sun illuminance (single source of truth —
             // lunco_environment::LunarSun).
-            lunco_render::scene_camera_look(Some(ls.exposure_ev100)),
+            lunco_render::scene_camera_look_with_profile(Some(ls.exposure_ev100), sun_profile),
+            lunco_render::GraphicsCameraDefaults,
             Projection::Perspective(PerspectiveProjection {
                 near: 1.0,
                 far: 1.0e15,
