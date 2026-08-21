@@ -168,6 +168,16 @@ impl LocalGravity {
     }
 }
 
+fn clear_unresolved_local_gravity(
+    commands: &mut Commands,
+    entity: Entity,
+    existing: Option<&LocalGravity>,
+) {
+    if existing.is_some() {
+        commands.entity(entity).remove::<LocalGravity>();
+    }
+}
+
 /// Computes [`LocalGravity`] for every entity that has a [`Transform`].
 ///
 /// Sources the gravity vector from:
@@ -178,14 +188,16 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
-    q_bodies: Query<&GravityProvider>,
+    q_bodies: Query<Ref<GravityProvider>>,
+    mut removed_providers: RemovedComponents<GravityProvider>,
+    mut removed_body_links: RemovedComponents<GravityBody>,
     q_entities: Query<(
         Entity,
         Ref<Transform>,
         Option<&CellCoord>,
         Option<&ChildOf>,
         Option<&Grid>,
-        Option<&GravityBody>,
+        Option<Ref<GravityBody>>,
         Option<&LocalGravity>,
     )>,
     q_parents: Query<&ChildOf>,
@@ -198,14 +210,22 @@ pub fn compute_local_gravity(
     // is not). Entities that don't yet have a `LocalGravity` always run once.
     // This stops both the per-frame provider lookups and the change-detection
     // storm caused by blindly re-inserting an identical value every frame.
-    let gravity_changed =
-        gravity.is_changed() || active_frame.as_ref().is_some_and(Res::is_changed);
+    let provider_changed = q_bodies.iter().any(|provider| provider.is_changed())
+        || removed_providers.read().next().is_some();
+    let body_link_removed = removed_body_links.read().next().is_some();
+    let gravity_changed = gravity.is_changed()
+        || active_frame.as_ref().is_some_and(Res::is_changed)
+        || provider_changed
+        || body_link_removed;
     let frame_rotation = active_frame.as_deref().and_then(|frame| {
         lunco_core::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
             .map(|(_, rotation)| rotation.0)
     });
     for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
-        if existing.is_some() && !gravity_changed && !tf.is_changed() {
+        let body_link_changed = gravity_body
+            .as_ref()
+            .is_some_and(|body_link| body_link.is_changed());
+        if existing.is_some() && !gravity_changed && !tf.is_changed() && !body_link_changed {
             continue;
         }
         let g = match gravity.as_ref() {
@@ -217,15 +237,18 @@ pub fn compute_local_gravity(
             // second time and create a spurious horizontal acceleration.
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
-                let Some(body_link) = gravity_body else {
+                let Some(body_link) = gravity_body.as_deref() else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Ok(provider) = q_bodies.get(body_link.body_entity) else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Some((entity_world, _)) =
                     lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
                 else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Some((body_world, body_rotation)) = lunco_core::coords::world_pose(
@@ -234,6 +257,7 @@ pub fn compute_local_gravity(
                     &q_grids,
                     &q_spatial,
                 ) else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
