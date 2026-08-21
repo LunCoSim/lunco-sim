@@ -164,6 +164,8 @@ def Xform "CommsAntenna" (
             float lunco:lathe:apexRadius = 0.02
             float lunco:lathe:rimRadius = 0.58
             float lunco:lathe:focalLength = 0.35
+            int vVertexCount = 4
+            int vOrder = 3
             # White thermal-control paint — what a high-gain reflector is actually
             # finished in.
             color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]

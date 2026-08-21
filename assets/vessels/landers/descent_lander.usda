@@ -1433,6 +1433,8 @@ def Xform "DescentLander" (
         float lunco:lathe:exitRadius = 1.35
         float lunco:lathe:length = 1.90
         float lunco:lathe:contour = 0.55
+        int vVertexCount = 4
+        int vOrder = 3
         # SEATED IN the hull, not hanging under it. The hull cylinder (radius
         # 2.5, height 3.0, uncentred) spans y = -1.5 to +1.5, so a throat at
         # -1.65 left a 0.15 m gap of empty space between the bell and the body

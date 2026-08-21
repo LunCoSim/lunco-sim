@@ -374,8 +374,8 @@ impl UsdLathe {
 
 /// Read a prim's lathe parameters into a [`UsdLathe`].
 ///
-/// The profile comes from `lunco:lathe:*`; its sampling comes from the standard
-/// `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`.
+/// The profile comes from `lunco:lathe:*`; its sampling is required in the
+/// standard `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`.
 ///
 /// `None` when `lunco:lathe:profile` is absent — that is an ordinary hand-authored
 /// patch, read from its `points` array as before. An UNKNOWN profile token warns
@@ -447,15 +447,50 @@ pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> O
     // Cylinder / Cone / Capsule / Plane, and NurbsPatch is a RESULT format — points
     // and knots — not a generator), so there is no standard field to reuse for
     // `profile`, `throatRadius`, `contour` and friends.
+    let rings = read_required_nurbs_int(reader, path, "vVertexCount")? as u32;
+    let v_order = read_required_nurbs_int(reader, path, "vOrder")? as u32;
     Some(UsdLathe {
         profile,
-        rings: reader
-            .scalar::<i32>(path, "vVertexCount")
-            .unwrap_or(4)
-            .max(2) as u32,
-        v_order: reader.scalar::<i32>(path, "vOrder").unwrap_or(3).max(2) as u32,
+        rings,
+        v_order,
         left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
     })
+}
+
+/// Read a required standard `NurbsPatch` integer without inventing a sampling
+/// profile when an author omitted or mistyped it.
+pub(crate) fn read_required_nurbs_int(
+    reader: &crate::StageView<'_>,
+    path: &openusd::sdf::Path,
+    name: &str,
+) -> Option<usize> {
+    match reader.scalar::<i32>(path, name) {
+        Some(value) if value >= 2 => Some(value as usize),
+        Some(value) => {
+            error!(
+                "[usd-bevy] {} has invalid NurbsPatch {} = {value}; expected an integer >= 2",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {} has an authored NurbsPatch {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => {
+            error!(
+                "[usd-bevy] {} is missing required NurbsPatch {}",
+                path.as_str(),
+                name
+            );
+            None
+        }
+    }
 }
 
 /// Re-lathe the control net when a [`UsdLathe`]'s parameters change.

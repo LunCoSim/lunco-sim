@@ -4576,22 +4576,22 @@ fn read_patch_surface(
     }
 
     let points = read_mesh_points(reader, path)?;
-    let u_count = reader
-        .scalar::<i32>(path, "uVertexCount")
-        .unwrap_or(0)
-        .max(0) as usize;
-    let v_count = reader
-        .scalar::<i32>(path, "vVertexCount")
-        .unwrap_or(0)
-        .max(0) as usize;
-    if u_count < 2 || v_count < 2 {
+    let u_count = lathe::read_required_nurbs_int(reader, path, "uVertexCount")?;
+    let v_count = lathe::read_required_nurbs_int(reader, path, "vVertexCount")?;
+    let u_order = lathe::read_required_nurbs_int(reader, path, "uOrder")?;
+    let v_order = lathe::read_required_nurbs_int(reader, path, "vOrder")?;
+    if u_count < u_order || v_count < v_order {
+        error!(
+            "[usd-bevy] {} has NurbsPatch order/count mismatch: u {u_count}/{u_order}, v {v_count}/{v_order}",
+            path.as_str()
+        );
         return None;
     }
-    let u_order = reader.scalar::<i32>(path, "uOrder").unwrap_or(4).max(2) as usize;
-    let v_order = reader.scalar::<i32>(path, "vOrder").unwrap_or(4).max(2) as usize;
     // `reals` throughout — see `build_usd_curve_mesh`: a `float[]` knot vector under a
     // strict `double[]` read is empty, which silently selects the default clamped
-    // basis below instead of the authored one.
+    // basis below instead of the authored one. Missing knots still use the USD
+    // conventional clamped construction; counts and orders above are required
+    // structural fields and are never invented by the renderer.
     let mut u_knots = reader.reals(path, "uKnots");
     if u_knots.is_empty() {
         u_knots = crate::nurbs::default_clamped_knots(u_count, u_order);
@@ -4671,6 +4671,50 @@ def NurbsPatch "Nozzle" (
         assert!(
             read_patch_surface(&stage.view(), &path).is_none(),
             "an invalid focal length must not be replaced with a tiny denominator"
+        );
+    }
+
+    #[test]
+    fn lathe_api_requires_standard_sampling_fields() {
+        let recipe = canonical::StageRecipe::from_source(
+            "lathe.usda",
+            r#"#usda 1.0
+def NurbsPatch "Nozzle" (
+    prepend apiSchemas = ["LunCoLatheAPI"]
+)
+{
+    uniform token lunco:lathe:profile = "bell"
+    float lunco:lathe:throatRadius = 0.35
+    float lunco:lathe:exitRadius = 1.35
+    float lunco:lathe:length = 1.90
+    float lunco:lathe:contour = 0.55
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Nozzle").unwrap();
+        assert!(
+            read_patch_surface(&stage.view(), &path).is_none(),
+            "a parametric patch must author its standard sampling fields"
+        );
+    }
+
+    #[test]
+    fn authored_patch_requires_standard_sampling_fields() {
+        let recipe = canonical::StageRecipe::from_source(
+            "patch.usda",
+            r#"#usda 1.0
+def NurbsPatch "Patch"
+{
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Patch").unwrap();
+        assert!(
+            read_patch_surface(&stage.view(), &path).is_none(),
+            "an authored patch must not receive renderer sampling defaults"
         );
     }
 }
