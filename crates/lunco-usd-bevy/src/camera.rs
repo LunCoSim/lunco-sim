@@ -34,7 +34,7 @@
 //! transform propagation — that's "camera on a rover" for free.
 
 use bevy::prelude::*;
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::UsdRead;
 use crate::units::StageMetrics;
@@ -190,8 +190,14 @@ pub(crate) fn instantiate_camera_prim(
     // Camera purpose and pose are authored semantics, never hierarchy guesses.
     // An avatar is a viewport camera with an interactive pose. Every other
     // participating camera must apply LunCoCameraAPI and state both roles.
-    let is_avatar = reader.has_api_schema(sdf_path, "LunCoAvatarAPI")
-        && reader.boolean(sdf_path, "lunco:avatar").unwrap_or(false);
+    let is_avatar = if reader.has_api_schema(sdf_path, "LunCoAvatarAPI") {
+        match read_camera_bool(reader, sdf_path, "lunco:avatar", false) {
+            Some(value) => value,
+            None => return true,
+        }
+    } else {
+        false
+    };
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
     let (is_viewport, is_sensor, pose) = if is_avatar {
         (true, false, UsdCameraPose::Avatar)
@@ -202,20 +208,17 @@ pub(crate) fn instantiate_camera_prim(
         );
         (false, false, UsdCameraPose::Authored)
     } else {
-        let pose = match reader
-            .text(sdf_path, "lunco:cameraPose")
-            .as_deref()
-            .unwrap_or("authored")
-        {
-            "authored" => UsdCameraPose::Authored,
-            "mounted" => UsdCameraPose::Mounted,
-            other => {
-                warn!(
-                    "[usd-bevy] {} has invalid lunco:cameraPose '{other}'",
-                    sdf_path.as_str()
-                );
-                UsdCameraPose::Authored
-            }
+        let pose = match read_camera_token(
+            reader,
+            sdf_path,
+            "lunco:cameraPose",
+            "authored",
+            &["authored", "mounted"],
+        ) {
+            Some(value) if value == "authored" => UsdCameraPose::Authored,
+            Some(value) if value == "mounted" => UsdCameraPose::Mounted,
+            None => return true,
+            Some(_) => unreachable!("camera token helper validates its allowed values"),
         };
         // A mounted follower has a fixed camera-local offset. Time samples on
         // that same prim would create two pose authors, so reject the invalid
@@ -233,22 +236,19 @@ pub(crate) fn instantiate_camera_prim(
             );
             // Reject this camera from runtime roles. Reclassifying it as an
             // authored viewport would hide an invalid two-writer declaration.
-            (false, false, UsdCameraPose::Authored)
+            return true;
         } else {
-            match reader
-                .text(sdf_path, "lunco:cameraRole")
-                .as_deref()
-                .unwrap_or("viewport")
-            {
-                "viewport" => (true, false, pose),
-                "sensor" => (false, true, pose),
-                other => {
-                    warn!(
-                        "[usd-bevy] {} has invalid lunco:cameraRole '{other}'",
-                        sdf_path.as_str()
-                    );
-                    (false, false, pose)
-                }
+            match read_camera_token(
+                reader,
+                sdf_path,
+                "lunco:cameraRole",
+                "viewport",
+                &["viewport", "sensor"],
+            ) {
+                Some(value) if value == "viewport" => (true, false, pose),
+                Some(value) if value == "sensor" => (false, true, pose),
+                None => return true,
+                Some(_) => unreachable!("camera token helper validates its allowed values"),
             }
         }
     };
@@ -364,26 +364,14 @@ fn read_projection(
         return None;
     }
 
-    let projection_token = reader.text(path, "projection");
-    let is_ortho = match projection_token.as_deref() {
-        Some("perspective") => false,
-        Some("orthographic") => true,
-        Some(other) => {
-            error!(
-                "[usd-bevy] {} has unsupported camera projection token {other:?}",
-                path.as_str()
-            );
-            return None;
-        }
-        None if reader.has_authored_attribute(path, "projection") => {
-            error!(
-                "[usd-bevy] {} has an authored camera projection with an unsupported value type",
-                path.as_str()
-            );
-            return None;
-        }
-        None => false,
-    };
+    let projection_token = read_camera_token(
+        reader,
+        path,
+        "projection",
+        "perspective",
+        &["perspective", "orthographic"],
+    )?;
+    let is_ortho = projection_token == "orthographic";
 
     if is_ortho {
         // Orthographic apertures are **tenths of scene units** (USD's aperture
@@ -462,6 +450,83 @@ fn read_positive_camera_real(
         None if reader.has_authored_attribute(path, name) => {
             error!(
                 "[usd-bevy] {} has an authored camera {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => Some(schema_default),
+    }
+}
+
+/// Read a schema token while preserving the distinction between an omitted
+/// attribute (which may use its documented USD default) and malformed authored
+/// data. Custom camera-role tokens are control-plane data, so falling through to
+/// another role would create a second pose/viewport owner by accident.
+fn read_camera_token(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    schema_default: &str,
+    allowed: &[&str],
+) -> Option<String> {
+    match reader.attr_value(path, name) {
+        Some(Value::Token(value)) => {
+            let value = value.to_string();
+            if allowed.contains(&value.as_str()) {
+                Some(value)
+            } else {
+                error!(
+                    "[usd-bevy] {} has unsupported {} token `{}`",
+                    path.as_str(),
+                    name,
+                    value
+                );
+                None
+            }
+        }
+        Some(_) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => Some(schema_default.to_string()),
+    }
+}
+
+/// Read the standard USD bool without turning an authored type mismatch into
+/// `false`. The schema fallback remains available only when the attribute is
+/// genuinely omitted.
+fn read_camera_bool(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+    schema_default: bool,
+) -> Option<bool> {
+    match reader.attr_value(path, name) {
+        Some(Value::Bool(value)) => Some(value),
+        Some(_) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {} has authored {} with an unsupported value type",
                 path.as_str(),
                 name
             );
@@ -568,6 +633,21 @@ mod tests {
         let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
+    }
+
+    #[test]
+    fn authored_camera_projection_wrong_type_or_token_is_rejected() {
+        for projection in [
+            "string projection = \"orthographic\"",
+            "uniform token projection = \"fisheye\"",
+        ] {
+            let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
+            let recipe = crate::canonical::StageRecipe::from_source("camera.usda", &source);
+            let stage =
+                crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+            let path = SdfPath::new("/Camera").unwrap();
+            assert!(read_projection(&stage.view(), &path).is_none());
+        }
     }
 
     #[test]
