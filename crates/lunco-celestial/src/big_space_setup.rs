@@ -233,7 +233,7 @@ pub fn setup_big_space_hierarchy(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     grid_config: Option<Res<lunco_core::WorldGridConfig>>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
@@ -431,10 +431,7 @@ pub fn setup_big_space_hierarchy(
     // sun frozen at its authored rotation.
     //
     // Physical/render lighting STATE is established here; the LIGHT is not.
-    let sun_profile = quality.as_deref().map_or_else(
-        || lunco_render::RenderingQuality::Balanced.profile(),
-        |settings| settings.profile(),
-    );
+    let sun_profile = quality.profile();
     let sun = lunco_render::LunarSunShadow::for_profile(sun_profile);
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.

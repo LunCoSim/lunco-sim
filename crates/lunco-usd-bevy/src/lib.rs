@@ -100,6 +100,11 @@ pub struct UsdBevyPlugin;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
+        // USD mesh and light projection consumes the authoritative graphics
+        // settings. Initialise the documented default at this boundary so
+        // projectors never invent a separate quality profile.
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
+
         // `SetActiveCamera` (avatar-free camera switch). Registered here so a
         // static/headless USD world can switch cameras via the command bus/rhai
         // without pulling in the avatar plugin. The observer is generated +
@@ -1784,7 +1789,7 @@ fn on_usd_prim_added(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, vis, tf, is_instance_root, member)) = q.get(entity) else {
@@ -1802,10 +1807,7 @@ fn on_usd_prim_added(
             .ok()
             .is_some_and(|c| q_high_precision.contains(c.parent()));
     let preview_only = is_preview_only(entity, &q_child_of, &q_preview_only);
-    let requested_profile = quality.as_deref().map_or_else(
-        || lunco_render::RenderingQuality::Balanced.profile(),
-        |settings| settings.profile(),
-    );
+    let requested_profile = quality.profile();
 
     instantiate_usd_prim(
         entity,
@@ -1888,7 +1890,7 @@ pub fn sync_usd_visuals(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     use bevy::asset::AssetId;
     let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
@@ -1901,10 +1903,7 @@ pub fn sync_usd_visuals(
         return;
     }
 
-    let requested_profile = quality.as_deref().map_or_else(
-        || lunco_render::RenderingQuality::Balanced.profile(),
-        |settings| settings.profile(),
-    );
+    let requested_profile = quality.profile();
 
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
         if !loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
@@ -4519,15 +4518,12 @@ fn build_primitive_mesh(
 fn retessellate_primitive_meshes_on_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&UsdPrimitiveMesh, &Mesh3d, Option<&Name>)>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
-    let Some(settings) = quality else {
-        return;
-    };
-    if !settings.is_changed() {
+    if !quality.is_changed() {
         return;
     }
-    let profile = settings.profile();
+    let profile = quality.profile();
     for (primitive, handle, name) in &q {
         let Some(mesh) = build_primitive_mesh(primitive.0, profile) else {
             warn!(
@@ -4549,16 +4545,13 @@ fn retessellate_primitive_meshes_on_quality_change(
 fn retessellate_curve_meshes_on_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&UsdPrimPath, &Mesh3d, Option<&Name>), With<UsdCurveMesh>>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     canonical: NonSend<CanonicalStages>,
 ) {
-    let Some(settings) = quality else {
-        return;
-    };
-    if !settings.is_changed() {
+    if !quality.is_changed() {
         return;
     }
-    let profile = settings.profile();
+    let profile = quality.profile();
     for (prim_path, handle, name) in &q {
         let Some(stage) = canonical.get(prim_path.stage_handle.id()) else {
             continue;

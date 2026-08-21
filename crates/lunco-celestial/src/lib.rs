@@ -212,6 +212,10 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        // Celestial shell geometry uses the same authoritative graphics
+        // settings as USD projection. Initialise the documented default here
+        // so setup does not substitute a private Balanced profile.
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
         app.init_resource::<globe_lod::GlobeLodBudget>();
         // Celestial content always lives in the canonical persistent BigSpace
         // shell. Installing the shell here when a host has not already done so

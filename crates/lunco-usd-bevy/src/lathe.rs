@@ -562,12 +562,9 @@ pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdL
 pub fn regenerate_patch_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>), Changed<NurbsSurface>>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
-    let profile = quality.as_deref().map_or_else(
-        || lunco_render::RenderingQuality::Balanced.profile(),
-        |settings| settings.profile(),
-    );
+    let profile = quality.profile();
     for (surface, handle, name) in &q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(
@@ -590,15 +587,12 @@ pub fn regenerate_patch_meshes(
 pub fn retessellate_patch_meshes_on_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>)>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
-    let Some(settings) = quality else {
-        return;
-    };
-    if !settings.is_changed() {
+    if !quality.is_changed() {
         return;
     }
-    let profile = settings.profile();
+    let profile = quality.profile();
     for (surface, handle, name) in &q {
         let Some(mesh) = surface.mesh(profile) else {
             warn!(
