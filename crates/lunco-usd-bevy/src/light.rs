@@ -691,16 +691,12 @@ pub(crate) fn instantiate_light_prim(
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let width = convention.length(
-                reader
-                    .real_f32(sdf_path, "inputs:width")
-                    .unwrap_or(1.0) as f64,
-            ) as f32;
-            let height = convention.length(
-                reader
-                    .real_f32(sdf_path, "inputs:height")
-                    .unwrap_or(1.0) as f64,
-            ) as f32;
+            let width = convention
+                .length(reader.real_f32(sdf_path, "inputs:width").unwrap_or(1.0) as f64)
+                as f32;
+            let height = convention
+                .length(reader.real_f32(sdf_path, "inputs:height").unwrap_or(1.0) as f64)
+                as f32;
             // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
             // implements (see the long derivation there): with normalize OFF (the
             // schema default) `intensity` fixes radiance, so emitted power scales
@@ -982,8 +978,7 @@ def Xform "World"
 
         assert_eq!(read_light_range(&view, &lamp, 30.0, convention), 0.9);
         assert_eq!(
-            convention.length(view.real_f32(&lamp, "inputs:radius").unwrap() as f64)
-                as f32,
+            convention.length(view.real_f32(&lamp, "inputs:radius").unwrap() as f64) as f32,
             0.02
         );
         assert_eq!(read_shadow_distance(&view, &lamp, 1500.0, convention), 6.0);

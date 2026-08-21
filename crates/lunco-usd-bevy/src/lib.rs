@@ -1039,7 +1039,8 @@ fn instantiate_usd_prim_from_stage(
         // shadow path ray-marches a heightfield and has no azimuth slices.
         // It was parsed into a field nothing ever read — see
         // `lunco_core::HorizonShadowTerrain`.
-        if reader.boolean(&sdf_path, "lunco:terrain:horizonShadows")
+        if reader
+            .boolean(&sdf_path, "lunco:terrain:horizonShadows")
             .unwrap_or(false)
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();

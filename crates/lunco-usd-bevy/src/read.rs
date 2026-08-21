@@ -886,11 +886,7 @@ mod real_reader_tests {
         assert_eq!(view.real(&world, "f_val"), Some(2.5), "real reads float");
         assert_eq!(view.real(&world, "d_val"), Some(3.5), "real reads double");
         assert_eq!(view.real(&world, "i_val"), Some(4.0), "real reads int");
-        assert_eq!(
-            view.real(&world, "i64_val"),
-            Some(5.0),
-            "real reads int64"
-        );
+        assert_eq!(view.real(&world, "i64_val"), Some(5.0), "real reads int64");
 
         // `real_f32` (→ f32) likewise reads either precision.
         assert_eq!(

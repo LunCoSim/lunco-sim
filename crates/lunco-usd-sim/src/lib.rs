@@ -1242,10 +1242,7 @@ fn process_usd_sim_prim_read(
                 .unwrap_or(default.fade_end),
         });
     }
-    if reader
-        .boolean(&sdf_path, "lunco:waypoint")
-        .unwrap_or(false)
-    {
+    if reader.boolean(&sdf_path, "lunco:waypoint").unwrap_or(false) {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
     // Pointer behavior is scene intent, not a picking-backend concern.  The
@@ -1382,9 +1379,7 @@ fn process_usd_sim_prim_read(
     // `scalar::<String>` read silently misses the `bool`, so the avatar's camera is
     // never set up and the viewport is blank after a scene swap. Read it
     // type-tolerantly (same principle as the `text`/`real` reader family).
-    let is_avatar = reader
-        .boolean(&sdf_path, "lunco:avatar")
-        .unwrap_or(false);
+    let is_avatar = reader.boolean(&sdf_path, "lunco:avatar").unwrap_or(false);
     if is_avatar {
         info!(
             "Detected Avatar prim at {}, setting up camera",

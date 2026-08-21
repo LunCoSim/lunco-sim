@@ -366,10 +366,7 @@ pub fn insert_celestial_comms_components(
     // node, applies the `link.connected` verdict, and publishes link state. Pose
     // tracking follows automatically. `class` is an authored role the routing /
     // verdict policy reads — the core never interprets it.
-    if reader
-        .boolean(sdf_path, "lunco:linkNode")
-        .unwrap_or(false)
-    {
+    if reader.boolean(sdf_path, "lunco:linkNode").unwrap_or(false) {
         let d = lunco_celestial::link::LinkNode::default();
         commands
             .entity(entity)
@@ -388,10 +385,7 @@ pub fn insert_celestial_comms_components(
     // A Wi-Fi endpoint shares the generic link geometry observation but is
     // intentionally not part of `LinkState`: the latter remains governed by
     // the authored Earth-only direct-link policy.
-    if reader
-        .boolean(sdf_path, "lunco:wifiNode")
-        .unwrap_or(false)
-    {
+    if reader.boolean(sdf_path, "lunco:wifiNode").unwrap_or(false) {
         commands
             .entity(entity)
             .try_insert(lunco_celestial::wifi::WifiNode {
@@ -416,10 +410,7 @@ pub fn insert_celestial_comms_components(
     // NOT derived from `PhysicsCollisionAPI`: opacity is a material property, not
     // a collision one (a handrail collides but does not block; a radome may block
     // but not collide). See `LinkOccluder`.
-    if reader
-        .boolean(sdf_path, "lunco:occluder")
-        .unwrap_or(false)
-    {
+    if reader.boolean(sdf_path, "lunco:occluder").unwrap_or(false) {
         commands.entity(entity).try_insert((
             read_occluder_box(reader, sdf_path),
             // LinkOccluder is tested against LinkNode::SolarFramePose. The

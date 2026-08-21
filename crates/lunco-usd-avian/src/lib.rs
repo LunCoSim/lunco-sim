@@ -1574,10 +1574,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // track is better still than swinging — needs a way to say so without editing
     // the component. `over "YawJoint" { uniform bool physics:jointEnabled = false }`
     // is that way, and it is stock UsdPhysics rather than anything invented here.
-    if !view
-        .boolean(path, ptok::A_JOINT_ENABLED)
-        .unwrap_or(true)
-    {
+    if !view.boolean(path, ptok::A_JOINT_ENABLED).unwrap_or(true) {
         return None;
     }
     // **Units/axes convert here** (doc 41). `axis` names an axis of the STAGE's

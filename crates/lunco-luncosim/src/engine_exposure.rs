@@ -1105,8 +1105,7 @@ fn publish_lunica_schema_exposure(
         if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
             continue;
         }
-        if !view.is_active(&path) || view.boolean(&path, "lunco:ui:schemaNode") != Some(true)
-        {
+        if !view.is_active(&path) || view.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
             continue;
         }
         let title = view
