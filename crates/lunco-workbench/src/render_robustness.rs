@@ -508,29 +508,76 @@ fn render_quality_changed(
     settings.is_changed() || directional_map.is_changed()
 }
 
+#[derive(Clone, Debug)]
+struct ShadowCasterCandidate {
+    entity: Entity,
+    cascade_layers: usize,
+    /// Canonical identity used for admission ordering. It is independent of
+    /// ECS allocation order; the entity is retained only for the query target
+    /// and cache invalidation.
+    key: String,
+}
+
+fn shadow_caster_key(
+    entity: Entity,
+    global_id: Option<&lunco_core::GlobalEntityId>,
+    provenance: Option<&lunco_core::Provenance>,
+    name: Option<&Name>,
+) -> String {
+    if let Some(id) = global_id {
+        return format!("global:{:016x}", id.get());
+    }
+    if let Some(id) = provenance.and_then(lunco_core::identity::derive_id) {
+        return format!("provenance:{id:016x}");
+    }
+    if let Some(name) = name {
+        return format!("name:{}", name.as_str());
+    }
+    // Anonymous local lights have no semantic identity to order by. This is
+    // only a final tie-break for entities that are otherwise indistinguishable;
+    // authored/content lights reach one of the canonical keys above.
+    format!("anonymous:{:016x}", entity.to_bits())
+}
+
+fn sort_shadow_casters(casters: &mut [ShadowCasterCandidate]) {
+    casters.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.entity.cmp(&b.entity)));
+}
+
 fn shadow_configuration_signature(
-    directionals: &[(Entity, usize)],
-    points: &[Entity],
-    spots: &[Entity],
+    directionals: &[ShadowCasterCandidate],
+    points: &[ShadowCasterCandidate],
+    spots: &[ShadowCasterCandidate],
 ) -> u64 {
     let mut signature = 0xcbf29ce484222325_u64;
-    for (entity, cascades) in directionals {
-        signature ^= entity.to_bits();
+    for candidate in directionals {
+        signature ^= candidate.entity.to_bits();
         signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= *cascades as u64;
+        signature ^= candidate.cascade_layers as u64;
         signature = signature.wrapping_mul(0x100000001b3);
+        for byte in candidate.key.as_bytes() {
+            signature ^= u64::from(*byte);
+            signature = signature.wrapping_mul(0x100000001b3);
+        }
     }
-    for (entity, class) in points.iter().zip(std::iter::repeat(1_u64)) {
-        signature ^= entity.to_bits();
+    for candidate in points {
+        signature ^= candidate.entity.to_bits();
         signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= class;
+        signature ^= 1;
         signature = signature.wrapping_mul(0x100000001b3);
+        for byte in candidate.key.as_bytes() {
+            signature ^= u64::from(*byte);
+            signature = signature.wrapping_mul(0x100000001b3);
+        }
     }
-    for (entity, class) in spots.iter().zip(std::iter::repeat(2_u64)) {
-        signature ^= entity.to_bits();
+    for candidate in spots {
+        signature ^= candidate.entity.to_bits();
         signature = signature.wrapping_mul(0x100000001b3);
-        signature ^= class;
+        signature ^= 2;
         signature = signature.wrapping_mul(0x100000001b3);
+        for byte in candidate.key.as_bytes() {
+            signature ^= u64::from(*byte);
+            signature = signature.wrapping_mul(0x100000001b3);
+        }
     }
     signature
 }
@@ -926,12 +973,14 @@ fn set_error_handler(
 /// byte ceiling are suppressed and reported.
 ///
 /// The selection is deliberately stable: directional casters are considered
-/// first, then point lights, then spot lights, and each class is ordered by
-/// Bevy's stable [`Entity`] key. There is no camera-distance heuristic whose
-/// result can change merely because the viewer moved. The shared byte estimate
-/// is the admission test for every individual caster, so the resulting set is
-/// guaranteed to fit the published budget rather than merely fit three
-/// unrelated per-class caps.
+/// first, then point lights, then spot lights, and each class is ordered by the
+/// existing canonical entity identity (`GlobalEntityId`, provenance-derived
+/// identity, or its authored `Name`). Anonymous local lights use an ECS key
+/// only as a final tie-break because they have no semantic identity. There is
+/// no camera-distance heuristic whose result can change merely because the
+/// viewer moved. The shared byte estimate is the admission test for every
+/// individual caster, so the resulting set is guaranteed to fit the published
+/// budget rather than merely fit three unrelated per-class caps.
 fn apply_shadow_budget_policy(
     mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
@@ -944,16 +993,25 @@ fn apply_shadow_budget_policy(
         &mut bevy::light::DirectionalLight,
         &bevy::light::CascadeShadowConfig,
         Option<&ShadowMapSuppressed>,
+        Option<&lunco_core::GlobalEntityId>,
+        Option<&lunco_core::Provenance>,
+        Option<&Name>,
     )>,
     mut points: Query<(
         Entity,
         &mut bevy::light::PointLight,
         Option<&ShadowMapSuppressed>,
+        Option<&lunco_core::GlobalEntityId>,
+        Option<&lunco_core::Provenance>,
+        Option<&Name>,
     )>,
     mut spots: Query<(
         Entity,
         &mut bevy::light::SpotLight,
         Option<&ShadowMapSuppressed>,
+        Option<&lunco_core::GlobalEntityId>,
+        Option<&lunco_core::Provenance>,
+        Option<&Name>,
     )>,
 ) {
     let profile = settings.profile();
@@ -966,19 +1024,19 @@ fn apply_shadow_budget_policy(
     let admission_changed = state.policy_signature != Some(policy_signature)
         || state.budget_bytes != Some(admission_budget);
     if admission_changed {
-        for (entity, mut light, _, suppressed) in directionals.iter_mut() {
+        for (entity, mut light, _, suppressed, _, _, _) in directionals.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
-        for (entity, mut light, suppressed) in points.iter_mut() {
+        for (entity, mut light, suppressed, _, _, _) in points.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
-        for (entity, mut light, suppressed) in spots.iter_mut() {
+        for (entity, mut light, suppressed, _, _, _) in spots.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
@@ -986,27 +1044,41 @@ fn apply_shadow_budget_policy(
         }
     }
 
-    let mut directional_entities: Vec<(Entity, usize)> = directionals
+    let mut directional_entities: Vec<ShadowCasterCandidate> = directionals
         .iter_mut()
-        .filter_map(|(entity, light, config, _)| {
-            light
-                .shadow_maps_enabled
-                .then_some((entity, config.bounds.len().max(1)))
+        .filter_map(|(entity, light, config, _, global_id, provenance, name)| {
+            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
+                entity,
+                cascade_layers: config.bounds.len().max(1),
+                key: shadow_caster_key(entity, global_id, provenance, name),
+            })
         })
         .collect();
-    directional_entities.sort_by_key(|(entity, _)| *entity);
+    sort_shadow_casters(&mut directional_entities);
 
-    let mut point_entities: Vec<Entity> = points
+    let mut point_entities: Vec<ShadowCasterCandidate> = points
         .iter_mut()
-        .filter_map(|(entity, light, _)| light.shadow_maps_enabled.then_some(entity))
+        .filter_map(|(entity, light, _, global_id, provenance, name)| {
+            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
+                entity,
+                cascade_layers: 1,
+                key: shadow_caster_key(entity, global_id, provenance, name),
+            })
+        })
         .collect();
-    point_entities.sort();
+    sort_shadow_casters(&mut point_entities);
 
-    let mut spot_entities: Vec<Entity> = spots
+    let mut spot_entities: Vec<ShadowCasterCandidate> = spots
         .iter_mut()
-        .filter_map(|(entity, light, _)| light.shadow_maps_enabled.then_some(entity))
+        .filter_map(|(entity, light, _, global_id, provenance, name)| {
+            light.shadow_maps_enabled.then_some(ShadowCasterCandidate {
+                entity,
+                cascade_layers: 1,
+                key: shadow_caster_key(entity, global_id, provenance, name),
+            })
+        })
         .collect();
-    spot_entities.sort();
+    sort_shadow_casters(&mut spot_entities);
 
     let light_count = directionals.iter().count() + points.iter().count() + spots.iter().count();
     let enabled_caster_count =
@@ -1021,7 +1093,7 @@ fn apply_shadow_budget_policy(
             == Some(
                 directional_entities
                     .iter()
-                    .map(|(_, cascades)| *cascades)
+                    .map(|candidate| candidate.cascade_layers)
                     .sum(),
             )
         && state.budget_bytes == Some(admission_budget)
@@ -1050,11 +1122,11 @@ fn apply_shadow_budget_policy(
     let mut kept_points = Vec::new();
     let mut kept_spots = Vec::new();
 
-    for (index, (entity, cascades)) in directional_entities.iter().enumerate() {
+    for (index, candidate) in directional_entities.iter().enumerate() {
         let cost = estimate_shadow_allocation_bytes(
             directional_shadow_map.size,
             point_shadow_map.size,
-            *cascades,
+            candidate.cascade_layers,
             1,
             0,
             0,
@@ -1063,24 +1135,30 @@ fn apply_shadow_budget_policy(
             && cost <= admission_budget.saturating_sub(used_bytes);
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
-            kept_directionals.push(*entity);
-            if let Ok((_, _, _, suppressed)) = directionals.get_mut(*entity) {
+            kept_directionals.push(candidate.entity);
+            if let Ok((_, _, _, suppressed, _, _, _)) = directionals.get_mut(candidate.entity) {
                 if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
-                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                    commands
+                        .entity(candidate.entity)
+                        .remove::<ShadowMapSuppressed>();
                 }
             }
-        } else if let Ok((_, mut light, _, suppressed)) = directionals.get_mut(*entity) {
+        } else if let Ok((_, mut light, _, suppressed, _, _, _)) =
+            directionals.get_mut(candidate.entity)
+        {
             if suppressed.is_none() {
-                commands.entity(*entity).try_insert(ShadowMapSuppressed {
-                    was_enabled: true,
-                    reason: ShadowMapSuppressionReason::Budget,
-                });
+                commands
+                    .entity(candidate.entity)
+                    .try_insert(ShadowMapSuppressed {
+                        was_enabled: true,
+                        reason: ShadowMapSuppressionReason::Budget,
+                    });
             }
             light.shadow_maps_enabled = false;
         }
     }
 
-    for (index, entity) in point_entities.iter().enumerate() {
+    for (index, candidate) in point_entities.iter().enumerate() {
         let cost = estimate_shadow_allocation_bytes(
             directional_shadow_map.size,
             point_shadow_map.size,
@@ -1093,24 +1171,28 @@ fn apply_shadow_budget_policy(
             && cost <= admission_budget.saturating_sub(used_bytes);
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
-            kept_points.push(*entity);
-            if let Ok((_, _, suppressed)) = points.get_mut(*entity) {
+            kept_points.push(candidate.entity);
+            if let Ok((_, _, suppressed, _, _, _)) = points.get_mut(candidate.entity) {
                 if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
-                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                    commands
+                        .entity(candidate.entity)
+                        .remove::<ShadowMapSuppressed>();
                 }
             }
-        } else if let Ok((_, mut light, suppressed)) = points.get_mut(*entity) {
+        } else if let Ok((_, mut light, suppressed, _, _, _)) = points.get_mut(candidate.entity) {
             if suppressed.is_none() {
-                commands.entity(*entity).try_insert(ShadowMapSuppressed {
-                    was_enabled: true,
-                    reason: ShadowMapSuppressionReason::Budget,
-                });
+                commands
+                    .entity(candidate.entity)
+                    .try_insert(ShadowMapSuppressed {
+                        was_enabled: true,
+                        reason: ShadowMapSuppressionReason::Budget,
+                    });
             }
             light.shadow_maps_enabled = false;
         }
     }
 
-    for (index, entity) in spot_entities.iter().enumerate() {
+    for (index, candidate) in spot_entities.iter().enumerate() {
         let cost = estimate_shadow_allocation_bytes(
             directional_shadow_map.size,
             point_shadow_map.size,
@@ -1123,18 +1205,22 @@ fn apply_shadow_budget_policy(
             && cost <= admission_budget.saturating_sub(used_bytes);
         if keep {
             used_bytes = used_bytes.saturating_add(cost);
-            kept_spots.push(*entity);
-            if let Ok((_, _, suppressed)) = spots.get_mut(*entity) {
+            kept_spots.push(candidate.entity);
+            if let Ok((_, _, suppressed, _, _, _)) = spots.get_mut(candidate.entity) {
                 if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
-                    commands.entity(*entity).remove::<ShadowMapSuppressed>();
+                    commands
+                        .entity(candidate.entity)
+                        .remove::<ShadowMapSuppressed>();
                 }
             }
-        } else if let Ok((_, mut light, suppressed)) = spots.get_mut(*entity) {
+        } else if let Ok((_, mut light, suppressed, _, _, _)) = spots.get_mut(candidate.entity) {
             if suppressed.is_none() {
-                commands.entity(*entity).try_insert(ShadowMapSuppressed {
-                    was_enabled: true,
-                    reason: ShadowMapSuppressionReason::Budget,
-                });
+                commands
+                    .entity(candidate.entity)
+                    .try_insert(ShadowMapSuppressed {
+                        was_enabled: true,
+                        reason: ShadowMapSuppressionReason::Budget,
+                    });
             }
             light.shadow_maps_enabled = false;
         }
@@ -1142,8 +1228,8 @@ fn apply_shadow_budget_policy(
 
     let directional_layers = directional_entities
         .iter()
-        .filter(|(entity, _)| kept_directionals.contains(entity))
-        .map(|(_, cascades)| *cascades)
+        .filter(|candidate| kept_directionals.contains(&candidate.entity))
+        .map(|candidate| candidate.cascade_layers)
         .sum::<usize>();
     let estimated_mib = used_bytes as f64 / (1024.0 * 1024.0);
     let shed_count = enabled_caster_count
@@ -1191,12 +1277,20 @@ fn apply_shadow_budget_policy(
             .filter_map(|entity| {
                 directional_entities
                     .iter()
-                    .find(|(candidate, _)| candidate == entity)
-                    .copied()
+                    .find(|candidate| candidate.entity == *entity)
+                    .cloned()
             })
             .collect::<Vec<_>>(),
-        &kept_points,
-        &kept_spots,
+        &point_entities
+            .iter()
+            .filter(|candidate| kept_points.contains(&candidate.entity))
+            .cloned()
+            .collect::<Vec<_>>(),
+        &spot_entities
+            .iter()
+            .filter(|candidate| kept_spots.contains(&candidate.entity))
+            .cloned()
+            .collect::<Vec<_>>(),
     ));
 }
 
@@ -1702,6 +1796,61 @@ mod tests {
         assert_eq!(enabled, 1);
         assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) <= 16 * 1024 * 1024);
         assert!(app.world().get_resource::<RenderWarning>().is_some());
+    }
+
+    #[test]
+    fn shadow_budget_orders_casters_by_canonical_identity_not_spawn_order() {
+        let mut app = App::new();
+        let mut settings = RenderingQualitySettings::default();
+        settings.directional_shadow_map_size = 1024;
+        settings.point_shadow_map_size = 512;
+        settings.max_point_shadow_casters = 2;
+        settings.shadow_budget_bytes = 16 * 1024 * 1024;
+        app.insert_resource(settings);
+        app.init_resource::<ShadowAdmissionState>();
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        app.add_systems(PostUpdate, apply_shadow_budget_policy);
+
+        // The first entity has the lower ECS allocation key but the higher
+        // canonical identity. The later-spawned entity must win admission.
+        let spawned_first = app
+            .world_mut()
+            .spawn((
+                bevy::light::PointLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                lunco_core::GlobalEntityId::from_raw(20),
+                Name::new("ZetaLamp"),
+            ))
+            .id();
+        let spawned_second = app
+            .world_mut()
+            .spawn((
+                bevy::light::PointLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                lunco_core::GlobalEntityId::from_raw(10),
+                Name::new("AlphaLamp"),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(
+            !app.world()
+                .get::<bevy::light::PointLight>(spawned_first)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            app.world()
+                .get::<bevy::light::PointLight>(spawned_second)
+                .unwrap()
+                .shadow_maps_enabled
+        );
     }
 
     #[test]
