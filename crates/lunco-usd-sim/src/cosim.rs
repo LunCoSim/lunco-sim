@@ -3952,9 +3952,7 @@ pub fn spawn_usd_child(
     // Pre-populate the translate so physics sees the spawn offset before the
     // observer refines the full transform (matches the loader's child branch).
     let sdf_path = SdfPath::new(path).ok()?;
-    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
-        .map(Transform::from_translation)
-        .unwrap_or_default();
+    let tf = lunco_usd_bevy::local_transform_at(reader, &sdf_path, 0.0).unwrap_or_default();
     spawn_usd_child_with_translate(world, stage_handle_id, path, tf)
 }
 

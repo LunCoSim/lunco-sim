@@ -284,8 +284,8 @@ pub(crate) fn apply_translates_live(
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::get_attribute_as_vec3(&view, &sp, TRANSLATE_ATTR)
-                    .map(|v| (p.clone(), v))
+                lunco_usd_bevy::local_transform_at(&view, &sp, 0.0)
+                    .map(|transform| (p.clone(), transform.translation))
             })
             .collect()
     };
@@ -463,10 +463,8 @@ pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, 
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::get_attribute_as_vec3(&view, &sp, ROTATE_ATTR)
-                    // Degrees → quat, via the canonical converter, so the Euler
-                    // order lives in exactly one place.
-                    .map(|deg| (p.clone(), lunco_usd_bevy::euler_xyz_deg_to_quat(deg)))
+                lunco_usd_bevy::local_transform_at(&view, &sp, 0.0)
+                    .map(|transform| (p.clone(), transform.rotation))
             })
             .collect()
     };
@@ -783,10 +781,7 @@ pub(crate) fn reconcile_structural_live(
                     let stages = world.non_send::<CanonicalStages>();
                     stages
                         .get(id)
-                        .and_then(|cs| {
-                            lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
-                        })
-                        .map(Transform::from_translation)
+                        .and_then(|cs| lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0))
                         .unwrap_or_default()
                 };
                 lunco_usd_sim::cosim::spawn_usd_child_with_translate(world, id, path, tf);
@@ -819,11 +814,12 @@ pub(crate) fn reconcile_structural_live(
                         return;
                     };
                     stages.get(id).and_then(|cs| {
-                        lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
+                        lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0)
+                            .map(|transform| transform.translation)
                     })
                 };
-                if let Some(v) = v {
-                    seat_authored_translate(world, entity, v);
+                if let Some(translate) = v {
+                    seat_authored_translate(world, entity, translate);
                 }
             }
             _ => {}
