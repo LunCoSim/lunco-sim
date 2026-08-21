@@ -703,20 +703,14 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
 /// panel-owned content cards. Keeping the decision here prevents one tab from
 /// accidentally becoming transparent while another still paints an opaque
 /// rectangle over the scene.
-#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(
+    Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug, Default,
+)]
 pub struct WorkbenchAppearanceSettings {
     /// Let the scene show through every dock/tab content body and its standard
     /// panel surface. The default keeps the themed mantle surface everywhere.
     #[serde(default)]
     pub transparent_tab_content: bool,
-}
-
-impl Default for WorkbenchAppearanceSettings {
-    fn default() -> Self {
-        Self {
-            transparent_tab_content: false,
-        }
-    }
 }
 
 impl SettingsSection for WorkbenchAppearanceSettings {
