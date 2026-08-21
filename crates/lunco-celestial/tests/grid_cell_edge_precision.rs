@@ -108,7 +108,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
         let origin = world
             .spawn((Transform::default(), CellCoord::default(), FloatingOrigin))
             .id();
-        world.entity_mut(surface_e).add_child(origin);
+        world.entity_mut(origin).insert(ChildOf(surface_e));
         let body_e = world
             .spawn((body, Transform::from_translation(moon_tf), moon_cell))
             .add_children(&[surface_e])
