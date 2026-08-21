@@ -76,7 +76,7 @@ pub mod view;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector, StageRecipe};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
-pub use light::{get_attribute_as_bool, UsdAuthoredLight};
+pub use light::UsdAuthoredLight;
 pub use read::{AttrUiHint, UsdRead};
 pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};
 use usd_data::UsdDataExt;
@@ -1039,7 +1039,7 @@ fn instantiate_usd_prim_from_stage(
         // shadow path ray-marches a heightfield and has no azimuth slices.
         // It was parsed into a field nothing ever read — see
         // `lunco_core::HorizonShadowTerrain`.
-        if light::get_attribute_as_bool(reader, &sdf_path, "lunco:terrain:horizonShadows")
+        if reader.boolean(&sdf_path, "lunco:terrain:horizonShadows")
             .unwrap_or(false)
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();
@@ -1647,7 +1647,9 @@ fn instantiate_usd_prim_from_stage(
             // whether the prim is Grid-direct OR nested under a referenced scene.
             // Scenes author `spawnable = false` (never a target); terrain/props
             // without the flag fall through to the leaf as before.
-            if light::get_attribute_as_bool(reader, &child_path, "lunco:spawnable").unwrap_or(false)
+            if reader
+                .boolean(&child_path, "lunco:spawnable")
+                .unwrap_or(false)
             {
                 commands
                     .entity(child_entity)
@@ -2469,8 +2471,9 @@ fn apply_standard_material(
     // such as an engine plume: add radiance without occluding the terrain behind
     // it. Read it here, at the USD material boundary, so every additive surface
     // (not only this episode's plume) gets the same render semantics.
-    let additive =
-        light::get_attribute_as_bool(reader, sdf_path, "lunco:surface:additive").unwrap_or(false);
+    let additive = reader
+        .boolean(sdf_path, "lunco:surface:additive")
+        .unwrap_or(false);
     let alpha_mode = if additive {
         SurfaceAlpha::Add
     } else if opacity_threshold > 0.0 {
@@ -2528,8 +2531,7 @@ fn apply_standard_material(
             // USD's fallback is `false`, and that is kept: back-face culling is the
             // right default for closed solids and halves the fragment work. An asset
             // that opens itself up asks for the other behaviour explicitly.
-            double_sided: light::get_attribute_as_bool(reader, sdf_path, "doubleSided")
-                .unwrap_or(false),
+            double_sided: reader.boolean(sdf_path, "doubleSided").unwrap_or(false),
             // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
             // reads it on the gprim and Composer surfaces it as the mesh's "Cast
             // Shadows" toggle, so a scene authored there arrives here with its shadow
@@ -2540,12 +2542,9 @@ fn apply_standard_material(
             // hard shadow until this says otherwise. Read on the GPRIM, not the shader
             // — two prims sharing one material can disagree about casting, and
             // `material:binding` is not the place to say so.
-            no_shadow_cast: light::get_attribute_as_bool(
-                reader,
-                sdf_path,
-                "primvars:doNotCastShadows",
-            )
-            .unwrap_or(false),
+            no_shadow_cast: reader
+                .boolean(sdf_path, "primvars:doNotCastShadows")
+                .unwrap_or(false),
             ..default()
         },
     ));

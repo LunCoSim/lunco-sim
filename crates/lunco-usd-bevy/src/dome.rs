@@ -216,7 +216,8 @@ pub fn read_dome_environment(
             .real_f32(sdf_path, "lunco:dome:faceSize")
             .map(|f| f as u32)
             .unwrap_or(DEFAULT_FACE_SIZE),
-        skybox: crate::light::get_attribute_as_bool(reader, sdf_path, "lunco:dome:skybox")
+        skybox: reader
+            .boolean(sdf_path, "lunco:dome:skybox")
             .unwrap_or(true),
     })
 }

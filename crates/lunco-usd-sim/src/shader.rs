@@ -225,16 +225,15 @@ fn apply_usd_shader_material_read(
     // it has to be carried here too because taking the shader path REMOVES the
     // `PbrLook`, which dropped the author's shadow intent on the floor the moment a
     // prim gained a `.wgsl`.
-    let no_shadow_cast =
-        lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
-            .unwrap_or(false);
+    let no_shadow_cast = reader
+        .boolean(sdf_path, "primvars:doNotCastShadows")
+        .unwrap_or(false);
     // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
     // the two above and carried for the same reason: the PBR path maps it to
     // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. The sky
     // dome is the case that cannot work without it — viewed from INSIDE, a culled
     // dome shows nothing (or, from outside, its far hemisphere: a disc of sky).
-    let double_sided =
-        lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "doubleSided").unwrap_or(false);
+    let double_sided = reader.boolean(sdf_path, "doubleSided").unwrap_or(false);
     // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
     // is per-instance — four landing legs bound to one strut material each report
     // their own load — so the material must be private, or the cache paints every
@@ -262,7 +261,8 @@ fn apply_usd_shader_material_read(
     // farther away still shows through it. That is what lets a finite starfield
     // dome sit 20 km out without clipping the bodies the ephemeris places at
     // 10^8 m and beyond; an opaque dome swallows the whole sky.
-    let alpha = if lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "lunco:surface:additive")
+    let alpha = if reader
+        .boolean(sdf_path, "lunco:surface:additive")
         .unwrap_or(false)
     {
         SurfaceAlpha::Add

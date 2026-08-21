@@ -291,6 +291,19 @@ pub trait UsdRead {
         }
     }
 
+    /// Read a boolean attribute, accepting USD's native `bool` and integer
+    /// spellings used by some exporters. Integer authoring follows the usual
+    /// USD convention: zero is false and any non-zero value is true.
+    /// Provided.
+    fn boolean(&self, prim: &SdfPath, name: &str) -> Option<bool> {
+        match self.attr_value(prim, name)? {
+            Value::Bool(value) => Some(value),
+            Value::Int(value) => Some(value != 0),
+            Value::Int64(value) => Some(value != 0),
+            _ => None,
+        }
+    }
+
     /// The timeSamples-or-default [`real`](Self::real) — precision-tolerant sibling
     /// of [`scalar_at`](Self::scalar_at) for animated real channels. Provided.
     fn real_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f64> {

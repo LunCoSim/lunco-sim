@@ -151,7 +151,7 @@ fn dome_intensity(data: &openusd::sdf::Data, prim: &SdfPath) -> Option<f32> {
 
 /// Scalar `default` field on `prim`'s attribute `attr`, tolerant of
 /// `float`/`double`/`int` authoring — the layer-data twin of
-/// [`get_attribute_as_f32`].
+/// [`UsdRead::real_f32`].
 fn field_f32(data: &openusd::sdf::Data, prim: &SdfPath, attr: &str) -> Option<f32> {
     use crate::usd_data::UsdDataExt;
     let attr = prim.append_property(attr).ok()?;
@@ -214,9 +214,13 @@ pub(crate) fn read_intensity_with_exposure(
 /// rule, shared by every light arm here and the dome tint in `dome.rs`.
 pub(crate) fn read_light_color(reader: &crate::StageView<'_>, path: &SdfPath) -> Vec3 {
     let color = crate::get_attribute_as_vec3(reader, path, "inputs:color").unwrap_or(Vec3::ONE);
-    if get_attribute_as_bool(reader, path, "inputs:enableColorTemperature").unwrap_or(false) {
-        let kelvin =
-            get_attribute_as_f32(reader, path, "inputs:colorTemperature").unwrap_or(6500.0);
+    if reader
+        .boolean(path, "inputs:enableColorTemperature")
+        .unwrap_or(false)
+    {
+        let kelvin = reader
+            .real_f32(path, "inputs:colorTemperature")
+            .unwrap_or(6500.0);
         color * blackbody_rgb(kelvin)
     } else {
         color
@@ -264,23 +268,6 @@ fn rect_area_scale(normalize: bool, width: f32, height: f32) -> f32 {
     }
 }
 
-/// Bool attribute reader (also accepts `int` 0/1 authoring).
-///
-/// Public because the shader-look authoring in `lunco-usd-sim` reads
-/// `primvars:doNotCastShadows` through the same rules the `PbrLook` path uses —
-/// two spellings of one primvar would be a drift bug waiting to happen.
-pub fn get_attribute_as_bool(
-    reader: &crate::StageView<'_>,
-    path: &SdfPath,
-    attr: &str,
-) -> Option<bool> {
-    match reader.attr_value(path, attr)? {
-        Value::Bool(b) => Some(b),
-        Value::Int(i) => Some(i != 0),
-        _ => None,
-    }
-}
-
 /// Attenuation cutoff for a local light, in metres.
 ///
 /// `LunCoLightAPI` declares `lunco:light:range` with a fallback of `0` and defines
@@ -297,7 +284,7 @@ fn read_light_range(
     default: f32,
     convention: crate::units::ConventionTransform,
 ) -> f32 {
-    match get_attribute_as_f32(reader, path, "lunco:light:range") {
+    match reader.real_f32(path, "lunco:light:range") {
         Some(r) if r > 0.0 => convention.length(r as f64) as f32,
         _ => default,
     }
@@ -317,7 +304,7 @@ fn read_shadow_distance(
     default: f32,
     convention: crate::units::ConventionTransform,
 ) -> f32 {
-    match get_attribute_as_f32(reader, path, "inputs:shadow:distance") {
+    match reader.real_f32(path, "inputs:shadow:distance") {
         Some(d) if d > 0.0 => convention.length(d as f64) as f32,
         _ => default,
     }
@@ -343,7 +330,9 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// `inputs:shadow:enable = false` — which shipped local lights now do — so the
 /// scene states its own render budget and the engine reads it.
 fn read_shadow_enable(reader: &crate::StageView<'_>, path: &SdfPath) -> bool {
-    get_attribute_as_bool(reader, path, "inputs:shadow:enable").unwrap_or(USDLUX_SHADOW_ENABLE)
+    reader
+        .boolean(path, "inputs:shadow:enable")
+        .unwrap_or(USDLUX_SHADOW_ENABLE)
 }
 
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
@@ -561,8 +550,9 @@ pub(crate) fn instantiate_light_prim(
                     .real_f32(sdf_path, "inputs:radius")
                     .unwrap_or(DEFAULT_SPHERE_RADIUS) as f64,
             ) as f32;
-            let normalize =
-                get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
+            let normalize = reader
+                .boolean(sdf_path, "inputs:normalize")
+                .unwrap_or(false);
             // `max(0)`: a negative radius is meaningless and would still square to a
             // positive scale, quietly brightening the light.
             let area_scale = if normalize {
@@ -716,8 +706,9 @@ pub(crate) fn instantiate_light_prim(
             // schema default) `intensity` fixes radiance, so emitted power scales
             // with the emitting area. For a rect A = w·h, and the ratio against
             // the 1×1 m schema fallback makes an unauthored size exactly neutral.
-            let normalize =
-                get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
+            let normalize = reader
+                .boolean(sdf_path, "inputs:normalize")
+                .unwrap_or(false);
             let area_scale = rect_area_scale(normalize, width, height);
             let intensity_lm = base_lm * area_scale;
             let range = read_light_range(
