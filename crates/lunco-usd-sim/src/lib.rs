@@ -3134,7 +3134,10 @@ fn setup_physical_wheel(
         // second, unauthored aerodynamic-style drag on the vehicle (≈22 N at
         // cruise) that the raycast rover — whose wheels are not bodies — could not
         // have. Rolling drag is the bearing term above; there is no air on the Moon.
-        AngularDamping(params.bearing_damping / params.axle_inertia().max(1e-6)),
+        // `WheelParams::read` rejects every non-finite/non-positive wheel input,
+        // so the authored inertia is already finite and positive here. Do not
+        // hide an invalid projection behind a numerical floor.
+        AngularDamping(params.bearing_damping / params.axle_inertia()),
         // Continuous collision detection: a thin, fast-falling wheel cylinder can
         // pass THROUGH the one-sided terrain heightfield in a single step (and once
         // below a one-sided surface, no contact ever pushes it back — it falls
