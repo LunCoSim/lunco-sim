@@ -40,8 +40,8 @@
 //! ## Shadow quality knobs
 //!
 //! The sun's shadow range is standard `UsdLuxShadowAPI`:
-//! `inputs:shadow:distance`. Non-positive means the configured Graphics
-//! default, since UsdLux's -1 "no limit" has no meaning for a cascade split.
+//! `inputs:shadow:distance`. USD's -1 "no limit" maps to the configured Graphics
+//! default, since a cascade shadow map has no unlimited split.
 //! Texel density scales inversely with it, so a scene wanting crisp near-field
 //! shadows over a huge terrain authors a shorter distance.
 //!
@@ -58,6 +58,12 @@ use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
 use crate::read::UsdRead;
+
+/// An authored light attribute could not be interpreted without inventing a
+/// replacement value. The importer logs the precise prim/property and refuses
+/// that light; live edits retain the previous valid state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightReadError;
 
 /// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
 /// (`DomeLight`) — i.e. one that establishes how the whole scene is lit.
@@ -194,17 +200,61 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
 /// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
 /// turned into a Bevy light — the *unit* of the result depends on the target
 /// component (lux for `DirectionalLight`, lumens for `Point`/`Spot`/`RectLight`),
-/// but the photometric conversion is identical, so it lives here once.
-pub(crate) fn read_intensity_with_exposure(
+/// but the photometric conversion is identical, so it lives here once. `Err`
+/// means an authored intensity/exposure could not be interpreted safely.
+pub fn read_intensity_with_exposure(
     reader: &crate::StageView<'_>,
     path: &SdfPath,
     default_intensity: f32,
-) -> f32 {
-    let intensity = reader
-        .real_f32(path, "inputs:intensity")
-        .unwrap_or(default_intensity);
-    let exposure = reader.real_f32(path, "inputs:exposure").unwrap_or(0.0);
-    intensity * exposure.exp2()
+) -> Result<f32, LightReadError> {
+    let intensity =
+        read_authored_real(reader, path, "inputs:intensity")?.unwrap_or(default_intensity);
+    let exposure = read_authored_real(reader, path, "inputs:exposure")?.unwrap_or(0.0);
+    let scaled = intensity * exposure.exp2();
+    if scaled.is_finite() && scaled >= 0.0 {
+        Ok(scaled)
+    } else {
+        error!(
+            "[usd-bevy] {} has non-finite or negative light intensity after exposure",
+            path.as_str()
+        );
+        Err(LightReadError)
+    }
+}
+
+/// Read a real-valued USD light attribute only when an authored opinion exists.
+/// Missing attributes retain the documented USD/Graphics default; malformed or
+/// non-finite authored values are rejected instead of being converted into a
+/// plausible-looking light.
+fn read_authored_real(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+) -> Result<Option<f32>, LightReadError> {
+    let has_authored_value = reader.has_authored_attribute(path, name);
+    let has_connection = !reader.connections(path, name).is_empty();
+    if !has_authored_value && !has_connection {
+        return Ok(None);
+    }
+    match reader.real_f32(path, name) {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        Some(_) => {
+            error!(
+                "[usd-bevy] {} has non-finite authored light attribute {}",
+                path.as_str(),
+                name
+            );
+            Err(LightReadError)
+        }
+        None => {
+            error!(
+                "[usd-bevy] {} has authored light attribute {} with an unsupported type",
+                path.as_str(),
+                name
+            );
+            Err(LightReadError)
+        }
+    }
 }
 
 /// A UsdLux light's effective linear-RGB colour: `inputs:color` (schema
@@ -212,19 +262,65 @@ pub(crate) fn read_intensity_with_exposure(
 /// `inputs:colorTemperature` (fallback 6500 K) when
 /// `inputs:enableColorTemperature` is authored `true` — the `UsdLuxLightAPI`
 /// rule, shared by every light arm here and the dome tint in `dome.rs`.
-pub(crate) fn read_light_color(reader: &crate::StageView<'_>, path: &SdfPath) -> Vec3 {
-    let color = crate::get_attribute_as_vec3(reader, path, "inputs:color").unwrap_or(Vec3::ONE);
-    if reader
-        .boolean(path, "inputs:enableColorTemperature")
-        .unwrap_or(false)
+pub(crate) fn read_light_color(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Vec3, LightReadError> {
+    let color = if reader.has_authored_attribute(path, "inputs:color")
+        || !reader.connections(path, "inputs:color").is_empty()
     {
-        let kelvin = reader
-            .real_f32(path, "inputs:colorTemperature")
-            .unwrap_or(6500.0);
-        color * blackbody_rgb(kelvin)
-    } else {
+        let Some(color) = crate::get_attribute_as_vec3(reader, path, "inputs:color") else {
+            error!(
+                "[usd-bevy] {} has authored inputs:color with an unsupported type",
+                path.as_str()
+            );
+            return Err(LightReadError);
+        };
+        if !color.is_finite() || color.min_element() < 0.0 {
+            error!(
+                "[usd-bevy] {} has invalid authored inputs:color = {color:?}",
+                path.as_str()
+            );
+            return Err(LightReadError);
+        }
         color
+    } else {
+        Vec3::ONE
+    };
+    let enabled =
+        read_authored_bool(reader, path, "inputs:enableColorTemperature")?.unwrap_or(false);
+    if !enabled {
+        return Ok(color);
     }
+    let kelvin = read_authored_real(reader, path, "inputs:colorTemperature")?.unwrap_or(6500.0);
+    let Some(temperature) = blackbody_rgb(kelvin) else {
+        error!(
+            "[usd-bevy] {} has unsupported authored color temperature {kelvin}; expected a finite value in [1667, 25000] K",
+            path.as_str()
+        );
+        return Err(LightReadError);
+    };
+    Ok(color * temperature)
+}
+
+/// Read an authored USD boolean, preserving the distinction between an omitted
+/// attribute and a malformed value.
+fn read_authored_bool(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    name: &str,
+) -> Result<Option<bool>, LightReadError> {
+    if !reader.has_authored_attribute(path, name) && reader.connections(path, name).is_empty() {
+        return Ok(None);
+    }
+    reader.boolean(path, name).map(Some).ok_or_else(|| {
+        error!(
+            "[usd-bevy] {} has authored light attribute {} with an unsupported type",
+            path.as_str(),
+            name
+        );
+        LightReadError
+    })
 }
 
 /// Linear-RGB colour of a Planckian (blackbody) radiator at `kelvin`, using the
@@ -232,8 +328,11 @@ pub(crate) fn read_light_color(reader: &crate::StageView<'_>, path: &SdfPath) ->
 /// xy, converted through XYZ to linear sRGB and normalized to a max component of
 /// 1 — so 6500 K comes out ≈ white, low temperatures warm orange, high ones
 /// blue. Input is clamped to the approximation's 1667–25000 K validity range.
-fn blackbody_rgb(kelvin: f32) -> Vec3 {
-    let t = f64::from(kelvin.clamp(1667.0, 25000.0));
+fn blackbody_rgb(kelvin: f32) -> Option<Vec3> {
+    if !kelvin.is_finite() || !(1667.0..=25000.0).contains(&kelvin) {
+        return None;
+    }
+    let t = f64::from(kelvin);
     let x = if t <= 4000.0 {
         -0.2661239e9 / (t * t * t) - 0.2343589e6 / (t * t) + 0.8776956e3 / t + 0.179910
     } else {
@@ -252,7 +351,8 @@ fn blackbody_rgb(kelvin: f32) -> Vec3 {
     let g = -0.9692660 * big_x + 1.8760108 + 0.0415560 * big_z;
     let b = 0.0556434 * big_x - 0.2040259 + 1.0572252 * big_z;
     let rgb = Vec3::new(r.max(0.0) as f32, g.max(0.0) as f32, b.max(0.0) as f32);
-    rgb / rgb.max_element()
+    let max = rgb.max_element();
+    (max > 0.0 && max.is_finite()).then_some(rgb / max)
 }
 
 /// UsdLux area scaling for a `RectLight`: with `inputs:normalize` off (the
@@ -275,38 +375,74 @@ fn rect_area_scale(normalize: bool, width: f32, height: f32) -> f32 {
 /// resolves to the schema fallback must land on the same number. Reading it with a
 /// plain `unwrap_or` honours only the first: a prim that applies the API without
 /// overriding the range reads back `0` and gets a light with no influence volume at
-/// all — lit in the authoring tool, black in the engine. Non-positive therefore
-/// means default here, not "zero metres".
+/// all — lit in the authoring tool, black in the engine. Zero therefore means
+/// default here, not "zero metres"; negative authored values are invalid.
 ///
 fn read_light_range(
     reader: &crate::StageView<'_>,
     path: &SdfPath,
     default: f32,
     convention: crate::units::ConventionTransform,
-) -> f32 {
-    match reader.real_f32(path, "lunco:light:range") {
-        Some(r) if r > 0.0 => convention.length(r as f64) as f32,
-        _ => default,
+) -> Result<f32, LightReadError> {
+    match read_authored_real(reader, path, "lunco:light:range")? {
+        None | Some(0.0) => Ok(default),
+        Some(r) if r > 0.0 => {
+            let metres = convention.length(r as f64) as f32;
+            if metres.is_finite() {
+                Ok(metres)
+            } else {
+                error!(
+                    "[usd-bevy] {} has an authored light range that is not finite after unit conversion",
+                    path.as_str()
+                );
+                Err(LightReadError)
+            }
+        }
+        Some(r) => {
+            error!(
+                "[usd-bevy] {} has invalid authored lunco:light:range = {r}; expected zero (engine default) or a positive value",
+                path.as_str()
+            );
+            Err(LightReadError)
+        }
     }
 }
 
 /// The sun's shadow-casting range — standard `UsdLuxShadowAPI`.
 ///
 /// UsdLux defines the schema fallback as **-1 = no limit**. A cascade shadow map
-/// has no unlimited mode (the split has to end somewhere), so a non-positive
-/// authored value means "engine default" here — the same rule
-/// [`read_light_range`] applies to `lunco:light:range`, and for the same reason:
-/// an author who applies the API without overriding the attribute must land on
-/// the engine default, not on a light that shadows nothing.
+/// has no unlimited mode (the split has to end somewhere), so the standard
+/// authored `-1` value means "engine default" here. An author who applies the
+/// API without overriding the attribute therefore lands on the engine default,
+/// while other invalid negative/zero values are rejected.
 fn read_shadow_distance(
     reader: &crate::StageView<'_>,
     path: &SdfPath,
     default: f32,
     convention: crate::units::ConventionTransform,
-) -> f32 {
-    match reader.real_f32(path, "inputs:shadow:distance") {
-        Some(d) if d > 0.0 => convention.length(d as f64) as f32,
-        _ => default,
+) -> Result<(f32, bool), LightReadError> {
+    match read_authored_real(reader, path, "inputs:shadow:distance")? {
+        Some(d) if d > 0.0 => {
+            let metres = convention.length(d as f64) as f32;
+            if metres.is_finite() {
+                Ok((metres, true))
+            } else {
+                error!(
+                    "[usd-bevy] {} has an authored shadow distance that is not finite after unit conversion",
+                    path.as_str()
+                );
+                Err(LightReadError)
+            }
+        }
+        Some(-1.0) => Ok((default, false)),
+        Some(distance) => {
+            error!(
+                "[usd-bevy] {} has invalid authored inputs:shadow:distance = {distance}; expected -1 (USD no-limit) or a positive value",
+                path.as_str()
+            );
+            Err(LightReadError)
+        }
+        None => Ok((default, false)),
     }
 }
 
@@ -329,10 +465,11 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// question the stage already answered: the fix is for the light to author
 /// `inputs:shadow:enable = false` — which shipped local lights now do — so the
 /// scene states its own render budget and the engine reads it.
-fn read_shadow_enable(reader: &crate::StageView<'_>, path: &SdfPath) -> bool {
-    reader
-        .boolean(path, "inputs:shadow:enable")
-        .unwrap_or(USDLUX_SHADOW_ENABLE)
+fn read_shadow_enable(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+) -> Result<bool, LightReadError> {
+    Ok(read_authored_bool(reader, path, "inputs:shadow:enable")?.unwrap_or(USDLUX_SHADOW_ENABLE))
 }
 
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
@@ -353,28 +490,22 @@ pub(crate) fn instantiate_light_prim(
     quality: lunco_render::RenderQualityProfile,
 ) -> bool {
     let convention = crate::units::stage_convention(reader);
-    // A SphereLight's scene-property ports are backed by a deferred Bevy light
-    // component. Publish the generic pending state before projection can create
-    // wires, so an epoch seal cannot turn that short installation window into a
-    // terminal missing-port error. The ready marker is published atomically with
-    // the eventual PointLight/SpotLight below.
-    if prim_type == Some("SphereLight") {
-        commands
-            .entity(entity)
-            .try_insert(lunco_core::PortSurfacePending);
-    }
     match prim_type {
         Some("DistantLight") => {
             // UsdLux spec default intensity is 1.0, but 1 lx is invisible
             // under Bevy's physically-based exposure — an unauthored
             // intensity almost certainly means "give me a sun", so default
             // to the calibrated 128 000 lx lunar sun and let authors override.
-            let illuminance_lux = read_intensity_with_exposure(
+            let Ok(illuminance_lux) = read_intensity_with_exposure(
                 reader,
                 sdf_path,
                 quality.distant_light_default_illuminance,
-            );
-            let c = read_light_color(reader, sdf_path);
+            ) else {
+                return false;
+            };
+            let Ok(c) = read_light_color(reader, sdf_path) else {
+                return false;
+            };
             let color = Color::linear_rgb(c.x, c.y, c.z);
 
             // Start from the canonical lunar sun (single source of truth) and
@@ -395,35 +526,71 @@ pub(crate) fn instantiate_light_prim(
             // `UsdLuxDistantLight`'s own — one constant, shared with
             // `lunco_environment::LunarSun`, which sits above this loader and so
             // cannot be read from here.
-            let angular_diameter_deg = reader
-                .real_f32(sdf_path, "inputs:angle")
-                .unwrap_or(lunco_render::SOLAR_ANGULAR_DIAMETER_DEG);
+            let angular_diameter_deg = match read_authored_real(reader, sdf_path, "inputs:angle") {
+                Ok(Some(angle)) if (0.0..=180.0).contains(&angle) => angle,
+                Ok(Some(angle)) => {
+                    error!(
+                        "[usd-bevy] {} has invalid DistantLight inputs:angle = {angle}; expected a finite angle in [0, 180] degrees",
+                        sdf_path.as_str()
+                    );
+                    return false;
+                }
+                Ok(None) => lunco_render::SOLAR_ANGULAR_DIAMETER_DEG,
+                Err(_) => return false,
+            };
             // Renderer settings supply defaults. Authored content overrides
             // only the two range attributes below, and the provenance marker
             // preserves that distinction for live Graphics edits.
-            let first_cascade_far_bound =
-                if reader.has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound") {
-                    reader
-                        .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
-                        .map(|distance| convention.length(distance as f64) as f32)
-                        .unwrap_or(d.first_cascade_far_bound)
-                } else {
-                    d.first_cascade_far_bound
-                };
+            let first_cascade_authored =
+                reader.has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound");
+            let first_cascade_far_bound = match read_authored_real(
+                reader,
+                sdf_path,
+                "lunco:shadow:firstCascadeFarBound",
+            ) {
+                Ok(Some(distance)) => {
+                    let metres = convention.length(distance as f64) as f32;
+                    if metres.is_finite() {
+                        metres
+                    } else {
+                        error!(
+                            "[usd-bevy] {} has a first shadow cascade bound that is not finite after unit conversion",
+                            sdf_path.as_str()
+                        );
+                        return false;
+                    }
+                }
+                Ok(None) => d.first_cascade_far_bound,
+                Err(_) => return false,
+            };
+            let Ok((maximum_distance, maximum_authored)) =
+                read_shadow_distance(reader, sdf_path, d.maximum_distance, convention)
+            else {
+                return false;
+            };
+            if first_cascade_far_bound <= d.minimum_distance
+                || first_cascade_far_bound >= maximum_distance
+            {
+                error!(
+                    "[usd-bevy] {} has invalid shadow cascade bounds: minimum {}, first {}, maximum {}",
+                    sdf_path.as_str(),
+                    d.minimum_distance,
+                    first_cascade_far_bound,
+                    maximum_distance
+                );
+                return false;
+            }
             let sun = LunarSunShadow {
-                maximum_distance: read_shadow_distance(
-                    reader,
-                    sdf_path,
-                    d.maximum_distance,
-                    convention,
-                ),
+                maximum_distance,
                 first_cascade_far_bound,
                 ..d
             };
 
             // A body's reflected fill authors `false` — see
             // `lunco://lighting/earthshine.usda`.
-            let casts_shadows = read_shadow_enable(reader, sdf_path);
+            let Ok(casts_shadows) = read_shadow_enable(reader, sdf_path) else {
+                return false;
+            };
 
             commands.insert_resource(sun.shadow_map());
             commands.entity(entity).try_insert((
@@ -431,13 +598,8 @@ pub(crate) fn instantiate_light_prim(
                 sun.directional_light(color, illuminance_lux, casts_shadows),
                 sun.cascade_config(),
                 ShadowRangeAuthorship {
-                    first_cascade_far_bound: reader
-                        .has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound"),
-                    maximum_distance: reader
-                        .has_authored_attribute(sdf_path, "inputs:shadow:distance")
-                        && reader
-                            .real_f32(sdf_path, "inputs:shadow:distance")
-                            .is_some_and(|distance| distance > 0.0),
+                    first_cascade_far_bound: first_cascade_authored,
+                    maximum_distance: maximum_authored,
                 },
                 UsdAuthoredLight,
             ));
@@ -464,17 +626,22 @@ pub(crate) fn instantiate_light_prim(
             // A textured dome deliberately contributes NO `UsdDomeAmbient`. The
             // IBL is a strictly better version of the same quantity; summing
             // both would count the sky twice and wash out every shadow.
-            let Some(env) = dome::read_dome_environment(reader, sdf_path, asset_server, stage_id)
-            else {
-                let intensity = read_intensity_with_exposure(reader, sdf_path, 1.0);
-                commands
-                    .entity(entity)
-                    .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
-                debug!(
-                    "[usd-bevy] {} DomeLight ambient={intensity}",
-                    sdf_path.as_str()
-                );
-                return true;
+            let env = match dome::read_dome_environment(reader, sdf_path, asset_server, stage_id) {
+                Ok(Some(env)) => env,
+                Ok(None) => {
+                    let Ok(intensity) = read_intensity_with_exposure(reader, sdf_path, 1.0) else {
+                        return false;
+                    };
+                    commands
+                        .entity(entity)
+                        .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
+                    debug!(
+                        "[usd-bevy] {} DomeLight ambient={intensity}",
+                        sdf_path.as_str()
+                    );
+                    return true;
+                }
+                Err(_) => return false,
             };
 
             debug!(
@@ -504,11 +671,13 @@ pub(crate) fn instantiate_light_prim(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let base_lm = read_intensity_with_exposure(
+            let Ok(base_lm) = read_intensity_with_exposure(
                 reader,
                 sdf_path,
                 quality.local_light_default_intensity,
-            );
+            ) else {
+                return false;
+            };
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
             //
@@ -545,20 +714,33 @@ pub(crate) fn instantiate_light_prim(
             // light in the asset library by π on a change that authored nothing.
             const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
             let default_sphere_radius = convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32;
-            let light_radius = convention.length(
-                reader
-                    .real_f32(sdf_path, "inputs:radius")
-                    .unwrap_or(DEFAULT_SPHERE_RADIUS) as f64,
-            ) as f32;
-            let normalize = reader
-                .boolean(sdf_path, "inputs:normalize")
-                .unwrap_or(false);
-            // `max(0)`: a negative radius is meaningless and would still square to a
-            // positive scale, quietly brightening the light.
+            let light_radius = match read_authored_real(reader, sdf_path, "inputs:radius") {
+                Ok(Some(radius)) if radius > 0.0 => convention.length(radius as f64) as f32,
+                Ok(Some(radius)) => {
+                    error!(
+                        "[usd-bevy] {} has invalid authored SphereLight radius {radius}; expected a positive value",
+                        sdf_path.as_str()
+                    );
+                    return false;
+                }
+                Ok(None) => convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32,
+                Err(_) => return false,
+            };
+            if !light_radius.is_finite() || light_radius <= 0.0 {
+                error!(
+                    "[usd-bevy] {} has a SphereLight radius that is not finite after unit conversion",
+                    sdf_path.as_str()
+                );
+                return false;
+            }
+            let Ok(normalize) = read_authored_bool(reader, sdf_path, "inputs:normalize") else {
+                return false;
+            };
+            let normalize = normalize.unwrap_or(false);
             let area_scale = if normalize {
                 1.0
             } else {
-                (light_radius.max(0.0) / default_sphere_radius).powi(2)
+                (light_radius / default_sphere_radius).powi(2)
             };
             // `inputs:intensity` is the authored photometric power. Do not impose an
             // importer-side ceiling: a lunar rover deliberately needs a much brighter
@@ -566,7 +748,9 @@ pub(crate) fn instantiate_light_prim(
             // exposure, and clamping here silently changes the USD scene.
             let intensity_lm = base_lm * area_scale;
 
-            let c = read_light_color(reader, sdf_path);
+            let Ok(c) = read_light_color(reader, sdf_path) else {
+                return false;
+            };
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // COST WARNING for authors, not a reader deviation: each
             // shadow-casting spot/point renders the whole scene again into its
@@ -577,29 +761,61 @@ pub(crate) fn instantiate_light_prim(
             // per-cluster shadow-caster cap. A local light that does not need to
             // cast therefore authors `inputs:shadow:enable = false`, and the
             // light still ILLUMINATES.
-            let shadow_maps_enabled = read_shadow_enable(reader, sdf_path);
-            let range = read_light_range(
+            let Ok(shadow_maps_enabled) = read_shadow_enable(reader, sdf_path) else {
+                return false;
+            };
+            let Ok(range) = read_light_range(
                 reader,
                 sdf_path,
                 quality.local_light_default_range,
                 convention,
-            );
+            ) else {
+                return false;
+            };
 
-            if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
+            let cone_angle_deg =
+                match read_authored_real(reader, sdf_path, "inputs:shaping:cone:angle") {
+                    Ok(angle) => angle,
+                    Err(_) => return false,
+                };
+            if let Some(cone_angle_deg) = cone_angle_deg {
                 // Spotlight path (UsdLuxShapingAPI applied)
-                let outer_angle = cone_angle_deg
-                    .to_radians()
-                    .clamp(0.0, std::f32::consts::FRAC_PI_2);
-                let softness = reader
-                    .real_f32(sdf_path, "inputs:shaping:cone:softness")
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 1.0);
+                if !(0.0..90.0).contains(&cone_angle_deg) {
+                    error!(
+                        "[usd-bevy] {} has unsupported SphereLight cone angle {cone_angle_deg}; Bevy requires a finite angle in (0, 90) degrees",
+                        sdf_path.as_str()
+                    );
+                    return false;
+                }
+                let softness = match read_authored_real(
+                    reader,
+                    sdf_path,
+                    "inputs:shaping:cone:softness",
+                ) {
+                    Ok(Some(softness)) if (0.0..=1.0).contains(&softness) => softness,
+                    Ok(Some(softness)) => {
+                        error!(
+                            "[usd-bevy] {} has invalid SphereLight cone softness {softness}; expected a finite value in [0, 1]",
+                            sdf_path.as_str()
+                        );
+                        return false;
+                    }
+                    Ok(None) => 0.0,
+                    Err(_) => return false,
+                };
+                let outer_angle = cone_angle_deg.to_radians();
                 let inner_angle = outer_angle * (1.0 - softness);
 
                 // No `UsdAuthoredLight`: a SphereLight is a *local* light (e.g. a
                 // vessel headlight), not a scene-dominant sun/sky. Stamping it
                 // would re-run the dome ambient recompute every time a rover
                 // spawns — see the marker docs.
+                // Its scene-property ports are marked pending immediately before
+                // the deferred light insertion, then become ready atomically with
+                // the component below.
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_core::PortSurfacePending);
                 commands
                     .entity(entity)
                     .try_remove::<lunco_core::PortSurfacePending>();
@@ -613,7 +829,7 @@ pub(crate) fn instantiate_light_prim(
                         // Bevy uses it for soft shadow penumbra / specular highlight size,
                         // so an authored radius reads as a bigger, softer source as well
                         // as a brighter one.
-                        radius: light_radius.max(0.0),
+                        radius: light_radius,
                         shadow_maps_enabled,
                         shadow_depth_bias: quality.shadow_depth_bias,
                         shadow_normal_bias: quality.shadow_normal_bias,
@@ -640,6 +856,9 @@ pub(crate) fn instantiate_light_prim(
                 // — local light, not a scene-dominant sun/sky (see above).
                 commands
                     .entity(entity)
+                    .try_insert(lunco_core::PortSurfacePending);
+                commands
+                    .entity(entity)
                     .try_remove::<lunco_core::PortSurfacePending>();
                 commands.entity(entity).try_insert((
                     PointLight {
@@ -647,7 +866,7 @@ pub(crate) fn instantiate_light_prim(
                         intensity: intensity_lm,
                         range,
                         // See the SpotLight arm: `inputs:radius` is the source size too.
-                        radius: light_radius.max(0.0),
+                        radius: light_radius,
                         shadow_maps_enabled,
                         shadow_depth_bias: quality.shadow_depth_bias,
                         shadow_normal_bias: quality.shadow_normal_bias,
@@ -682,37 +901,62 @@ pub(crate) fn instantiate_light_prim(
             // dimensionless scale, so it is read as lumens here; the larger
             // default simply reflects that an area light stands in for a panel
             // rather than a bulb.
-            let base_lm = read_intensity_with_exposure(
+            let Ok(base_lm) = read_intensity_with_exposure(
                 reader,
                 sdf_path,
                 quality.rect_light_default_intensity,
-            );
-            let c = read_light_color(reader, sdf_path);
+            ) else {
+                return false;
+            };
+            let Ok(c) = read_light_color(reader, sdf_path) else {
+                return false;
+            };
             let color = Color::linear_rgb(c.x, c.y, c.z);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let width = convention
-                .length(reader.real_f32(sdf_path, "inputs:width").unwrap_or(1.0) as f64)
-                as f32;
-            let height = convention
-                .length(reader.real_f32(sdf_path, "inputs:height").unwrap_or(1.0) as f64)
-                as f32;
+            let width = match read_authored_real(reader, sdf_path, "inputs:width") {
+                Ok(Some(width)) if width > 0.0 => convention.length(width as f64) as f32,
+                Ok(Some(width)) => {
+                    error!(
+                        "[usd-bevy] {} has invalid authored RectLight width {width}; expected a positive value",
+                        sdf_path.as_str()
+                    );
+                    return false;
+                }
+                Ok(None) => convention.length(1.0) as f32,
+                Err(_) => return false,
+            };
+            let height = match read_authored_real(reader, sdf_path, "inputs:height") {
+                Ok(Some(height)) if height > 0.0 => convention.length(height as f64) as f32,
+                Ok(Some(height)) => {
+                    error!(
+                        "[usd-bevy] {} has invalid authored RectLight height {height}; expected a positive value",
+                        sdf_path.as_str()
+                    );
+                    return false;
+                }
+                Ok(None) => convention.length(1.0) as f32,
+                Err(_) => return false,
+            };
             // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
             // implements (see the long derivation there): with normalize OFF (the
             // schema default) `intensity` fixes radiance, so emitted power scales
             // with the emitting area. For a rect A = w·h, and the ratio against
             // the 1×1 m schema fallback makes an unauthored size exactly neutral.
-            let normalize = reader
-                .boolean(sdf_path, "inputs:normalize")
-                .unwrap_or(false);
+            let Ok(normalize) = read_authored_bool(reader, sdf_path, "inputs:normalize") else {
+                return false;
+            };
+            let normalize = normalize.unwrap_or(false);
             let area_scale = rect_area_scale(normalize, width, height);
             let intensity_lm = base_lm * area_scale;
-            let range = read_light_range(
+            let Ok(range) = read_light_range(
                 reader,
                 sdf_path,
                 quality.local_light_default_range,
                 convention,
-            );
+            ) else {
+                return false;
+            };
 
             // `UsdLuxRectLight.inputs:texture:file` (an image mapped across the
             // rect) has no Bevy equivalent — say so rather than silently drop it.
@@ -944,16 +1188,18 @@ mod photometry_tests {
 
     #[test]
     fn blackbody_is_white_at_6500k_warm_below_cool_above() {
-        let white = blackbody_rgb(6500.0);
+        let white = blackbody_rgb(6500.0).unwrap();
         for ch in white.to_array() {
             assert!(ch > 0.9, "6500 K should be ≈ white, got {white:?}");
         }
-        let warm = blackbody_rgb(2000.0);
+        let warm = blackbody_rgb(2000.0).unwrap();
         assert_eq!(warm.x, 1.0);
         assert!(warm.z < 0.1, "2000 K should be orange, got {warm:?}");
-        let cool = blackbody_rgb(10000.0);
+        let cool = blackbody_rgb(10000.0).unwrap();
         assert_eq!(cool.z, 1.0);
         assert!(cool.x < 0.9, "10000 K should be blue, got {cool:?}");
+        assert!(blackbody_rgb(1000.0).is_none());
+        assert!(blackbody_rgb(30000.0).is_none());
     }
 
     #[test]
@@ -976,12 +1222,39 @@ def Xform "World"
         let lamp = SdfPath::new("/World/Lamp").unwrap();
         let convention = crate::units::stage_convention(&view);
 
-        assert_eq!(read_light_range(&view, &lamp, 30.0, convention), 0.9);
+        assert_eq!(read_light_range(&view, &lamp, 30.0, convention), Ok(0.9));
         assert_eq!(
             convention.length(view.real_f32(&lamp, "inputs:radius").unwrap() as f64) as f32,
             0.02
         );
-        assert_eq!(read_shadow_distance(&view, &lamp, 1500.0, convention), 6.0);
+        assert_eq!(
+            read_shadow_distance(&view, &lamp, 1500.0, convention),
+            Ok((6.0, true))
+        );
+    }
+
+    #[test]
+    fn malformed_authored_light_values_are_rejected() {
+        let source = r#"#usda 1.0
+
+def DistantLight "Sun"
+{
+    string inputs:intensity = "invalid"
+    string inputs:shadow:distance = "invalid"
+    string inputs:shadow:enable = "invalid"
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = stage.view();
+        let sun = SdfPath::new("/Sun").unwrap();
+
+        assert!(read_intensity_with_exposure(&view, &sun, 77_000.0).is_err());
+        assert!(
+            read_shadow_distance(&view, &sun, 1500.0, crate::units::stage_convention(&view))
+                .is_err()
+        );
+        assert!(read_shadow_enable(&view, &sun).is_err());
     }
 
     #[test]
@@ -1008,15 +1281,15 @@ def Xform "World"
 
         assert_eq!(
             read_intensity_with_exposure(&view, &SdfPath::new("/World/Sun").unwrap(), 77_000.0),
-            77_000.0
+            Ok(77_000.0)
         );
         assert_eq!(
             read_intensity_with_exposure(&view, &SdfPath::new("/World/Bulb").unwrap(), 700.0),
-            700.0
+            Ok(700.0)
         );
         assert_eq!(
             read_intensity_with_exposure(&view, &SdfPath::new("/World/Panel").unwrap(), 10_000.0),
-            23.0
+            Ok(23.0)
         );
     }
 }

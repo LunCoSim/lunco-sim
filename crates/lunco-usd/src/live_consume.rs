@@ -507,10 +507,32 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 if view.type_name(&sp).as_deref() != Some("DomeLight") {
                     return None;
                 }
-                let env = dome::read_dome_environment(&view, &sp, &asset_server, id);
+                let env = match dome::read_dome_environment(&view, &sp, &asset_server, id) {
+                    Ok(env) => env,
+                    Err(_) => {
+                        bevy::log::error!(
+                            "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                            sp.as_str()
+                        );
+                        return None;
+                    }
+                };
                 // The fallback if the author dropped the texture: a bare dome is
-                // a scalar ambient.
-                let ambient = view.real_f32(&sp, "inputs:intensity").unwrap_or(0.0);
+                // a scalar ambient, read through the same photometry path as load.
+                let ambient = if env.is_none() {
+                    match lunco_usd_bevy::read_intensity_with_exposure(&view, &sp, 1.0) {
+                        Ok(intensity) => intensity,
+                        Err(_) => {
+                            bevy::log::error!(
+                                "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                                sp.as_str()
+                            );
+                            return None;
+                        }
+                    }
+                } else {
+                    0.0
+                };
                 Some((p.clone(), env, ambient))
             })
             .collect()

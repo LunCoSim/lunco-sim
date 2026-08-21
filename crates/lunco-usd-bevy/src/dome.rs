@@ -166,8 +166,10 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
     asset_server.load::<Image>(path.to_string())
 }
 
-/// Read a `DomeLight` prim's HDRI intent. `None` when the prim authors no
+/// Read a `DomeLight` prim's HDRI intent. `Ok(None)` when the prim authors no
 /// `inputs:texture:file` — that dome is a plain scalar ambient (`light.rs`).
+/// `Err(())` means an authored photometric value was malformed and the existing
+/// live state must remain untouched.
 ///
 /// The single definition of how a dome's attributes are read, shared by the
 /// load path (`instantiate_light_prim`) and the live-edit path
@@ -178,11 +180,14 @@ pub fn read_dome_environment(
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
-) -> Option<UsdDomeEnvironment> {
+) -> Result<Option<UsdDomeEnvironment>, crate::LightReadError> {
     let texture_path = reader
         .asset(sdf_path, "inputs:texture:file")
         .filter(|p| !p.is_empty())
-        .map(|p| crate::resolve_texture_path(asset_server, stage_id, &p))?;
+        .map(|p| crate::resolve_texture_path(asset_server, stage_id, &p));
+    let Some(texture_path) = texture_path else {
+        return Ok(None);
+    };
 
     // `automatic` (USD's default) means "infer from the file". We infer from the
     // *decoded* image in `project_dome_textures` rather than the extension, so
@@ -200,16 +205,16 @@ pub fn read_dome_environment(
         _ => {}
     }
 
-    Some(UsdDomeEnvironment {
+    Ok(Some(UsdDomeEnvironment {
         texture: load_dome_texture(asset_server, &texture_path),
         format: DomeFormat::LatLong,
         intensity: crate::light::read_intensity_with_exposure(
             reader,
             sdf_path,
             DEFAULT_DOME_INTENSITY,
-        ),
+        )?,
         tint: {
-            let c = crate::light::read_light_color(reader, sdf_path);
+            let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)
         },
         face_size: reader
@@ -219,7 +224,7 @@ pub fn read_dome_environment(
         skybox: reader
             .boolean(sdf_path, "lunco:dome:skybox")
             .unwrap_or(true),
-    })
+    }))
 }
 
 impl UsdDomeEnvironment {
