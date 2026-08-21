@@ -1119,7 +1119,7 @@ fn process_usd_avian_prims(
         ) {
             Ok(Some(root)) => !mount_state.contains_root(root),
             Ok(None) => false,
-            Err(()) => true,
+            Err(_) => true,
         };
         if stale_mount {
             // `UsdVisualSynced` can be applied from a command buffer that was

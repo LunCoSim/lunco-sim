@@ -1887,7 +1887,7 @@ pub fn sync_usd_visuals(
         {
             Ok(Some(root)) => !mount_state.contains_root(root),
             Ok(None) => false,
-            Err(()) => true,
+            Err(_) => true,
         };
         if !preview_only && stale_mount {
             // The stage event is real, but this entity belongs to a root that
@@ -1933,12 +1933,20 @@ pub fn sync_usd_visuals(
 /// policy.  A regular scene entity always reaches `UsdSceneRoot`, including
 /// the root itself.  The bound prevents malformed relationship data from
 /// turning a failed load into an infinite loop during error handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneRootAncestorError {
+    /// A parent relationship points to an entity that no longer exists.
+    MissingParentEntity,
+    /// The hierarchy exceeded the traversal bound and is treated as malformed.
+    DepthExceeded,
+}
+
 pub fn scene_root_ancestor(
     entity: Entity,
     q_scene_root: &Query<(), With<UsdSceneRoot>>,
     q_child_of: &Query<&ChildOf>,
     q_entities: &Query<Entity>,
-) -> Result<Option<Entity>, ()> {
+) -> Result<Option<Entity>, SceneRootAncestorError> {
     let mut current = entity;
     for _ in 0..1024 {
         if q_scene_root.contains(current) {
@@ -1949,14 +1957,14 @@ pub fn scene_root_ancestor(
         };
         current = parent.parent();
         if !q_entities.contains(current) {
-            return Err(());
+            return Err(SceneRootAncestorError::MissingParentEntity);
         }
     }
     warn!(
         "[usd] scene hierarchy exceeded 1024 ancestors at {:?}",
         entity
     );
-    Err(())
+    Err(SceneRootAncestorError::DepthExceeded)
 }
 
 #[cfg(test)]
