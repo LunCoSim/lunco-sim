@@ -1589,6 +1589,36 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
+    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+    let env_path = if parent_path == "/" {
+        "/Environment".to_string()
+    } else {
+        format!("{parent_path}/Environment")
+    };
+    // Resolve the ambient solve before queuing any other edits. A malformed
+    // authored DomeLight must reject the whole command rather than allowing the
+    // unrelated sun/environment edits through while silently fabricating a
+    // different ambient value.
+    let ambient_plan = if let Some(requested) = cmd.ambient_brightness {
+        let fill_path = format!("{env_path}/AmbientFill");
+        let composed = host.document().composed_arc();
+        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
+        match lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref()) {
+            Ok(others) => Some((requested, others, fill_path)),
+            Err(_) => {
+                error!(
+                    "[scene-commands] refusing environment update: authored DomeLight \
+                     intensity, exposure, or texture data is malformed or unresolved"
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     for (prim, tf) in &q_sun {
         // Ownership guard: only author for suns the active document actually
         // holds (base or runtime), so an engine-fallback sun never gets opinions.
@@ -1713,14 +1743,6 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
-    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
-    let env_path = if parent_path == "/" {
-        "/Environment".to_string()
-    } else {
-        format!("{parent_path}/Environment")
-    };
     // Ensure the settings prim exists, but only author `AddPrim` when it's
     // actually absent (else every render tweak would journal a redundant
     // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
@@ -1771,15 +1793,11 @@ pub fn persist_environment_light_to_runtime_layer(
     // ask for 50, compose 2650, and the slider jumps to 2650 on the next frame.
     // Authoring `requested - others` makes the composed total land exactly on the
     // request, so the knob is stable under its own feedback.
-    if let Some(requested) = cmd.ambient_brightness {
-        let fill_path = format!("{env_path}/AmbientFill");
+    if let Some((requested, others, fill_path)) = ambient_plan {
         // Read the composed (base ⊕ runtime) layer data, so a fill dome authored
         // by an earlier drag — which lives only in the runtime overlay — is seen
         // and correctly EXCLUDED from "other domes" rather than subtracted from
         // itself, which would ratchet the value down on every drag.
-        let composed = host.document().composed_arc();
-        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
-        let others = lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref());
         let intensity = lunco_usd_bevy::ambient_fill_intensity(requested, others);
 
         if lunco_usd_bevy::ambient_fill_saturates(requested, others) {

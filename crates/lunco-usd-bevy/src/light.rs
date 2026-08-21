@@ -111,7 +111,10 @@ pub const DOME_TEXTURE_ATTR: &str = "inputs:texture:file";
 /// `references`d asset is **not** counted, while the ECS sum does see it. Scenes
 /// author their ambient fill directly, so this is the rare case; it would show up
 /// as the ambient slider reading back higher than it was set.
-pub fn untextured_dome_intensity_sum(data: &openusd::sdf::Data, exclude: Option<&SdfPath>) -> f32 {
+pub fn untextured_dome_intensity_sum(
+    data: &openusd::sdf::Data,
+    exclude: Option<&SdfPath>,
+) -> Result<f32, LightReadError> {
     use crate::usd_data::UsdDataExt;
 
     // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
@@ -123,49 +126,134 @@ pub fn untextured_dome_intensity_sum(data: &openusd::sdf::Data, exclude: Option<
         .filter(|p| data.prim_type_name(p).as_deref() == Some("DomeLight"))
         .collect();
 
-    dome_paths
+    let mut total = 0.0;
+    for path in dome_paths
         .iter()
         .filter(|p| exclude != Some(*p))
-        .filter(|p| !dome_has_texture(data, p))
         .filter(|p| data.prim_is_active(p))
-        .filter_map(|p| dome_intensity(data, p))
-        .sum()
+    {
+        if dome_has_texture(data, path)? {
+            continue;
+        }
+        if let Some(intensity) = dome_intensity(data, path)? {
+            total += intensity;
+        }
+    }
+
+    if total.is_finite() && total >= 0.0 {
+        Ok(total)
+    } else {
+        error!("[usd-bevy] authored DomeLight ambient sum is non-finite or negative");
+        Err(LightReadError)
+    }
 }
 
 /// Whether `prim` authors a non-empty `inputs:texture:file` — the exact test
 /// `dome::read_dome_environment` uses to decide "HDRI environment" vs "scalar
-/// ambient". Presence of the `default` field is the signal; the value's asset
-/// path is not inspected here (this reader has no `AssetServer` to resolve it),
-/// so a dome whose texture fails to *resolve* is treated as textured and
-/// contributes nothing — matching the conservative direction (never over-count).
-fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> bool {
-    use crate::usd_data::UsdDataExt;
-    match prim.append_property(DOME_TEXTURE_ATTR) {
-        Ok(attr) => data.field(&attr, "default").is_some(),
-        Err(_) => false,
+/// ambient". An empty asset is the explicit scalar spelling; a non-asset value,
+/// animation, or connection is rejected because this authoring-layer reader
+/// cannot resolve it safely.
+fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> Result<bool, LightReadError> {
+    let attr = prim
+        .append_property(DOME_TEXTURE_ATTR)
+        .map_err(|_| LightReadError)?;
+    let Some(spec) = data.spec(&attr) else {
+        return Ok(false);
+    };
+    if spec.get("timeSamples").is_some() || spec.get("connectionPaths").is_some() {
+        error!(
+            "[usd-bevy] {} has an animated or connected DomeLight texture input, which \
+             cannot be resolved by the authoring-layer ambient solver",
+            prim.as_str()
+        );
+        return Err(LightReadError);
+    }
+    let Some(value) = spec.get("default") else {
+        return Ok(false);
+    };
+    match value {
+        Value::AssetPath(path) => Ok(!path.as_str().is_empty()),
+        _ => {
+            error!(
+                "[usd-bevy] {} has authored DomeLight {} with an unsupported type",
+                prim.as_str(),
+                DOME_TEXTURE_ATTR
+            );
+            Err(LightReadError)
+        }
     }
 }
 
 /// `inputs:intensity` × 2^`inputs:exposure` on `prim` — the layer-data twin of
 /// [`read_intensity_with_exposure`], which needs a `UsdRead`. `None` when
 /// `inputs:intensity` is unauthored: the sum counts only authored opinions.
-fn dome_intensity(data: &openusd::sdf::Data, prim: &SdfPath) -> Option<f32> {
-    let intensity = field_f32(data, prim, "inputs:intensity")?;
-    let exposure = field_f32(data, prim, "inputs:exposure").unwrap_or(0.0);
-    Some(intensity * exposure.exp2())
+fn dome_intensity(
+    data: &openusd::sdf::Data,
+    prim: &SdfPath,
+) -> Result<Option<f32>, LightReadError> {
+    let Some(intensity) = field_f32(data, prim, "inputs:intensity")? else {
+        return Ok(None);
+    };
+    let exposure = field_f32(data, prim, "inputs:exposure")?.unwrap_or(0.0);
+    let scaled = intensity * exposure.exp2();
+    if scaled.is_finite() && scaled >= 0.0 {
+        Ok(Some(scaled))
+    } else {
+        error!(
+            "[usd-bevy] {} has non-finite or negative authored DomeLight intensity after exposure",
+            prim.as_str()
+        );
+        Err(LightReadError)
+    }
 }
 
 /// Scalar `default` field on `prim`'s attribute `attr`, tolerant of
-/// `float`/`double`/`int` authoring — the layer-data twin of
+/// `float`/`double`/`int`/`int64` authoring — the layer-data twin of
 /// [`UsdRead::real_f32`].
-fn field_f32(data: &openusd::sdf::Data, prim: &SdfPath, attr: &str) -> Option<f32> {
-    use crate::usd_data::UsdDataExt;
-    let attr = prim.append_property(attr).ok()?;
-    match data.field(&attr, "default")? {
-        Value::Float(f) => Some(*f),
-        Value::Double(d) => Some(*d as f32),
-        Value::Int(i) => Some(*i as f32),
-        _ => None,
+fn field_f32(
+    data: &openusd::sdf::Data,
+    prim: &SdfPath,
+    attr: &str,
+) -> Result<Option<f32>, LightReadError> {
+    let attr_path = prim.append_property(attr).map_err(|_| LightReadError)?;
+    let Some(spec) = data.spec(&attr_path) else {
+        return Ok(None);
+    };
+    if spec.get("timeSamples").is_some() || spec.get("connectionPaths").is_some() {
+        error!(
+            "[usd-bevy] {} has an animated or connected DomeLight {} input, which \
+             cannot be resolved by the authoring-layer ambient solver",
+            prim.as_str(),
+            attr
+        );
+        return Err(LightReadError);
+    }
+    let Some(value) = spec.get("default") else {
+        return Ok(None);
+    };
+    let value = match value {
+        Value::Float(f) => *f,
+        Value::Double(d) => *d as f32,
+        Value::Int(i) => *i as f32,
+        Value::Int64(i) => *i as f32,
+        _ => {
+            error!(
+                "[usd-bevy] {} has authored DomeLight {} with an unsupported type",
+                prim.as_str(),
+                attr
+            );
+            return Err(LightReadError);
+        }
+    };
+    if value.is_finite() {
+        Ok(Some(value))
+    } else {
+        error!(
+            "[usd-bevy] {} has non-finite authored DomeLight {}",
+            prim.as_str(),
+            attr
+        );
+        Err(LightReadError)
     }
 }
 
@@ -1098,7 +1186,7 @@ def Xform "World"
         let fill = path("/World/Environment/AmbientFill");
         // Only `RegolithBounce` counts: the fill is excluded by request and the
         // starfield by its texture.
-        assert_eq!(untextured_dome_intensity_sum(&d, Some(&fill)), 30.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, Some(&fill)), Ok(30.0));
     }
 
     #[test]
@@ -1106,14 +1194,14 @@ def Xform "World"
         let d = data(SCENE);
         // Without excluding anything, the 500-intensity starfield must STILL be
         // absent — its image becomes IBL, not a scalar ambient term.
-        assert_eq!(untextured_dome_intensity_sum(&d, None), 30.0 + 70.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(30.0 + 70.0));
     }
 
     #[test]
     fn requested_100_over_an_existing_30_authors_70() {
         let d = data(SCENE);
         let fill = path("/World/Environment/AmbientFill");
-        let others = untextured_dome_intensity_sum(&d, Some(&fill));
+        let others = untextured_dome_intensity_sum(&d, Some(&fill)).unwrap();
         assert_eq!(others, 30.0);
         assert_eq!(ambient_fill_intensity(100.0, others), 70.0);
         assert!(!ambient_fill_saturates(100.0, others));
@@ -1125,7 +1213,7 @@ def Xform "World"
     #[test]
     fn no_other_domes_means_author_the_total_verbatim() {
         let d = data("#usda 1.0\n\ndef Xform \"World\"\n{\n}\n");
-        assert_eq!(untextured_dome_intensity_sum(&d, None), 0.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(0.0));
         assert_eq!(ambient_fill_intensity(42.0, 0.0), 42.0);
     }
 
@@ -1159,7 +1247,7 @@ def Xform "World"
 }
 "#,
         );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), 5.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(5.0));
     }
 
     #[test]
@@ -1178,7 +1266,37 @@ def DomeLight "Fill"
 }
 "#,
         );
-        assert_eq!(untextured_dome_intensity_sum(&d, None), 64.0);
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(64.0));
+    }
+
+    #[test]
+    fn malformed_dome_inputs_are_rejected_instead_of_treated_as_omitted() {
+        let d = data(
+            r#"#usda 1.0
+
+def DomeLight "Malformed"
+{
+    float inputs:intensity = 8
+    string inputs:exposure = "not-a-number"
+}
+"#,
+        );
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Err(LightReadError));
+    }
+
+    #[test]
+    fn empty_texture_asset_is_scalar_ambient() {
+        let d = data(
+            r#"#usda 1.0
+
+def DomeLight "Scalar"
+{
+    asset inputs:texture:file = @@
+    float inputs:intensity = 5
+}
+"#,
+        );
+        assert_eq!(untextured_dome_intensity_sum(&d, None), Ok(5.0));
     }
 }
 

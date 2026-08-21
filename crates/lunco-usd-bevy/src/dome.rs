@@ -160,8 +160,19 @@ pub fn read_dome_environment(
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
     quality: RenderQualityProfile,
 ) -> Result<Option<UsdDomeEnvironment>, crate::LightReadError> {
-    let texture_path = reader
-        .asset(sdf_path, "inputs:texture:file")
+    let texture_authored = reader.has_authored_attribute(sdf_path, "inputs:texture:file")
+        || !reader
+            .connections(sdf_path, "inputs:texture:file")
+            .is_empty();
+    let texture_value = reader.asset(sdf_path, "inputs:texture:file");
+    if texture_authored && texture_value.is_none() {
+        error!(
+            "[usd-bevy] {} has authored DomeLight inputs:texture:file with an unsupported type",
+            sdf_path.as_str()
+        );
+        return Err(crate::LightReadError);
+    }
+    let texture_path = texture_value
         .filter(|p| !p.is_empty())
         .map(|p| crate::resolve_texture_path(asset_server, stage_id, &p));
     let Some(texture_path) = texture_path else {
