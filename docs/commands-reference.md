@@ -592,7 +592,6 @@ type and literal, journals the edit, and re-composes the live stage.
 | `color` | `Option < [f32 ; 3] >` |  `inputs:color` — linear RGB tint multiplied into the image. |
 | `rotation` | `Option < [f32 ; 3] >` |  `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case  is yaw only (`[0, heading, 0]`). |
 | `skybox` | `Option < bool >` |  `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves  the sky black. The lunar case: real bounce light, no visible sky. |
-| `face_size` | `Option < u32 >` |  `lunco:dome:faceSize` — cubemap face resolution. Rounded up to a power  of two. |
 
 ### `lunco-usd-bevy` <a id="lunco-usd-bevy"></a>
 

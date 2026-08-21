@@ -1386,9 +1386,6 @@ pub struct SetDomeLight {
     /// `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves
     /// the sky black. The lunar case: real bounce light, no visible sky.
     pub skybox: Option<bool>,
-    /// `lunco:dome:faceSize` — cubemap face resolution. Must be a positive
-    /// power of two because the environment-map projection requires it.
-    pub face_size: Option<u32>,
 }
 
 #[on_command(SetDomeLight)]
@@ -1400,15 +1397,6 @@ fn on_set_dome_light(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-
-    if let Some(face_size) = cmd.face_size {
-        if !face_size.is_power_of_two() {
-            bevy::log::warn!(
-                "[SetDomeLight] face_size must be a positive power of two; refusing {face_size}"
-            );
-            return;
-        }
-    }
 
     // The running scene's root is the single entity that knows both things this
     // command needs: which document to author into, and which prim to author
@@ -1511,9 +1499,6 @@ fn on_set_dome_light(
         }
         if let Some(s) = cmd.skybox {
             attr("lunco:dome:skybox", "bool", s.to_string());
-        }
-        if let Some(f) = cmd.face_size {
-            attr("lunco:dome:faceSize", "int", f.to_string());
         }
         // Rotation is an xformOp, not a plain attribute: `SetRotate` also
         // authors `xformOpOrder` when the prim has none, which a bare

@@ -912,9 +912,11 @@ impl RenderingQualitySettings {
         if !profile.dome_default_intensity.is_finite() || profile.dome_default_intensity < 0.0 {
             return Err("dome default intensity must be finite and non-negative");
         }
-        if profile.dome_cubemap_face_size == 0 || !profile.dome_cubemap_face_size.is_power_of_two()
+        if profile.dome_cubemap_face_size == 0
+            || !profile.dome_cubemap_face_size.is_power_of_two()
+            || profile.dome_cubemap_face_size > 4096
         {
-            return Err("dome cubemap face size must be a non-zero power of two");
+            return Err("dome cubemap face size must be a power of two between 1 and 4096");
         }
         if profile.primitive_sphere_longitudes < 3
             || profile.primitive_sphere_latitudes < 2
@@ -1268,7 +1270,13 @@ mod tests {
         settings.dome_cubemap_face_size = 1000;
         assert_eq!(
             settings.validate(),
-            Err("dome cubemap face size must be a non-zero power of two")
+            Err("dome cubemap face size must be a power of two between 1 and 4096")
+        );
+
+        settings.dome_cubemap_face_size = 8192;
+        assert_eq!(
+            settings.validate(),
+            Err("dome cubemap face size must be a power of two between 1 and 4096")
         );
     }
 

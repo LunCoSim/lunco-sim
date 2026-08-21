@@ -31,7 +31,9 @@ def Xform "HdriTest" (
 
 
 
-    def DomeLight "Sky"
+    def DomeLight "Sky" (
+        prepend apiSchemas = ["LunCoDomeAPI"]
+    )
     {
         # Equirectangular ("latlong") — the format every HDRI library ships and
         # the only one USD's `automatic` will resolve to for a 2:1 image.
@@ -57,10 +59,9 @@ def Xform "HdriTest" (
         double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
 
-        # lunco extensions: draw the sky (vs. light-only), and the cubemap face
-        # resolution the equirect is projected into.
+        # lunco extension: draw the sky (vs. light-only). Cubemap resolution is
+        # renderer quality and comes from Graphics settings.
         custom bool lunco:dome:skybox = true
-        custom int lunco:dome:faceSize = 1024
     }
 
     # The sun still exists as a real DistantLight: an HDRI gives soft ambient +

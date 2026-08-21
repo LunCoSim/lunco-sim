@@ -20,10 +20,10 @@
 //! }
 //! ```
 //!
-//! Two knobs have no UsdLux equivalent and are namespaced `lunco:`:
-//! `lunco:dome:skybox` (draw it, or light-only — a lunar scene wants a black
-//! sky but may still want bounce light) and `lunco:dome:faceSize` (cubemap
-//! resolution).
+//! The scene-owned visibility choice has no UsdLux equivalent and is declared
+//! by `LunCoDomeAPI`: `lunco:dome:skybox` (draw it, or light-only — a lunar
+//! scene wants a black sky but may still want bounce light). Cubemap resolution
+//! is renderer quality and therefore comes only from Graphics settings.
 //!
 //! # The one hard part: latlong is not a cubemap
 //!
@@ -88,7 +88,7 @@ pub struct UsdDomeEnvironment {
     /// `inputs:color` (× the blackbody colour when
     /// `inputs:enableColorTemperature` is on), multiplied into the image.
     pub tint: LinearRgba,
-    /// `lunco:dome:faceSize`.
+    /// The active Graphics cubemap face-size setting.
     pub face_size: u32,
     /// `lunco:dome:skybox` — false = light the scene but leave the sky black.
     pub skybox: bool,
@@ -222,42 +222,10 @@ pub fn read_dome_environment(
             let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)
         },
-        face_size: read_face_size(reader, sdf_path, quality.dome_cubemap_face_size)?,
+        face_size: quality.dome_cubemap_face_size,
         skybox: crate::light::read_authored_bool(reader, sdf_path, "lunco:dome:skybox")?
             .unwrap_or(true),
     }))
-}
-
-/// Read the renderer-specific dome face size without rounding an authored
-/// request into a different quality level. The generated environment-map path
-/// requires a positive power of two, so invalid values are rejected before an
-/// async allocation begins.
-fn read_face_size(
-    reader: &crate::StageView<'_>,
-    path: &openusd::sdf::Path,
-    default: u32,
-) -> Result<u32, crate::LightReadError> {
-    let authored = reader.has_authored_attribute(path, "lunco:dome:faceSize")
-        || !reader.connections(path, "lunco:dome:faceSize").is_empty();
-    if !authored {
-        return Ok(default);
-    }
-    let Some(value) = reader.scalar::<i32>(path, "lunco:dome:faceSize") else {
-        error!(
-            "[usd-bevy] {} has authored lunco:dome:faceSize with an unsupported type",
-            path.as_str()
-        );
-        return Err(crate::LightReadError);
-    };
-    if value <= 0 || !(value as u32).is_power_of_two() {
-        error!(
-            "[usd-bevy] {} has invalid authored lunco:dome:faceSize = {}; expected a positive power of two",
-            path.as_str(),
-            value
-        );
-        return Err(crate::LightReadError);
-    }
-    Ok(value as u32)
 }
 
 impl UsdDomeEnvironment {
@@ -764,7 +732,7 @@ def DomeLight "Dome"
     /// The projection API rejects invalid sizes too, so callers cannot bypass
     /// the USD reader and silently request a different allocation.
     #[test]
-    fn invalid_face_sizes_are_rejected() {
+    fn projection_rejects_invalid_face_sizes() {
         let src = Equirect::from_texels(4, 2, vec![[1.0; 4]; 8]);
         assert!(equirect_to_cubemap(&src, 0, LinearRgba::WHITE).is_none());
         assert!(equirect_to_cubemap(&src, 100, LinearRgba::WHITE).is_none());
