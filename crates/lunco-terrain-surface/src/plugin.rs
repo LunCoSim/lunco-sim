@@ -7,7 +7,7 @@
 //! ([`crate::stream_viz`]), the composable USD terrain-layer stack
 //! ([`crate::terrain_layers`]), and the per-body heightfield collider ring +
 //! physics-hold / tunnel / overturn rescues ([`crate::collider_ring`]). The
-//! runtime LOD knobs live in [`crate::stream_viz::TerrainLodConfig`].
+//! visual quality knobs live in [`lunco_render::RenderingQualitySettings`].
 
 use bevy::prelude::*;
 
@@ -34,16 +34,13 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
-        // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
-        app.init_resource::<crate::stream_viz::TerrainLodConfig>();
-        app.register_type::<crate::stream_viz::TerrainLodConfig>();
-        // The streamed mesh cache is a rendering-quality resource even when
+        // The streamed mesh cache and LOD controls are rendering-quality resources even when
         // this plugin runs headless: the CPU-side cache still needs the same
         // authoritative limit as the graphical client. The workbench's
         // settings registration may replace this default with persisted user
         // values later in plugin construction.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
-        // `SetTerrainLod` — the same knobs, addressable from the API/scripts.
+        // `SetTerrainRenderingQuality` — the same knobs, addressable from the API/scripts.
         crate::stream_viz::register_all_commands(app);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();

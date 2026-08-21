@@ -46,6 +46,14 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.06,
                 shadow_normal_bias: 2.5,
                 terrain_mesh_cache_bytes: 640 * 1024 * 1024,
+                terrain_lod_tile_resolution: 49,
+                terrain_lod_cinematic_resolution: 2049,
+                terrain_lod_pixel_error: 2.0,
+                terrain_lod_max_depth: 8,
+                terrain_lod_probe_resolution: 9,
+                terrain_lod_bakes_per_frame: 24,
+                terrain_lod_max_inflight_bakes: 64,
+                terrain_lod_tile_budget: 768,
             },
             Self::Low => RenderQualityProfile {
                 directional_shadow_map_size: 512,
@@ -58,6 +66,14 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.1,
                 shadow_normal_bias: 4.0,
                 terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+                terrain_lod_tile_resolution: 33,
+                terrain_lod_cinematic_resolution: 1025,
+                terrain_lod_pixel_error: 4.0,
+                terrain_lod_max_depth: 6,
+                terrain_lod_probe_resolution: 5,
+                terrain_lod_bakes_per_frame: 8,
+                terrain_lod_max_inflight_bakes: 16,
+                terrain_lod_tile_budget: 256,
             },
             Self::High => RenderQualityProfile {
                 directional_shadow_map_size: 2048,
@@ -70,6 +86,14 @@ impl RenderingQuality {
                 shadow_depth_bias: 0.03,
                 shadow_normal_bias: 1.5,
                 terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
+                terrain_lod_tile_resolution: 65,
+                terrain_lod_cinematic_resolution: 2049,
+                terrain_lod_pixel_error: 1.0,
+                terrain_lod_max_depth: 10,
+                terrain_lod_probe_resolution: 13,
+                terrain_lod_bakes_per_frame: 48,
+                terrain_lod_max_inflight_bakes: 128,
+                terrain_lod_tile_budget: 1536,
             },
         }
     }
@@ -93,6 +117,22 @@ pub struct RenderQualityProfile {
     /// meshes. This is a requested cache limit, not an automatic quality
     /// downgrade; eviction is the cache's explicit response when it is full.
     pub terrain_mesh_cache_bytes: u64,
+    /// Vertices per side of one streamed terrain tile.
+    pub terrain_lod_tile_resolution: usize,
+    /// Vertices per side of a frozen/cinematic terrain tile.
+    pub terrain_lod_cinematic_resolution: usize,
+    /// Screen-space terrain error in pixels that triggers refinement.
+    pub terrain_lod_pixel_error: f64,
+    /// Deepest streamed terrain quadtree level.
+    pub terrain_lod_max_depth: u8,
+    /// Samples per side used to measure terrain-node error.
+    pub terrain_lod_probe_resolution: usize,
+    /// New streamed terrain bakes admitted per interactive frame.
+    pub terrain_lod_bakes_per_frame: usize,
+    /// Maximum streamed terrain bakes allowed in flight.
+    pub terrain_lod_max_inflight_bakes: usize,
+    /// Maximum selected streamed terrain tiles per terrain.
+    pub terrain_lod_tile_budget: usize,
 }
 
 /// Persisted user settings for shadow and local-light presentation quality.
@@ -123,6 +163,22 @@ pub struct RenderingQualitySettings {
     pub shadow_normal_bias: f32,
     #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
+    #[serde(default = "default_terrain_lod_tile_resolution")]
+    pub terrain_lod_tile_resolution: usize,
+    #[serde(default = "default_terrain_lod_cinematic_resolution")]
+    pub terrain_lod_cinematic_resolution: usize,
+    #[serde(default = "default_terrain_lod_pixel_error")]
+    pub terrain_lod_pixel_error: f64,
+    #[serde(default = "default_terrain_lod_max_depth")]
+    pub terrain_lod_max_depth: u8,
+    #[serde(default = "default_terrain_lod_probe_resolution")]
+    pub terrain_lod_probe_resolution: usize,
+    #[serde(default = "default_terrain_lod_bakes_per_frame")]
+    pub terrain_lod_bakes_per_frame: usize,
+    #[serde(default = "default_terrain_lod_max_inflight_bakes")]
+    pub terrain_lod_max_inflight_bakes: usize,
+    #[serde(default = "default_terrain_lod_tile_budget")]
+    pub terrain_lod_tile_budget: usize,
 }
 
 const fn balanced_profile() -> RenderQualityProfile {
@@ -169,6 +225,38 @@ const fn default_shadow_normal_bias() -> f32 {
     balanced_profile().shadow_normal_bias
 }
 
+const fn default_terrain_lod_tile_resolution() -> usize {
+    balanced_profile().terrain_lod_tile_resolution
+}
+
+const fn default_terrain_lod_cinematic_resolution() -> usize {
+    balanced_profile().terrain_lod_cinematic_resolution
+}
+
+const fn default_terrain_lod_pixel_error() -> f64 {
+    balanced_profile().terrain_lod_pixel_error
+}
+
+const fn default_terrain_lod_max_depth() -> u8 {
+    balanced_profile().terrain_lod_max_depth
+}
+
+const fn default_terrain_lod_probe_resolution() -> usize {
+    balanced_profile().terrain_lod_probe_resolution
+}
+
+const fn default_terrain_lod_bakes_per_frame() -> usize {
+    balanced_profile().terrain_lod_bakes_per_frame
+}
+
+const fn default_terrain_lod_max_inflight_bakes() -> usize {
+    balanced_profile().terrain_lod_max_inflight_bakes
+}
+
+const fn default_terrain_lod_tile_budget() -> usize {
+    balanced_profile().terrain_lod_tile_budget
+}
+
 impl RenderingQualitySettings {
     /// Return the currently authoritative values, including custom edits.
     pub const fn profile(self) -> RenderQualityProfile {
@@ -183,6 +271,14 @@ impl RenderingQualitySettings {
             shadow_depth_bias: self.shadow_depth_bias,
             shadow_normal_bias: self.shadow_normal_bias,
             terrain_mesh_cache_bytes: self.terrain_mesh_cache_bytes,
+            terrain_lod_tile_resolution: self.terrain_lod_tile_resolution,
+            terrain_lod_cinematic_resolution: self.terrain_lod_cinematic_resolution,
+            terrain_lod_pixel_error: self.terrain_lod_pixel_error,
+            terrain_lod_max_depth: self.terrain_lod_max_depth,
+            terrain_lod_probe_resolution: self.terrain_lod_probe_resolution,
+            terrain_lod_bakes_per_frame: self.terrain_lod_bakes_per_frame,
+            terrain_lod_max_inflight_bakes: self.terrain_lod_max_inflight_bakes,
+            terrain_lod_tile_budget: self.terrain_lod_tile_budget,
         }
     }
 
@@ -207,6 +303,14 @@ impl RenderingQualitySettings {
         self.shadow_depth_bias = profile.shadow_depth_bias;
         self.shadow_normal_bias = profile.shadow_normal_bias;
         self.terrain_mesh_cache_bytes = profile.terrain_mesh_cache_bytes;
+        self.terrain_lod_tile_resolution = profile.terrain_lod_tile_resolution;
+        self.terrain_lod_cinematic_resolution = profile.terrain_lod_cinematic_resolution;
+        self.terrain_lod_pixel_error = profile.terrain_lod_pixel_error;
+        self.terrain_lod_max_depth = profile.terrain_lod_max_depth;
+        self.terrain_lod_probe_resolution = profile.terrain_lod_probe_resolution;
+        self.terrain_lod_bakes_per_frame = profile.terrain_lod_bakes_per_frame;
+        self.terrain_lod_max_inflight_bakes = profile.terrain_lod_max_inflight_bakes;
+        self.terrain_lod_tile_budget = profile.terrain_lod_tile_budget;
     }
 
     /// Validate persisted or UI-edited settings before they reach Bevy.
@@ -235,6 +339,32 @@ impl RenderingQualitySettings {
         if profile.terrain_mesh_cache_bytes == 0 {
             return Err("terrain mesh cache byte ceiling must be greater than zero");
         }
+        if profile.terrain_lod_tile_resolution < 3 || profile.terrain_lod_tile_resolution > 4097 {
+            return Err("terrain tile resolution must be between 3 and 4097");
+        }
+        if profile.terrain_lod_cinematic_resolution < 3
+            || profile.terrain_lod_cinematic_resolution > 4097
+        {
+            return Err("cinematic terrain resolution must be between 3 and 4097");
+        }
+        if !profile.terrain_lod_pixel_error.is_finite() || profile.terrain_lod_pixel_error <= 0.0 {
+            return Err("terrain LOD pixel error must be finite and greater than zero");
+        }
+        if profile.terrain_lod_max_depth == 0 || profile.terrain_lod_max_depth > 20 {
+            return Err("terrain LOD max depth must be between 1 and 20");
+        }
+        if profile.terrain_lod_probe_resolution < 3 || profile.terrain_lod_probe_resolution > 257 {
+            return Err("terrain LOD probe resolution must be between 3 and 257");
+        }
+        if profile.terrain_lod_bakes_per_frame == 0 {
+            return Err("terrain LOD bakes per frame must be greater than zero");
+        }
+        if profile.terrain_lod_max_inflight_bakes == 0 {
+            return Err("terrain LOD in-flight bake cap must be greater than zero");
+        }
+        if profile.terrain_lod_tile_budget == 0 {
+            return Err("terrain LOD tile budget must be greater than zero");
+        }
         Ok(())
     }
 }
@@ -253,6 +383,14 @@ impl Default for RenderingQualitySettings {
             shadow_depth_bias: profile.shadow_depth_bias,
             shadow_normal_bias: profile.shadow_normal_bias,
             terrain_mesh_cache_bytes: profile.terrain_mesh_cache_bytes,
+            terrain_lod_tile_resolution: profile.terrain_lod_tile_resolution,
+            terrain_lod_cinematic_resolution: profile.terrain_lod_cinematic_resolution,
+            terrain_lod_pixel_error: profile.terrain_lod_pixel_error,
+            terrain_lod_max_depth: profile.terrain_lod_max_depth,
+            terrain_lod_probe_resolution: profile.terrain_lod_probe_resolution,
+            terrain_lod_bakes_per_frame: profile.terrain_lod_bakes_per_frame,
+            terrain_lod_max_inflight_bakes: profile.terrain_lod_max_inflight_bakes,
+            terrain_lod_tile_budget: profile.terrain_lod_tile_budget,
         }
     }
 }
@@ -375,6 +513,24 @@ mod tests {
         assert!(
             estimate_directional_shadow_bytes(RenderingQuality::High, 1)
                 > GpuShadowAdapterLimit::default().limit_bytes
+        );
+    }
+
+    #[test]
+    fn terrain_quality_is_authoritative_and_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        assert!(settings.validate().is_ok());
+        assert_eq!(
+            settings.profile().terrain_lod_tile_resolution,
+            RenderingQuality::Balanced
+                .profile()
+                .terrain_lod_tile_resolution
+        );
+
+        settings.terrain_lod_tile_resolution = 2;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain tile resolution must be between 3 and 4097")
         );
     }
 

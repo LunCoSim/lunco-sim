@@ -38,9 +38,7 @@ use lunco_terrain_core::{
 };
 
 use crate::oracle::SurfaceOracle;
-use crate::stream_viz::{
-    DemHeightField, TerrainDetailDemands, TerrainLodConfig, TerrainStreamStatus,
-};
+use crate::stream_viz::{DemHeightField, TerrainDetailDemands, TerrainStreamStatus};
 
 /// Largest raster a single `TerrainField` query may materialise per side (256×256 =
 /// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the
@@ -400,12 +398,13 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "TerrainLodStatus: terrain streaming is unavailable".to_string(),
             );
         };
-        let Some(config) = world.get_resource::<TerrainLodConfig>() else {
+        let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
-                "TerrainLodStatus: terrain LOD configuration is unavailable".to_string(),
+                "TerrainLodStatus: rendering quality settings are unavailable".to_string(),
             );
         };
+        let profile = settings.profile();
         let Some(demands) = world.get_resource::<TerrainDetailDemands>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
@@ -426,10 +425,14 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             .collect::<Vec<_>>();
         ApiResponse::ok(serde_json::json!({
             "config": {
-                "pixel_error": config.pixel_error,
-                "max_depth": config.max_depth,
-                "bakes_per_frame": config.bakes_per_frame,
-                "tile_budget": config.tile_budget,
+                "pixel_error": profile.terrain_lod_pixel_error,
+                "max_depth": profile.terrain_lod_max_depth,
+                "bakes_per_frame": profile.terrain_lod_bakes_per_frame,
+                "max_inflight_bakes": profile.terrain_lod_max_inflight_bakes,
+                "tile_budget": profile.terrain_lod_tile_budget,
+                "tile_resolution": profile.terrain_lod_tile_resolution,
+                "cinematic_resolution": profile.terrain_lod_cinematic_resolution,
+                "probe_resolution": profile.terrain_lod_probe_resolution,
             },
             "stream": {
                 "wanted": status.wanted,

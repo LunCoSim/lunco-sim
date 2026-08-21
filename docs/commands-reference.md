@@ -2680,21 +2680,24 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `id` | `String` |   |
 
-#### `SetTerrainLod`
+#### `SetTerrainRenderingQuality`
 
- Live-tune [`TerrainLodConfig`] from the API/scripts — the same fields the
- Inspector's "Terrain LOD" section edits. Omitted fields keep their current
- values. Written through raw: the selection pass clamps at its use sites, so
- command and Inspector edits go through the same guards.
+ Edit the persisted terrain rendering-quality fields from the API/scripts. The
+ command updates only supplied fields and rejects the complete candidate when
+ any value is invalid; it never silently selects a lower preset.
 
 - *defined in:* `crates/lunco-terrain-surface/src/stream_viz.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `pixel_error` | `Option < f64 >` |   |
-| `max_depth` | `Option < u8 >` |   |
-| `bakes_per_frame` | `Option < usize >` |   |
-| `tile_budget` | `Option < usize >` |   |
+| `tile_resolution` | `Option < usize >` | Streamed tile vertices per side. |
+| `cinematic_resolution` | `Option < usize >` | Frozen/cinematic tile vertices per side. |
+| `pixel_error` | `Option < f64 >` | Screen-space refinement error in pixels. |
+| `max_depth` | `Option < u8 >` | Deepest streamed quadtree level. |
+| `probe_resolution` | `Option < usize >` | Samples per side for node-error measurement. |
+| `bakes_per_frame` | `Option < usize >` | Interactive tile bakes admitted per frame. |
+| `max_inflight_bakes` | `Option < usize >` | In-flight bake backpressure cap. |
+| `tile_budget` | `Option < usize >` | Maximum selected tiles per terrain. |
 
 #### `SetTerrainOverlay`
 

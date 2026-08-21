@@ -5227,6 +5227,64 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
+            ui.collapsing("Terrain LOD", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_tile_resolution)
+                        .speed(2.0)
+                        .range(3..=4097)
+                        .prefix("Streamed tile resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_cinematic_resolution)
+                        .speed(2.0)
+                        .range(3..=4097)
+                        .prefix("Cinematic tile resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_pixel_error)
+                        .speed(0.1)
+                        .range(0.1..=32.0)
+                        .prefix("Screen error: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_max_depth)
+                        .speed(1.0)
+                        .range(1..=20)
+                        .prefix("Max depth: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_probe_resolution)
+                        .speed(2.0)
+                        .range(3..=257)
+                        .prefix("Error probe resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_bakes_per_frame)
+                        .speed(1.0)
+                        .range(1..=256)
+                        .prefix("Bakes per frame: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_max_inflight_bakes)
+                        .speed(1.0)
+                        .range(1..=512)
+                        .prefix("In-flight bakes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_tile_budget)
+                        .speed(16.0)
+                        .range(1..=8192)
+                        .prefix("Selected tile budget: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These are explicit terrain rendering controls. A custom value is applied as authored; the renderer does not silently choose a lower preset.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             if settings != *current {
                 ctx.set_resource(settings);
             }

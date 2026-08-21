@@ -1015,12 +1015,6 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
         .show(ui, |ui| terrain_overlay_section(ui, ctx));
     ui.separator();
 
-    // ── Terrain LOD (runtime streaming knobs + streaming health) ─
-    egui::CollapsingHeader::new("Terrain LOD")
-        .default_open(true)
-        .show(ui, |ui| terrain_lod_section(ui, ctx));
-    ui.separator();
-
     // ── Obstacle Field (procedural craters + rocks) ──────────────
     egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
         .default_open(true)
@@ -1957,90 +1951,6 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     if any_change {
         ctx.trigger(cmd);
-    }
-}
-
-/// Runtime LOD knobs for streamed DEM terrain — detail-vs-distance + load
-/// smoothness, applied live (no rebuild). Edits the global `TerrainLodConfig`.
-fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    use lunco_terrain_surface::{SetTerrainLod, TerrainLodConfig};
-    let Some(mut cfg) = ctx.resource::<TerrainLodConfig>().copied() else {
-        ui.label("No streaming terrain in this scene.");
-        return;
-    };
-    let before = cfg;
-    ui.add(egui::Slider::new(&mut cfg.pixel_error, 0.5..=16.0).text("Pixel error (px)"))
-        .on_hover_text(
-            "Screen-space error at which a tile refines (canonical viewport). \
-                 Lower = finer tiles wherever the surface earns it (rims, peaks).",
-        );
-    ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
-        .on_hover_text("Deepest refinement = closest-up detail.");
-    ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
-        .on_hover_text(
-            "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
-        );
-    ui.add(egui::Slider::new(&mut cfg.tile_budget, 64usize..=2048).text("Tile budget"))
-        .on_hover_text(
-            "Cap on SELECTED tiles per terrain — the dominant terrain GPU cost. \
-             If the pixel-error metric wants more tiles than this, the excess \
-             splits are refused and the far field sits on coarser parents.",
-        );
-    if cfg != before {
-        ctx.trigger(SetTerrainLod {
-            pixel_error: (cfg.pixel_error != before.pixel_error).then_some(cfg.pixel_error),
-            max_depth: (cfg.max_depth != before.max_depth).then_some(cfg.max_depth),
-            bakes_per_frame: (cfg.bakes_per_frame != before.bakes_per_frame)
-                .then_some(cfg.bakes_per_frame),
-            tile_budget: (cfg.tile_budget != before.tile_budget).then_some(cfg.tile_budget),
-        });
-    }
-    // Streaming health — pure derived read of `TerrainStreamStatus`.
-    if let Some(status) = ctx
-        .resource::<lunco_terrain_surface::TerrainStreamStatus>()
-        .copied()
-    {
-        ui.separator();
-        ui.label(format!(
-            "Tiles: {}/{} resident · view {}/{} ready · {} baking",
-            status.resident,
-            status.wanted,
-            status.focus_resident,
-            status.focus_wanted,
-            status.pending
-        ))
-        .on_hover_text(
-            "Wanted tiles with a mesh on screen / wanted by the current selection; \
-             view ready requires the exact selected tile beneath every active camera, \
-             not merely a coarse fallback; baking = off-thread height bakes in flight.",
-        );
-        if status.stale_cancelled > 0 {
-            ui.label(format!(
-                "{} obsolete bake requests cancelled",
-                status.stale_cancelled
-            ))
-            .on_hover_text(
-                "Requests left behind by camera/body movement were removed so they \
-                 cannot occupy all terrain worker slots.",
-            );
-        }
-        if status.budget_refused > 0 {
-            // Semantic status colour from the active Theme (§3.1); egui
-            // placeholder when headless.
-            let warning_col = ctx
-                .resource::<lunco_theme::Theme>()
-                .map(|t| t.tokens.warning)
-                .unwrap_or(egui::Color32::PLACEHOLDER);
-            ui.colored_label(
-                warning_col,
-                format!("{} splits refused by tile budget", status.budget_refused),
-            )
-            .on_hover_text(
-                "The pixel-error metric wants finer tiles than the budget allows, so \
-                 those areas hold on coarser parents. This does NOT resolve by \
-                 waiting — raise the tile budget or the pixel error.",
-            );
-        }
     }
 }
 
