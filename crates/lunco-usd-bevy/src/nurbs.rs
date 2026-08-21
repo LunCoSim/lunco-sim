@@ -56,10 +56,27 @@ pub fn sample_nurbs_curve(
     steps: usize,
 ) -> Vec<[f32; 3]> {
     let cv = points.len();
-    if order < 2 || cv < order || knots.len() < cv + order {
+    let Some(knot_count) = cv.checked_add(order) else {
+        return Vec::new();
+    };
+    if order < 2 || cv < order || knots.len() != knot_count || steps == 0 {
         return Vec::new();
     }
     if !weights.is_empty() && weights.len() != cv {
+        return Vec::new();
+    }
+    if points
+        .iter()
+        .any(|p| p.iter().any(|value| !value.is_finite()))
+        || (!weights.is_empty()
+            && weights
+                .iter()
+                .any(|weight| !weight.is_finite() || *weight <= 0.0))
+        || knots
+            .windows(2)
+            .any(|window| !window[0].is_finite() || window[1] < window[0])
+        || knots.last().is_some_and(|value| !value.is_finite())
+    {
         return Vec::new();
     }
 
@@ -67,7 +84,7 @@ pub fn sample_nurbs_curve(
     // degree `p = order - 1` over `cv` control points wants the same length, so
     // this is a direct hand-over. Trim any excess USD authored beyond the
     // requirement rather than rejecting — assets over-author this routinely.
-    let knot_vec = KnotVec::from(knots[..cv + order].to_vec());
+    let knot_vec = KnotVec::from(knots.to_vec());
 
     // Homogeneous control points: PRE-MULTIPLY xyz by w. `(x, y, z, w)` with raw
     // xyz is a different curve — the classic rational-NURBS mistake.
@@ -97,8 +114,10 @@ pub fn sample_nurbs_curve(
         return Vec::new();
     }
 
-    let steps = steps.max(1);
-    let mut out = Vec::with_capacity(steps + 1);
+    let Some(capacity) = steps.checked_add(1) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(capacity);
     for i in 0..=steps {
         let t = t0 + (t1 - t0) * (i as f64 / steps as f64);
         let p = curve.subs(t);
@@ -145,9 +164,21 @@ pub fn sample_nurbs_patch(
     u_steps: usize,
     v_steps: usize,
 ) -> Vec<PatchSample> {
+    if u_steps == 0 || v_steps == 0 {
+        return Vec::new();
+    }
     let uvs: Vec<[f64; 2]> = {
-        let (us, vs) = (u_steps.max(1), v_steps.max(1));
-        let mut g = Vec::with_capacity((us + 1) * (vs + 1));
+        let Some(us) = u_steps.checked_add(1) else {
+            return Vec::new();
+        };
+        let Some(vs) = v_steps.checked_add(1) else {
+            return Vec::new();
+        };
+        let Some(capacity) = us.checked_mul(vs) else {
+            return Vec::new();
+        };
+        let (us, vs) = (us - 1, vs - 1);
+        let mut g = Vec::with_capacity(capacity);
         for iv in 0..=vs {
             for iu in 0..=us {
                 g.push([iu as f64 / us as f64, iv as f64 / vs as f64]);
@@ -184,6 +215,15 @@ pub fn sample_nurbs_patch_at(
     // an empty vec into `None` and the surface simply is not there. A patch that
     // vanishes with no log line is the worst failure mode available — it cost most
     // of a session on the HAB-1 dome. Each path therefore names itself.
+    let Some(point_count) = u_count.checked_mul(v_count) else {
+        return Vec::new();
+    };
+    let Some(u_knot_count) = u_count.checked_add(u_order) else {
+        return Vec::new();
+    };
+    let Some(v_knot_count) = v_count.checked_add(v_order) else {
+        return Vec::new();
+    };
     if u_order < 2 || v_order < 2 || u_count < u_order || v_count < v_order {
         warn!(
             u_count,
@@ -194,32 +234,54 @@ pub fn sample_nurbs_patch_at(
         );
         return Vec::new();
     }
-    if points.len() < u_count * v_count {
+    if points.len() != point_count {
         warn!(
             got = points.len(),
-            need = u_count * v_count,
+            need = point_count,
             u_count,
             v_count,
-            "NurbsPatch skipped: too few control points for the declared net"
+            "NurbsPatch skipped: control-point count does not match the declared net"
         );
         return Vec::new();
     }
-    if u_knots.len() < u_count + u_order || v_knots.len() < v_count + v_order {
+    if u_knots.len() != u_knot_count || v_knots.len() != v_knot_count {
         warn!(
             u_knots = u_knots.len(),
-            u_need = u_count + u_order,
+            u_need = u_knot_count,
             v_knots = v_knots.len(),
-            v_need = v_count + v_order,
-            "NurbsPatch skipped: knot vector shorter than count + order"
+            v_need = v_knot_count,
+            "NurbsPatch skipped: knot vector count does not match count + order"
         );
         return Vec::new();
     }
-    if !weights.is_empty() && weights.len() < u_count * v_count {
+    if !weights.is_empty() && weights.len() != point_count {
         warn!(
             got = weights.len(),
-            need = u_count * v_count,
-            "NurbsPatch skipped: fewer weights than control points"
+            need = point_count,
+            "NurbsPatch skipped: weight count does not match control points"
         );
+        return Vec::new();
+    }
+    if points
+        .iter()
+        .any(|p| p.iter().any(|value| !value.is_finite()))
+        || (!weights.is_empty()
+            && weights
+                .iter()
+                .any(|weight| !weight.is_finite() || *weight <= 0.0))
+        || u_knots
+            .windows(2)
+            .any(|window| !window[0].is_finite() || window[1] < window[0])
+        || v_knots
+            .windows(2)
+            .any(|window| !window[0].is_finite() || window[1] < window[0])
+        || u_knots.last().is_some_and(|value| !value.is_finite())
+        || v_knots.last().is_some_and(|value| !value.is_finite())
+        || uvs.iter().any(|[u, v]| {
+            !u.is_finite() || !v.is_finite() || !(0.0..=1.0).contains(u) || !(0.0..=1.0).contains(v)
+        })
+    {
+        warn!("NurbsPatch skipped: non-finite or out-of-domain authored data");
         return Vec::new();
     }
 
@@ -248,8 +310,8 @@ pub fn sample_nurbs_patch_at(
         ctrl.push(col);
     }
 
-    let uk = KnotVec::from(u_knots[..u_count + u_order].to_vec());
-    let vk = KnotVec::from(v_knots[..v_count + v_order].to_vec());
+    let uk = KnotVec::from(u_knots.to_vec());
+    let vk = KnotVec::from(v_knots.to_vec());
     // `try_new` for the same reason the curve path uses it — `new` panics, and a
     // zero-range knot vector passes every check above.
     let bsp = match BSplineSurface::try_new((uk, vk), ctrl) {
@@ -258,8 +320,8 @@ pub fn sample_nurbs_patch_at(
             warn!(
                 error = %e,
                 u_count, v_count, u_order, v_order,
-                u_knots = ?&u_knots[..(u_count + u_order).min(u_knots.len())],
-                v_knots = ?&v_knots[..(v_count + v_order).min(v_knots.len())],
+                u_knots = ?u_knots,
+                v_knots = ?v_knots,
                 "NurbsPatch skipped: truck rejected the control net / knot vectors"
             );
             return Vec::new();
@@ -282,10 +344,9 @@ pub fn sample_nurbs_patch_at(
     let mut out = Vec::with_capacity(uvs.len());
     {
         for &[tu, tv] in uvs {
-            let u = u0 + (u1 - u0) * tu.clamp(0.0, 1.0);
-            let v = v0 + (v1 - v0) * tv.clamp(0.0, 1.0);
+            let u = u0 + (u1 - u0) * tu;
+            let v = v0 + (v1 - v0) * tv;
             let p = surface.subs(u, v);
-            let n = surface.normal(u, v);
             if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
                 warn!(
                     u,
@@ -297,17 +358,44 @@ pub fn sample_nurbs_patch_at(
                 );
                 return Vec::new();
             }
-            // A degenerate row (a dome apex, where every control point collapses to
-            // one) has a zero cross product and so a NaN normal. Substitute +Y
-            // rather than emitting NaN into the vertex buffer, which would render
-            // as a black hole and is miserable to trace back to a normal.
-            let n = if n.x.is_finite() && n.y.is_finite() && n.z.is_finite() {
-                [n.x as f32, n.y as f32, n.z as f32]
-            } else {
-                [0.0, 1.0, 0.0]
+            // The analytic normal is undefined at a genuine singularity such as
+            // a dome apex. Evaluate the normal at the nearest non-singular point
+            // in the patch domain so the result follows the authored surface
+            // instead of inventing a world-axis normal.
+            let du = (u1 - u0) * 1e-6;
+            let dv = (v1 - v0) * 1e-6;
+            let candidates = [
+                (u, v),
+                ((u - du).max(u0), v),
+                ((u + du).min(u1), v),
+                (u, (v - dv).max(v0)),
+                (u, (v + dv).min(v1)),
+            ];
+            let Some(n) = candidates.into_iter().find_map(|(nu, nv)| {
+                let n = surface.normal(nu, nv);
+                let length = (n.x * n.x + n.y * n.y + n.z * n.z).sqrt();
+                if !n.x.is_finite()
+                    || !n.y.is_finite()
+                    || !n.z.is_finite()
+                    || !length.is_finite()
+                    || length <= f64::EPSILON
+                {
+                    return None;
+                }
+                let n = [n.x / length, n.y / length, n.z / length];
+                let n = [n[0] as f32, n[1] as f32, n[2] as f32];
+                n.iter().all(|value| value.is_finite()).then_some(n)
+            }) else {
+                warn!(u, v, "NurbsPatch skipped: surface normal is undefined");
+                return Vec::new();
             };
+            let position = [p.x as f32, p.y as f32, p.z as f32];
+            if position.iter().any(|value| !value.is_finite()) {
+                warn!(u, v, "NurbsPatch skipped: point exceeds finite f32 range");
+                return Vec::new();
+            }
             out.push(PatchSample {
-                position: [p.x as f32, p.y as f32, p.z as f32],
+                position,
                 normal: n,
                 uv: [tu as f32, tv as f32],
             });
@@ -515,6 +603,11 @@ mod tests {
         assert!(sample_nurbs_patch(&pts, &[], 2, 2, 2, 2, &[0.0, 0.0], &k, 2, 2).is_empty());
         // weight-count mismatch
         assert!(sample_nurbs_patch(&pts, &[1.0], 2, 2, 2, 2, &k, &k, 2, 2).is_empty());
+        // extra control points and out-of-domain sample coordinates are not
+        // silently truncated or clamped.
+        assert!(sample_nurbs_patch(&[[0.0; 3]; 5], &[], 2, 2, 2, 2, &k, &k, 2, 2).is_empty());
+        assert!(sample_nurbs_patch_at(&pts, &[], 2, 2, 2, 2, &k, &k, &[[-0.1, 0.5]]).is_empty());
+        assert!(sample_nurbs_patch(&pts, &[], 2, 2, 2, 2, &k, &k, 0, 2).is_empty());
         // zero-range knots — the panic case again, on the surface path
         let z = [0.0, 0.0, 0.0, 0.0];
         assert!(sample_nurbs_patch(&pts, &[], 2, 2, 2, 2, &z, &z, 2, 2).is_empty());
@@ -539,6 +632,18 @@ mod tests {
         assert!(
             sample_nurbs_curve(&pts, &[1.0], 2, &knots, 4).is_empty(),
             "weight mismatch"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[], 2, &knots, 0).is_empty(),
+            "zero tessellation steps"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[1.0, 0.0], 2, &knots, 4).is_empty(),
+            "zero rational weight"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[], 2, &[0.0, 0.0, 1.0, 1.0, 2.0], 4).is_empty(),
+            "extra knot data"
         );
     }
 

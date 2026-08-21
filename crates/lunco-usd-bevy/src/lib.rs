@@ -4885,6 +4885,29 @@ fn build_usd_curve_mesh(
         )
     };
 
+    if is_nurbs {
+        let expected_knots = counts
+            .iter()
+            .enumerate()
+            .try_fold(0usize, |total, (index, count)| {
+                let count = usize::try_from(*count).ok()?;
+                let order = orders
+                    .get(index)
+                    .or_else(|| orders.first())
+                    .and_then(|order| usize::try_from(*order).ok())?;
+                total.checked_add(count.checked_add(order)?)
+            });
+        if expected_knots != Some(all_knots.len()) {
+            error!(
+                "[usd-bevy] {} has {} NurbsCurves knots, expected {:?}",
+                path.as_str(),
+                all_knots.len(),
+                expected_knots
+            );
+            return None;
+        }
+    }
+
     if quality.curve_samples_per_segment == 0 || quality.curve_radial_segments < 3 {
         return None;
     }
@@ -4947,15 +4970,18 @@ fn build_usd_curve_mesh(
                 return None;
             };
             let need = n + order;
-            if knot_cursor + need > all_knots.len() {
+            let Some(knot_end) = knot_cursor.checked_add(need) else {
+                return None;
+            };
+            if knot_end > all_knots.len() {
                 error!(
                     "[usd-bevy] {} has insufficient NurbsCurves knots",
                     path.as_str()
                 );
                 return None;
             }
-            let knots = all_knots[knot_cursor..knot_cursor + need].to_vec();
-            knot_cursor += need;
+            let knots = all_knots[knot_cursor..knot_end].to_vec();
+            knot_cursor = knot_end;
             let w: Vec<f64> = if point_weights.is_empty() {
                 Vec::new()
             } else {
@@ -4965,8 +4991,11 @@ fn build_usd_curve_mesh(
             let pts: Vec<[f32; 3]> = cvs.iter().map(|p| p.to_array()).collect();
             let sampled = crate::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
             if sampled.is_empty() {
-                // Malformed NURBS: skip this curve rather than emit a wrong one.
-                continue;
+                error!(
+                    "[usd-bevy] {} has a NurbsCurves segment that cannot be evaluated",
+                    path.as_str()
+                );
+                return None;
             }
             sampled.into_iter().map(Vec3::from_array).collect()
         } else if basis == CurveBasis::Linear {
@@ -5002,7 +5031,11 @@ fn build_usd_curve_mesh(
             quality.curve_radial_segments,
             periodic,
         ) else {
-            continue;
+            error!(
+                "[usd-bevy] {} has a curve segment that cannot be swept into a mesh",
+                path.as_str()
+            );
+            return None;
         };
         merged = Some(match merged {
             None => tube,
@@ -5011,6 +5044,9 @@ fn build_usd_curve_mesh(
                 acc
             }
         });
+    }
+    if is_nurbs && knot_cursor != all_knots.len() {
+        return None;
     }
     merged
 }
@@ -5076,7 +5112,7 @@ fn read_patch_surface(
         return None;
     }
     let u_knots = match read_curve_real_array(reader, path, "uKnots") {
-        Ok(Some(knots)) if knots.len() >= u_count + u_order => knots,
+        Ok(Some(knots)) if knots.len() == u_count + u_order => knots,
         Ok(Some(_)) | Ok(None) | Err(()) => {
             error!(
                 "[usd-bevy] {} has no usable authored uKnots for its NurbsPatch",
@@ -5086,7 +5122,7 @@ fn read_patch_surface(
         }
     };
     let v_knots = match read_curve_real_array(reader, path, "vKnots") {
-        Ok(Some(knots)) if knots.len() >= v_count + v_order => knots,
+        Ok(Some(knots)) if knots.len() == v_count + v_order => knots,
         Ok(Some(_)) | Ok(None) | Err(()) => {
             error!(
                 "[usd-bevy] {} has no usable authored vKnots for its NurbsPatch",

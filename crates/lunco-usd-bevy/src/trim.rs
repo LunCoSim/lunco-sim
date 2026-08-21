@@ -83,17 +83,28 @@ impl TrimLoops {
 fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Option<[f64; 2]> {
     let n = cvs.len();
     let degree = order.checked_sub(1)?;
-    if n < order || knots.len() < n + order || degree == 0 {
+    let knot_count = n.checked_add(order)?;
+    if n < order || knots.len() != knot_count || degree == 0 {
+        return None;
+    }
+    if cvs
+        .iter()
+        .any(|[x, y, w]| !x.is_finite() || !y.is_finite() || !w.is_finite() || *w <= 0.0)
+        || knots
+            .windows(2)
+            .any(|window| !window[0].is_finite() || window[1] < window[0])
+        || knots.last().is_some_and(|value| !value.is_finite())
+    {
         return None;
     }
 
-    // Clamp into the valid span range: [knots[degree], knots[n]].
+    // The trim range must already be in the authored knot domain. Clamping it
+    // would silently move a malformed boundary and change the requested hole.
     let lo = knots[degree];
     let hi = knots[n];
-    if hi.partial_cmp(&lo) != Some(std::cmp::Ordering::Greater) {
+    if hi <= lo || !t.is_finite() || t < lo || t > hi {
         return None;
     }
-    let t = t.clamp(lo, hi);
 
     // Find the knot span k such that knots[k] <= t < knots[k+1].
     let mut k = degree;
@@ -104,9 +115,7 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
     // de Boor on homogeneous coordinates. Working homogeneous throughout is what
     // makes this correct for weighted control points; dividing early would
     // linearly interpolate an already-projected point and bow the curve.
-    let mut d: Vec<[f64; 3]> = (0..=degree)
-        .map(|j| cvs[(k - degree + j).min(n - 1)])
-        .collect();
+    let mut d: Vec<[f64; 3]> = (0..=degree).map(|j| cvs[k - degree + j]).collect();
 
     for r in 1..=degree {
         for j in (r..=degree).rev() {
@@ -127,10 +136,14 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
     }
 
     let [x, y, w] = d[degree];
-    if w.abs() < 1e-12 || !x.is_finite() || !y.is_finite() {
+    if w.abs() < 1e-12 || !w.is_finite() || !x.is_finite() || !y.is_finite() {
         return None;
     }
-    Some([x / w, y / w])
+    let result = [x / w, y / w];
+    result
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(result)
 }
 
 /// Discretise one trim curve into a polyline.
@@ -165,9 +178,22 @@ fn tessellate_curve(
     range: [f64; 2],
     steps: usize,
 ) -> Vec<[f64; 2]> {
-    let steps = steps.max(2);
+    if steps == 0 {
+        return Vec::new();
+    }
     let (t0, t1) = (range[0], range[1]);
-    if t1.partial_cmp(&t0) != Some(std::cmp::Ordering::Greater) {
+    if !t0.is_finite()
+        || !t1.is_finite()
+        || t1 <= t0
+        || knots.len() != cvs.len().saturating_add(order)
+        || order < 2
+        || cvs.len() < order
+    {
+        return Vec::new();
+    }
+    let lo = knots[order - 1];
+    let hi = knots[cvs.len()];
+    if hi <= lo || t0 < lo || t1 > hi {
         return Vec::new();
     }
 
@@ -176,15 +202,16 @@ fn tessellate_curve(
         .collect();
     ts.extend(knots.iter().copied().filter(|&k| k > t0 && k < t1));
 
-    ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ts.sort_by(f64::total_cmp);
     // Relative to the span so this behaves the same whether the curve is knotted
     // 0..1 or 0..15.
     let eps = (t1 - t0) * 1e-9;
     ts.dedup_by(|a, b| (*a - *b).abs() <= eps);
 
     ts.into_iter()
-        .filter_map(|t| eval_rational_2d(cvs, knots, order, t))
-        .collect()
+        .map(|t| eval_rational_2d(cvs, knots, order, t))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
 /// Assemble `trimCurve:*` arrays into normalised closed loops.
@@ -208,13 +235,30 @@ pub fn assemble_loops(
     let mut out = TrimLoops::default();
     let (mut curve_i, mut knot_i, mut pt_i) = (0usize, 0usize, 0usize);
 
+    let Some(curve_count) = counts.iter().try_fold(0usize, |total, &count| {
+        usize::try_from(count)
+            .ok()
+            .filter(|count| *count > 0)
+            .and_then(|count| total.checked_add(count))
+    }) else {
+        return out;
+    };
+    if orders.len() != curve_count
+        || vertex_counts.len() != curve_count
+        || (!ranges.is_empty() && ranges.len() != curve_count)
+    {
+        return out;
+    }
+
     let (du, dv) = (u_range[1] - u_range[0], v_range[1] - v_range[0]);
     if !(du.is_finite() && dv.is_finite()) || du <= 0.0 || dv <= 0.0 {
         return out;
     }
 
     for &n_curves in counts {
-        let n_curves = n_curves.max(0) as usize;
+        let Some(n_curves) = usize::try_from(n_curves).ok().filter(|count| *count > 0) else {
+            return TrimLoops::default();
+        };
         let mut loop_pts: Vec<[f64; 2]> = Vec::new();
 
         for _ in 0..n_curves {
@@ -224,24 +268,44 @@ pub fn assemble_loops(
             let Some(&vc) = vertex_counts.get(curve_i) else {
                 return out;
             };
-            let (order, vc) = (order.max(2) as usize, vc.max(0) as usize);
-            let n_knots = vc + order;
+            let Some(order) = usize::try_from(order).ok().filter(|order| *order >= 2) else {
+                return TrimLoops::default();
+            };
+            let Some(vc) = usize::try_from(vc).ok().filter(|vc| *vc >= order) else {
+                return TrimLoops::default();
+            };
+            let Some(n_knots) = vc.checked_add(order) else {
+                return TrimLoops::default();
+            };
 
-            if pt_i + vc > points.len() || knot_i + n_knots > knots.len() {
+            let Some(pt_end) = pt_i.checked_add(vc) else {
+                return TrimLoops::default();
+            };
+            let Some(knot_end) = knot_i.checked_add(n_knots) else {
+                return TrimLoops::default();
+            };
+            if pt_end > points.len() || knot_end > knots.len() {
                 return out;
             }
 
-            let cvs: Vec<[f64; 3]> = points[pt_i..pt_i + vc]
+            let cvs: Vec<[f64; 3]> = points[pt_i..pt_end]
                 .iter()
                 .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
                 .collect();
-            let kn = &knots[knot_i..knot_i + n_knots];
-            let range = ranges
-                .get(curve_i)
-                .copied()
-                .unwrap_or([kn[order - 1], kn[vc]]);
+            let kn = &knots[knot_i..knot_end];
+            let range = if ranges.is_empty() {
+                [kn[order - 1], kn[vc]]
+            } else {
+                let Some(range) = ranges.get(curve_i).copied() else {
+                    return TrimLoops::default();
+                };
+                range
+            };
 
             let seg = tessellate_curve(&cvs, kn, order, range, steps_per_curve);
+            if seg.len() < 2 {
+                return TrimLoops::default();
+            }
             // Drop the duplicated joint between consecutive curves of one loop.
             let seg = if loop_pts.is_empty() {
                 seg
@@ -251,8 +315,8 @@ pub fn assemble_loops(
             loop_pts.extend(seg);
 
             curve_i += 1;
-            knot_i += n_knots;
-            pt_i += vc;
+            pt_i = pt_end;
+            knot_i = knot_end;
         }
 
         // Normalise, and close the loop if the author left it open.
@@ -260,13 +324,20 @@ pub fn assemble_loops(
             .into_iter()
             .map(|[u, v]| [(u - u_range[0]) / du, (v - v_range[0]) / dv])
             .collect();
-        if norm.len() >= 3 {
-            let (first, last) = (norm[0], norm[norm.len() - 1]);
-            if (first[0] - last[0]).abs() > 1e-9 || (first[1] - last[1]).abs() > 1e-9 {
-                norm.push(first);
-            }
-            out.loops.push(norm);
+        if norm.iter().any(|[u, v]| {
+            !u.is_finite() || !v.is_finite() || !(0.0..=1.0).contains(u) || !(0.0..=1.0).contains(v)
+        }) || norm.len() < 3
+        {
+            return TrimLoops::default();
         }
+        let (first, last) = (norm[0], norm[norm.len() - 1]);
+        if (first[0] - last[0]).abs() > 1e-9 || (first[1] - last[1]).abs() > 1e-9 {
+            norm.push(first);
+        }
+        out.loops.push(norm);
+    }
+    if curve_i != curve_count || knot_i != knots.len() || pt_i != points.len() {
+        return TrimLoops::default();
     }
     out
 }
@@ -309,11 +380,24 @@ pub struct TrimmedDomain {
 /// the hole boundary is honoured exactly rather than approximated by whichever
 /// grid cells happen to straddle it.
 pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDomain> {
+    if grid < 2
+        || loops.loops.iter().any(|loop_points| {
+            loop_points.len() < 4
+                || loop_points.iter().any(|[u, v]| {
+                    !u.is_finite()
+                        || !v.is_finite()
+                        || !(0.0..=1.0).contains(u)
+                        || !(0.0..=1.0).contains(v)
+                })
+        })
+    {
+        return None;
+    }
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> =
         ConstrainedDelaunayTriangulation::new();
 
     // Domain corners and a seeded interior grid.
-    let g = grid.max(2);
+    let g = grid;
     for iv in 0..=g {
         for iu in 0..=g {
             let (u, v) = (iu as f64 / g as f64, iv as f64 / g as f64);
@@ -323,7 +407,9 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
             if loops.loops.iter().any(|l| point_in_loop(p, l)) {
                 continue;
             }
-            let _ = cdt.insert(Point2::new(u, v));
+            if cdt.insert(Point2::new(u, v)).is_err() {
+                return None;
+            }
         }
     }
 
@@ -337,15 +423,15 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
     // hard edge regardless of what the loops do near it.
     let corners: Vec<_> = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
         .iter()
-        .filter_map(|&[u, v]| cdt.insert(Point2::new(u, v)).ok())
-        .collect();
-    if corners.len() == 4 {
-        for i in 0..4 {
-            let (a, b) = (corners[i], corners[(i + 1) % 4]);
-            if a != b {
-                cdt.add_constraint_and_split(a, b, |p| p);
-            }
+        .map(|&[u, v]| cdt.insert(Point2::new(u, v)))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    for i in 0..4 {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        if a == b {
+            return None;
         }
+        cdt.add_constraint_and_split(a, b, |p| p);
     }
 
     // Loop vertices + constraint edges.
@@ -371,13 +457,11 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
         }
         if !ok || handles.len() < 4 {
             bevy::log::warn!(
-                "[usd-bevy] trim loop dropped: {} of {} vertices inserted — \
-                 rendering this patch WITHOUT that loop rather than with a \
-                 corrupted one",
+                "[usd-bevy] trim loop could not be inserted: {} of {} vertices",
                 handles.len(),
                 l.len()
             );
-            continue;
+            return None;
         }
         for w in handles.windows(2) {
             if w[0] == w[1] {
@@ -762,5 +846,30 @@ mod tests {
     fn malformed_trim_is_skipped_not_guessed() {
         assert!(eval_rational_2d(&[[0.0, 0.0, 1.0]], &[0.0, 1.0], 3, 0.5).is_none());
         assert!(eval_rational_2d(&[], &[], 3, 0.5).is_none());
+        assert!(assemble_loops(
+            &[1],
+            &[1],
+            &[1],
+            &[0.0, 1.0],
+            &[],
+            &[[0.0, 0.0, 1.0]],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            4
+        )
+        .is_empty());
+        assert!(assemble_loops(
+            &[1],
+            &[2],
+            &[2],
+            &[0.0, 0.0, 1.0, 1.0],
+            &[[0.0, 2.0]],
+            &[[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            4
+        )
+        .is_empty());
+        assert!(triangulate_trimmed(&TrimLoops::default(), 1).is_none());
     }
 }
