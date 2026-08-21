@@ -147,17 +147,25 @@ pub struct ActuatorDrivenJoint;
 #[reflect(Component)]
 pub struct SoiMigrant;
 
+/// UsdLux `DistantLight.inputs:angle` schema fallback, in degrees.
+///
+/// This is a physical/schema fact rather than a renderer preset: it is shared
+/// by authored USD projection, the environment sun state, and the horizon
+/// shadow march. Keeping it at the lowest shared layer prevents those readers
+/// from drifting apart.
+pub const SOLAR_ANGULAR_DIAMETER_DEG: f32 = 0.53;
+
 /// Angular **diameter** of a sun (`DirectionalLight`) in degrees, from the
-/// UsdLux `inputs:angle` attribute (Sol from Earth/Moon ≈ 0.53°). Drives
-/// physically-scaled penumbra width in the horizon-shadow ray-march:
-/// shadows are razor-sharp next to the caster and soften with distance.
+/// UsdLux `inputs:angle` attribute. Drives physically-scaled penumbra width in
+/// the horizon-shadow ray-march: shadows are razor-sharp next to the caster and
+/// soften with distance.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct SunAngularDiameter(pub f32);
 
 impl Default for SunAngularDiameter {
     fn default() -> Self {
-        Self(0.53)
+        Self(SOLAR_ANGULAR_DIAMETER_DEG)
     }
 }
 

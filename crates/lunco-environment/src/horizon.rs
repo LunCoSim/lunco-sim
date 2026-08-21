@@ -994,8 +994,11 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
             0.0
         };
         // A sun with no authored angular size must not yield tan(0)=0
-        // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
-        let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
+        // (→ div-by-zero in the march). Use the UsdLux schema fallback.
+        let diameter_deg = ang
+            .map(|a| a.0)
+            .filter(|d| *d > 0.0)
+            .unwrap_or(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG);
         (gt, tan_sun_radius(diameter_deg), csm_far)
     })
 }

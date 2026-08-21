@@ -664,7 +664,7 @@ pub(crate) fn instantiate_light_prim(
                     );
                     return false;
                 }
-                Ok(None) => lunco_render::SOLAR_ANGULAR_DIAMETER_DEG,
+                Ok(None) => lunco_core::SOLAR_ANGULAR_DIAMETER_DEG,
                 Err(_) => return false,
             };
             // Renderer settings supply defaults. Authored content overrides

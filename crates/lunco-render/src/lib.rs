@@ -27,7 +27,7 @@ pub use quality::{
     RenderingQuality, RenderingQualitySettings, ShadowMapSuppressed, ShadowMapSuppressionReason,
     ShadowRangeAuthorship,
 };
-pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_DEG};
+pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100};
 
 /// Persisted presentation preference for runtime communication-link beams.
 ///

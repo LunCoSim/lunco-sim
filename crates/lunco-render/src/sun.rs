@@ -41,22 +41,6 @@ use crate::{RenderQualityProfile, RenderingQuality};
 /// the 131 klx sun renders against an EV-9.7 camera (a ~5-stop blowout).
 pub const LUNAR_SUN_EXPOSURE_EV100: f32 = 16.0;
 
-/// Sol's apparent angular **diameter** in degrees, from the Moon or the Earth
-/// (the two are indistinguishable at this precision).
-///
-/// Here for the same reason as [`LUNAR_SUN_EXPOSURE_EV100`]: it is the lowest
-/// crate both readers reach. `lunco_environment::LunarSun` publishes it as
-/// environmental state, and the `lunco-usd-bevy` `DistantLight` loader — which
-/// sits BELOW environment — needs it as the fallback for an unauthored
-/// `inputs:angle`. Two literals would be two numbers that can drift, and the
-/// symptom of drift is a penumbra width that changes depending on whether a
-/// scene authored the attribute.
-///
-/// It is also exactly `UsdLuxDistantLight`'s schema fallback for
-/// `inputs:angle`, so an unauthored prim lands where USD says it lands rather
-/// than on an engine opinion.
-pub const SOLAR_ANGULAR_DIAMETER_DEG: f32 = 0.53;
-
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
 /// atlas size. This is render-side *presentation* config only; the sun's
 /// physical identity (illuminance, angular size, matched camera exposure) lives

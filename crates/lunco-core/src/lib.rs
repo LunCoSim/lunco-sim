@@ -89,7 +89,8 @@ pub use markers::{
     ActuatorDrivenJoint, CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath,
     EmbeddedScenarioSource, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
     PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter,
-    TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
+    TriggerZone, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
+    TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
