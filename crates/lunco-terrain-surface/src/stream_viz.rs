@@ -3510,8 +3510,10 @@ mod draw_partition_tests {
             .children()
             .into_iter()
             .collect::<HashSet<_>>();
-        let mut tiles = LodTiles::default();
-        tiles.cover = cover.clone();
+        let mut tiles = LodTiles {
+            cover: cover.clone(),
+            ..Default::default()
+        };
         for coord in &cover {
             tiles.tiles.insert(
                 *coord,
