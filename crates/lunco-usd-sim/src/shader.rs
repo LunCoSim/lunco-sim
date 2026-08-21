@@ -38,7 +38,9 @@ use lunco_materials::{
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::{
-    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
+    get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
+    read_primvar_vec3_strict, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset,
+    UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
@@ -177,7 +179,13 @@ fn apply_usd_shader_material_read(
     // …plus the engine-provided inputs that are read off the GPRIM itself
     // (`primvars:displayColor` → `display_color`). Authored `inputs:` already in
     // the map WIN — see `fill_prim_engine_params`.
-    fill_prim_engine_params(reader, sdf_path, &mut values);
+    if let Err(attribute) = fill_prim_engine_params(reader, sdf_path, &mut values) {
+        error!(
+            "[shader] prim {} has malformed authored material attribute `{attribute}`; keeping its PbrLook",
+            prim_path.path
+        );
+        return;
+    }
     // `asset`-typed inputs are TEXTURE layers (doc 18 §3.1): `inputs:albedo_map =
     // @terrain/site/…/ortho.png@` fills the material slot of the same reflected
     // name. Root-relative paths resolve against the SCENE's source root (the
@@ -225,15 +233,35 @@ fn apply_usd_shader_material_read(
     // it has to be carried here too because taking the shader path REMOVES the
     // `PbrLook`, which dropped the author's shadow intent on the floor the moment a
     // prim gained a `.wgsl`.
-    let no_shadow_cast = reader
-        .boolean(sdf_path, "primvars:doNotCastShadows")
-        .unwrap_or(false);
+    let no_shadow_cast = match read_authored_bool_strict(
+        reader,
+        sdf_path,
+        "primvars:doNotCastShadows",
+    ) {
+        Ok(value) => value.unwrap_or(false),
+        Err(()) => {
+            error!(
+                "[shader] prim {} has malformed authored material attribute `primvars:doNotCastShadows`; keeping its PbrLook",
+                prim_path.path
+            );
+            return;
+        }
+    };
     // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
     // the two above and carried for the same reason: the PBR path maps it to
     // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. The sky
     // dome is the case that cannot work without it — viewed from INSIDE, a culled
     // dome shows nothing (or, from outside, its far hemisphere: a disc of sky).
-    let double_sided = reader.boolean(sdf_path, "doubleSided").unwrap_or(false);
+    let double_sided = match read_authored_bool_strict(reader, sdf_path, "doubleSided") {
+        Ok(value) => value.unwrap_or(false),
+        Err(()) => {
+            error!(
+                "[shader] prim {} has malformed authored material attribute `doubleSided`; keeping its PbrLook",
+                prim_path.path
+            );
+            return;
+        }
+    };
     // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
     // is per-instance — four landing legs bound to one strut material each report
     // their own load — so the material must be private, or the cache paints every
@@ -261,13 +289,32 @@ fn apply_usd_shader_material_read(
     // farther away still shows through it. That is what lets a finite starfield
     // dome sit 20 km out without clipping the bodies the ephemeris places at
     // 10^8 m and beyond; an opaque dome swallows the whole sky.
-    let alpha = if reader
-        .boolean(sdf_path, "lunco:surface:additive")
-        .unwrap_or(false)
+    let additive = match read_authored_bool_strict(reader, sdf_path, "lunco:surface:additive") {
+        Ok(value) => value.unwrap_or(false),
+        Err(()) => {
+            error!(
+                "[shader] prim {} has malformed authored material attribute `lunco:surface:additive`; keeping its PbrLook",
+                prim_path.path
+            );
+            return;
+        }
+    };
+    let display_opacity = match read_primvar_f32_strict(reader, sdf_path, "primvars:displayOpacity")
     {
+        Ok(Some(value)) if (0.0..=1.0).contains(&value) => Some(value),
+        Ok(None) => None,
+        Ok(Some(_)) | Err(()) => {
+            error!(
+                "[shader] prim {} has malformed authored material attribute `primvars:displayOpacity`; keeping its PbrLook",
+                prim_path.path
+            );
+            return;
+        }
+    };
+    let alpha = if additive {
         SurfaceAlpha::Add
     } else {
-        match lunco_usd_bevy::read_primvar_f32(reader, sdf_path, "primvars:displayOpacity") {
+        match display_opacity {
             Some(o) if o < 1.0 => SurfaceAlpha::Blend,
             _ => SurfaceAlpha::Opaque,
         }
@@ -366,7 +413,7 @@ fn fill_prim_engine_params(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
     values: &mut BTreeMap<String, ParamValue>,
-) {
+) -> Result<(), String> {
     for p in lunco_materials::engine_params().prim_sourced() {
         // An explicit `inputs:` override beats the engine fill.
         if values.contains_key(p.name) {
@@ -379,14 +426,15 @@ fn fill_prim_engine_params(
             // `color3f[]`, `constant` interpolation → element 0. The dedicated
             // ARRAY reader, not the scalar one: `color3f primvars:displayColor`
             // is the wrong type by schema and must not silently work.
-            AttrRead::Color3fArray0 => {
-                lunco_usd_bevy::read_primvar_vec3(reader, sdf_path, attr).map(prim_color_value)
-            }
+            AttrRead::Color3fArray0 => read_primvar_vec3_strict(reader, sdf_path, attr)
+                .map_err(|_| attr.to_string())?
+                .map(prim_color_value),
         };
         if let Some(v) = v {
             values.insert(p.name.to_string(), v);
         }
     }
+    Ok(())
 }
 
 /// The shader parameters this prim drives through a connection —

@@ -1249,14 +1249,20 @@ fn instantiate_usd_prim_from_stage(
 
         // Author the PBR appearance intent (`PbrLook`) with the USD colour/textures
         if let Some(ref m) = mesh_handle {
-            apply_standard_material(
+            if let Err(err) = apply_standard_material(
                 reader,
                 &sdf_path,
                 m,
                 &mut commands.entity(entity),
                 asset_server,
                 prim_path.stage_handle.id(),
-            );
+            ) {
+                error!(
+                    "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
+                    sdf_path.as_str(),
+                    err.attribute
+                );
+            }
         }
 
         // Scripts are `LunCoProgramAPI` CHILD prims whose source is a `.rhai` — read
@@ -1398,14 +1404,20 @@ fn instantiate_usd_prim_from_stage(
                     // Single-mesh path keeps `lunco-usd-avian` collider
                     // construction unchanged — the entity ends up with
                     // a `Mesh3d` exactly like the Cube/Sphere branches.
-                    apply_standard_material(
+                    if let Err(err) = apply_standard_material(
                         reader,
                         &sdf_path,
                         &mesh_h,
                         &mut commands.entity(entity),
                         asset_server,
                         prim_path.stage_handle.id(),
-                    );
+                    ) {
+                        error!(
+                            "[usd-bevy] {} has malformed authored material attribute `{}`; no PbrLook was created",
+                            sdf_path.as_str(),
+                            err.attribute
+                        );
+                    }
                 }
                 _ => {
                     let label = label.unwrap_or_else(|| "Scene0".to_string());
@@ -2249,16 +2261,134 @@ pub fn resolve_bound_material(
 }
 
 /// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
-/// address mode. USD's `"useMetadata"` (and absent) fall back to `Repeat` —
-/// the common authored intent for tiled textures — rather than the spec's
-/// metadata-then-black, which we can't read from the file header here.
-fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
+/// address mode. USD's `"useMetadata"` (and absent) use the documented
+/// projection default `Repeat` because the image-header metadata is not part
+/// of the material intent reader. An authored token outside the USD schema is
+/// rejected instead of becoming a repeat sampler by accident.
+fn usd_wrap_to_address(
+    wrap: Option<&str>,
+    attribute: &str,
+) -> Result<bevy::image::ImageAddressMode, MaterialReadError> {
     use bevy::image::ImageAddressMode;
-    match wrap {
-        Some("clamp") => ImageAddressMode::ClampToEdge,
-        Some("mirror") => ImageAddressMode::MirrorRepeat,
-        Some("black") => ImageAddressMode::ClampToBorder,
-        _ => ImageAddressMode::Repeat,
+    match wrap.unwrap_or("useMetadata") {
+        "useMetadata" | "repeat" => Ok(ImageAddressMode::Repeat),
+        "clamp" => Ok(ImageAddressMode::ClampToEdge),
+        "mirror" => Ok(ImageAddressMode::MirrorRepeat),
+        "black" => Ok(ImageAddressMode::ClampToBorder),
+        _ => Err(MaterialReadError::new(attribute)),
+    }
+}
+
+/// Identifies an authored material property that cannot be represented by the
+/// render intent.  The caller must reject the whole look: substituting a
+/// plausible value would make a typo or a wrong USD type look like a valid
+/// material and would leave the ECS projection disagreeing with the stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaterialReadError {
+    attribute: String,
+}
+
+impl MaterialReadError {
+    fn new(attribute: &str) -> Self {
+        Self {
+            attribute: attribute.to_string(),
+        }
+    }
+}
+
+/// Read a schema-declared USD token without treating a wrong value type as an
+/// omitted token.  Texture controls use this rather than `text`, whose broad
+/// textual coercion is appropriate for display labels but not for enum inputs.
+fn read_material_token(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, MaterialReadError> {
+    match reader.attr_value(path, attribute) {
+        Some(Value::Token(value)) => Ok(Some(value.to_string())),
+        Some(_) => Err(MaterialReadError::new(attribute)),
+        None if reader.has_authored_attribute(path, attribute) => {
+            Err(MaterialReadError::new(attribute))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Read one authored real material input while preserving omission as a
+/// semantic default.  Connections are deliberately rejected here because the
+/// scalar PBR path has no graph evaluator; texture-capable inputs go through
+/// `load_tex` first and scalar-only inputs must be authored values.
+fn read_material_real(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f32>, MaterialReadError> {
+    if !reader.connections(path, attribute).is_empty() {
+        return Err(MaterialReadError::new(attribute));
+    }
+    match reader.real_f32(path, attribute) {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        Some(_) => Err(MaterialReadError::new(attribute)),
+        None if reader.has_authored_attribute(path, attribute) => {
+            Err(MaterialReadError::new(attribute))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Read one authored scalar USD color input.  `UsdPreviewSurface` declares
+/// these as scalar `color3f`/`color3d`, not array primvars; accepting an array
+/// here would reintroduce the type confusion that the display-primvar reader
+/// intentionally avoids.
+fn read_material_vec3(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<Vec3>, MaterialReadError> {
+    if !reader.connections(path, attribute).is_empty() {
+        return Err(MaterialReadError::new(attribute));
+    }
+    let value = reader
+        .scalar::<[f32; 3]>(path, attribute)
+        .map(|v| Vec3::new(v[0], v[1], v[2]))
+        .or_else(|| {
+            reader
+                .scalar::<[f64; 3]>(path, attribute)
+                .map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+        });
+    match value {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        Some(_) => Err(MaterialReadError::new(attribute)),
+        None if reader.has_authored_attribute(path, attribute) => {
+            Err(MaterialReadError::new(attribute))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Read an authored boolean surface flag.  The shared USD boolean reader keeps
+/// its documented integer spelling support, while malformed strings/arrays are
+/// refused instead of becoming `false`.
+fn read_material_bool(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<bool>, MaterialReadError> {
+    read_authored_bool_strict(reader, path, attribute)
+        .map_err(|_| MaterialReadError::new(attribute))
+}
+
+/// Validate a `UsdPreviewSurface` value whose schema meaning is a unit
+/// interval.  The USD default remains available through `None`; an authored
+/// value outside the interval is malformed and is never clamped.
+fn material_unit_interval(
+    value: Option<f32>,
+    attribute: &str,
+) -> Result<Option<f32>, MaterialReadError> {
+    match value {
+        Some(value) if (0.0..=1.0).contains(&value) => Ok(Some(value)),
+        Some(_) => Err(MaterialReadError::new(attribute)),
+        None => Ok(None),
     }
 }
 
@@ -2283,7 +2413,7 @@ fn apply_standard_material(
     entity_cmd: &mut EntityCommands,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-) {
+) -> Result<(), MaterialReadError> {
     let mut base_color_texture = None;
     let mut emissive_texture = None;
     let mut metallic_roughness_texture = None;
@@ -2297,7 +2427,8 @@ fn apply_standard_material(
     //
     // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`, so
     // this reads `Vec3fVec`, not a scalar `color3f`. See `read_primvar_vec3`.
-    let mut base_color = read_primvar_vec3(reader, sdf_path, "primvars:displayColor")
+    let mut base_color = read_primvar_vec3_strict(reader, sdf_path, "primvars:displayColor")
+        .map_err(|_| MaterialReadError::new("primvars:displayColor"))?
         .map(|v| Color::linear_rgb(v[0] as f32, v[1] as f32, v[2] as f32))
         .unwrap_or(Color::WHITE);
 
@@ -2333,10 +2464,14 @@ fn apply_standard_material(
     // `primvars:displayOpacity` ONLY — the bare `displayOpacity` alias is gone.
     // It is not a UsdGeomGprim attribute, and accepting it meant a typo'd primvar
     // still worked here and nowhere else. ARRAY-valued (`float[]`) by schema.
-    let mut alpha = read_primvar_f32(reader, sdf_path, "primvars:displayOpacity").unwrap_or(1.0);
+    let mut alpha = material_unit_interval(
+        read_primvar_f32_strict(reader, sdf_path, "primvars:displayOpacity")
+            .map_err(|_| MaterialReadError::new("primvars:displayOpacity"))?,
+        "primvars:displayOpacity",
+    )?
+    .unwrap_or(1.0);
     let mut ior = 1.5f32;
     let mut opacity_threshold = 0.0f32;
-    let mut opacity_connected = false;
 
     // Clearcoat layer.
     let mut clearcoat = 0.0f32;
@@ -2359,57 +2494,77 @@ fn apply_standard_material(
         // albedo/emissive, false = linear data for metallic/roughness/normal/AO);
         // a `UsdUVTexture inputs:sourceColorSpace` of `raw`/`sRGB` overrides it.
         // `inputs:wrapS`/`wrapT` drive the sampler address modes at load time.
-        let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
-            let conn = reader.connection_source(&shader_path, input)?;
-            let texture_path = parent_prim_path(&conn)?;
-            let asset_path = reader.asset(&texture_path, "inputs:file")?;
-            let resolved = resolve_texture_path(asset_server, stage_id, &asset_path);
+        let load_tex =
+            |input: &str, is_color: bool| -> Result<Option<Handle<Image>>, MaterialReadError> {
+                let conn = match reader.connection_source(&shader_path, input) {
+                    Some(conn) => conn,
+                    None if reader.connections(&shader_path, input).is_empty() => return Ok(None),
+                    None => return Err(MaterialReadError::new(input)),
+                };
+                let texture_path =
+                    parent_prim_path(&conn).ok_or_else(|| MaterialReadError::new(input))?;
+                let asset_path = reader
+                    .asset(&texture_path, "inputs:file")
+                    .ok_or_else(|| MaterialReadError::new(input))?;
+                let resolved = resolve_texture_path(asset_server, stage_id, &asset_path);
 
-            let is_srgb = match reader
-                .text(&texture_path, "inputs:sourceColorSpace")
-                .as_deref()
-            {
-                Some("sRGB") => true,
-                Some("raw") => false,
-                _ => is_color, // "auto" / absent → channel default
+                let is_srgb =
+                    match read_material_token(reader, &texture_path, "inputs:sourceColorSpace")?
+                        .as_deref()
+                    {
+                        Some("sRGB") => true,
+                        Some("raw") => false,
+                        Some("auto") | None => is_color,
+                        Some(_) => {
+                            return Err(MaterialReadError::new("inputs:sourceColorSpace"));
+                        }
+                    };
+                let addr_u = usd_wrap_to_address(
+                    read_material_token(reader, &texture_path, "inputs:wrapS")?.as_deref(),
+                    "inputs:wrapS",
+                )?;
+                let addr_v = usd_wrap_to_address(
+                    read_material_token(reader, &texture_path, "inputs:wrapT")?.as_deref(),
+                    "inputs:wrapT",
+                )?;
+
+                Ok(Some(
+                    asset_server
+                        .load_builder()
+                        .with_settings(move |s: &mut ImageLoaderSettings| {
+                            s.is_srgb = is_srgb;
+                            let mut d = ImageSamplerDescriptor::linear();
+                            d.address_mode_u = addr_u;
+                            d.address_mode_v = addr_v;
+                            s.sampler = ImageSampler::Descriptor(d);
+                        })
+                        .load::<Image>(resolved),
+                ))
             };
-            let addr_u = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapS").as_deref());
-            let addr_v = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapT").as_deref());
-
-            Some(
-                asset_server
-                    .load_builder()
-                    .with_settings(move |s: &mut ImageLoaderSettings| {
-                        s.is_srgb = is_srgb;
-                        let mut d = ImageSamplerDescriptor::linear();
-                        d.address_mode_u = addr_u;
-                        d.address_mode_v = addr_v;
-                        s.sampler = ImageSampler::Descriptor(d);
-                    })
-                    .load::<Image>(resolved),
-            )
-        };
 
         // diffuseColor: texture, else authored value, else geometry baseline.
-        base_color_texture = load_tex("inputs:diffuseColor", true);
+        base_color_texture = load_tex("inputs:diffuseColor", true)?;
         if base_color_texture.is_none() {
-            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:diffuseColor") {
+            if let Some(c) = read_material_vec3(reader, &shader_path, "inputs:diffuseColor")? {
                 base_color = Color::linear_rgb(c.x, c.y, c.z);
             }
         }
 
         // emissiveColor
-        emissive_texture = load_tex("inputs:emissiveColor", true);
+        emissive_texture = load_tex("inputs:emissiveColor", true)?;
         if emissive_texture.is_none() {
-            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:emissiveColor") {
+            if let Some(c) = read_material_vec3(reader, &shader_path, "inputs:emissiveColor")? {
                 emissive = LinearRgba::new(c.x, c.y, c.z, 1.0);
             }
         }
 
         // metallic
-        let metallic_texture = load_tex("inputs:metallic", false);
+        let metallic_texture = load_tex("inputs:metallic", false)?;
         if metallic_texture.is_none() {
-            if let Some(m) = reader.real_f32(&shader_path, "inputs:metallic") {
+            if let Some(m) = material_unit_interval(
+                read_material_real(reader, &shader_path, "inputs:metallic")?,
+                "inputs:metallic",
+            )? {
                 metallic = m;
             }
         }
@@ -2417,17 +2572,20 @@ fn apply_standard_material(
         // roughness. `inputs:roughness` ONLY — `inputs:perceptual_roughness` is
         // Bevy's field name, not a UsdPreviewSurface input, and accepting it here
         // just taught callers to author a value usdview will never read.
-        let roughness_texture = load_tex("inputs:roughness", false);
+        let roughness_texture = load_tex("inputs:roughness", false)?;
         if roughness_texture.is_none() {
-            if let Some(r) = reader.real_f32(&shader_path, "inputs:roughness") {
+            if let Some(r) = material_unit_interval(
+                read_material_real(reader, &shader_path, "inputs:roughness")?,
+                "inputs:roughness",
+            )? {
                 roughness = r;
             }
         }
 
         metallic_roughness_texture = roughness_texture.or(metallic_texture);
 
-        normal_map_texture = load_tex("inputs:normal", false);
-        occlusion_texture = load_tex("inputs:occlusion", false);
+        normal_map_texture = load_tex("inputs:normal", false)?;
+        occlusion_texture = load_tex("inputs:occlusion", false)?;
 
         // NOTE: there is no `inputs:reflectance`. `UsdPreviewSurface` has no such
         // input — its specular strength is `inputs:ior` (read below), and Bevy's
@@ -2440,45 +2598,56 @@ fn apply_standard_material(
         // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
         // `specularColor` instead of metalness → force metallic 0 (USD's specular
         // workflow has no metalness channel), and carry the tint.
-        if reader
-            .real_f32(&shader_path, "inputs:useSpecularWorkflow")
-            .unwrap_or(0.0)
+        if read_material_real(reader, &shader_path, "inputs:useSpecularWorkflow")?.unwrap_or(0.0)
             >= 0.5
         {
             metallic = 0.0;
-            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
+            if let Some(c) = read_material_vec3(reader, &shader_path, "inputs:specularColor")? {
                 specular_tint = LinearRgba::rgb(c[0], c[1], c[2]);
             }
         }
 
         // Clearcoat layer (UsdPreviewSurface ↔ StandardMaterial 1:1).
-        if let Some(c) = reader.real_f32(&shader_path, "inputs:clearcoat") {
+        if let Some(c) = material_unit_interval(
+            read_material_real(reader, &shader_path, "inputs:clearcoat")?,
+            "inputs:clearcoat",
+        )? {
             clearcoat = c;
         }
-        if let Some(cr) = reader.real_f32(&shader_path, "inputs:clearcoatRoughness") {
+        if let Some(cr) = material_unit_interval(
+            read_material_real(reader, &shader_path, "inputs:clearcoatRoughness")?,
+            "inputs:clearcoatRoughness",
+        )? {
             clearcoat_roughness = cr;
         }
 
         // Transparency: scalar `inputs:opacity` drives base-color alpha; a
-        // *connected* opacity (texture) flips to blended even without a scalar.
-        if let Some(o) = reader.real_f32(&shader_path, "inputs:opacity") {
+        // connected opacity cannot be represented by the PBR intent because it
+        // has no separate opacity texture slot. Reject it rather than claiming
+        // Blend while retaining an unrelated opaque alpha.
+        if let Some(o) = material_unit_interval(
+            read_material_real(reader, &shader_path, "inputs:opacity")?,
+            "inputs:opacity",
+        )? {
             alpha = o;
         }
-        opacity_threshold = reader
-            .real_f32(&shader_path, "inputs:opacityThreshold")
-            .unwrap_or(0.0);
-        opacity_connected = reader
-            .connection_source(&shader_path, "inputs:opacity")
-            .is_some();
+        opacity_threshold = material_unit_interval(
+            read_material_real(reader, &shader_path, "inputs:opacityThreshold")?,
+            "inputs:opacityThreshold",
+        )?
+        .unwrap_or(0.0);
 
-        if let Some(i) = reader.real_f32(&shader_path, "inputs:ior") {
+        if let Some(i) = read_material_real(reader, &shader_path, "inputs:ior")? {
+            if i <= 0.0 {
+                return Err(MaterialReadError::new("inputs:ior"));
+            }
             ior = i;
         }
     }
 
     // UsdPreviewSurface alpha semantics → `SurfaceAlpha`: a non-zero
-    // `opacityThreshold` is a cutout (`Mask`); otherwise any sub-1 opacity or a
-    // connected opacity input is alpha-blended; fully-opaque stays `Opaque` so
+    // `opacityThreshold` is a cutout (`Mask`); otherwise any sub-1 opacity is
+    // alpha-blended; fully-opaque stays `Opaque` so
     // the depth-sorted transparent pass is only paid for when needed.
     //
     // `lunco:surface:additive` is a gprim-level USD surface policy, not a
@@ -2486,14 +2655,12 @@ fn apply_standard_material(
     // such as an engine plume: add radiance without occluding the terrain behind
     // it. Read it here, at the USD material boundary, so every additive surface
     // (not only this episode's plume) gets the same render semantics.
-    let additive = reader
-        .boolean(sdf_path, "lunco:surface:additive")
-        .unwrap_or(false);
+    let additive = read_material_bool(reader, sdf_path, "lunco:surface:additive")?.unwrap_or(false);
     let alpha_mode = if additive {
         SurfaceAlpha::Add
     } else if opacity_threshold > 0.0 {
         SurfaceAlpha::Mask(opacity_threshold)
-    } else if alpha < 1.0 || opacity_connected {
+    } else if alpha < 1.0 {
         SurfaceAlpha::Blend
     } else {
         SurfaceAlpha::Opaque
@@ -2546,7 +2713,7 @@ fn apply_standard_material(
             // USD's fallback is `false`, and that is kept: back-face culling is the
             // right default for closed solids and halves the fragment work. An asset
             // that opens itself up asks for the other behaviour explicitly.
-            double_sided: reader.boolean(sdf_path, "doubleSided").unwrap_or(false),
+            double_sided: read_material_bool(reader, sdf_path, "doubleSided")?.unwrap_or(false),
             // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
             // reads it on the gprim and Composer surfaces it as the mesh's "Cast
             // Shadows" toggle, so a scene authored there arrives here with its shadow
@@ -2557,12 +2724,12 @@ fn apply_standard_material(
             // hard shadow until this says otherwise. Read on the GPRIM, not the shader
             // — two prims sharing one material can disagree about casting, and
             // `material:binding` is not the place to say so.
-            no_shadow_cast: reader
-                .boolean(sdf_path, "primvars:doNotCastShadows")
+            no_shadow_cast: read_material_bool(reader, sdf_path, "primvars:doNotCastShadows")?
                 .unwrap_or(false),
             ..default()
         },
     ));
+    Ok(())
 }
 
 /// Reads a 3-component vector attribute from a USD prim.
@@ -2825,6 +2992,26 @@ pub fn read_primvar_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> 
     out
 }
 
+/// Strict authored twin of [`read_primvar_vec3`].  `Ok(None)` means the
+/// attribute is genuinely omitted; `Err(())` means an authored value has the
+/// wrong USD type, is empty, or contains a non-finite component.  Runtime
+/// material boundaries use this distinction so malformed display data cannot
+/// turn into a white surface.
+pub fn read_primvar_vec3_strict(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<[f64; 3]>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(value) => primvar_vec3_from(value)
+            .filter(|values| values.iter().all(|value| value.is_finite()))
+            .map(Some)
+            .ok_or(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
 /// Time-sampled twin of [`read_primvar_vec3`].
 pub fn read_primvar_vec3_at(
     reader: &StageView<'_>,
@@ -2856,6 +3043,38 @@ fn primvar_vec3_from(value: Value) -> Option<[f64; 3]> {
 /// [`read_primvar_vec3`] for why this is not merged with the scalar reader.
 pub fn read_primvar_f32(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<f32> {
     primvar_f32_from(reader.attr_value(path, attr)?)
+}
+
+/// Strict authored twin of [`read_primvar_f32`].  It preserves omission while
+/// rejecting authored wrong types, empty arrays, and non-finite values.
+pub fn read_primvar_f32_strict(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<f32>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(value) => primvar_f32_from(value)
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Strict authored boolean reader for USD surface flags.  Integer spellings
+/// remain supported by [`UsdRead::boolean`], but an authored value that is not
+/// a USD boolean/integer is not treated as `false`.
+pub fn read_authored_bool_strict(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<bool>, ()> {
+    match reader.boolean(path, attr) {
+        Some(value) => Ok(Some(value)),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
 }
 
 /// Time-sampled twin of [`read_primvar_f32`].
