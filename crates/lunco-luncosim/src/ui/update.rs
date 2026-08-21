@@ -822,12 +822,13 @@ mod tests {
     fn automatic_check_does_not_duplicate_pending_or_disabled_checks() {
         let mut settings = UpdateSettings::default();
         let state = UpdateState::default();
-        let mut actions = UpdateActions::default();
-
-        actions.check_requested = true;
+        let actions = UpdateActions {
+            check_requested: true,
+            ..Default::default()
+        };
         assert!(!automatic_check_due(&settings, &state, &actions));
 
-        actions.check_requested = false;
+        let actions = UpdateActions::default();
         settings.auto_check = false;
         assert!(!automatic_check_due(&settings, &state, &actions));
     }
@@ -847,8 +848,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_starts_download_for_available_update() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::Available;
+        let state = UpdateState {
+            status: UpdateStatus::Available,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
@@ -859,8 +862,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_installs_downloaded_update() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::ReadyToRestart;
+        let state = UpdateState {
+            status: UpdateStatus::ReadyToRestart,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
@@ -871,8 +876,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_ignores_other_sources_and_in_flight_downloads() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::Downloading;
+        let state = UpdateState {
+            status: UpdateStatus::Downloading,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action("scene", &state, &mut actions);
