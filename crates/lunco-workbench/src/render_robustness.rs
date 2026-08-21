@@ -629,29 +629,41 @@ fn apply_render_quality(
         point_map.size = profile.point_shadow_map_size as usize;
     }
 
-    for (_, _, mut config, _) in &mut directional_lights {
-        if config.bounds.len() == profile.directional_cascades {
-            continue;
+    for (_, mut light, mut config, _) in &mut directional_lights {
+        light.shadow_depth_bias = profile.shadow_depth_bias;
+        light.shadow_normal_bias = profile.shadow_normal_bias;
+
+        if config.bounds.len() != profile.directional_cascades {
+            let Some(maximum_distance) = config.bounds.last().copied() else {
+                warn!("directional light has no authored cascade bounds; preserving its invalid shadow configuration");
+                continue;
+            };
+            let maximum_distance = maximum_distance.max(config.minimum_distance + f32::EPSILON);
+            let first_cascade_far_bound = config
+                .bounds
+                .first()
+                .copied()
+                .unwrap_or(maximum_distance)
+                .clamp(config.minimum_distance + f32::EPSILON, maximum_distance);
+            *config = bevy::light::CascadeShadowConfigBuilder {
+                num_cascades: profile.directional_cascades,
+                minimum_distance: config.minimum_distance,
+                first_cascade_far_bound,
+                maximum_distance,
+                overlap_proportion: config.overlap_proportion,
+            }
+            .build();
         }
-        let Some(maximum_distance) = config.bounds.last().copied() else {
-            warn!("directional light has no authored cascade bounds; preserving its invalid shadow configuration");
-            continue;
-        };
-        let maximum_distance = maximum_distance.max(config.minimum_distance + f32::EPSILON);
-        let first_cascade_far_bound = config
-            .bounds
-            .first()
-            .copied()
-            .unwrap_or(maximum_distance)
-            .clamp(config.minimum_distance + f32::EPSILON, maximum_distance);
-        *config = bevy::light::CascadeShadowConfigBuilder {
-            num_cascades: profile.directional_cascades,
-            minimum_distance: config.minimum_distance,
-            first_cascade_far_bound,
-            maximum_distance,
-            overlap_proportion: config.overlap_proportion,
-        }
-        .build();
+    }
+
+    for (_, mut light, _) in &mut point_lights {
+        light.shadow_depth_bias = profile.shadow_depth_bias;
+        light.shadow_normal_bias = profile.shadow_normal_bias;
+    }
+
+    for (_, mut light, _) in &mut spot_lights {
+        light.shadow_depth_bias = profile.shadow_depth_bias;
+        light.shadow_normal_bias = profile.shadow_normal_bias;
     }
 }
 
@@ -1470,6 +1482,54 @@ mod tests {
                 .shadow_maps_enabled
         );
         assert!(world.get::<ShadowMapSuppressed>(light).is_none());
+    }
+
+    #[test]
+    fn quality_bias_changes_update_existing_directional_and_local_lights() {
+        let mut app = App::new();
+        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
+        app.init_resource::<Ladder>();
+        app.add_systems(Update, apply_render_quality.run_if(render_quality_changed));
+
+        let directional = app
+            .world_mut()
+            .spawn((
+                bevy::light::DirectionalLight::default(),
+                bevy::light::CascadeShadowConfig::default(),
+            ))
+            .id();
+        let point = app
+            .world_mut()
+            .spawn(bevy::light::PointLight::default())
+            .id();
+        let spot = app
+            .world_mut()
+            .spawn(bevy::light::SpotLight::default())
+            .id();
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<RenderingQualitySettings>()
+            .shadow_depth_bias = 0.37;
+        app.world_mut()
+            .resource_mut::<RenderingQualitySettings>()
+            .shadow_normal_bias = 7.25;
+        app.update();
+
+        let directional_light = app
+            .world()
+            .get::<bevy::light::DirectionalLight>(directional)
+            .unwrap();
+        assert_eq!(directional_light.shadow_depth_bias, 0.37);
+        assert_eq!(directional_light.shadow_normal_bias, 7.25);
+        let point_light = app.world().get::<bevy::light::PointLight>(point).unwrap();
+        assert_eq!(point_light.shadow_depth_bias, 0.37);
+        assert_eq!(point_light.shadow_normal_bias, 7.25);
+        let spot_light = app.world().get::<bevy::light::SpotLight>(spot).unwrap();
+        assert_eq!(spot_light.shadow_depth_bias, 0.37);
+        assert_eq!(spot_light.shadow_normal_bias, 7.25);
     }
 
     /// The original reason this module exists: a one-frame depth/color size skew

@@ -595,6 +595,8 @@ pub(crate) fn instantiate_light_prim(
                         // as a brighter one.
                         radius: light_radius.max(0.0),
                         shadow_maps_enabled,
+                        shadow_depth_bias: quality.shadow_depth_bias,
+                        shadow_normal_bias: quality.shadow_normal_bias,
                         inner_angle,
                         outer_angle,
                         ..default()
@@ -626,6 +628,8 @@ pub(crate) fn instantiate_light_prim(
                         // See the SpotLight arm: `inputs:radius` is the source size too.
                         radius: light_radius.max(0.0),
                         shadow_maps_enabled,
+                        shadow_depth_bias: quality.shadow_depth_bias,
+                        shadow_normal_bias: quality.shadow_normal_bias,
                         ..default()
                     },
                     lunco_core::PortSurfaceReady,
