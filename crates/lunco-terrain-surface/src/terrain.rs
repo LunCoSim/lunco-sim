@@ -60,11 +60,6 @@ fn dem_build_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
     }
 }
 
-/// Default realized region side length (metres) when `window_m` is 0… no — see
-/// below: 0 means the whole map. This is the fallback when a caller passes a
-/// negative value. A 4 km window at 5 m is 800² ≈ 640 k verts — full detail,
-/// light to render, and covers a rover working area.
-const DEFAULT_WINDOW_M: f32 = 4096.0;
 /// Above this native tile resolution we still build, but warn: a single mesh this
 /// large is heavy (e.g. the full 16 km map is 3200² ≈ 10 M verts ≈ 560 MB). Full
 /// detail at that scale belongs to tiled streaming (M7), not one mesh.
@@ -81,6 +76,34 @@ const MAX_WINDOW_M: f32 = 64_000.0;
 /// (4096² ≈ 16.8 M verts) — heavy, warned about, but survivable.
 const MIN_TARGET_RES: u32 = 16;
 const MAX_TARGET_RES: u32 = 4096;
+
+/// Resolve the command's explicit terrain-quality parameters without changing
+/// them into a different request. `0` is the documented semantic value for
+/// whole-map/native output; every other value must be valid as authored.
+fn resolve_spawn_dem_parameters(
+    window_m: f32,
+    target_res: u32,
+) -> Result<(f64, usize), &'static str> {
+    let half_window = if window_m == 0.0 {
+        f64::INFINITY
+    } else if !window_m.is_finite() || window_m < 0.0 {
+        return Err("window_m must be finite and non-negative (0 means the whole map)");
+    } else if window_m > MAX_WINDOW_M {
+        return Err("window_m exceeds the maximum supported terrain window");
+    } else {
+        f64::from(window_m) * 0.5
+    };
+
+    let target_res = if target_res == 0 {
+        0
+    } else if !(MIN_TARGET_RES..=MAX_TARGET_RES).contains(&target_res) {
+        return Err("target_res must be 0 or between the supported visual-resolution bounds");
+    } else {
+        target_res as usize
+    };
+
+    Ok((half_window, target_res))
+}
 
 /// The driveable DEM surface: the bake fills **this** entity with a heightfield
 /// collider (+ visual mesh when rendering). Put on a command-spawned entity by
@@ -513,26 +536,16 @@ fn on_spawn_dem_terrain(
             crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE),
         );
     }
-    let half_window = match ev.window_m {
-        w if !w.is_finite() => (DEFAULT_WINDOW_M * 0.5) as f64, // NaN/inf → default
-        0.0 => f64::INFINITY,                                   // whole map
-        w if w < 0.0 => (DEFAULT_WINDOW_M * 0.5) as f64,
-        w => (w.min(MAX_WINDOW_M) * 0.5) as f64,
+    let (half_window, target_res) = match resolve_spawn_dem_parameters(ev.window_m, ev.target_res) {
+        Ok(parameters) => parameters,
+        Err(reason) => {
+            warn!(
+                "[dem-terrain] rejected SpawnDemTerrain for '{}': {reason}",
+                ev.uri
+            );
+            return;
+        }
     };
-    // Clamp the resample target the same way the crater count is clamped
-    // (`crater_placements`): `target_res` lands straight in a `res × res` vertex
-    // grid, so an unclamped `100000` from the API/rhai is an instant OOM. `0` =
-    // native (no decimation).
-    let target_res = match ev.target_res {
-        0 => 0,
-        r => (r.clamp(MIN_TARGET_RES, MAX_TARGET_RES)) as usize,
-    };
-    if ev.target_res != 0 && target_res != ev.target_res as usize {
-        warn!(
-            "[dem-terrain] target_res {} out of range — clamped to {}",
-            ev.target_res, target_res
-        );
-    }
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
@@ -2752,6 +2765,28 @@ pub(crate) fn register(app: &mut App) {
 mod visual_product_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn spawn_dem_parameters_preserve_documented_zero_semantics() {
+        assert_eq!(
+            resolve_spawn_dem_parameters(0.0, 0).expect("zero parameters are valid"),
+            (f64::INFINITY, 0)
+        );
+        assert_eq!(
+            resolve_spawn_dem_parameters(512.0, 128).expect("explicit parameters are valid"),
+            (256.0, 128)
+        );
+    }
+
+    #[test]
+    fn spawn_dem_parameters_reject_invalid_quality_instead_of_clamping() {
+        for window_m in [f32::NAN, f32::INFINITY, -1.0, MAX_WINDOW_M + 1.0] {
+            assert!(resolve_spawn_dem_parameters(window_m, 0).is_err());
+        }
+        for target_res in [1, MIN_TARGET_RES - 1, MAX_TARGET_RES + 1] {
+            assert!(resolve_spawn_dem_parameters(0.0, target_res).is_err());
+        }
+    }
 
     #[test]
     fn target_resolution_changes_only_the_static_visual_product() {
