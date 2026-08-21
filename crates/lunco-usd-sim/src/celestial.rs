@@ -668,37 +668,39 @@ pub fn insert_celestial_comms_components(
     // The third placement kind, beside geodetic (on a body) and Kepler (around one).
     // Keyed on `primary`, since an L-point is defined by a PAIR — the pair IS the
     // placement, so a prim naming only one body is not half-placed, it is unplaced.
-    if let Some(primary) = reader.scalar::<i32>(sdf_path, "lunco:libration:primary") {
-        let Some(secondary) = reader.scalar::<i32>(sdf_path, "lunco:libration:secondary") else {
-            warn!(
-                "[usd-celestial] {}: `lunco:libration:primary` without `:secondary` — an \
-                 L-point is a property of a PAIR; prim left unplaced",
-                prim_path_str
+    let libration = match read_authored_i32(reader, sdf_path, "lunco:libration:primary") {
+        Ok(None) => Ok(None),
+        Ok(Some(primary)) if primary != 0 => (|| {
+            let secondary =
+                read_authored_i32(reader, sdf_path, "lunco:libration:secondary")?.ok_or(())?;
+            if secondary == 0 {
+                return Err(());
+            }
+            let token = read_authored_token(reader, sdf_path, "lunco:libration:point")?
+                .unwrap_or_else(|| "L1".to_string());
+            let point = LPoint::from_token(&token).ok_or(())?;
+            Ok(LibrationAnchor {
+                primary,
+                secondary,
+                point,
+            })
+        })()
+        .map(Some),
+        Ok(Some(_)) | Err(()) => Err(()),
+    };
+    match libration {
+        Ok(Some(anchor)) => {
+            info!(
+                "[usd-celestial] libration {}: {:?} of pair {}/{}",
+                prim_path_str, anchor.point, anchor.primary, anchor.secondary
             );
-            return;
-        };
-        // `text()` — the value is an authored `token`, and a token is not a string:
-        // reading it with the wrong accessor returns None and would silently default.
-        let token = reader
-            .text(sdf_path, "lunco:libration:point")
-            .unwrap_or_else(|| "L1".to_string());
-        let Some(point) = LPoint::from_token(&token) else {
-            warn!(
-                "[usd-celestial] {}: `lunco:libration:point = \"{}\"` names no libration point \
-                 (want L1..L5); prim left unplaced rather than silently parked at L1",
-                prim_path_str, token
-            );
-            return;
-        };
-        commands.entity(entity).try_insert(LibrationAnchor {
-            primary,
-            secondary,
-            point,
-        });
-        info!(
-            "[usd-celestial] libration {}: {:?} of pair {}/{}",
-            prim_path_str, point, primary, secondary
-        );
+            commands.entity(entity).try_insert(anchor);
+        }
+        Ok(None) => {}
+        Err(()) => warn!(
+            "[usd-celestial] {} has malformed libration attributes; anchor ignored",
+            prim_path_str
+        ),
     }
 
     // --- Solar-pose tracking marker (generic celestial placement) ---
@@ -706,10 +708,18 @@ pub fn insert_celestial_comms_components(
     // the pose system tracks its solar-frame position; anchored/orbiting prims
     // are tracked automatically. Authored subsystems read it through the
     // `SolarPose` query — no domain component, no domain vocabulary.
-    if reader
-        .boolean(sdf_path, "lunco:solarTracked")
-        .unwrap_or(false)
-    {
+    let solar_tracked = match read_authored_bool(reader, sdf_path, "lunco:solarTracked") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed `lunco:solarTracked`; tracking ignored",
+                prim_path_str
+            );
+            false
+        }
+    };
+    if solar_tracked {
         commands
             .entity(entity)
             .try_insert(lunco_celestial::pose::SolarTracked);
@@ -720,33 +730,84 @@ pub fn insert_celestial_comms_components(
     // node, applies the `link.connected` verdict, and publishes link state. Pose
     // tracking follows automatically. `class` is an authored role the routing /
     // verdict policy reads — the core never interprets it.
-    if reader.boolean(sdf_path, "lunco:linkNode").unwrap_or(false) {
-        let d = lunco_celestial::link::LinkNode::default();
-        commands
-            .entity(entity)
-            .try_insert(lunco_celestial::link::LinkNode {
-                max_range_m: reader
-                    .real(sdf_path, "lunco:link:maxRangeM")
-                    .unwrap_or(d.max_range_m),
-                min_elevation_deg: reader
-                    .real(sdf_path, "lunco:link:minElevationDeg")
-                    .unwrap_or(d.min_elevation_deg),
-                class: reader.text(sdf_path, "lunco:link:class"),
-            });
+    let link_node = match read_authored_bool(reader, sdf_path, "lunco:linkNode") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed `lunco:linkNode`; link node ignored",
+                prim_path_str
+            );
+            false
+        }
+    };
+    if link_node {
+        let link = (|| {
+            let defaults = lunco_celestial::link::LinkNode::default();
+            let max_range_m = read_real_strict(reader, sdf_path, "lunco:link:maxRangeM")?
+                .unwrap_or(defaults.max_range_m);
+            let min_elevation_deg =
+                read_real_strict(reader, sdf_path, "lunco:link:minElevationDeg")?
+                    .unwrap_or(defaults.min_elevation_deg);
+            if !max_range_m.is_finite()
+                || max_range_m <= 0.0
+                || !min_elevation_deg.is_finite()
+                || !(-90.0..=90.0).contains(&min_elevation_deg)
+            {
+                return Err(());
+            }
+            let class = read_authored_string(reader, sdf_path, "lunco:link:class")?
+                .filter(|class| !class.is_empty());
+            Ok(lunco_celestial::link::LinkNode {
+                max_range_m,
+                min_elevation_deg,
+                class,
+            })
+        })();
+        match link {
+            Ok(link) => {
+                commands.entity(entity).try_insert(link);
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid link node attributes; node ignored",
+                prim_path_str
+            ),
+        }
     }
 
     // --- Separate rover radio endpoint ---
     // A Wi-Fi endpoint shares the generic link geometry observation but is
     // intentionally not part of `LinkState`: the latter remains governed by
     // the authored Earth-only direct-link policy.
-    if reader.boolean(sdf_path, "lunco:wifiNode").unwrap_or(false) {
-        commands
-            .entity(entity)
-            .try_insert(lunco_celestial::wifi::WifiNode {
-                max_range_m: reader
-                    .real(sdf_path, "lunco:wifi:maxRangeM")
-                    .unwrap_or(5_000.0),
-            });
+    let wifi_node = match read_authored_bool(reader, sdf_path, "lunco:wifiNode") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed `lunco:wifiNode`; Wi-Fi node ignored",
+                prim_path_str
+            );
+            false
+        }
+    };
+    if wifi_node {
+        let wifi = (|| {
+            let max_range_m =
+                read_real_strict(reader, sdf_path, "lunco:wifi:maxRangeM")?.unwrap_or(5_000.0);
+            if !max_range_m.is_finite() || max_range_m <= 0.0 {
+                return Err(());
+            }
+            Ok(lunco_celestial::wifi::WifiNode { max_range_m })
+        })();
+        match wifi {
+            Ok(wifi) => {
+                commands.entity(entity).try_insert(wifi);
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid Wi-Fi node attributes; node ignored",
+                prim_path_str
+            ),
+        }
     }
 
     // --- Sight-line occluder (generic geometry, not a comms concept) ---
@@ -764,14 +825,34 @@ pub fn insert_celestial_comms_components(
     // NOT derived from `PhysicsCollisionAPI`: opacity is a material property, not
     // a collision one (a handrail collides but does not block; a radome may block
     // but not collide). See `LinkOccluder`.
-    if reader.boolean(sdf_path, "lunco:occluder").unwrap_or(false) {
-        commands.entity(entity).try_insert((
-            read_occluder_box(reader, sdf_path),
-            // LinkOccluder is tested against LinkNode::SolarFramePose. The
-            // marker makes that frame an explicit projection contract for
-            // every authored blocker, including a scene-local wall.
-            lunco_celestial::pose::SolarTracked,
-        ));
+    let occluder = match read_authored_bool(reader, sdf_path, "lunco:occluder") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed `lunco:occluder`; occluder ignored",
+                prim_path_str
+            );
+            false
+        }
+    };
+    if occluder {
+        match read_occluder_box(reader, sdf_path) {
+            Ok(occluder) => {
+                commands.entity(entity).try_insert((
+                    occluder,
+                    // LinkOccluder is tested against LinkNode::SolarFramePose.
+                    // The marker makes that frame an explicit projection
+                    // contract for every authored blocker, including a
+                    // scene-local wall.
+                    lunco_celestial::pose::SolarTracked,
+                ));
+            }
+            Err(()) => warn!(
+                "[usd-celestial] {} has malformed UsdGeom `extent`; occluder ignored",
+                prim_path_str
+            ),
+        }
     }
 }
 
@@ -781,20 +862,47 @@ pub fn insert_celestial_comms_components(
 fn read_occluder_box(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
-) -> lunco_celestial::link::LinkOccluder {
+) -> Result<lunco_celestial::link::LinkOccluder, ()> {
     use bevy::math::DVec3;
-    let extent = reader
-        .scalar::<Vec<f32>>(sdf_path, "extent")
-        .map(|v| v.into_iter().map(|f| f as f64).collect::<Vec<f64>>())
-        .or_else(|| reader.scalar::<Vec<f64>>(sdf_path, "extent"));
-    let Some(v) = extent.filter(|v| v.len() >= 6) else {
-        return lunco_celestial::link::LinkOccluder::default();
+    let Some(value) = reader.attr_value(sdf_path, "extent") else {
+        if reader.has_authored_attribute(sdf_path, "extent") {
+            return Err(());
+        }
+        return Ok(lunco_celestial::link::LinkOccluder::default());
     };
-    let (min, max) = (DVec3::new(v[0], v[1], v[2]), DVec3::new(v[3], v[4], v[5]));
-    lunco_celestial::link::LinkOccluder {
-        half_extents: (max - min) * 0.5,
-        center: (max + min) * 0.5,
+    let (min, max) = match value {
+        Value::Vec3fVec(values) if values.len() == 2 => (
+            DVec3::new(
+                f64::from(values[0].x),
+                f64::from(values[0].y),
+                f64::from(values[0].z),
+            ),
+            DVec3::new(
+                f64::from(values[1].x),
+                f64::from(values[1].y),
+                f64::from(values[1].z),
+            ),
+        ),
+        Value::Vec3dVec(values) if values.len() == 2 => (
+            DVec3::new(values[0].x, values[0].y, values[0].z),
+            DVec3::new(values[1].x, values[1].y, values[1].z),
+        ),
+        _ => return Err(()),
+    };
+    let half_extents = (max - min) * 0.5;
+    if !min.is_finite()
+        || !max.is_finite()
+        || !half_extents.is_finite()
+        || half_extents.x <= 0.0
+        || half_extents.y <= 0.0
+        || half_extents.z <= 0.0
+    {
+        return Err(());
     }
+    Ok(lunco_celestial::link::LinkOccluder {
+        half_extents,
+        center: (max + min) * 0.5,
+    })
 }
 
 #[cfg(test)]
@@ -925,5 +1033,39 @@ def Xform "World"
                 .expect("valid ephemeris id"),
             Some(-1024)
         );
+    }
+
+    #[test]
+    fn authored_usd_extent_is_used_for_occluder_geometry() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Cube "Body"
+    {
+        float3[] extent = [(-2, -3, -4), (2, 3, 4)]
+    }
+}
+"#,
+        );
+        let occluder = read_occluder_box(&stage.view(), &path).expect("valid extent");
+        assert_eq!(occluder.center, bevy::math::DVec3::ZERO);
+        assert_eq!(occluder.half_extents, bevy::math::DVec3::new(2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn malformed_usd_extent_is_not_replaced_with_a_unit_cube() {
+        let (stage, path) = view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Cube "Body"
+    {
+        float3[] extent = [(-2, -3, -4)]
+    }
+}
+"#,
+        );
+        assert!(read_occluder_box(&stage.view(), &path).is_err());
     }
 }
