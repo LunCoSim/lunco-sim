@@ -952,8 +952,10 @@ impl RenderingQualitySettings {
         {
             return Err("cinematic terrain resolution must be between 3 and 4097");
         }
-        if !profile.terrain_lod_pixel_error.is_finite() || profile.terrain_lod_pixel_error <= 0.0 {
-            return Err("terrain LOD pixel error must be finite and greater than zero");
+        if !profile.terrain_lod_pixel_error.is_finite()
+            || !(0.1..=32.0).contains(&profile.terrain_lod_pixel_error)
+        {
+            return Err("terrain LOD pixel error must be finite and in [0.1, 32]");
         }
         if profile.terrain_lod_max_depth == 0 || profile.terrain_lod_max_depth > 20 {
             return Err("terrain LOD max depth must be between 1 and 20");
@@ -1349,6 +1351,19 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain tile resolution must be between 3 and 4097")
+        );
+
+        settings.terrain_lod_tile_resolution = 49;
+        settings.terrain_lod_pixel_error = 0.05;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain LOD pixel error must be finite and in [0.1, 32]")
+        );
+
+        settings.terrain_lod_pixel_error = 33.0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain LOD pixel error must be finite and in [0.1, 32]")
         );
     }
 

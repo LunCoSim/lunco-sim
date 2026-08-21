@@ -91,7 +91,7 @@ impl TerrainColliderRing {
     /// sees, not a finer band the mesh flattens out.
     pub fn for_profile(profile: lunco_render::RenderQualityProfile, half_extent: f64) -> Self {
         let depth = profile.terrain_lod_max_depth;
-        let res = profile.terrain_lod_tile_resolution.max(2);
+        let res = profile.terrain_lod_tile_resolution;
         let tile_side = (2.0 * half_extent) / (1u32 << depth) as f64;
         let step = tile_side / (res - 1) as f64;
         TerrainColliderRing {

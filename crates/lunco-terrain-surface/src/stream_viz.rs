@@ -2148,8 +2148,7 @@ pub fn update_lod_tiles(
                 px,
             )
         };
-        let base_px = profile.terrain_lod_pixel_error.clamp(0.5, 32.0);
-        let pixel_error = base_px;
+        let pixel_error = profile.terrain_lod_pixel_error;
         let qt = quadtree_for(pixel_error);
         // ── Idle-camera fast path ────────────────────────────────────────────
         // The selection below (quadtree walks + budget-coarsen loop + sort + queue
@@ -2280,7 +2279,7 @@ pub fn update_lod_tiles(
         // the range factor, so the transition distance and the morph band move
         // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
         // the re-walks are cheap; the loop is bounded by the 32 px clamp.
-        let budget = profile.terrain_lod_tile_budget.max(16);
+        let budget = profile.terrain_lod_tile_budget;
         // NOT a full `select_with_error` walk. The cover is persistent state now
         // (`evolve_cover` below); walking the whole tree here and discarding it would
         // reintroduce the per-frame cost this change exists to remove.
@@ -2344,7 +2343,7 @@ pub fn update_lod_tiles(
                 // camera rig settles over its first few frames.
                 if tiles.cover.is_empty() {
                     tiles.budget_refused = 0;
-                    for _ in 0..profile.terrain_lod_max_depth.max(1) {
+                    for _ in 0..profile.terrain_lod_max_depth {
                         let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
                         let (_, refused) = evolve_cover_for_foci_with_retention(
                             &qt,
@@ -2894,7 +2893,7 @@ pub fn update_lod_tiles(
         // tile entities themselves, so LRU-evicting its cache entries can only
         // cost a re-bake on a much later re-selection, never a visible hole.)
         mesh_cache.trim(
-            mesh_cache_entry_cap(profile.terrain_lod_tile_budget.max(16), terrain_count),
+            mesh_cache_entry_cap(profile.terrain_lod_tile_budget, terrain_count),
             profile.terrain_mesh_cache_bytes,
             |(e, c, _)| {
                 *e == terrain
