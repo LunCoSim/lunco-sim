@@ -1046,15 +1046,13 @@ impl SettingsSection for RenderingQualitySettings {
 /// Why a shadow map is temporarily suppressed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShadowMapSuppressionReason {
-    /// The explicit graphics admission settings excluded this caster.
-    Budget,
-    /// The render-recovery ladder disabled the map after a GPU fault.
-    Recovery,
+    /// The explicit graphics caster limit excluded this caster.
+    ConfiguredLimit,
 }
 
-/// Records the user/scene shadow intent while a render policy temporarily
-/// disables a map. It makes re-arm lossless and preserves an authored
-/// `shadow:enable = false` value.
+/// Records the user/scene shadow intent while the explicit graphics caster
+/// limit excludes a map. It makes a later settings increase lossless and
+/// preserves an authored `shadow:enable = false` value.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShadowMapSuppressed {
     pub was_enabled: bool,

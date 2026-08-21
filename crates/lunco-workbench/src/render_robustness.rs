@@ -27,13 +27,12 @@
 //! no dump, and no clue for the tester. Converting a crash into a silent
 //! infinite loop is worse than crashing.
 //!
-//! So a repeated error escalates through [`Ladder`], a resource-aware ladder:
+//! So a repeated error escalates through [`Ladder`]:
 //!
 //! | rung | when | what |
 //! |---|---|---|
 //! | `Healthy` | — | drop the bad frame, log rate-limited (transient skew) |
-//! | `ShadowMapsOff` | first shadow-map failure | turn shadow maps off on every light — this releases the named atlas |
-//! | `PersistentFailure` | first non-shadow failure | preserve scene state and wait for a bounded give-up decision |
+//! | `PersistentFailure` | first render failure | preserve the authored and configured scene state and wait for a bounded give-up decision |
 //! | `GaveUp` | still failing [`GIVE_UP_AFTER_SECS`] later, or device lost | deactivate every camera, log once, loudly |
 //!
 //! `GaveUp` stops the null loop rather than the process: the sim, the API and
@@ -43,9 +42,9 @@
 //!
 //! The ladder is a pure state machine precisely so it can be tested without a
 //! GPU (see the tests at the bottom); the systems around it only apply what it
-//! decides. The one thing no test here can prove is that disabling shadow maps
-//! actually clears the driver's invalid-texture state — that needs the Windows
-//! adapter that produced it.
+//! decides. No quality setting is changed by this ladder. The user can choose
+//! a different explicit graphics configuration, or reload the scene, after a
+//! presentation failure.
 //!
 //! Two further mitigations, independent of the ladder:
 //!
@@ -312,7 +311,6 @@ pub(crate) fn draw_render_recovery_banner(
 pub(crate) enum Rung {
     #[default]
     Healthy,
-    ShadowMapsOff,
     PersistentFailure,
     GaveUp,
 }
@@ -320,7 +318,6 @@ pub(crate) enum Rung {
 /// What the ladder decided to do this frame.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Action {
-    DisableShadowMaps,
     GiveUp,
 }
 
@@ -345,9 +342,9 @@ pub(crate) struct Ladder {
 #[derive(Resource, Default)]
 pub(crate) struct ShadowAdmissionState {
     light_count: Option<usize>,
-    /// Number of currently enabled shadow casters. This changes when the
-    /// recovery ladder sheds maps and changes back when an explicit re-arm
-    /// restores them, even if the scene contains the same total lights.
+    /// Number of currently enabled shadow casters. This changes when an
+    /// explicit caster-limit setting changes, even if the scene contains the
+    /// same total lights.
     enabled_caster_count: Option<usize>,
     directional_map_size: Option<usize>,
     point_map_size: Option<usize>,
@@ -360,11 +357,10 @@ pub(crate) struct ShadowAdmissionState {
 const FAILURE_QUIET_SECS: f64 = 0.5;
 
 impl Ladder {
-    /// Re-arm after an explicit user quality change. A re-arm is only valid
-    /// after the shadow-specific mitigation; device loss and unrelated render
-    /// failures remain terminal/persistent respectively.
-    fn rearm(&mut self, total: u64) {
-        if self.rung != Rung::ShadowMapsOff {
+    /// Re-arm after an explicit user quality change. Device loss remains
+    /// terminal because changing a setting cannot recreate the device.
+    fn rearm(&mut self, total: u64, device_lost: bool) {
+        if device_lost || self.rung != Rung::PersistentFailure {
             return;
         }
         self.rung = Rung::Healthy;
@@ -383,8 +379,8 @@ impl Ladder {
         device_lost: bool,
         now: f64,
     ) -> Option<Action> {
-        // Device loss short-circuits every rung: the shadow-map fallback cannot
-        // help when there is no device to render with.
+        // Device loss short-circuits every rung: no quality setting can help
+        // when there is no device to render with.
         if device_lost {
             if self.rung == Rung::GaveUp {
                 return None;
@@ -413,36 +409,20 @@ impl Ladder {
         }
 
         self.last_failure_at = Some(now);
-        let kind_changed = self.failure_kind != kind;
         self.failure_kind = kind;
         let since = *self.failing_since.get_or_insert(now);
 
         match self.rung {
-            // Only the resource named by the error gets this fallback. OOM and
-            // unrelated validation faults must not toggle every light in the
-            // scene; their bounded outcome is a visible give-up state.
-            Rung::Healthy if kind == FailureKind::ShadowMap => {
-                self.rung = Rung::ShadowMapsOff;
-                // Restart the clock: persistence is now measured against the
-                // mitigation, not against the original fault.
-                self.failing_since = Some(now);
-                Some(Action::DisableShadowMaps)
-            }
             Rung::Healthy => {
                 self.rung = Rung::PersistentFailure;
                 self.failing_since = Some(now);
                 None
             }
-            Rung::ShadowMapsOff if kind_changed => {
-                self.rung = Rung::PersistentFailure;
-                self.failing_since = Some(now);
-                None
-            }
-            Rung::ShadowMapsOff | Rung::PersistentFailure if now - since >= GIVE_UP_AFTER_SECS => {
+            Rung::PersistentFailure if now - since >= GIVE_UP_AFTER_SECS => {
                 self.rung = Rung::GaveUp;
                 Some(Action::GiveUp)
             }
-            Rung::ShadowMapsOff | Rung::PersistentFailure | Rung::GaveUp => None,
+            Rung::PersistentFailure | Rung::GaveUp => None,
         }
     }
 }
@@ -622,46 +602,28 @@ fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
 ///
 /// This is change-driven: settings or a newly authored directional-light map
 /// must change before it runs. The selected settings are applied exactly as
-/// authored. Changing a setting is also the explicit, safe re-arm after the
-/// reactive error ladder has shed shadows.
+/// authored. Changing a setting is also the explicit re-arm for a pending
+/// persistent-failure timer.
 fn apply_render_quality(
     settings: Res<RenderingQualitySettings>,
     mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_map: ResMut<bevy::light::PointLightShadowMap>,
     mut directional_lights: Query<(
-        Entity,
         &mut bevy::light::DirectionalLight,
         &mut bevy::light::CascadeShadowConfig,
-        Option<&ShadowMapSuppressed>,
         Option<&ShadowRangeAuthorship>,
     )>,
-    mut point_lights: Query<(
-        Entity,
-        &mut bevy::light::PointLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-    mut spot_lights: Query<(
-        Entity,
-        &mut bevy::light::SpotLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
+    mut point_lights: Query<&mut bevy::light::PointLight>,
+    mut spot_lights: Query<&mut bevy::light::SpotLight>,
     mut ladder: ResMut<Ladder>,
     health: Option<Res<RenderHealthHandle>>,
     warning: Option<Res<RenderWarning>>,
     mut commands: Commands,
 ) {
-    let explicit_rearm = settings.is_changed() && ladder.rung == Rung::ShadowMapsOff;
-    if explicit_rearm {
+    if settings.is_changed() {
         let total = health.as_ref().map_or(0, |handle| handle.0.total());
-        ladder.rearm(total);
-        restore_suppressed_shadow_maps(
-            &mut commands,
-            &mut directional_lights,
-            &mut point_lights,
-            &mut spot_lights,
-        );
-        // The warning was produced by the rung being re-armed. A subsequent
-        // budget cap is reported in the Graphics settings row instead.
+        let device_lost = health.as_ref().is_some_and(|handle| handle.0.device_lost());
+        ladder.rearm(total, device_lost);
         commands.remove_resource::<RenderWarning>();
     }
 
@@ -685,7 +647,7 @@ fn apply_render_quality(
         point_map.size = profile.point_shadow_map_size as usize;
     }
 
-    for (_, mut light, mut config, _, authored_ranges) in &mut directional_lights {
+    for (mut light, mut config, authored_ranges) in &mut directional_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
 
@@ -732,13 +694,13 @@ fn apply_render_quality(
         .build();
     }
 
-    for (_, mut light, _) in &mut point_lights {
+    for mut light in &mut point_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
         light.shadow_map_near_z = profile.local_shadow_map_near_z;
     }
 
-    for (_, mut light, _) in &mut spot_lights {
+    for mut light in &mut spot_lights {
         light.shadow_depth_bias = profile.shadow_depth_bias;
         light.shadow_normal_bias = profile.shadow_normal_bias;
         light.shadow_map_near_z = profile.local_shadow_map_near_z;
@@ -1048,19 +1010,19 @@ fn apply_shadow_budget_policy(
         || state.budget_bytes != Some(admission_budget);
     if admission_changed {
         for (entity, mut light, _, suppressed, _, _, _) in directionals.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
         for (entity, mut light, suppressed, _, _, _) in points.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
         for (entity, mut light, suppressed, _, _, _) in spots.iter_mut() {
-            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+            if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
                 light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
@@ -1163,7 +1125,9 @@ fn apply_shadow_budget_policy(
             used_bytes = used_bytes.saturating_add(cost);
             kept_directionals.push(candidate.entity);
             if let Ok((_, _, _, suppressed, _, _, _)) = directionals.get_mut(candidate.entity) {
-                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                if suppressed
+                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
+                {
                     commands
                         .entity(candidate.entity)
                         .remove::<ShadowMapSuppressed>();
@@ -1177,7 +1141,7 @@ fn apply_shadow_budget_policy(
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
                         was_enabled: true,
-                        reason: ShadowMapSuppressionReason::Budget,
+                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
             light.shadow_maps_enabled = false;
@@ -1199,7 +1163,9 @@ fn apply_shadow_budget_policy(
             used_bytes = used_bytes.saturating_add(cost);
             kept_points.push(candidate.entity);
             if let Ok((_, _, suppressed, _, _, _)) = points.get_mut(candidate.entity) {
-                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                if suppressed
+                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
+                {
                     commands
                         .entity(candidate.entity)
                         .remove::<ShadowMapSuppressed>();
@@ -1211,7 +1177,7 @@ fn apply_shadow_budget_policy(
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
                         was_enabled: true,
-                        reason: ShadowMapSuppressionReason::Budget,
+                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
             light.shadow_maps_enabled = false;
@@ -1233,7 +1199,9 @@ fn apply_shadow_budget_policy(
             used_bytes = used_bytes.saturating_add(cost);
             kept_spots.push(candidate.entity);
             if let Ok((_, _, suppressed, _, _, _)) = spots.get_mut(candidate.entity) {
-                if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::Budget) {
+                if suppressed
+                    .is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit)
+                {
                     commands
                         .entity(candidate.entity)
                         .remove::<ShadowMapSuppressed>();
@@ -1245,7 +1213,7 @@ fn apply_shadow_budget_policy(
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
                         was_enabled: true,
-                        reason: ShadowMapSuppressionReason::Budget,
+                        reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
             light.shadow_maps_enabled = false;
@@ -1375,13 +1343,12 @@ pub(crate) fn reset_render_recovery(
     commands.remove_resource::<RenderGaveUp>();
 }
 
-/// Main-world escalation: read the shared tallies, advance the [`Ladder`], apply
-/// whatever it decided, and publish the cross-world presentation gate.
+/// Main-world escalation: read the shared tallies, advance the [`Ladder`], and
+/// publish the cross-world presentation gate when the fault persists.
 ///
-/// In the main world rather than the render world because both remedies are
-/// main-world state — `DirectionalLight::shadow_maps_enabled` and
-/// `Camera::is_active` are extracted to the render world each frame. The
-/// terminal presentation gate additionally stops the render schedule itself.
+/// In the main world because `Camera::is_active` is extracted to the render
+/// world each frame. The terminal presentation gate additionally stops the
+/// render schedule itself.
 fn escalate_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
@@ -1389,21 +1356,6 @@ fn escalate_render_recovery(
     mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
     warning: Option<Res<RenderWarning>>,
-    mut dir: Query<(
-        Entity,
-        &mut bevy::light::DirectionalLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-    mut point: Query<(
-        Entity,
-        &mut bevy::light::PointLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
-    mut spot: Query<(
-        Entity,
-        &mut bevy::light::SpotLight,
-        Option<&ShadowMapSuppressed>,
-    )>,
     mut cameras: Query<&mut bevy::camera::Camera>,
 ) {
     let h = &health.0;
@@ -1424,50 +1376,6 @@ fn escalate_render_recovery(
     };
 
     match action {
-        Action::DisableShadowMaps => {
-            let mut n = 0;
-            for (entity, mut l, suppressed) in &mut dir {
-                if suppressed.is_none() {
-                    commands.entity(entity).try_insert(ShadowMapSuppressed {
-                        was_enabled: l.shadow_maps_enabled,
-                        reason: ShadowMapSuppressionReason::Recovery,
-                    });
-                }
-                l.shadow_maps_enabled = false;
-                n += 1;
-            }
-            for (entity, mut l, suppressed) in &mut point {
-                if suppressed.is_none() {
-                    commands.entity(entity).try_insert(ShadowMapSuppressed {
-                        was_enabled: l.shadow_maps_enabled,
-                        reason: ShadowMapSuppressionReason::Recovery,
-                    });
-                }
-                l.shadow_maps_enabled = false;
-                n += 1;
-            }
-            for (entity, mut l, suppressed) in &mut spot {
-                if suppressed.is_none() {
-                    commands.entity(entity).try_insert(ShadowMapSuppressed {
-                        was_enabled: l.shadow_maps_enabled,
-                        reason: ShadowMapSuppressionReason::Recovery,
-                    });
-                }
-                l.shadow_maps_enabled = false;
-                n += 1;
-            }
-            let shadow = h.shadow.load(Ordering::Relaxed);
-            warn!(
-                "GPU errors are not clearing ({shadow} naming a shadow map) \
-                 — disabling shadow maps on {n} light(s) to release the shadow atlas and keep \
-                 rendering. A scene reload re-arms the policy after closing \
-                 content; a lost GPU remains terminal. If the errors continue, \
-                 presentation will stop in {GIVE_UP_AFTER_SECS:.0}s."
-            );
-            commands.insert_resource(RenderWarning {
-                message: "Rendering recovered with shadow maps disabled. Change Rendering quality in Settings to safely re-arm the shadow allocation.".to_string(),
-            });
-        }
         Action::GiveUp => {
             h.presentation_stopped.store(true, Ordering::Relaxed);
             presentation.stopped = true;
@@ -1616,7 +1524,7 @@ mod tests {
                 },
                 ShadowMapSuppressed {
                     was_enabled: true,
-                    reason: ShadowMapSuppressionReason::Recovery,
+                    reason: ShadowMapSuppressionReason::ConfiguredLimit,
                 },
             ))
             .id();
@@ -1754,11 +1662,9 @@ mod tests {
     /// frames has length one, so the clock resets and no amount of elapsed time
     /// can turn it into a give-up.
     ///
-    /// Note this DOES cost the session its shadow maps, which for a resize skew
-    /// is a real over-reaction. It is the deliberate trade: the ladder cannot
-    /// tell a permanent invalid-texture from a one-frame skew at the moment it
-    /// must decide, and shedding shadows is recoverable where a 339-fps null loop
-    /// is not.
+    /// No quality setting is changed for the one-frame skew. The clean frame
+    /// resets the persistence clock, while the authored shadow intent remains
+    /// intact.
     #[test]
     fn a_transient_error_never_gives_up() {
         let mut l = Ladder::default();
@@ -1767,23 +1673,20 @@ mod tests {
             // No new errors: healthy frames, arbitrarily far into the future.
             assert_eq!(l.step(1, FailureKind::ShadowMap, false, i as f64), None);
         }
-        assert_eq!(l.rung, Rung::ShadowMapsOff);
+        assert_eq!(l.rung, Rung::PersistentFailure);
         assert!(
             l.failing_since.is_none(),
             "a clean frame must reset the clock"
         );
     }
 
-    /// Shadow maps come off on the FIRST non-transient error, not after a
-    /// countdown. The reported failure was already permanent on frame one.
+    /// The first error records a persistent-failure state but does not alter
+    /// any quality setting.
     #[test]
-    fn first_failure_sheds_shadow_maps() {
+    fn first_failure_does_not_change_quality() {
         let mut l = Ladder::default();
-        assert_eq!(
-            l.step(1, FailureKind::ShadowMap, false, 0.0),
-            Some(Action::DisableShadowMaps)
-        );
-        assert_eq!(l.rung, Rung::ShadowMapsOff);
+        assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
+        assert_eq!(l.rung, Rung::PersistentFailure);
     }
 
     #[test]
@@ -2026,15 +1929,12 @@ mod tests {
         assert_eq!(enabled, 4);
     }
 
-    /// The 339-fps null loop. Errors keep coming after the mitigation, so
-    /// presentation is abandoned — once, and only after the grace period.
+    /// The 339-fps null loop. Errors keep coming without a quality fallback,
+    /// so presentation is abandoned — once, and only after the grace period.
     #[test]
     fn persistent_failure_gives_up_after_the_grace_period() {
         let mut l = Ladder::default();
-        assert_eq!(
-            l.step(1, FailureKind::ShadowMap, false, 0.0),
-            Some(Action::DisableShadowMaps)
-        );
+        assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
 
         // Still failing, but inside the grace period: hold.
         let mut total = 1;
@@ -2069,17 +1969,13 @@ mod tests {
         assert_eq!(l.rung, Rung::GaveUp);
     }
 
-    /// The grace period is measured from the MITIGATION, not from the first
-    /// error — otherwise a fallback applied at t=4.9s would be judged a failure
-    /// 0.1s later, having had no chance to work.
+    /// The grace period is measured from the first persistent failure because
+    /// no automatic mitigation is applied.
     #[test]
     fn grace_period_starts_at_the_mitigation() {
         let mut l = Ladder::default();
-        assert_eq!(
-            l.step(1, FailureKind::ShadowMap, false, 100.0),
-            Some(Action::DisableShadowMaps)
-        );
-        // 4s after the mitigation — not yet.
+        assert_eq!(l.step(1, FailureKind::ShadowMap, false, 100.0), None);
+        // 4s after the first failure — not yet.
         assert_eq!(l.step(2, FailureKind::ShadowMap, false, 104.0), None);
         // 5s after the mitigation.
         assert_eq!(
@@ -2088,30 +1984,27 @@ mod tests {
         );
     }
 
-    /// A recovery that works must be permanent: once frames render again the
-    /// ladder holds at `ShadowMapsOff` and never escalates.
+    /// A clean frame resets the persistence clock without silently re-arming
+    /// or changing any quality setting.
     #[test]
-    fn a_successful_mitigation_never_escalates() {
+    fn a_clean_frame_resets_the_persistence_clock() {
         let mut l = Ladder::default();
         l.step(1, FailureKind::ShadowMap, false, 0.0);
-        // Shadow maps off; frames now render. Total never moves again.
+        // Frames now render. Total never moves again.
         for i in 0..100 {
             assert_eq!(
                 l.step(1, FailureKind::ShadowMap, false, i as f64 * 10.0),
                 None
             );
         }
-        assert_eq!(l.rung, Rung::ShadowMapsOff);
+        assert_eq!(l.rung, Rung::PersistentFailure);
     }
 
     #[test]
-    fn an_explicit_quality_change_rearms_only_shadow_degradation() {
+    fn an_explicit_quality_change_rearms_pending_failures() {
         let mut l = Ladder::default();
-        assert_eq!(
-            l.step(1, FailureKind::ShadowMap, false, 0.0),
-            Some(Action::DisableShadowMaps)
-        );
-        l.rearm(1);
+        assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
+        l.rearm(1, false);
         assert_eq!(l.rung, Rung::Healthy);
         // The old error total is the new baseline; a clean frame does not
         // immediately trip the ladder again.
@@ -2119,8 +2012,8 @@ mod tests {
 
         let mut persistent = Ladder::default();
         persistent.step(1, FailureKind::OutOfMemory, false, 0.0);
-        persistent.rearm(1);
-        assert_eq!(persistent.rung, Rung::PersistentFailure);
+        persistent.rearm(1, false);
+        assert_eq!(persistent.rung, Rung::Healthy);
     }
 
     /// Device loss skips the ladder entirely — no rung of it can recover a
@@ -2141,13 +2034,13 @@ mod tests {
         );
     }
 
-    /// Device loss after a shadow-map fallback still terminates immediately,
+    /// Device loss after a pending failure still terminates immediately,
     /// rather than waiting out a grace period that cannot help.
     #[test]
     fn device_lost_from_a_degraded_rung_is_still_immediate() {
         let mut l = Ladder::default();
         l.step(1, FailureKind::ShadowMap, false, 0.0);
-        assert_eq!(l.rung, Rung::ShadowMapsOff);
+        assert_eq!(l.rung, Rung::PersistentFailure);
         assert_eq!(
             l.step(2, FailureKind::Other, true, 0.5),
             Some(Action::GiveUp)
