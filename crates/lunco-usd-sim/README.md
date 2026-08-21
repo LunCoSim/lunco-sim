@@ -17,18 +17,22 @@ This approach provides:
 ### 1. `UsdSimPlugin`
 The main plugin that observes USD prims and injects simulation-specific behaviors.
 
-### 2. "Duck Typing" USD Physics
-The crate identifies specialized prims by looking for specific schema attributes (e.g., `physxVehicleWheel:radius`).
+### 2. Applied USD vehicle schemas
+The crate identifies specialized prims from their applied schema APIs (for example,
+`PhysxVehicleWheelAPI`), then reads composed standard attributes from those
+contracts. It does not infer a wheel from a stray attribute.
 *   **Wheel Intercept**: When a `PhysxVehicleWheelAPI` is detected, the crate injects a `WheelRaycast` component from `lunco-mobility`.
-*   **Future Mappings**: Will include `PhysxVehicleTireAPI` for friction parameters and `PhysxVehicleSuspensionAPI` for spring dynamics.
+*   **Tire and suspension mappings**: `PhysxVehicleTireAPI` and
+    `PhysxVehicleSuspensionAPI` are projected through standard wheel-attachment
+    relationships or the standard direct-API form.
 
 ### 3. Priority & Overrides
 Simulation-specific behaviors applied by this crate are intended to take priority over standard collision physics. If an object is marked as a Wheel, its standard collider logic should be bypassed in favor of raycast-based ground interaction.
 
 ## Implementation Status
 *   [x] Basic `PhysxVehicleWheelAPI` intercept.
-*   [ ] `PhysxVehicleTireAPI` mapping.
-*   [ ] `PhysxVehicleSuspensionAPI` mapping.
+*   [x] `PhysxVehicleTireAPI` mapping.
+*   [x] `PhysxVehicleSuspensionAPI` mapping.
 *   [ ] Automatic removal/replacement of standard `UsdPhysics` colliders on intercepted prims.
 
 ## Co-simulation translator (`cosim` module)

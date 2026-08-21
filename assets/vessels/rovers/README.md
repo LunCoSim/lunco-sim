@@ -48,6 +48,8 @@ Controlling traction and speed:
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
 *   `float physics:dynamicFriction`: standard `UsdPhysicsMaterialAPI` Coulomb coefficient ($\mu$) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant, and consumed by both wheel realizations.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).
+*   `float2 physxVehicleTire:lateralStiffnessGraph`: Standard PhysX load graph `(minimum normalized load, maximum stiffness)` in `(ratio, N/rad)`.
+*   `float physxVehicleTire:restLoad`: Standard PhysX tire reference load in newtons; required by LunCoSim's shared tire projection.
 
 ---
 

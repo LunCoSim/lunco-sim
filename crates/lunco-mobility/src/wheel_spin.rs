@@ -350,13 +350,12 @@ pub(crate) fn update_wheel_spin(
         //     goes where it physically goes: into ω, as visible spin.
         // Nothing is calibrated against anything else, so μ means μ and a tire
         // swapped at runtime behaves like the tire it is.
-        // ── LATERAL: A SLIP ANGLE, NOT A LATERAL VELOCITY ──────────────────────
+        // ── LATERAL: THE STANDARD PHYSX LOAD GRAPH ─────────────────────────────
         //
-        // The attribute is `physxVehicleTire:lateralStiffness` and every text —
-        // and PhysX — means CORNERING STIFFNESS by that: side force per RADIAN of
-        // slip angle. This computed `-k · v_lat`: force per metre-per-second of
-        // lateral velocity. Those are not the same model and they do not differ by
-        // a constant, because `v_lat = |v| · sin(α)`.
+        // The tire's lateral stiffness is authored as
+        // `physxVehicleTire:lateralStiffnessGraph`, not as a LunCo scalar. The
+        // shared patch law evaluates that graph at this contact's normal load
+        // and then applies the resulting force to the slip angle.
         //
         // The consequence is that grip vanished with speed. At the same slip angle
         // — the same wheel scrubbing equally badly sideways — a wheel at 0.5 m/s
@@ -374,17 +373,8 @@ pub(crate) fn update_wheel_spin(
         // The slip-angle reference is kinematic: the larger of hub travel speed
         // and circumferential wheel speed. A pivot wheel therefore retains a
         // well-defined angle even while its hub's longitudinal speed is near zero.
-        // The stiffness is NORMALISED BY LOAD — side force per radian PER NEWTON of
-        // normal force — so one authored number describes the tyre rather than the
-        // tyre-on-this-particular-rover. That is the same reason PhysX states its
-        // `lateralStiffness` per unit gravity, and it is what the old absolute
-        // value could not do: `tires/regolith.usda` records a fit that worked on
-        // one vehicle and had to be re-fitted for the next.
-        //
-        // It also puts the saturation point where a tyre spec actually states it.
-        // The linear region ends when `C·N·α` reaches the cone `μ·N`, i.e. at
-        // `α_peak = μ / C`, independent of load: at C = 10 a μ = 0.8 regolith tyre
-        // develops full side force at 4.6° of slip, which is where a real one does.
+        // The graph's reference load makes the same tire setup usable across
+        // contact loads while retaining the standard load-dependent response.
         // ── THE FRICTION CONE — SCALE THE FORCE, DON'T RE-DERIVE IT ────────────
         //
         // The two components above are the whole tire model: `f_long` from the slip
@@ -398,9 +388,8 @@ pub(crate) fn update_wheel_spin(
         // exact lateral variable the slip-angle model was written to replace
         // (`v_lat`, whose grip vanishes with speed), so the tire obeyed one lateral
         // law below the cone and a different one above it. Two laws in one function
-        // is the bug, not the numbers: the authored `cornering_stiffness` set the
-        // direction the force pointed under grip and had no say in it under
-        // saturation.
+        // is the bug, not the numbers: a former scalar stiffness set the direction
+        // the force pointed under grip and had no say in it under saturation.
         //
         // The low-speed definition lives in `tire_patch_force`: actual `omega*r`
         // keeps a rolling/pivoting wheel's angle defined, and `atan2` supplies the
@@ -417,7 +406,7 @@ pub(crate) fn update_wheel_spin(
                 v_lat,
                 wheel.last_normal_force,
                 friction_mu,
-                wheel.cornering_stiffness,
+                wheel.lateral_stiffness_graph,
             )
         } else {
             (0.0, 0.0)
@@ -540,7 +529,11 @@ mod tests {
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
-                cornering_stiffness: 10.0,
+                lateral_stiffness_graph: crate::TireLateralStiffnessGraph {
+                    minimum_normalized_load: 1.0,
+                    max_stiffness: 4_000.0,
+                    rest_load: 400.0,
+                },
                 min_validated_speed: 0.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
@@ -641,7 +634,11 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
-                    cornering_stiffness: 10.0,
+                    lateral_stiffness_graph: crate::TireLateralStiffnessGraph {
+                        minimum_normalized_load: 1.0,
+                        max_stiffness: 4_000.0,
+                        rest_load: 400.0,
+                    },
                     min_validated_speed: 0.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,

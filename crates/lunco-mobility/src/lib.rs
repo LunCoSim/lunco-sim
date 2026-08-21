@@ -104,6 +104,7 @@ impl Plugin for LunCoMobilityPlugin {
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             .register_type::<JointedWheelTire>()
+            .register_type::<TireLateralStiffnessGraph>()
             // `DriveMix` is the kernel-selected allocation spec. Registered
             // here with the kernels it selects between; it is a vehicle-domain
             // type and core carries no domain.
@@ -565,11 +566,53 @@ pub fn contact_plane_basis(
     (forward, right)
 }
 
+/// The standard PhysX tire lateral-stiffness graph projected into the shared
+/// LunCo tire law.
+///
+/// USD authors `(minimum normalized load, maximum lateral stiffness)` through
+/// `physxVehicleTire:lateralStiffnessGraph` and the reference load through
+/// `physxVehicleTire:restLoad`. The graph is linear from zero load to its
+/// plateau, exactly as the PhysX schema defines it. `max_stiffness` is an
+/// absolute force-per-radian value; it is not a LunCo-specific normalized
+/// coefficient.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct TireLateralStiffnessGraph {
+    /// Normalized tire load at which the graph reaches its plateau.
+    pub minimum_normalized_load: f64,
+    /// Plateau lateral stiffness, N/rad.
+    pub max_stiffness: f64,
+    /// Authored rest load used to normalize the current contact load, N.
+    pub rest_load: f64,
+}
+
+impl TireLateralStiffnessGraph {
+    /// Evaluate the standard graph at one current normal load.
+    pub fn stiffness_at_load(self, normal_force: f64) -> f64 {
+        if !(normal_force.is_finite()
+            && normal_force > 0.0
+            && self.max_stiffness.is_finite()
+            && self.max_stiffness > 0.0
+            && self.rest_load.is_finite()
+            && self.rest_load > 0.0
+            && self.minimum_normalized_load.is_finite()
+            && self.minimum_normalized_load >= 0.0)
+        {
+            return 0.0;
+        }
+        let scale = if self.minimum_normalized_load > 0.0 {
+            (normal_force / self.rest_load / self.minimum_normalized_load).min(1.0)
+        } else {
+            1.0
+        };
+        self.max_stiffness * scale
+    }
+}
+
 /// Resolve a longitudinal tire demand and lateral slip into one Coulomb-limited
 /// contact-patch force.
 ///
-/// `cornering_stiffness` is the normalized PhysX value (side force per radian,
-/// per newton of normal load). `rolling_reference_speed` is derived by the wheel
+/// `lateral_stiffness_graph` is evaluated at this contact's normal load using
+/// the standard PhysX graph. `rolling_reference_speed` is derived by the wheel
 /// realization as `max(|v_hub,long|, |omega*r|)`: the actual longitudinal motion
 /// available to define a slip angle, including a counter-rotating pivot wheel.
 /// There is no fitted low-speed threshold. If translation and rotation are both
@@ -588,15 +631,15 @@ pub fn tire_patch_force(
     lateral_speed: f64,
     normal_force: f64,
     friction_mu: f64,
-    cornering_stiffness: f64,
+    lateral_stiffness_graph: TireLateralStiffnessGraph,
 ) -> (f64, f64) {
     if normal_force <= 0.0 {
         return (0.0, 0.0);
     }
 
-    let lateral_force = if cornering_stiffness > 0.0 {
+    let lateral_force = if lateral_stiffness_graph.max_stiffness > 0.0 {
         let slip_angle = (-lateral_speed).atan2(rolling_reference_speed.abs());
-        cornering_stiffness * normal_force * slip_angle
+        lateral_stiffness_graph.stiffness_at_load(normal_force) * slip_angle
     } else {
         0.0
     };
@@ -706,26 +749,61 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{parking_brake_force, tire_patch_force};
+    use super::{parking_brake_force, tire_patch_force, TireLateralStiffnessGraph};
     use bevy::math::DVec3;
 
     #[test]
     fn rolling_speed_defines_pivot_slip_angle_without_a_threshold() {
-        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, 2.9);
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 1.0,
+            max_stiffness: 2.9 * 400.0,
+            rest_load: 400.0,
+        };
+        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, graph);
         let expected = 2.9 * 400.0 * (-0.5_f64).atan();
         assert!((lateral - expected).abs() < 1.0e-9);
     }
 
     #[test]
     fn combined_force_preserves_direction_at_coulomb_limit() {
-        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, 2.9);
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 1.0,
+            max_stiffness: 2.9 * 200.0,
+            rest_load: 200.0,
+        };
+        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, graph);
         assert!((long.hypot(lateral) - 300.0).abs() < 1.0e-9);
         assert!(long > 0.0 && lateral > 0.0);
     }
 
     #[test]
     fn zero_load_has_no_patch_force() {
-        assert_eq!(tire_patch_force(10.0, 1.0, 1.0, 0.0, 1.0, 2.9), (0.0, 0.0));
+        assert_eq!(
+            tire_patch_force(
+                10.0,
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+                TireLateralStiffnessGraph {
+                    minimum_normalized_load: 1.0,
+                    max_stiffness: 1_160.0,
+                    rest_load: 400.0,
+                },
+            ),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn lateral_graph_scales_stiffness_below_its_plateau_load() {
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 2.0,
+            max_stiffness: 1_000.0,
+            rest_load: 400.0,
+        };
+        assert_eq!(graph.stiffness_at_load(200.0), 250.0);
+        assert_eq!(graph.stiffness_at_load(800.0), 1_000.0);
     }
 
     #[test]
@@ -801,15 +879,10 @@ pub struct WheelRaycast {
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
     /// like ice.
-    /// Tire CORNERING stiffness: side force per radian of slip angle (N/rad).
-    ///
-    /// NOT force per m/s of lateral velocity — that was the old model, and the
-    /// rename is deliberate: the units changed, so a value carried across without
-    /// thought fails to compile instead of being silently wrong by ~100×.
-    ///
-    /// The force is clamped with the load-dependent Coulomb cone after the
-    /// cornering law is evaluated.
-    pub cornering_stiffness: f64,
+    /// Standard PhysX tire lateral stiffness graph evaluated at the contact
+    /// load. The force is clamped with the load-dependent Coulomb cone after
+    /// the graph law is evaluated.
+    pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lowest speed at which the authored steady-state cornering curve was
     /// validated. This is an evidence boundary, not a fitted transition.
     pub min_validated_speed: f64,
@@ -855,7 +928,7 @@ impl Default for WheelRaycast {
             max_rotation_speed: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
-            cornering_stiffness: 0.0,
+            lateral_stiffness_graph: TireLateralStiffnessGraph::default(),
             min_validated_speed: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,

@@ -1325,6 +1325,22 @@ class "RigUnitsAPI" (
                 .type_name,
             "int",
         );
+        assert_eq!(
+            reg.property("physxVehicleTire:lateralStiffnessGraph")
+                .expect("canonical PhysX lateral stiffness graph")
+                .type_name,
+            "float2",
+        );
+        assert_eq!(
+            reg.property("physxVehicleTire:restLoad")
+                .expect("canonical PhysX tire rest load")
+                .type_name,
+            "float",
+        );
+        assert!(
+            reg.property("physxVehicleTire:lateralStiffness").is_none(),
+            "lateralStiffness is not a PhysX property; use lateralStiffnessGraph"
+        );
         // The frame attrs are the types assets get wrong most often (double3 vs
         // point3f, quatd vs quatf) — pin them.
         assert_eq!(

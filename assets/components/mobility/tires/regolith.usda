@@ -56,25 +56,14 @@ over "Tire" (
     # for marked joint wheels, so its generic tangent friction is not a second law.
     float physics:dynamicFriction = 1.5
     float physics:staticFriction = 1.5
-    # Normalized cornering stiffness: side force per radian of slip angle, per
-    # newton of wheel load. This is the PhysX attribute's meaning and the runtime
-    # evaluates `F_y = C_alpha * N * alpha`, capped by the tire's Coulomb cone.
-    #
-    # DERIVED FROM MEASUREMENT, not from a rover acceptance threshold. US Army
-    # WES/NASA tests of the 50%-chevron GM Lunar Roving Vehicle wheel in crushed-
-    # basalt lunar-soil simulant measured side-thrust coefficient F_y/N ≈ 0.25
-    # at 5 degrees yaw over 180–370 N wheel loads. Therefore the small-angle
-    # normalized stiffness is:
-    #
-    #   C_alpha = (F_y/N) / alpha = 0.25 / radians(5) = 2.86 rad^-1
-    #
-    # rounded to the precision readable from figure 10 of the report:
-    # https://ntrs.nasa.gov/citations/19750021903
-    #
-    # The former 12.6 value asserted saturation near 5 degrees but did not come
-    # from that measured curve; it over-predicted low-angle side thrust by more
-    # than four times and physically locked skid-steer vehicles against pivoting.
-    float physxVehicleTire:lateralStiffness = 2.9
+    # Standard PhysX load graph. The measured small-angle coefficient is about
+    # 2.9 rad^-1 over 180–370 N wheel loads (NASA/TM-X-73109, fig. 10). For the
+    # nominal 400 N reference load, the equivalent plateau is 2.9 * 400 =
+    # 1160 N/rad. The graph and rest load retain that measurement in the
+    # standard schema's absolute units while allowing the runtime to evaluate
+    # the authored load dependence.
+    float2 physxVehicleTire:lateralStiffnessGraph = (1.0, 1160.0)
+    float physxVehicleTire:restLoad = 400.0
     # The same report's tests span 1.07–3.05 m/s. This explicitly marks the
     # lower evidence boundary so the steady-state curve is not extrapolated
     # into the singular near-zero-speed regime.

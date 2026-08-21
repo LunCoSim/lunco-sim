@@ -34,7 +34,11 @@ over "Tire" (
     # it, so the side force is up against the (lower) friction cone almost at
     # once. Stiff and slippery is a real combination: it holds a line precisely
     # right up until it lets go.
-    float physxVehicleTire:lateralStiffness = 14.0
+    # Standard PhysX load graph: the nominal four-wheel lunar rover load is
+    # 400 N; the plateau is 14 N/(N·rad) at that load, expressed in the
+    # schema's absolute N/rad units.
+    float2 physxVehicleTire:lateralStiffnessGraph = (1.0, 5600.0)
+    float physxVehicleTire:restLoad = 400.0
     # Idealized rigid-surface model: explicitly valid to rest.
     float lunco:tire:minValidatedSpeed = 0.0
 

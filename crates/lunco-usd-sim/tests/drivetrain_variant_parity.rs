@@ -278,8 +278,8 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
                     "{wheel} slip stiffness"
                 );
                 assert_eq!(
-                    pa.cornering_stiffness, pb.cornering_stiffness,
-                    "{wheel} cornering stiffness"
+                    pa.lateral_stiffness_graph, pb.lateral_stiffness_graph,
+                    "{wheel} lateral stiffness graph"
                 );
                 assert_eq!(pa.brake_torque_max, pb.brake_torque_max, "{wheel} brake");
                 checked += 1;
@@ -308,7 +308,8 @@ def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
 }
 def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {
     float physxVehicleTire:longitudinalStiffness = 9876.0
-    float physxVehicleTire:lateralStiffness = 6.5
+    float2 physxVehicleTire:lateralStiffnessGraph = (2.0, 9876.0)
+    float physxVehicleTire:restLoad = 400.0
     float lunco:tire:minValidatedSpeed = 1.25
     float physics:dynamicFriction = 0.73
 }
@@ -340,7 +341,9 @@ def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"])
     )
     .expect("separate tire target is a supported standard composition");
     assert_eq!(params.slip_stiffness, 9876.0);
-    assert_eq!(params.cornering_stiffness, 6.5);
+    assert_eq!(params.lateral_stiffness_graph.minimum_normalized_load, 2.0);
+    assert_eq!(params.lateral_stiffness_graph.max_stiffness, 9876.0);
+    assert_eq!(params.lateral_stiffness_graph.rest_load, 400.0);
     assert_eq!(params.min_validated_speed, 1.25);
     assert!((params.friction_mu - 0.73).abs() < 1e-6);
 }

@@ -1074,157 +1074,27 @@ fn collect_joint_scan_read(
                 }
             }
         }
-        // Canonical wheel-attachment binding: an attachment prim names its wheel,
-        // tire, and suspension via USD relationships. The standard schema also
-        // permits those APIs directly on the attachment prim; that direct form is
-        // explicit and is handled by mapping the attachment to itself. There is
-        // no flat legacy fallback.
-        if reader.has_api_schema(&path, "PhysxVehicleWheelAttachmentAPI") {
-            let attachment = path.as_str().to_string();
-            let endpoint = |relationship: &str, api: &str| {
-                attachment_endpoint(reader, &path, relationship, api)
-            };
-            let wheel = match endpoint("physxVehicleWheelAttachment:wheel", "PhysxVehicleWheelAPI")
-            {
-                Ok(Some(target)) => target,
-                Ok(None) => {
-                    error!(
-                        "USD wheel attachment {} has neither a wheel relationship nor a direct PhysxVehicleWheelAPI",
-                        attachment
-                    );
-                    topology.invalid_wheel_attachments.insert(attachment);
-                    continue;
-                }
-                Err(reason) => {
-                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
-                    topology.invalid_wheel_attachments.insert(attachment);
-                    continue;
-                }
-            };
-            let suspension = match endpoint(
-                "physxVehicleWheelAttachment:suspension",
-                "PhysxVehicleSuspensionAPI",
-            ) {
-                Ok(Some(target)) => target,
-                Ok(None) => {
-                    error!(
-                        "USD wheel attachment {} for {} has neither a suspension relationship nor a direct PhysxVehicleSuspensionAPI",
-                        attachment, wheel
-                    );
-                    topology.invalid_wheel_attachments.insert(wheel.clone());
-                    continue;
-                }
-                Err(reason) => {
-                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
-                    topology.invalid_wheel_attachments.insert(wheel.clone());
-                    continue;
-                }
-            };
-            let tire = match endpoint("physxVehicleWheelAttachment:tire", "PhysxVehicleTireAPI") {
-                Ok(Some(target)) => target,
-                Ok(None) => {
-                    error!(
-                        "USD wheel attachment {} for {} has neither a tire relationship nor a direct PhysxVehicleTireAPI",
-                        attachment, wheel
-                    );
-                    topology.invalid_wheel_attachments.insert(wheel.clone());
-                    continue;
-                }
-                Err(reason) => {
-                    error!("USD wheel attachment {} is invalid: {}", attachment, reason);
-                    topology.invalid_wheel_attachments.insert(wheel.clone());
-                    continue;
-                }
-            };
-
-            let Some(index) = reader.scalar::<i32>(&path, "physxVehicleWheelAttachment:index")
-            else {
-                error!(
-                    "USD wheel attachment {} has no valid physxVehicleWheelAttachment:index",
-                    attachment
-                );
-                topology.invalid_wheel_attachments.insert(wheel.clone());
-                continue;
-            };
-
-            if topology.wheel_attachment_targets.contains_key(&wheel)
-                || topology.wheel_attachment_tires.contains_key(&wheel)
-                || topology.wheel_attachment_indices.contains_key(&wheel)
-            {
-                error!(
-                    "USD wheel {} is targeted by more than one PhysxVehicleWheelAttachmentAPI; one attachment is required",
-                    wheel
-                );
-                topology.wheel_attachment_targets.remove(&wheel);
-                topology.wheel_attachment_tires.remove(&wheel);
-                topology.wheel_attachment_indices.remove(&wheel);
-                topology.invalid_wheel_attachments.insert(wheel);
-                continue;
-            }
-
-            debug!(
-                "USD wheel attachment: wheel {} → tire {} / suspension {} (via {})",
-                wheel, tire, suspension, attachment
-            );
-            topology
-                .wheel_attachment_targets
-                .insert(wheel.clone(), suspension);
-            topology.wheel_attachment_tires.insert(wheel.clone(), tire);
-            topology.wheel_attachment_indices.insert(wheel, index);
-        }
     }
-}
 
-/// Resolve a composed relationship only when it has exactly one target. The
-/// standard wheel attachment relationships are singular links; accepting the
-/// first element of a multi-target list would make topology depend on list-op
-/// ordering rather than authored intent.
-fn one_attachment_target(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    prim: &SdfPath,
-    name: &str,
-) -> Result<Option<String>, usize> {
-    let targets = reader.rel_targets(prim, name);
-    match targets.as_slice() {
-        [] => Ok(None),
-        [target] => Ok(Some(target.as_str().to_string())),
-        _ => Err(targets.len()),
+    let attachments = wheel_params::collect_wheel_attachment_topology(reader);
+    topology
+        .invalid_wheel_attachments
+        .extend(attachments.invalid_wheels().cloned());
+    for (wheel, binding) in attachments.bindings() {
+        debug!(
+            "USD wheel attachment: wheel {} → tire {} / suspension {}",
+            wheel, binding.tire, binding.suspension
+        );
+        topology
+            .wheel_attachment_targets
+            .insert(wheel.clone(), binding.suspension.clone());
+        topology
+            .wheel_attachment_tires
+            .insert(wheel.clone(), binding.tire.clone());
+        topology
+            .wheel_attachment_indices
+            .insert(wheel.clone(), binding.index);
     }
-}
-
-/// Resolve one standard attachment endpoint. A relationship target is
-/// authoritative when present; the standard schema's direct-API form uses the
-/// attachment prim itself when the relationship is omitted. In both cases the
-/// resolved prim must carry the API that defines the endpoint.
-fn attachment_endpoint(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    attachment: &SdfPath,
-    relationship: &str,
-    api_schema: &str,
-) -> Result<Option<String>, String> {
-    let target = one_attachment_target(reader, attachment, relationship).map_err(|count| {
-        format!(
-            "{} has {} relationship targets; exactly one is required",
-            relationship, count
-        )
-    })?;
-    let target = target.or_else(|| {
-        reader
-            .has_api_schema(attachment, api_schema)
-            .then(|| attachment.as_str().to_string())
-    });
-    let Some(target) = target else {
-        return Ok(None);
-    };
-    let target_path = SdfPath::new(&target)
-        .map_err(|_| format!("{} resolves to invalid target {}", relationship, target))?;
-    if !reader.has_api_schema(&target_path, api_schema) {
-        return Err(format!(
-            "{} targets {} without {}",
-            relationship, target, api_schema
-        ));
-    }
-    Ok(Some(target))
 }
 
 /// Per-prim sim-schema extractor (Pass 2) over the live composed [`UsdRead`]
