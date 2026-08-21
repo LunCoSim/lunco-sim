@@ -979,18 +979,6 @@ class "LunCoMotorAPI" (
         That reflected term is what makes a geared rover feel heavy to accelerate and
         is why this is authored rather than assumed zero."""
     )
-    float lunco:motor:ratedVoltage (
-        customData = {
-            double min = 0
-            double max = 1000
-            string unit = "V"
-        }
-        doc = """Bus voltage the stall torque and no-load speed are quoted at. The curve
-        scales with it, so a motor on a sagging battery is the same motor with a lower
-        `noLoadSpeed` — which is a thing a power program can compute and a constant
-        cannot. Carried here so the electrical model and the mechanical curve agree on
-        what "full demand" meant."""
-    )
     rel lunco:motor:drivenWheel (
         doc = """The WHEEL this motor turns — not the joint.
 

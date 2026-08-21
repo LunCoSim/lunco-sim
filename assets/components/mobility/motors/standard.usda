@@ -42,5 +42,4 @@ def Xform "MotorClass" (
     float lunco:motor:noLoadSpeed = 2400.0
     float lunco:motor:continuousTorque = 0.9
     float lunco:motor:rotorInertia = 0.00012
-    float lunco:motor:ratedVoltage = 28.0
 }

@@ -13,7 +13,9 @@ use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, Signal
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::{state::ModelicaDocumentRegistry, ModelicaModel};
+use crate::{
+    ast_extract::ModelicaVariableMetadata, state::ModelicaDocumentRegistry, ModelicaModel,
+};
 
 /// Runtime state retained for each Modelica participant.
 ///
@@ -49,6 +51,11 @@ pub struct ModelicaSignalLayout {
     /// duplicate row for the same physical value. Every other variable remains
     /// available through the explicit model-variable inspection view.
     pub public_exact_paths: HashSet<String>,
+    /// Modelica source metadata for projected solver names.  Generated wrapper
+    /// declarations are intentionally plain `Real`s, so the member declaration
+    /// is the only authoritative place to recover units and descriptions for
+    /// promoted outputs.
+    pub metadata: BTreeMap<String, ModelicaVariableMetadata>,
     /// Owner of a generated value for which the topology has no more specific
     /// member mapping.  This is the composed network scope, not a fabricated
     /// telemetry entity.
@@ -189,18 +196,26 @@ fn model_signal_meta(
     layout: Option<&ModelicaSignalLayout>,
     name: &str,
 ) -> SignalMeta {
+    let projected = layout.and_then(|layout| layout.metadata.get(name));
     let entry = documents
         .and_then(|registry| registry.host(model.document))
         .and_then(|host| host.document().index().find_component_by_leaf(name));
-    let unit = entry
-        .and_then(|entry| entry.modifications.get("unit"))
-        .map(|unit| unit.trim_matches('"').to_string())
-        .filter(|unit| !unit.is_empty());
+    let unit = projected.and_then(|entry| entry.unit.clone()).or_else(|| {
+        entry
+            .and_then(|entry| entry.modifications.get("unit"))
+            .map(|unit| unit.trim_matches('"').to_string())
+            .filter(|unit| !unit.is_empty())
+    });
 
     SignalMeta {
-        description: entry
-            .map(|entry| entry.description.clone())
-            .filter(|description| !description.is_empty()),
+        description: projected
+            .and_then(|entry| entry.description.clone())
+            .filter(|description| !description.is_empty())
+            .or_else(|| {
+                entry
+                    .map(|entry| entry.description.clone())
+                    .filter(|description| !description.is_empty())
+            }),
         unit,
         provenance: Some("modelica".to_string()),
         group_path: layout
@@ -257,6 +272,27 @@ mod tests {
             Some("modelica")
         );
         assert!(app.world().entity(entity).contains::<SignalSource>());
+    }
+
+    #[test]
+    fn projected_member_metadata_is_used_for_generated_channel_names() {
+        let mut model = ModelicaModel::default();
+        model.variables.insert("member_current".to_string(), 3.0);
+        let mut layout = ModelicaSignalLayout::default();
+        layout.metadata.insert(
+            "member_current".to_string(),
+            ModelicaVariableMetadata {
+                description: Some("Current delivered by the member".to_string()),
+                unit: Some("A".to_string()),
+            },
+        );
+
+        let meta = model_signal_meta(None, &model, Some(&layout), "member_current");
+        assert_eq!(meta.unit.as_deref(), Some("A"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("Current delivered by the member")
+        );
     }
 
     #[test]

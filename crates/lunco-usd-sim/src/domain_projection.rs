@@ -9,8 +9,9 @@ use std::fmt::Write as _;
 
 use bevy::prelude::*;
 use lunco_modelica::{
-    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    ModelicaNotice, ModelicaSignalLayout, NoticeLevel,
+    ast_extract::{parse_model_interface, ModelicaVariableMetadata},
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
+    NoticeLevel,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
@@ -1532,6 +1533,7 @@ pub fn project_domain_islands(
             &synthesized.members,
             &member_output_aliases,
             &synthesized.units,
+            &classes,
         );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
@@ -2248,6 +2250,7 @@ fn generated_signal_layout(
     members: &[(String, String, String)],
     member_output_aliases: &[(String, String, String)],
     units: &[SynthesisUnit],
+    classes: &MemberClasses,
 ) -> ModelicaSignalLayout {
     let mut layout = ModelicaSignalLayout {
         root_path: root.to_string(),
@@ -2270,6 +2273,11 @@ fn generated_signal_layout(
             .exact_paths
             .insert(output.clone(), target_prim.to_string());
         layout.public_exact_paths.insert(output.clone());
+        if let Some((_, asset, _)) = members.iter().find(|(path, _, _)| path == target_prim) {
+            if let Some(metadata) = classes.output_metadata(asset, target_output) {
+                layout.metadata.insert(output.clone(), metadata.clone());
+            }
+        }
     }
 
     // Boundary inputs are also solver variables.  Their authored source is
@@ -2297,6 +2305,11 @@ fn generated_signal_layout(
 
     for (member, output, alias) in member_output_aliases {
         layout.exact_paths.insert(alias.clone(), member.clone());
+        if let Some((_, asset, _)) = members.iter().find(|(path, _, _)| path == member) {
+            if let Some(metadata) = classes.output_metadata(asset, output) {
+                layout.metadata.insert(alias.clone(), metadata.clone());
+            }
+        }
         // A generated member alias is the canonical public projection for an
         // authored component output unless the network already exposes that
         // same USD port under a public boundary name. This is topology-derived
@@ -2387,6 +2400,7 @@ const CLASS_RESOLVE_MAX_SECS: f64 = 20.0;
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
     outputs: HashMap<String, BTreeSet<String>>,
+    output_metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
     pending: HashMap<String, (Handle<lunco_modelica::source_asset::ModelicaSource>, f64)>,
 }
 
@@ -2411,6 +2425,16 @@ impl MemberClasses {
     /// be the authority.
     pub fn output_names(&self, asset: &str) -> Option<&BTreeSet<String>> {
         self.outputs.get(asset)
+    }
+
+    /// Units and descriptions for the output declarations that the generated
+    /// wrapper promotes from this member.  The metadata is read from the same
+    /// Modelica source as the class and output names; it is not reconstructed
+    /// from generated solver identifiers or component names.
+    pub fn output_metadata(&self, asset: &str, output: &str) -> Option<&ModelicaVariableMetadata> {
+        self.output_metadata
+            .get(asset)
+            .and_then(|metadata| metadata.get(output))
     }
 
     /// Resolve the class to instantiate for `asset`. `Ok(None)` means the source
@@ -2507,7 +2531,11 @@ pub fn resolve_member_classes(
     if classes.pending.is_empty() {
         return;
     }
-    let settled: Vec<(String, Option<String>, Option<BTreeSet<String>>)> = classes
+    let settled: Vec<(
+        String,
+        Option<String>,
+        Option<(BTreeSet<String>, HashMap<String, ModelicaVariableMetadata>)>,
+    )> = classes
         .pending
         .iter()
         .filter_map(|(asset, (handle, expires))| {
@@ -2517,7 +2545,11 @@ pub fn resolve_member_classes(
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
                 });
-                return Some((asset.clone(), class, Some(interface.outputs)));
+                return Some((
+                    asset.clone(),
+                    class,
+                    Some((interface.outputs, interface.variable_metadata)),
+                ));
             }
             if asset_server.load_state(handle).is_failed() || now >= *expires {
                 return Some((asset.clone(), None, None));
@@ -2525,12 +2557,13 @@ pub fn resolve_member_classes(
             None
         })
         .collect();
-    for (asset, class, outputs) in settled {
+    for (asset, class, interface) in settled {
         classes.pending.remove(&asset);
         match class {
             Some(class) => {
-                if let Some(outputs) = outputs {
+                if let Some((outputs, metadata)) = interface {
                     classes.outputs.insert(asset.clone(), outputs);
+                    classes.output_metadata.insert(asset.clone(), metadata);
                 }
                 classes.known.insert(asset, MemberClass::Declared(class));
             }
@@ -2651,6 +2684,26 @@ mod tests {
         assert!(
             issues.is_empty(),
             "generated wrapper must parse: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn emits_authored_motor_voltage_as_the_modelica_parameter() {
+        let mut motor = component("/Electrical/Motor", None);
+        motor.constants.insert("v_rated".into(), 28.0);
+        let network = DomainNetwork {
+            root: "/Electrical".into(),
+            components: vec![motor],
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            pending_sources: false,
+        };
+
+        let source = emit_modelica(&network, "Electrical");
+        assert!(
+            source.contains("v_rated = 28"),
+            "the authored motor nameplate must reach DCMotor through the generic inputs boundary:\n{source}"
         );
     }
 

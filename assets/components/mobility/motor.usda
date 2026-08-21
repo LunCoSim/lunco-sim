@@ -225,7 +225,10 @@ def Xform "Motor" (
     # That reflected inertia is a real part of what a geared rover feels, which is why
     # the ratio is chosen against it and not only against torque — see the winding note.
     float lunco:motor:rotorInertia = 0.00012
-    float lunco:motor:ratedVoltage = 28.0
+    # The electrical facet and the mechanical motor curve share this authored
+    # nameplate voltage. `inputs:*` is the generic Modelica parameter boundary;
+    # a second custom voltage property would be a write with no reader.
+    float inputs:v_rated = 28.0
     # Which drive instance on the wheel's joint the output couples to, when the wheel has
     # one. The wheel target itself is authored per-instance by the vessel — a component
     # cannot know which wheel it is on.

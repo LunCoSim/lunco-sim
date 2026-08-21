@@ -30,5 +30,4 @@ def Xform "MotorClass" (
     float lunco:motor:continuousTorque = 0.84
     # Smaller FRAME, so this one really does differ — see the header.
     float lunco:motor:rotorInertia = 0.00006
-    float lunco:motor:ratedVoltage = 28.0
 }

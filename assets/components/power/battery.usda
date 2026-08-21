@@ -23,9 +23,16 @@ def Xform "Battery" (
 
     # Model parameters consumed when an enclosing CollectionAPI:components
     # includes this part in a runtime-projected network.
-    float inputs:voltage_nom = 24.0
+    # The rover EPS is a 28 V bus; this must agree with the motor nameplate
+    # voltage and the PDU contract instead of forcing the motor drive to run
+    # below its authored operating point.
+    float inputs:voltage_nom = 28.0
     float inputs:capacity = 83.33
-    float inputs:R_internal = 0.05
+    # Pack-level equivalent series resistance. 50 mOhm made the authored
+    # eight-motor full-load current drive the Thevenin source through zero
+    # volts, which is not a valid DC bus operating point. 10 mOhm is the
+    # explicit high-current pack value used by this 83 Ah rover battery.
+    float inputs:R_internal = 0.01
     float inputs:soc_init = 1.0
     float outputs:soc_out
     float outputs:capacity_ah
