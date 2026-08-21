@@ -1358,9 +1358,18 @@ fn apply_wheel_steering(
 // allocators). `apply_drive_mix` resolves and runs the selected kernel without
 // a per-architecture component taxonomy.
 
-/// Authored `PhysicsDriveAPI` engagement and target position. `lunco-usd-sim`
-/// reads those fields into a `PendingDifferential` and
-/// `resolve_differential_coupling` attaches this component; inert until present.
+/// Drive interpretation for an authored `PhysicsDriveAPI` relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+pub enum DifferentialDriveType {
+    /// Coefficients describe a generalized force/torque.
+    Force,
+    /// Coefficients describe a generalized acceleration.
+    Acceleration,
+}
+
+/// Authored `PhysicsDriveAPI` parameters for a gear relation. `lunco-usd-sim`
+/// reads these fields into a `PendingDifferential` and
+/// `resolve_differential_coupling` attaches this component.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct DifferentialCoupling {
@@ -1371,27 +1380,19 @@ pub struct DifferentialCoupling {
     /// Right rocker body.
     pub rocker_b: Entity,
     /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
-    /// `-1` (the default) is the mirror/rocker-bogie case.
     pub ratio: f64,
-    /// Target for `θ_a − r·θ_b` (rad). Zero ⇒ symmetric (mirror) rockers at `r = -1`.
+    /// Target for `θ_a − r·θ_b` (rad).
     pub rest_offset: f64,
-    /// Coupling stiffness (N·m per rad of constraint error).
+    /// Target relation velocity (rad/s).
+    pub target_velocity: f64,
+    /// Coupling stiffness (N·m per rad of relation error in force mode).
     pub stiffness: f64,
-}
-
-impl Default for DifferentialCoupling {
-    fn default() -> Self {
-        Self {
-            chassis: Entity::PLACEHOLDER,
-            rocker_a: Entity::PLACEHOLDER,
-            rocker_b: Entity::PLACEHOLDER,
-            // Mirror rockers — the rocker-bogie case, and what the coupling
-            // hardcoded before the authored ratio was threaded through.
-            ratio: -1.0,
-            rest_offset: 0.0,
-            stiffness: 200_000.0,
-        }
-    }
+    /// Coupling damping (N·m·s per rad/s of relation velocity in force mode).
+    pub damping: f64,
+    /// Maximum generalized force/torque. Infinity is the standard USD fallback.
+    pub max_force: f64,
+    /// Whether the authored coefficients are acceleration-based.
+    pub drive_type: DifferentialDriveType,
 }
 
 /// Signed rotation angle (rad) of a relative quaternion about `axis` — the twist
@@ -1461,31 +1462,52 @@ fn native_revolute_state(
     Some((angle, corrected_axis))
 }
 
-/// XPBD's zero-compliance Lagrange update for the gear relation.
-fn gear_delta_lagrange(error: f64, inverse_mass: f64) -> f64 {
-    if inverse_mass <= f64::EPSILON {
-        0.0
-    } else {
-        -error / inverse_mass
-    }
-}
-
-/// The gear's constraint function `c = θ_a − r·θ_b − rest_offset`, on rocker
-/// pitches measured in the CHASSIS frame. Zero ⇒ the gear is satisfied.
+/// The gear's relation `c = θ_a − r·θ_b − rest_offset`, on rocker pitches
+/// measured in the CHASSIS frame. Zero ⇒ the drive is at its target.
 fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
     angle_a - ratio * angle_b - rest_offset
 }
 
-/// The rocker-bogie differential is a zero-compliance gear relation inside
-/// Avian's substep solver:
-/// `c = θ_a − r·θ_b − rest_offset = 0`.
-/// A positive authored angular stiffness enables the gear, while zero is the
-/// explicit disengaged state used by `rocker_bogie_nodiff.usda`.
+/// Generalized impulse for one authored USD drive update.
+fn gear_drive_impulse(
+    position_error: f64,
+    relation_velocity: f64,
+    target_velocity: f64,
+    stiffness: f64,
+    damping: f64,
+    max_force: f64,
+    inverse_mass: f64,
+    dt: f64,
+    drive_type: DifferentialDriveType,
+) -> f64 {
+    if inverse_mass <= f64::EPSILON || !dt.is_finite() || dt <= 0.0 {
+        return 0.0;
+    }
+    let raw = -stiffness * position_error + damping * (target_velocity - relation_velocity);
+    if !raw.is_finite() {
+        return 0.0;
+    }
+    let limited = if max_force.is_finite() {
+        raw.clamp(-max_force, max_force)
+    } else {
+        raw
+    };
+    if !limited.is_finite() {
+        return 0.0;
+    }
+    match drive_type {
+        DifferentialDriveType::Force => limited * dt,
+        DifferentialDriveType::Acceleration => limited / inverse_mass * dt,
+    }
+}
+
+/// The rocker-bogie differential is an authored `PhysicsDriveAPI:angular`
+/// relation inside Avian's substep solver. Its stiffness, damping, target
+/// velocity, drive type, and max-force limit are all projected from USD.
 ///
-/// Runs per substep before the native revolute constraints. The current world rotation of each body is
-/// `delta_rotation · Rotation` (avian only writes `Rotation` back at the end of the
-/// step) — the same composition Avian's own joints use. Native alignment and
-/// authored-stop enforcement close the same solver iteration.
+/// Runs per substep before the native revolute pass. The current world rotation
+/// of each body is `delta_rotation · Rotation` (Avian only writes `Rotation` back
+/// at the end of the step), matching Avian's own joint solver.
 fn solve_differential_gear(
     q_coupling: Query<&DifferentialCoupling>,
     q_revolute: Query<&RevoluteJoint>,
@@ -1493,11 +1515,10 @@ fn solve_differential_gear(
         (&mut SolverBody, &SolverBodyInertia, &Rotation),
         Without<RigidBodyDisabled>,
     >,
+    time: Res<Time>,
 ) {
+    let dt = time.delta_secs_f64();
     for coupling in q_coupling.iter() {
-        if coupling.stiffness <= 0.0 {
-            continue; // disengaged — the authored control case
-        }
         let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) =
             q_solver.get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
         else {
@@ -1563,24 +1584,28 @@ fn solve_differential_gear(
             .zip(inv_inertias.iter())
             .map(|(gradient, inverse_inertia)| gradient.dot(*inverse_inertia * *gradient))
             .sum();
-        // The authored drive stiffness is the engagement control for this
-        // standard gear joint. Once engaged, it is a holonomic relation; a
-        // penalty compliance here makes the coupling resolution depend on the
-        // fixed-step size and creates a discontinuous soft/locked bifurcation.
-        let delta_lagrange = gear_delta_lagrange(error, inverse_mass);
-        if delta_lagrange == 0.0 || !delta_lagrange.is_finite() {
+        let relation_velocity = gradients[0].dot(sa.angular_velocity)
+            + gradients[1].dot(sb.angular_velocity)
+            + gradients[2].dot(sc.angular_velocity);
+        let impulse = gear_drive_impulse(
+            error,
+            relation_velocity,
+            coupling.target_velocity,
+            coupling.stiffness,
+            coupling.damping,
+            coupling.max_force,
+            inverse_mass,
+            dt,
+            coupling.drive_type,
+        );
+        if impulse == 0.0 || !impulse.is_finite() {
             continue;
         }
-        // This is the same zero-compliance XPBD projection used by Avian's
-        // native equality constraints. Velocity projection converts the
-        // accumulated orientation correction into the corresponding impulse.
         for (body, (gradient, inv)) in [&mut sa, &mut sb, &mut sc]
             .into_iter()
             .zip(gradients.iter().zip(inv_inertias.iter()))
         {
-            let correction = *gradient * delta_lagrange;
-            let delta = DQuat::from_scaled_axis(*inv * correction);
-            body.delta_rotation.0 = (delta * body.delta_rotation.0).normalize();
+            body.angular_velocity += *inv * (*gradient * impulse);
         }
     }
 }
@@ -2390,15 +2415,40 @@ mod differential_tests {
     use super::*;
 
     #[test]
-    fn zero_compliance_projection_is_finite() {
+    fn force_drive_impulse_is_finite_and_limited() {
         for error in [0.4, -0.15, 0.6, 0.2] {
-            assert!(gear_delta_lagrange(error, 0.11).is_finite());
+            let impulse = gear_drive_impulse(
+                error,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                100.0,
+                0.11,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            );
+            assert!(impulse.is_finite());
+            assert!(impulse.abs() <= 100.0 / 64.0);
         }
     }
 
     #[test]
-    fn satisfied_gear_needs_no_correction() {
-        assert_eq!(gear_delta_lagrange(0.0, 0.11), 0.0);
+    fn satisfied_drive_at_target_needs_no_impulse() {
+        assert_eq!(
+            gear_drive_impulse(
+                0.0,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                f64::INFINITY,
+                0.11,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            ),
+            0.0
+        );
     }
 
     #[test]
@@ -2418,7 +2468,20 @@ mod differential_tests {
 
     #[test]
     fn an_immovable_rig_is_left_alone() {
-        assert_eq!(gear_delta_lagrange(0.5, 0.0), 0.0);
+        assert_eq!(
+            gear_drive_impulse(
+                0.5,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                f64::INFINITY,
+                0.0,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            ),
+            0.0
+        );
     }
 }
 

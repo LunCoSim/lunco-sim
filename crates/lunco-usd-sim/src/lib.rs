@@ -79,8 +79,8 @@ use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_mobility::{
-    DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
-    WheelRaycast,
+    DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
+    SuspensionSpring, WheelRaycast,
 };
 use lunco_render::{PbrLook, SceneCamera};
 use openusd::sdf::{Path as SdfPath, Value};
@@ -736,7 +736,11 @@ pub struct PendingDifferential {
     /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
     pub ratio: f64,
     pub rest_offset: f64,
+    pub target_velocity: f64,
     pub stiffness: f64,
+    pub damping: f64,
+    pub max_force: f64,
+    pub drive_type: DifferentialDriveType,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -1118,6 +1122,116 @@ fn collect_behavior_sources(
             }
         }
         collect_behavior_sources(reader, &child, out);
+    }
+}
+
+fn read_gear_drive_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    default: f64,
+    allow_infinity: bool,
+) -> Result<f64, ()> {
+    match reader.real(prim, name) {
+        Some(value) if value.is_finite() || (allow_infinity && value == f64::INFINITY) => Ok(value),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(prim, name) => Err(()),
+        None => Ok(default),
+    }
+}
+
+fn read_gear_drive_values(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Result<(f64, f64, f64, f64, f64), ()> {
+    let rest_offset = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:targetPosition",
+        0.0,
+        false,
+    )?;
+    let target_velocity = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:targetVelocity",
+        0.0,
+        false,
+    )?;
+    let stiffness =
+        read_gear_drive_real(reader, prim, "drive:angular:physics:stiffness", 0.0, false)?;
+    let damping = read_gear_drive_real(reader, prim, "drive:angular:physics:damping", 0.0, false)?;
+    let max_force = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:maxForce",
+        f64::INFINITY,
+        true,
+    )?;
+    if stiffness < 0.0 || damping < 0.0 || max_force < 0.0 {
+        return Err(());
+    }
+    Ok((rest_offset, target_velocity, stiffness, damping, max_force))
+}
+
+fn read_gear_drive_type(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<DifferentialDriveType> {
+    match reader.text(prim, "drive:angular:physics:type") {
+        Some(value) if value == "force" => Some(DifferentialDriveType::Force),
+        Some(value) if value == "acceleration" => Some(DifferentialDriveType::Acceleration),
+        Some(_) => None,
+        None if reader.has_authored_attribute(prim, "drive:angular:physics:type") => None,
+        None => Some(DifferentialDriveType::Force),
+    }
+}
+
+#[cfg(test)]
+mod gear_drive_tests {
+    use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    const FIXTURE: &str = r#"#usda 1.0
+def PhysxPhysicsGearJoint "Differential" (
+    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+)
+{
+    float physxGearJoint:gearRatio = -1.0
+    float drive:angular:physics:targetPosition = 0.25
+    float drive:angular:physics:targetVelocity = 0.5
+    float drive:angular:physics:stiffness = 8000.0
+    float drive:angular:physics:damping = 1200.0
+    float drive:angular:physics:maxForce = 100.0
+    uniform token drive:angular:physics:type = "force"
+}
+"#;
+
+    #[test]
+    fn reads_standard_angular_drive_parameters_without_solver_defaults() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", FIXTURE))
+            .expect("gear fixture composes");
+        let view = stage.view();
+        let path = SdfPath::new("/Differential").expect("gear path");
+        assert_eq!(
+            read_gear_drive_values(&view, &path).expect("drive values"),
+            (0.25, 0.5, 8000.0, 1200.0, 100.0)
+        );
+        assert_eq!(
+            read_gear_drive_type(&view, &path),
+            Some(DifferentialDriveType::Force)
+        );
+    }
+
+    #[test]
+    fn rejects_negative_authored_drive_coefficients() {
+        let source = FIXTURE.replace("damping = 1200.0", "damping = -1.0");
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", &source))
+            .expect("gear fixture composes");
+        let view = stage.view();
+        let path = SdfPath::new("/Differential").expect("gear path");
+        assert!(read_gear_drive_values(&view, &path).is_err());
     }
 }
 
@@ -1957,12 +2071,14 @@ fn process_usd_sim_prim_read(
     //
     // Nothing here is rocker-bogie code. A gear joint is a gear joint, and any
     // geared linkage authored this way gets the same coupling with no new Rust.
-    // A gear joint is a zero-compliance relation. A positive authored angular
-    // stiffness enables the relation; zero disables it for an explicit control
-    // scene.
+    // The backend implements the standard angular drive on the gear relation;
+    // an omitted drive therefore leaves the gear passive instead of inventing a
+    // solver stiffness.
     //
     // Defer-resolved once both geared bodies spawn.
-    if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint") {
+    if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint")
+        && reader.has_api_schema(&sdf_path, "PhysicsDriveAPI:angular")
+    {
         let hinges = (
             reader.rel_target(&sdf_path, "physxGearJoint:hinge0"),
             reader.rel_target(&sdf_path, "physxGearJoint:hinge1"),
@@ -1978,19 +2094,47 @@ fn process_usd_sim_prim_read(
             ))
         };
         if let (Some((body_a, frame)), Some((body_b, _))) = (geared(&hinges.0), geared(&hinges.1)) {
-            let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            let ratio = read_f("physxGearJoint:gearRatio", -1.0);
+            let Some(ratio) = reader
+                .real(&sdf_path, "physxGearJoint:gearRatio")
+                .filter(|value| value.is_finite() && *value != 0.0)
+            else {
+                warn!(
+                    "Gear joint {} has no valid non-zero physxGearJoint:gearRatio; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
+            let Ok((rest_offset, target_velocity, stiffness, damping, max_force)) =
+                read_gear_drive_values(reader, &sdf_path)
+            else {
+                warn!(
+                    "Gear joint {} has malformed angular PhysicsDriveAPI values; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
+            let Some(drive_type) = read_gear_drive_type(reader, &sdf_path) else {
+                warn!(
+                    "Gear joint {} has an unsupported angular PhysicsDriveAPI type; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
             info!(
-                "Gear joint {} couples {} / {} (ratio {})",
-                prim_path.path, body_a, body_b, ratio,
+                "Gear joint {} couples {} / {} (ratio {}, stiffness {}, damping {})",
+                prim_path.path, body_a, body_b, ratio, stiffness, damping,
             );
             commands.entity(entity).try_insert(PendingDifferential {
                 chassis: frame,
                 rocker_a: body_a,
                 rocker_b: body_b,
                 ratio,
-                rest_offset: read_f("drive:angular:physics:targetPosition", 0.0),
-                stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
+                rest_offset,
+                target_velocity,
+                stiffness,
+                damping,
+                max_force,
+                drive_type,
             });
         }
     }
@@ -3822,7 +3966,11 @@ fn resolve_differential_coupling(
             rocker_b,
             ratio: pending.ratio,
             rest_offset: pending.rest_offset,
+            target_velocity: pending.target_velocity,
             stiffness: pending.stiffness,
+            damping: pending.damping,
+            max_force: pending.max_force,
+            drive_type: pending.drive_type,
         });
         commands.entity(joint).remove::<PendingDifferential>();
         info!(
