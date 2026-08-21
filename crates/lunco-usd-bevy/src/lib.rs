@@ -5031,9 +5031,8 @@ fn build_usd_curve_mesh(
 /// irregular triangulation of its surviving domain instead of a lattice, which is
 /// what puts a genuine arched doorway in a wall.
 ///
-/// Trim data that is missing or malformed falls back to rendering UNTRIMMED, with
-/// a warning naming the prim — larger than authored, never smaller. That is the
-/// safe direction to fail in, and it is loud rather than silent.
+/// A malformed authored trim definition refuses the patch. Rendering the
+/// untrimmed surface would add geometry the USD scene explicitly removed.
 ///
 /// (This paragraph previously said trimming was unimplemented and silently
 /// ignored. It was stale, and it cost a debugging session: the claim was taken at
@@ -5076,31 +5075,66 @@ fn read_patch_surface(
         );
         return None;
     }
-    // `reals` throughout — see `build_usd_curve_mesh`: a `float[]` knot vector under a
-    // strict `double[]` read is empty, which silently selects the default clamped
-    // basis below instead of the authored one. Missing knots still use the USD
-    // conventional clamped construction; counts and orders above are required
-    // structural fields and are never invented by the renderer.
-    let mut u_knots = reader.reals(path, "uKnots");
-    if u_knots.is_empty() {
-        u_knots = crate::nurbs::default_clamped_knots(u_count, u_order);
-    }
-    let mut v_knots = reader.reals(path, "vKnots");
-    if v_knots.is_empty() {
-        v_knots = crate::nurbs::default_clamped_knots(v_count, v_order);
-    }
+    let u_knots = match read_curve_real_array(reader, path, "uKnots") {
+        Ok(Some(knots)) if knots.len() >= u_count + u_order => knots,
+        Ok(Some(_)) | Ok(None) | Err(()) => {
+            error!(
+                "[usd-bevy] {} has no usable authored uKnots for its NurbsPatch",
+                path.as_str()
+            );
+            return None;
+        }
+    };
+    let v_knots = match read_curve_real_array(reader, path, "vKnots") {
+        Ok(Some(knots)) if knots.len() >= v_count + v_order => knots,
+        Ok(Some(_)) | Ok(None) | Err(()) => {
+            error!(
+                "[usd-bevy] {} has no usable authored vKnots for its NurbsPatch",
+                path.as_str()
+            );
+            return None;
+        }
+    };
+    let weights = match read_curve_real_array(reader, path, "pointWeights") {
+        Ok(Some(weights)) if weights.len() == points.len() => weights,
+        Ok(Some(_)) => {
+            error!(
+                "[usd-bevy] {} has pointWeights whose length does not match its NurbsPatch points",
+                path.as_str()
+            );
+            return None;
+        }
+        Ok(None) => Vec::new(),
+        Err(()) => {
+            error!(
+                "[usd-bevy] {} has pointWeights with an unsupported value type",
+                path.as_str()
+            );
+            return None;
+        }
+    };
+    let orientation = match read_curve_token(
+        reader,
+        path,
+        "orientation",
+        "rightHanded",
+        &["rightHanded", "leftHanded"],
+    ) {
+        Ok(orientation) => orientation == "leftHanded",
+        Err(()) => return None,
+    };
 
     Some((
         lathe::NurbsSurface {
             points,
-            weights: reader.reals(path, "pointWeights"),
+            weights,
             u_count: u_count as u32,
             v_count: v_count as u32,
             u_order: u_order as u32,
             v_order: v_order as u32,
             u_knots,
             v_knots,
-            left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
+            left_handed: orientation,
         },
         None,
     ))
@@ -5206,6 +5240,60 @@ def NurbsPatch "Patch"
             "an authored patch must not receive renderer sampling defaults"
         );
     }
+
+    #[test]
+    fn authored_patch_requires_authored_knot_vectors() {
+        let recipe = canonical::StageRecipe::from_source(
+            "patch.usda",
+            r#"#usda 1.0
+def NurbsPatch "Patch"
+{
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    int uVertexCount = 2
+    int vVertexCount = 2
+    int uOrder = 2
+    int vOrder = 2
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Patch").unwrap();
+        assert!(
+            read_patch_surface(&stage.view(), &path).is_none(),
+            "a patch must not receive guessed clamped knot vectors"
+        );
+    }
+
+    #[test]
+    fn authored_trim_data_cannot_fall_back_to_an_untrimmed_patch() {
+        let recipe = canonical::StageRecipe::from_source(
+            "patch.usda",
+            r#"#usda 1.0
+def NurbsPatch "Patch"
+{
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    int uVertexCount = 2
+    int vVertexCount = 2
+    int uOrder = 2
+    int vOrder = 2
+    float[] uKnots = [0, 0, 1, 1]
+    float[] vKnots = [0, 0, 1, 1]
+    int[] trimCurve:counts = [1]
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Patch").unwrap();
+        assert!(
+            build_usd_nurbs_patch_mesh(
+                &stage.view(),
+                &path,
+                lunco_render::RenderingQuality::Balanced.profile()
+            )
+            .is_none(),
+            "partial authored trim data must refuse the patch instead of restoring its hole"
+        );
+    }
 }
 
 /// Build a `NurbsPatch`'s mesh AND the definition to retain alongside it.
@@ -5245,77 +5333,101 @@ fn build_usd_nurbs_patch_mesh(
     // loops are inserted with `add_constraint_and_split` rather than gated with
     // `can_add_constraint` — gating would silently drop part of a loop and leave
     // the hole with a missing side.
-    let trim_loops = read_int_array(reader, path, "trimCurve:counts")
-        .filter(|c| !c.is_empty())
-        .and_then(|counts| {
-            // Every component is REQUIRED once `counts` is authored, and a missing one
-            // must say so. Returning `None` here drops straight to the untrimmed
-            // branch, which renders a solid wall where a doorway was authored — the
-            // one failure this whole path is supposed to be loud about.
-            let missing = |attr: &str| {
-                bevy::log::warn!(
-                    "[usd-bevy] {} authors `trimCurve:counts` but `{}` is absent or has \
-                     an unreadable type — rendering UNTRIMMED (larger than authored)",
-                    path.as_str(),
-                    attr
-                );
-            };
-            let orders = read_int_array(reader, path, "trimCurve:orders").or_else(|| {
-                missing("trimCurve:orders");
-                None
-            })?;
-            let vertex_counts =
-                read_int_array(reader, path, "trimCurve:vertexCounts").or_else(|| {
-                    missing("trimCurve:vertexCounts");
-                    None
-                })?;
-            // `reals` / `points3`, not `scalar::<Vec<f64>>` / `scalar::<Vec<[f32; 3]>>`:
-            // the trim arrays get the same tolerant reads as the patch's own `uKnots`
-            // and `points` above. A `float[]` knot vector or a `point3d[]` control
-            // hull is legal USD and is what a promoting DCC emits, and a strict read
-            // of either is indistinguishable from "no trim authored" — silently
-            // filling the hole back in.
-            let tknots = reader.reals(path, "trimCurve:knots");
-            if tknots.is_empty() {
-                missing("trimCurve:knots");
-                return None;
-            }
-            let tpoints = reader.points3(path, "trimCurve:points");
-            if tpoints.is_empty() {
-                missing("trimCurve:points");
-                return None;
-            }
-            // `ranges` is optional: fall back to each curve's full knot span.
-            let ranges = read_double2_array(reader, path, "trimCurve:ranges").unwrap_or_default();
-
-            // Trim curves live in the patch's PARAMETER space, so they are not
-            // touched by `ConventionTransform` — a Z-up or centimetre stage
-            // changes where the surface is in the world, never what its (u, v)
-            // domain means. Converting them would be a subtle, hard-to-see bug.
-            let u_span = [u_knots[u_order - 1], u_knots[u_count]];
-            let v_span = [v_knots[v_order - 1], v_knots[v_count]];
-            let loops = crate::trim::assemble_loops(
-                &counts,
-                &orders,
-                &vertex_counts,
-                &tknots,
-                &ranges,
-                &tpoints,
-                u_span,
-                v_span,
-                quality.nurbs_trim_curve_samples,
-            );
-            if loops.is_empty() {
-                bevy::log::warn!(
-                    "[usd-bevy] {} authors `trimCurve:*` but no usable loop was \
-                     assembled — rendering UNTRIMMED (larger than authored)",
+    let trim_authored = [
+        "trimCurve:counts",
+        "trimCurve:orders",
+        "trimCurve:vertexCounts",
+        "trimCurve:knots",
+        "trimCurve:points",
+        "trimCurve:ranges",
+    ]
+    .into_iter()
+    .any(|attr| reader.has_authored_attribute(path, attr));
+    let trim_loops = if !trim_authored {
+        None
+    } else {
+        let counts = match read_curve_int_array(reader, path, "trimCurve:counts") {
+            Ok(Some(counts)) if !counts.is_empty() => counts,
+            _ => {
+                error!(
+                    "[usd-bevy] {} has malformed trimCurve:counts; refusing the patch",
                     path.as_str()
                 );
-                None
-            } else {
-                Some(loops)
+                return None;
             }
-        });
+        };
+        let orders = match read_curve_int_array(reader, path, "trimCurve:orders") {
+            Ok(Some(orders)) => orders,
+            _ => {
+                error!(
+                    "[usd-bevy] {} has malformed trimCurve:orders; refusing the patch",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        let vertex_counts = match read_curve_int_array(reader, path, "trimCurve:vertexCounts") {
+            Ok(Some(vertex_counts)) => vertex_counts,
+            _ => {
+                error!(
+                    "[usd-bevy] {} has malformed trimCurve:vertexCounts; refusing the patch",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        let tknots = match read_curve_real_array(reader, path, "trimCurve:knots") {
+            Ok(Some(tknots)) if !tknots.is_empty() => tknots,
+            _ => {
+                error!(
+                    "[usd-bevy] {} has malformed trimCurve:knots; refusing the patch",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+        let tpoints = reader.points3(path, "trimCurve:points");
+        if tpoints.is_empty() {
+            error!(
+                "[usd-bevy] {} has malformed trimCurve:points; refusing the patch",
+                path.as_str()
+            );
+            return None;
+        }
+        let ranges = match read_double2_array_strict(reader, path, "trimCurve:ranges") {
+            Ok(Some(ranges)) => ranges,
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[usd-bevy] {} has malformed trimCurve:ranges; refusing the patch",
+                    path.as_str()
+                );
+                return None;
+            }
+        };
+
+        let u_span = [u_knots[u_order - 1], u_knots[u_count]];
+        let v_span = [v_knots[v_order - 1], v_knots[v_count]];
+        let loops = crate::trim::assemble_loops(
+            &counts,
+            &orders,
+            &vertex_counts,
+            &tknots,
+            &ranges,
+            &tpoints,
+            u_span,
+            v_span,
+            quality.nurbs_trim_curve_samples,
+        );
+        if loops.is_empty() {
+            error!(
+                "[usd-bevy] {} has authored trimCurve data but no usable loop",
+                path.as_str()
+            );
+            return None;
+        }
+        Some(loops)
+    };
 
     if let Some(loops) = trim_loops {
         let grid = quality.nurbs_trim_subdivisions(u_count.max(v_count));
@@ -5325,51 +5437,57 @@ fn build_usd_nurbs_patch_mesh(
             loops.loops.len(),
             grid
         );
-        if let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) {
-            bevy::log::info!(
-                "[usd-bevy] {} trimmed domain: {} verts, {} tris",
-                path.as_str(),
-                domain.uvs.len(),
-                domain.indices.len() / 3
+        let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) else {
+            error!(
+                "[usd-bevy] {} authored trim could not be triangulated; refusing the patch",
+                path.as_str()
             );
-            let samples = crate::nurbs::sample_nurbs_patch_at(
-                &points,
-                &weights,
-                u_count,
-                v_count,
-                u_order,
-                v_order,
-                &u_knots,
-                &v_knots,
-                &domain.uvs,
-            );
-            if !samples.is_empty() {
-                let mut positions = Vec::with_capacity(samples.len());
-                let mut normals = Vec::with_capacity(samples.len());
-                let mut uvs = Vec::with_capacity(samples.len());
-                for s in &samples {
-                    positions.push(s.position);
-                    normals.push(s.normal);
-                    uvs.push(s.uv);
-                }
-                let mut indices = domain.indices;
-                crate::lathe::flip_if_left_handed(surface.left_handed, &mut normals, &mut indices);
-                let mut mesh = Mesh::new(
-                    PrimitiveTopology::TriangleList,
-                    RenderAssetUsages::default(),
-                );
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-                mesh.insert_indices(bevy_mesh::Indices::U32(indices));
-                // No `NurbsSurface` for a trimmed patch — see the fn doc.
-                return Some((mesh, None));
-            }
-        }
-        bevy::log::warn!(
-            "[usd-bevy] {} trim produced no geometry — falling back to UNTRIMMED",
-            path.as_str()
+            return None;
+        };
+        bevy::log::info!(
+            "[usd-bevy] {} trimmed domain: {} verts, {} tris",
+            path.as_str(),
+            domain.uvs.len(),
+            domain.indices.len() / 3
         );
+        let samples = crate::nurbs::sample_nurbs_patch_at(
+            &points,
+            &weights,
+            u_count,
+            v_count,
+            u_order,
+            v_order,
+            &u_knots,
+            &v_knots,
+            &domain.uvs,
+        );
+        if samples.is_empty() {
+            error!(
+                "[usd-bevy] {} authored trim produced no surface samples; refusing the patch",
+                path.as_str()
+            );
+            return None;
+        }
+        let mut positions = Vec::with_capacity(samples.len());
+        let mut normals = Vec::with_capacity(samples.len());
+        let mut uvs = Vec::with_capacity(samples.len());
+        for s in &samples {
+            positions.push(s.position);
+            normals.push(s.normal);
+            uvs.push(s.uv);
+        }
+        let mut indices = domain.indices;
+        crate::lathe::flip_if_left_handed(surface.left_handed, &mut normals, &mut indices);
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_indices(bevy_mesh::Indices::U32(indices));
+        // No `NurbsSurface` for a trimmed patch — see the fn doc.
+        return Some((mesh, None));
     }
 
     // The untrimmed build now lives on `NurbsSurface` itself, because it is
@@ -5520,11 +5638,19 @@ fn read_curve_token(
 /// `f64` knot vector to decide where each curve's span starts and ends, so
 /// round-tripping them through `f32` can move a span end just past a knot and drop
 /// or duplicate a segment of a trim loop.
-fn read_double2_array(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<Vec<[f64; 2]>> {
-    match reader.attr_value(path, attr)? {
-        Value::Vec2dVec(v) => Some(v.iter().map(|p| [p[0], p[1]]).collect()),
-        Value::Vec2fVec(v) => Some(v.iter().map(|p| [p[0] as f64, p[1] as f64]).collect()),
-        _ => None,
+fn read_double2_array_strict(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<[f64; 2]>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::Vec2dVec(v)) => Ok(Some(v.iter().map(|p| [p[0], p[1]]).collect())),
+        Some(Value::Vec2fVec(v)) => {
+            Ok(Some(v.iter().map(|p| [p[0] as f64, p[1] as f64]).collect()))
+        }
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
     }
 }
 
