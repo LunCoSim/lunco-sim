@@ -15,10 +15,10 @@
 //! `lunco_mobility::fold_proxy_wheel_mass` now folds the proxy wheels onto the
 //! chassis; these tests pin the AUTHORED side of the same contract.
 //!
-//! The headline test does not hand-list the properties to compare. It composes the
-//! rover twice and DIFFS every attribute of every prim the two compositions share,
-//! so a newly-introduced divergence fails here by existing — nobody has to have
-//! predicted it.
+//! The headline test does not hand-list shared vehicle properties. It composes the
+//! rover twice and diffs every shared attribute except the explicitly declared
+//! suspension-realization projection, so a newly-introduced divergence fails here
+//! without requiring somebody to predict its spelling.
 
 use lunco_usd_bevy::{compose_file_to_stage, CanonicalStage, StageRecipe, UsdRead};
 use openusd::sdf::Path as SdfPath;
@@ -58,6 +58,16 @@ fn vec3(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> Opt
 /// `…/RoverPhysical/Wheel_FL` both key as `/Wheel_FL`).
 fn under(prim: &str, root: &str) -> Option<String> {
     prim.strip_prefix(root).map(str::to_string)
+}
+
+/// The physical realization intentionally replaces the compliant raycast
+/// suspension arc with a rigid mount. These are the only composed attributes
+/// allowed to differ between the two realizations; each is asserted separately
+/// below so this list cannot become a silent escape hatch for vehicle changes.
+fn is_realization_specific_suspension_attribute(key: &str) -> bool {
+    key.ends_with(".lunco:suspension:restLength")
+        || key.ends_with(".physxVehicleSuspension:springDamperRate")
+        || key.ends_with("/SuspensionCasing.xformOp:translate")
 }
 
 /// Every `prim.attr = value` under one rover, keyed by the prim's path RELATIVE
@@ -115,8 +125,10 @@ fn the_two_realizations_compose_the_same_vehicle() {
     // Only attributes the two compositions SHARE. The physical variant legitimately
     // adds prims the raycast one has no use for (the articulation root, the per-wheel
     // revolute joints); a prim that exists on one side only is the variant doing its
-    // job. A prim on BOTH sides with a different value is the variant exceeding it.
+    // job. A prim on BOTH sides with a different value is the variant exceeding it,
+    // except for the explicitly tested suspension realization projection.
     let mut diffs: Vec<String> = Vec::new();
+    let mut realization_specific_diffs = Vec::new();
     for (key, va) in &ra {
         let Some(vb) = rb.get(key) else { continue };
         if va == vb {
@@ -132,10 +144,22 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if key.ends_with(".primvars:displayColor") {
             continue;
         }
+        if is_realization_specific_suspension_attribute(key) {
+            realization_specific_diffs.push(key.clone());
+            continue;
+        }
         diffs.push(format!(
             "  {key}\n      raycast : {va}\n      physical: {vb}"
         ));
     }
+
+    assert_eq!(
+        realization_specific_diffs.len(),
+        12,
+        "expected four wheels × three explicitly realization-specific suspension attributes, got {}: {:?}",
+        realization_specific_diffs.len(),
+        realization_specific_diffs
+    );
 
     assert!(
         diffs.is_empty(),
@@ -145,6 +169,42 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if diffs.len() == 1 { "y" } else { "ies" },
         diffs.join("\n")
     );
+}
+
+#[test]
+fn suspension_projection_matches_each_wheel_realization() {
+    let stage = parity_scene();
+    let view = stage.view();
+
+    for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+        let raycast = SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap();
+        let physical = SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap();
+        let raycast_rest = view.real(&raycast, "lunco:suspension:restLength");
+        let physical_rest = view.real(&physical, "lunco:suspension:restLength");
+        assert!(
+            raycast_rest.is_some_and(|value| value > 0.0),
+            "{wheel} raycast realization must compose positive suspension travel"
+        );
+        assert_eq!(
+            physical_rest,
+            Some(0.0),
+            "{wheel} physical realization must compose the authored rigid mount"
+        );
+
+        let raycast_casing = SdfPath::new(&format!("{RAYCAST}/{wheel}/SuspensionCasing")).unwrap();
+        let physical_casing =
+            SdfPath::new(&format!("{PHYSICAL}/{wheel}/SuspensionCasing")).unwrap();
+        let raycast_translate = vec3(&view, &raycast_casing, WHEEL_MOUNT_TRANSLATE);
+        let physical_translate = vec3(&view, &physical_casing, WHEEL_MOUNT_TRANSLATE);
+        assert!(
+            raycast_translate.is_some() && physical_translate.is_some(),
+            "{wheel} must compose the casing geometry in both realizations"
+        );
+        assert_ne!(
+            raycast_translate, physical_translate,
+            "{wheel} casing geometry must reflect compliant versus rigid suspension"
+        );
+    }
 }
 
 #[test]
