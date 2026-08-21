@@ -1382,14 +1382,12 @@ class "LunCoAssetAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """How a prim backed by an external binary asset (glTF/OBJ/STL payload)
-    or a built terrain projects into the engine.
+    doc = """How a prim backed by an external binary asset (glTF payload) or a
+    built terrain projects into the engine.
 
-    `lunco:resolvedAsset` is a SIDE-CHANNEL, declared so it stops serializing as
-    untyped `custom`, not endorsed: openusd-rs has no `SdfFileFormat` plugin
-    system, so binary arcs are stubbed out of composition and the resolved URI is
-    surfaced here for Bevy's loaders. The in-code migration plan (a glTF dynamic
-    file format) deletes it — see `lunco-usd-bevy/src/resolver.rs`."""
+    The standard USD payload/reference remains the asset identity. The runtime
+    render projection reads that authored arc from the composed prim stack and
+    passes its canonical URI to the native glTF loader."""
 )
 {
     string lunco:assetMode = "scene" (
@@ -1400,11 +1398,6 @@ class "LunCoAssetAPI" (
     string lunco:assetLabel = "" (
         doc = """Sub-asset label inside the binary asset (`"Mesh0/Primitive0"`),
         for `lunco:assetMode = "mesh"`. Empty = the loader's default label."""
-    )
-    string lunco:resolvedAsset = "" (
-        doc = """Resolved URI of the binary asset this prim's payload named —
-        normally SYNTHESIZED from the stubbed arc at compose time; an authored
-        value wins. Deleted when the glTF file-format plugin lands."""
     )
     bool lunco:placeholder = false (
         doc = """This prim's primitive mesh is a stand-in that hides once the real

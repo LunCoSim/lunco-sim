@@ -169,7 +169,8 @@ Mostly independent of Phases 1–2; can interleave.
   where it exists (`R`, …). Drop bespoke duplicates.
 - **P3.2 — Camera → `UsdGeomCamera`; lights → `UsdLux`; sensors → mirror Isaac shapes** (doc 38 §8.5).
   Keep `lunco:cameraMode` (behavior). *Verify:* camera/light/sensor behavior unchanged.
-- **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `lunco:resolvedAsset`/`assetMode`
+- **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `assetMode` and the authored
+  `payload`/`references` arc
   shrink to a thin runtime cache (doc 38 §14.7).
 
 **Phase 3 done when:** params are typed attributes/model parameters; camera/light/sensor use standard (or

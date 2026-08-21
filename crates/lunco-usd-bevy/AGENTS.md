@@ -42,23 +42,18 @@ layers. Pixar's distribution handles `.gltf`/`.glb` via the `UsdGltf`
 SdfFileFormat plugin — `prepend payload = @./body.glb@` *just works*. Our
 `openusd` fork (v0.5) has no plugin system, so we approximate:
 
-1. **The compose path (folded into `lunco-usd-bevy`)** detects non-USD extensions
-   (`glb`, `gltf`, `obj`,
-   `stl`) on `payload`/`references`, skips the USD-text read, and synthesises
-   a `lunco:resolvedAsset` attribute on the referencing prim with the
-   resolved URI.
-2. **`sync_usd_visuals`** reads `lunco:resolvedAsset` and dispatches:
+1. **The compose path (folded into `lunco-usd-bevy`)** detects binary
+   extensions on `payload`/`references`, skips the USD-text read, and composes
+   the arc through an empty stub because the Rust USD fork has no file-format
+   plugin API. The render projection reads the authored arc live from the
+   composed prim stack and canonicalizes it relative to its authoring layer.
+2. **`sync_usd_visuals`** reads that live binary payload/reference and dispatches:
    - `lunco:assetMode = "mesh"` → `asset_server.load::<Mesh>("<uri>#Mesh0/Primitive0")`,
      attached as `Mesh3d`. Compatible with `lunco-usd-avian` collider construction.
    - `lunco:assetMode = "scene"` (default) → `asset_server.load::<Scene>("<uri>#Scene0")`,
      attached as a child `SceneRoot`. Preserves multi-mesh hierarchy, materials, lights.
    - `lunco:assetLabel` overrides the `#…` suffix when the file isn't laid out
      as the default labels.
-
-The synthesised `lunco:resolvedAsset` is an internal contract between the
-composer and this plugin — **don't author it by hand**. Author the standard
-USD `payload` instead, and the composer fills it in. A hand-written value is
-respected (composer doesn't overwrite), but it's a sharp tool.
 
 ## Asset URI schemes
 

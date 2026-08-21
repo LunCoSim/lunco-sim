@@ -76,9 +76,6 @@ pub struct CanonicalStage {
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
     #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
     sink_id: StageSinkId,
-    /// Precomputed binary (glTF) arc sites for `lunco:resolvedAsset` synthesis
-    /// off the live stage, so a read never has to re-walk the arcs.
-    binary_sites: crate::compose::BinarySites,
     /// The live resolver's shared byte-map handle, when this stage was built
     /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
     /// lets [`add_layer_bytes`](Self::add_layer_bytes) inject a spawned asset's
@@ -107,16 +104,12 @@ impl CanonicalStage {
                 });
             }
         });
-        // Precompute the binary-arc sites once (glTF/DEM resolution) so the live
-        // `resolved_asset` read doesn't rescan every layer per prim.
-        let binary_sites = crate::compose::discover_binary_sites(&stage);
         Self {
             stage,
             scene_layer: scene_layer.into(),
             runtime_layer: String::new(),
             inbox,
             sink_id,
-            binary_sites,
             resolver_bytes: None,
             generation: 0,
         }
@@ -133,10 +126,9 @@ impl CanonicalStage {
         Ok(cs)
     }
 
-    /// A [`StageView`] over the composed stage for typed reads — carrying the
-    /// precomputed binary-arc sites so `resolved_asset` synthesizes glTF URIs.
+    /// A [`StageView`] over the live composed stage for typed reads.
     pub fn view(&self) -> StageView<'_> {
-        StageView::with_binary_sites(&self.stage, &self.binary_sites)
+        StageView::new(&self.stage)
     }
 
     /// The underlying stage (escape hatch for authoring / reads not yet wrapped).

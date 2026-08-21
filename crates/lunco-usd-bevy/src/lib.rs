@@ -1109,7 +1109,7 @@ fn instantiate_usd_prim_from_stage(
             .scalar::<bool>(&sdf_path, "lunco:placeholder")
             .unwrap_or(false);
 
-        // **Placeholder + payload pattern**: when `lunco:resolvedAsset`
+        // **Placeholder + payload pattern**: when a binary payload/reference
         // is present, we still build the primitive Cube/Sphere/Cylinder
         // mesh so the prim has a fallback visual until the glTF Scene
         // finishes loading. Once Bevy reports the Scene asset loaded,
@@ -1353,10 +1353,10 @@ fn instantiate_usd_prim_from_stage(
 
         // glTF / external-mesh branch.
         //
-        // The composer writes `lunco:resolvedAsset` onto any prim whose
-        // `payload`/`references` point at a non-USD binary (`.glb`,
-        // `.gltf`, `.obj`, `.stl`). We hand the URI to Bevy's
-        // `AssetServer` directly — the registered asset sources
+        // Read the authored binary `payload`/`references` directly from the
+        // live composed prim stack. The pure-Rust USD resolver composes those
+        // arcs through an empty stub, while this render projection hands the
+        // canonical URI to Bevy's `AssetServer` — the registered asset sources
         // (`lunco://` for library assets, `twin://` for Twin-local ones,
         // default `assets://` for
         // in-tree paths) handle the lookup.
@@ -1370,7 +1370,7 @@ fn instantiate_usd_prim_from_stage(
         //   attach as a `WorldAssetRoot` child. Preserves hierarchy,
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
-        if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
+        if let Some(asset_uri) = reader.binary_asset_uri(&sdf_path) {
             let mode = reader
                 .text(&sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
@@ -2557,10 +2557,8 @@ fn apply_standard_material(
 /// - `Value::String` — authored as `string foo = "..."`.
 /// - `Value::Token` — authored as `token foo = "..."` (also the
 ///   parser's choice for several `lunco:*` attributes).
-/// - `Value::AssetPath` — authored as `asset foo = @...@`. This
-///   is what the composer emits for the synthesised
-///   `lunco:resolvedAsset` so user-facing attributes carry the
-///   correct USD type.
+/// - `Value::AssetPath` — authored as `asset foo = @...@`, preserving the
+///   standard USD asset-path type for user-facing attributes.
 ///
 /// `prim_attribute_value::<String>` covers `String`/`Token` only,
 /// so we go through `reader.get` for the attribute path directly

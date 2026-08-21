@@ -432,21 +432,18 @@ For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco://` 
 A `.glb`/`.gltf` is **not a USD layer** — USD composition only composes formats
 a registered `SdfFileFormat` plugin can parse (`.usda`/`.usdc`/`.usd`/`.usdz`).
 Core USD ships no glTF plugin, so a `payload = @terrain.glb@` resolves to an
-empty layer in stock USD. Our engine sidesteps this: it detects the binary
-extension, stubs the arc out of composition, and routes the file to Bevy's glTF
-loader via a synthesized `lunco:resolvedAsset` (so the terrain renders for us,
-native + web).
+empty layer in stock USD. Our engine detects the binary extension and composes
+the arc through an empty stub, then the render projection reads the authored
+payload/reference directly from the live composed prim stack and routes its
+canonical URI to Bevy's glTF loader (native + web).
 
-**Composition-stack anchoring.** The binary arc is discovered from the
-*composed layer stack*, not just the root layer: `compose.rs` walks every loaded
-layer (`discover_binary_sites`) keyed by authoring site `(layer id, spec path)`,
-then matches each composed prim's `prim_stack` against those sites to anchor
-`lunco:resolvedAsset` on the **composed prim**. So a `payload = @model.glb@`
-authored *inside a referenced `.usda` wrapper* (the `scene → wrapper.usda → .glb`
-shape the `structures/*.usda` model wrappers use) surfaces on the composed prim —
-e.g. `/Scene/Bldg/Visual` — exactly like a glb referenced directly in the scene.
-This keeps USD the source of truth for a placed model while still rendering the
-glTF (and firing the failure placeholder). Covered by
+**Composition-stack anchoring.** The binary arc is read from each authored spec
+in the composed prim's `prim_stack`, with the URI anchored to that spec's layer.
+So a `payload = @model.glb@` authored *inside a referenced `.usda` wrapper* (the
+`scene → wrapper.usda → .glb` shape the `structures/*.usda` model wrappers use)
+renders from the composed prim — e.g. `/Scene/Bldg/Visual` — exactly like a glb
+referenced directly in the scene. The standard USD arc is the only asset
+identity, and live edits are observed on the next read. Covered by
 `glb_payload_in_referenced_wrapper_anchors_on_composed_prim`.
 
 **To make the glb compose in external tools (Blender/usdview):** install
@@ -455,7 +452,10 @@ Adobe's open-source [`USD-Fileformat-plugins`](https://github.com/adobe/USD-File
 at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry —
 config only, no conversion, no engine code. This is the proper interop path.
 
-*Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter in `lunco-usd-bevy/compose.rs` can be added to emit `Mesh` specs instead of stubbing. This would remove the `lunco:resolvedAsset` side-channel so that terrain is ordinary composed USD everywhere.
+*Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter
+in `lunco-usd-bevy/compose.rs` can emit `Mesh` specs instead of stubbing. That is
+an interop improvement; it must continue to use the authored USD payload as the
+asset identity.
 
 ### Reference Resolution
 USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative to the **USD asset root** (`assets/`). The `UsdComposer` resolves:

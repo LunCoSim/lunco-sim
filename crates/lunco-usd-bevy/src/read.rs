@@ -13,10 +13,55 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
+use openusd::ar::ResolvedPath;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 
 use crate::view::StageView;
+
+/// Read binary asset arcs from one authored prim spec in the live stage.
+///
+/// Binary files cannot be opened as USD layers by the pure-Rust resolver, so
+/// composition maps them to an empty stub. The authored payload/reference is
+/// still the authoritative asset identity; reading it here keeps the render
+/// projection live and avoids a second precomputed cache or a custom USD
+/// attribute.
+fn binary_assets_in_spec(stage: &Stage, layer_id: &str, path: &SdfPath) -> Vec<String> {
+    let Some(layer) = stage.layer(layer_id) else {
+        return Vec::new();
+    };
+    let data = layer.data();
+    let anchor = ResolvedPath::new(layer_id);
+    let mut arcs = Vec::new();
+
+    if let Ok(Some(value)) = data.try_field(path, "references") {
+        if let Value::ReferenceListOp(op) = value.as_ref() {
+            arcs.extend(
+                op.iter()
+                    .filter(|reference| !reference.asset_path.is_empty())
+                    .map(|reference| reference.asset_path.clone()),
+            );
+        }
+    }
+    if let Ok(Some(value)) = data.try_field(path, "payload") {
+        match value.as_ref() {
+            Value::Payload(payload) if !payload.asset_path.is_empty() => {
+                arcs.push(payload.asset_path.clone());
+            }
+            Value::PayloadListOp(op) => arcs.extend(
+                op.iter()
+                    .filter(|payload| !payload.asset_path.is_empty())
+                    .map(|payload| payload.asset_path.clone()),
+            ),
+            _ => {}
+        }
+    }
+
+    arcs.into_iter()
+        .filter(|asset_path| lunco_usd_compose::is_binary_asset(asset_path))
+        .map(|asset_path| lunco_usd_compose::canonicalize_at(&asset_path, Some(&anchor)))
+        .collect()
+}
 
 /// Parsed `customData` UI hint for a scalar attribute — the bounds + unit a
 /// data-driven parameter slider derives from an asset. All fields optional; a
@@ -342,11 +387,10 @@ pub trait UsdRead {
             .and_then(|v| v.get::<T>())
     }
 
-    /// The glTF/binary asset URI resolved for `prim` (`lunco:resolvedAsset`) —
-    /// authored, or synthesized from a binary (glTF) reference/payload in the
-    /// prim's composition stack — synthesized on read from the stage's
-    /// precomputed binary arc sites.
-    fn resolved_asset(&self, prim: &SdfPath) -> Option<String>;
+    /// The single binary asset URI authored by a payload/reference on `prim`'s
+    /// composed stack. The read is live: it scans the current authored arc
+    /// opinions and never consults a generated cache or custom attribute.
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
 
     /// Whether `prim` is active (`active` metadata; defaults to `true`, matching
     /// USD semantics). The visual extractor skips mesh/child creation for
@@ -545,27 +589,25 @@ impl UsdRead for StageView<'_> {
             .flatten()
     }
 
-    fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
-        // Authored value wins; else synthesize from a binary arc in the stack.
-        if let Some(authored) = self.value_str(prim, "lunco:resolvedAsset") {
-            return Some(authored);
-        }
-        let sites = self.binary_sites()?;
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
         let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
-        let matches = stack
-            .iter()
-            .filter_map(|site| sites.get(site))
-            .flat_map(|assets| assets.iter())
-            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for (layer_id, authored_path) in stack {
+            for asset in binary_assets_in_spec(self.stage(), &layer_id, &authored_path) {
+                if !matches.contains(&asset) {
+                    matches.push(asset);
+                }
+            }
+        }
         match matches.as_slice() {
-            [asset] => Some((*asset).clone()),
+            [asset] => Some(asset.clone()),
             [] => None,
             _ => {
                 bevy::log::error!(
                     target: "usd-bevy",
                     prim = %prim.as_str(),
                     assets = ?matches,
-                    "ambiguous binary payload/reference set; author exactly one binary asset or lunco:resolvedAsset"
+                    "ambiguous binary payload/reference set; author exactly one binary asset"
                 );
                 None
             }

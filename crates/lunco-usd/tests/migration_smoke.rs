@@ -7,7 +7,7 @@
 //!   * `over` opinion composition (per-instance colour override),
 //!   * relationship targets survive composition,
 //!   * `apiSchemas` compose across the reference,
-//!   * binary-asset (glTF) `lunco:resolvedAsset` synthesis.
+//!   * binary-asset (glTF) payload/reference projection.
 //!
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
@@ -25,8 +25,7 @@ fn assets_root() -> PathBuf {
         .join("assets")
 }
 
-/// Compose an asset into a live [`CanonicalStage`] — carries the precomputed
-/// binary-arc sites so `resolved_asset` synthesizes glTF URIs off the live stage.
+/// Compose an asset into a live [`CanonicalStage`] for composed-stage reads.
 fn compose(rel: &str) -> CanonicalStage {
     let path = assets_root().join(rel);
     let stage = lunco_usd_bevy::compose_file_to_stage(&path)
@@ -246,9 +245,3 @@ fn drivetrain_raycast_has_no_joints() {
         "raycast instance must not have joint prims"
     );
 }
-
-// (Removed `gltf_resolved_asset_synthesized`: it asserted on the sandbox scene's
-// Perseverance glTF prim, which has been removed from the default scene. The glTF
-// `lunco:resolvedAsset` synthesis it exercised is covered independently by
-// `lunco-usd-bevy` `compose::tests::glb_payload_in_referenced_wrapper_anchors_on_composed_prim`,
-// which uses a self-contained inline fixture.)

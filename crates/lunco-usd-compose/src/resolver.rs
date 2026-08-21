@@ -38,11 +38,11 @@ use lunco_assets::asset_path::{canonicalize, canonicalize_root};
 pub type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
 /// File extensions openusd cannot parse as USD layers — non-USD binary assets
-/// referenced through `payload`/`references` (glTF, OBJ, STL). Pixar handles
-/// these via `SdfFileFormat` plugins (`UsdGltf`, …); openusd-rs has no plugin
-/// system, so we route them to an empty stub layer during composition and
-/// surface the resolved URI as a `lunco:resolvedAsset` attribute for the Bevy
-/// side to load through `AssetServer`. Matched case-insensitively.
+/// referenced through `payload`/`references`. Pixar handles these via
+/// `SdfFileFormat` plugins (`UsdGltf`, …); openusd-rs has no plugin system, so
+/// the resolver routes them to an empty composition stub. The render projection
+/// reads the authored arc directly from the live prim stack. Matched
+/// case-insensitively.
 pub(crate) const BINARY_ASSET_EXTENSIONS: &[&str] = &["glb", "gltf", "obj", "stl"];
 
 /// Identifier every binary asset is mapped to. Ends in `.usda` so openusd's
@@ -91,19 +91,18 @@ pub fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> Strin
     }
 }
 
-// TODO(glb-composability): binary assets (`.glb`/`.gltf`/…) are currently a
-// side-channel — stubbed out of USD composition and surfaced via
-// `lunco:resolvedAsset` for Bevy's glTF loader. The *proper* USD way is a
-// glTF `SdfFileFormat` (dynamic file format) that composes the glb into the
-// stage as real `Mesh` geometry — no special-case, no `resolvedAsset`.
+// TODO(glb-composability): binary assets (`.glb`/`.gltf`) remain an explicit
+// render projection because the pure-Rust openusd fork has no
+// `SdfFileFormat` plugin system. The standard payload/reference is composed as
+// an empty stub and the render reader loads the authored URI through Bevy.
 //   * External tools (Blender/usdview): adopt Adobe's open-source
 //     `USD-Fileformat-plugins` (glTF/FBX/OBJ/STL/PLY SdfFileFormat plugins)
 //     via `PXR_PLUGINPATH` — config only, no engine code. See
 //     `docs/architecture/21-domain-usd.md` (interop note).
 //   * Our engine (pure-Rust `openusd`, no C++ plugin system): mirror it with a
 //     small glTF→USD-layer adapter in `compose.rs` (points/indices/normals/uvs →
-//     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
-// Until then the binary side-channel is retained — it works native + web.
+//     `Mesh` specs) fed to the composer instead of stubbing. This is an
+//     interop enhancement, not a reason to duplicate asset identity in USD.
 
 /// In-memory resolver over pre-fetched layer bytes, keyed by [`canonicalize`]d
 /// identifier. Binary assets resolve to an empty stub (see [`BINARY_STUB_ID`]).
