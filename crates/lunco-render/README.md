@@ -15,8 +15,8 @@ pipeline into the slim web / Modelica binaries.
 
 - **`sun::LunarSunShadow`** — the canonical lunar sun-shadow spec (cascade
   split + shadow-map atlas + depth/normal biases). Shared by the sandbox,
-  celestial, and USD render paths; binaries override individual biases for their
-  look (e.g. the sandbox's hard-shadow tuning).
+  celestial, and USD render paths; callers construct it from the authoritative
+  Graphics profile and may then apply authored scene overrides.
 
 ## Roadmap
 
