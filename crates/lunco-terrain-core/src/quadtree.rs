@@ -183,21 +183,23 @@ impl Quadtree {
         fov_y_rad: f64,
         target_pixel_error: f64,
     ) -> Self {
-        // Guard BOTH divisors. A `target_pixel_error` of 0 (an Inspector knob set to
-        // zero) or a `fov_y_rad` of 0 (an uninitialised camera) makes `range_factor`
-        // infinite → every node refines to `max_depth` → a triangle/tile blow-up
-        // (and `inf · 0 = NaN` downstream). A sub-pixel epsilon floor would only
-        // dodge the inf: at 1e-3 px the range factor is still ~1000× sane and the
-        // tree STILL refines to max_depth. So clamp to a USABLE band — the same one
-        // the caller's own knob uses (`stream_viz` clamps 0.5..32 px).
-        let target_pixel_error = if target_pixel_error.is_nan() {
-            2.0
-        } else {
-            target_pixel_error.clamp(0.25, 64.0)
-        };
-        // `tan` of a 0 / non-finite fov → floor at a small positive denominator
-        // (`f64::max` also returns the finite side of a NaN).
-        let sse_denominator = (2.0 * (0.5 * fov_y_rad).tan()).max(1e-4);
+        assert!(
+            target_pixel_error.is_finite() && target_pixel_error > 0.0,
+            "target pixel error must be finite and greater than zero"
+        );
+        assert!(
+            screen_height_px.is_finite() && screen_height_px > 0.0,
+            "screen height must be finite and greater than zero"
+        );
+        assert!(
+            fov_y_rad.is_finite() && fov_y_rad > 0.0 && fov_y_rad < std::f64::consts::PI,
+            "vertical field of view must be finite and in (0, pi)"
+        );
+        let sse_denominator = 2.0 * (0.5 * fov_y_rad).tan();
+        assert!(
+            sse_denominator.is_finite() && sse_denominator > 0.0,
+            "vertical field of view must produce a finite positive screen metric"
+        );
         let range_factor = screen_height_px / (sse_denominator * target_pixel_error);
         Quadtree::new(
             root_half_extent,
@@ -535,41 +537,15 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_screen_metric_stays_finite_and_clamped() {
-        use std::f64::consts::FRAC_PI_4;
-        let mk =
-            |fov: f64, px: f64| Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, fov, px);
+    #[should_panic(expected = "target pixel error must be finite and greater than zero")]
+    fn invalid_target_pixel_error_is_rejected() {
+        Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, std::f64::consts::FRAC_PI_4, 0.0);
+    }
 
-        // `target_pixel_error = 0` (an Inspector knob dragged to zero) must NOT give
-        // an infinite range factor — it clamps to the usable floor (0.25 px), i.e. the
-        // SAME tree a 0.25-px request builds, not a 1e-3-px one (≈1000× off).
-        let zero_px = mk(FRAC_PI_4, 0.0);
-        assert!(zero_px.range_factor.is_finite());
-        assert_eq!(zero_px.range_factor, mk(FRAC_PI_4, 0.25).range_factor);
-        // …and NOT the old 1e-3-px floor, which was ~250× tighter (every node to
-        // max_depth — the blow-up the guard claimed to prevent).
-        let old_floor_factor = 1080.0 / (2.0 * (0.5 * FRAC_PI_4).tan() * 1e-3);
-        assert!(zero_px.range_factor < old_floor_factor * 0.01);
-
-        // `fov_y_rad = 0` (uninitialised camera): `tan(0) = 0` used to zero the
-        // divisor ⇒ inf range factor ⇒ every node to max_depth + `inf·0 = NaN` morph
-        // bands. The floored denominator keeps everything finite.
-        let zero_fov = mk(0.0, 2.0);
-        assert!(zero_fov.range_factor.is_finite());
-        // The geomorph window is derived from the range factor, so an infinite factor
-        // used to surface here as `inf · 0 = NaN` bands. Both ends must stay a number.
-        let parent_range = zero_fov.error_refine_range(zero_fov.geometric_error(0));
-        let s = zero_fov.selected(QuadCoord::ROOT.children()[0], parent_range);
-        assert!(!s.morph_start.is_nan() && !s.morph_end.is_nan());
-
-        // NaN / inf knobs stay finite too (NaN → the 2 px default; inf → the ceiling).
-        assert!(mk(FRAC_PI_4, f64::NAN).range_factor.is_finite());
-        assert!(mk(FRAC_PI_4, f64::INFINITY).range_factor.is_finite());
-        assert_eq!(
-            mk(FRAC_PI_4, f64::INFINITY).range_factor,
-            mk(FRAC_PI_4, 64.0).range_factor
-        );
-        assert!(mk(f64::NAN, 2.0).range_factor.is_finite());
+    #[test]
+    #[should_panic(expected = "vertical field of view must be finite and in (0, pi)")]
+    fn invalid_field_of_view_is_rejected() {
+        Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, 0.0, 2.0);
     }
 
     #[test]
