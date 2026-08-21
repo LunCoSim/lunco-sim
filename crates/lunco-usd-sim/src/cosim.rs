@@ -229,14 +229,6 @@ fn environment_probe_interface() -> DeclaredOutputPorts {
     }
 }
 
-/// Return the authored body-level presentation scope for an environment probe.
-///
-/// A probe is often nested below the part whose mount frame it measures (an
-/// antenna or a solar panel), but its values describe the local environment of
-/// the rigid body, not that consumer. Walk the composed USD ancestry to the
-/// nearest body and expose the provider as `<body>/Environment`. This keeps the
-/// physical frame relationship intact while keeping the operator tree semantic.
-
 /// A compile-specific port-contract verdict already reported to the console.
 ///
 /// Keeping the session id makes validation reactive to a later recompile while

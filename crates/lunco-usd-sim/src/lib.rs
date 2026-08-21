@@ -2422,7 +2422,7 @@ pub(crate) fn steering_vehicle_params(
     let max_steer_angle = reader
         .real(vehicle, "physxVehicleAckermannSteering:maxSteerAngle")
         .ok_or_else(|| "missing physxVehicleAckermannSteering:maxSteerAngle".to_string())?;
-    if !max_steer_angle.is_finite() || max_steer_angle < 0.0 || max_steer_angle > 1.2 {
+    if !max_steer_angle.is_finite() || !(0.0..=1.2).contains(&max_steer_angle) {
         return Err(format!(
             "physxVehicleAckermannSteering:maxSteerAngle must be finite and in [0, 1.2] rad, got {max_steer_angle}"
         ));
