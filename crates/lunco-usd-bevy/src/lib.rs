@@ -4564,7 +4564,14 @@ fn read_patch_surface(
     reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)> {
-    if let Some(l) = lathe::read_lathe(reader, path) {
+    // Applying the parametric API is the ownership decision: its profile is the
+    // only source of the surface. An empty/unknown profile is therefore an
+    // invalid parametric definition, not permission to resurrect a competing
+    // authored control net. Falling through here used to make a profile typo
+    // render stale or unrelated `points` data and violated the schema's explicit
+    // "unknown = no surface" contract.
+    if reader.has_api_schema(path, "LunCoLatheAPI") {
+        let l = lathe::read_lathe(reader, path)?;
         return Some((l.surface(), Some(l)));
     }
 
@@ -4608,6 +4615,37 @@ fn read_patch_surface(
         },
         None,
     ))
+}
+
+#[cfg(test)]
+mod parametric_surface_tests {
+    use super::*;
+
+    #[test]
+    fn lathe_api_owns_surface_even_when_profile_is_invalid() {
+        let recipe = canonical::StageRecipe::from_source(
+            "lathe.usda",
+            r#"#usda 1.0
+def NurbsPatch "Nozzle" (
+    prepend apiSchemas = ["LunCoLatheAPI"]
+)
+{
+    uniform token lunco:lathe:profile = "typo"
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    int uVertexCount = 2
+    int vVertexCount = 2
+    int uOrder = 2
+    int vOrder = 2
+}
+"#,
+        );
+        let stage = canonical::CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let path = SdfPath::new("/Nozzle").unwrap();
+        assert!(
+            read_patch_surface(&stage.view(), &path).is_none(),
+            "an invalid parametric profile must not fall through to authored points"
+        );
+    }
 }
 
 /// Build a `NurbsPatch`'s mesh AND the definition to retain alongside it.
