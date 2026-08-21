@@ -238,8 +238,8 @@ class "LunCoShadowAPI" (
     the Graphics settings provide the renderer-wide defaults."""
 )
 {
-    float lunco:shadow:firstCascadeFarBound = 40 (
-        doc = "Far bound of the first (highest-resolution) cascade, metres."
+    float lunco:shadow:firstCascadeFarBound (
+        doc = "Far bound of the first (highest-resolution) cascade, metres. Omitted values use the persisted Graphics setting."
     )
 }
 
