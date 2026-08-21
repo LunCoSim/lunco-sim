@@ -458,13 +458,40 @@ pub fn resolve_camera_paths(
         //
         // Absent ⇒ fall back to the whole-path `lunco:path:lookAt` rel, else
         // tangent. So the simple case stays a one-liner and the track is opt-in.
-        // Tolerant reads: `modes` is naturally authored `token[]` (it is an enum) but
-        // reads fine as `string[]`, and `times` is naturally `double[]` but authors
-        // reach for `float[]`. A strict read of either degrades to an EMPTY array,
-        // which silently turns every aim key into the tangent fallback rather than
-        // reporting anything — see `UsdRead::texts`/`reals`.
-        let times = reader.reals(&path, "lunco:path:aim:times");
-        let modes = reader.texts(&path, "lunco:path:aim:modes");
+        let times = match crate::read_curve_real_array(reader, &path, "lunco:path:aim:times") {
+            Ok(Some(times)) => times,
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[camera-path] {} has authored aim times with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        let modes = match crate::read_curve_token_array(reader, &path, "lunco:path:aim:modes") {
+            Ok(Some(modes)) => modes,
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[camera-path] {} has authored aim modes with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        if times.len() != modes.len()
+            || times.iter().any(|time| !time.is_finite() || *time < 0.0)
+            || modes
+                .iter()
+                .any(|mode| !["tangent", "target", "manual"].contains(&mode.as_str()))
+        {
+            error!(
+                "[camera-path] {} has invalid or non-parallel aim times and modes",
+                prim.path
+            );
+            continue;
+        }
         // The RAW rel paths, not entity lookups. A "target" key is authored
         // against a PRIM PATH, and the entity for that path is a moving target:
         // it may not have spawned yet (async reference), may be shadowed by a
@@ -474,6 +501,19 @@ pub fn resolve_camera_paths(
         // only the KEYS (with a tangent placeholder) plus the path each target
         // key came from; `bind_aim_targets` owns entity binding, every frame.
         let target_paths = reader.rel_targets(&path, "lunco:path:aim:targets");
+        let target_count = modes
+            .iter()
+            .filter(|mode| mode.as_str() == "target")
+            .count();
+        if target_count != target_paths.len() {
+            error!(
+                "[camera-path] {} has {} target aim modes but {} aim target relationships",
+                prim.path,
+                target_count,
+                target_paths.len()
+            );
+            continue;
+        }
 
         // (key, target path) — folded into indices after the sort.
         let mut keys: Vec<(AimKey, Option<String>)> = Vec::new();
@@ -483,21 +523,14 @@ pub fn resolve_camera_paths(
                 Some("target") => {
                     let tp = target_paths.get(next_target);
                     next_target += 1;
-                    match tp {
-                        Some(tp) => (AimMode::Tangent, Some(tp.to_string())),
-                        None => {
-                            warn!(
-                                "[camera-path] {}: aim key {i} is \"target\" but \
-                                 `lunco:path:aim:targets` has no {next_target}th entry — \
-                                 falling back to tangent",
-                                prim.path
-                            );
-                            (AimMode::Tangent, None)
-                        }
-                    }
+                    let Some(tp) = tp else {
+                        unreachable!("target count was validated before key construction")
+                    };
+                    (AimMode::Tangent, Some(tp.to_string()))
                 }
                 Some("manual") => (AimMode::Manual, None),
-                _ => (AimMode::Tangent, None),
+                Some("tangent") => (AimMode::Tangent, None),
+                _ => unreachable!("aim modes are validated by the USD schema"),
             };
             keys.push((AimKey { t: *t, mode }, source));
         }
@@ -534,20 +567,47 @@ pub fn resolve_camera_paths(
         // `curveVertexCounts` partitions `points` into separate curves on one prim.
         // A camera rides ONE curve — the first — so slice it out rather than
         // interpolating across curve boundaries as if the batch were one polyline.
-        if let Some(counts) = crate::read_int_array(reader, &path, "curveVertexCounts") {
-            if let Some(&first) = counts.first() {
-                let n = first.max(0) as usize;
-                if n >= 2 && n < points.len() {
-                    if counts.len() > 1 {
-                        warn!(
-                            "[camera-path] {} carries {} curves — driving the first ({n} pts)",
-                            prim.path,
-                            counts.len()
-                        );
-                    }
-                    points.truncate(n);
-                }
+        let counts = match crate::read_curve_int_array(reader, &path, "curveVertexCounts") {
+            Ok(Some(counts)) if !counts.is_empty() => counts,
+            Ok(Some(_)) | Ok(None) | Err(()) => {
+                error!(
+                    "[camera-path] {} has no usable authored curveVertexCounts",
+                    prim.path
+                );
+                continue;
             }
+        };
+        let Some(&first) = counts.first() else {
+            continue;
+        };
+        let Ok(first) = usize::try_from(first) else {
+            error!(
+                "[camera-path] {} has a negative curveVertexCounts entry",
+                prim.path
+            );
+            continue;
+        };
+        let total = counts.iter().try_fold(0usize, |total, count| {
+            usize::try_from(*count)
+                .ok()
+                .and_then(|count| total.checked_add(count))
+        });
+        if first < 2 || first > points.len() || total != Some(points.len()) {
+            error!(
+                "[camera-path] {} has curveVertexCounts inconsistent with points",
+                prim.path
+            );
+            continue;
+        }
+        if first < points.len() {
+            if counts.len() > 1 {
+                warn!(
+                    "[camera-path] {} carries {} curves — driving the first ({first} pts)",
+                    prim.path,
+                    counts.len()
+                );
+            }
+            points.truncate(first);
         }
         if points.is_empty() {
             warn!("[camera-path] {} has no `points`", prim.path);
@@ -564,23 +624,76 @@ pub fn resolve_camera_paths(
         // is diagnosing is worse than no diagnostic.
         let n_points = points.len();
 
-        let cubic = reader.text(&path, "type").as_deref() != Some("linear");
-        let basis = match reader.text(&path, "basis").as_deref() {
-            _ if !cubic => CurveBasis::Linear,
-            // No bspline evaluator here — catmullRom is the closest interpolating
-            // stand-in (the same approximation the tube mesher takes).
-            Some("catmullRom") | Some("bspline") => CurveBasis::CatmullRom,
-            // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
-            _ => CurveBasis::Bezier,
+        let ty = match crate::read_curve_token(reader, &path, "type", "cubic", &["linear", "cubic"])
+        {
+            Ok(ty) => ty,
+            Err(()) => continue,
         };
-        let periodic = reader.text(&path, "wrap").as_deref() == Some("periodic");
-        // `real`, not `scalar::<f64>`: a `float lunco:path:duration = 8` would
-        // otherwise read as unauthored and silently run the shot for 60 s.
-        let duration = reader.real(&path, "lunco:path:duration").unwrap_or(60.0);
+        let basis = if ty == "linear" {
+            CurveBasis::Linear
+        } else {
+            match crate::read_curve_token(
+                reader,
+                &path,
+                "basis",
+                "bezier",
+                &["bezier", "catmullRom"],
+            ) {
+                Ok(basis) if basis == "bezier" => CurveBasis::Bezier,
+                Ok(_) => CurveBasis::CatmullRom,
+                Err(()) => continue,
+            }
+        };
+        let wrap = match crate::read_curve_token(
+            reader,
+            &path,
+            "wrap",
+            "nonperiodic",
+            &["nonperiodic", "periodic", "pinned"],
+        ) {
+            Ok(wrap) => wrap,
+            Err(()) => continue,
+        };
+        if wrap == "pinned" {
+            error!(
+                "[camera-path] {} uses unsupported BasisCurves wrap=pinned",
+                prim.path
+            );
+            continue;
+        }
+        let periodic = wrap == "periodic";
+        let duration = match reader.real(&path, "lunco:path:duration") {
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            Some(value) => {
+                error!(
+                    "[camera-path] {} has invalid duration {value}; expected a finite positive value",
+                    prim.path
+                );
+                continue;
+            }
+            None if reader.has_authored_attribute(&path, "lunco:path:duration") => {
+                error!(
+                    "[camera-path] {} has authored duration with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+            None => 60.0,
+        };
         // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).
-        let on_wall = reader.text(&path, "lunco:path:clock").as_deref() == Some("real");
+        let clock = match crate::read_curve_token(
+            reader,
+            &path,
+            "lunco:path:clock",
+            "sim",
+            &["sim", "real"],
+        ) {
+            Ok(clock) => clock,
+            Err(()) => continue,
+        };
+        let on_wall = clock == "real";
         let parent = if on_wall {
             clocks.interaction
         } else {
@@ -613,7 +726,7 @@ pub fn resolve_camera_paths(
                 TimeDomain::derived(Some(gate), 0.0, 1.0),
                 Playback {
                     start: 0.0,
-                    end: duration.max(f64::EPSILON),
+                    end: duration,
                     looping: periodic,
                     ..default()
                 },

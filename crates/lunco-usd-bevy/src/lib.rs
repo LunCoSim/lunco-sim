@@ -5449,6 +5449,23 @@ fn read_curve_real_array(
     }
 }
 
+/// Read a schema-declared `token[]` array without treating an authored string
+/// array or malformed value as an empty optional list.
+fn read_curve_token_array(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<String>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::TokenVec(values)) => Ok(Some(
+            values.into_iter().map(|value| value.to_string()).collect(),
+        )),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
 /// Read one standard USD token with its schema fallback. An authored token
 /// outside the schema's allowed set is malformed and is rejected, rather than
 /// being interpreted as a different curve basis or wrap mode.
