@@ -94,6 +94,31 @@ pub struct UsdDomeEnvironment {
     pub skybox: bool,
 }
 
+fn read_dome_format(
+    reader: &crate::StageView<'_>,
+    path: &openusd::sdf::Path,
+) -> Result<(), crate::LightReadError> {
+    match reader.text(path, "inputs:texture:format").as_deref() {
+        Some("latlong") | Some("automatic") => Ok(()),
+        Some(format) => {
+            warn!(
+                "[usd-bevy] {} DomeLight inputs:texture:format `{format}` is unsupported; \
+                 the textured dome was not instantiated",
+                path.as_str()
+            );
+            Err(crate::LightReadError)
+        }
+        None if !reader.has_authored_attribute(path, "inputs:texture:format") => Ok(()),
+        None => {
+            error!(
+                "[usd-bevy] {} has authored DomeLight inputs:texture:format with an unsupported type",
+                path.as_str()
+            );
+            Err(crate::LightReadError)
+        }
+    }
+}
+
 /// The projected cubemap, ready to hand to a camera.
 #[derive(Component)]
 pub struct DomeCubemap(pub Handle<Image>);
@@ -182,18 +207,8 @@ pub fn read_dome_environment(
     // `automatic` (USD's default) means "infer from the file". We infer from the
     // *decoded* image in `project_dome_textures` rather than the extension, so
     // this starts as LatLong and is corrected there if the image turns out to
-    // carry 6 layers.
-    match reader.text(sdf_path, "inputs:texture:format").as_deref() {
-        Some("latlong") | Some("automatic") | None => {}
-        Some(format) => {
-            warn!(
-                "[usd-bevy] {} DomeLight inputs:texture:format `{format}` is unsupported; \
-                 the textured dome was not instantiated",
-                sdf_path.as_str()
-            );
-            return Err(crate::LightReadError);
-        }
-    }
+    // carry 6 layers. An authored value with the wrong type is not omission.
+    read_dome_format(reader, sdf_path)?;
 
     Ok(Some(UsdDomeEnvironment {
         texture: load_dome_texture(asset_server, &texture_path),
@@ -637,6 +652,22 @@ pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_textured_dome_format_is_not_treated_as_automatic() {
+        let recipe = crate::canonical::StageRecipe::from_source(
+            "dome.usda",
+            r#"#usda 1.0
+def DomeLight "Dome"
+{
+    float inputs:texture:format = 1.0
+}
+"#,
+        );
+        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build dome");
+        let path = openusd::sdf::Path::new("/Dome").unwrap();
+        assert!(read_dome_format(&stage.view(), &path).is_err());
+    }
 
     /// An equirect that encodes its own direction: red = +X-ness, green =
     /// +Y-ness, blue = +Z-ness, each remapped to 0..1. Projecting it and
