@@ -88,6 +88,7 @@
 //!@engine  hf_res
 //!@engine  csm_far
 //!@engine  shadow_cache_on
+//!@engine  horizon_march_steps
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -108,6 +109,7 @@ struct Material {
     hf_res:            f32,  // engine-filled: heightfield resolution
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
+    horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -122,7 +124,7 @@ var height_map: texture_2d<f32>;
 
 // Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
 // with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
-// of the 48-step heightfield ray-march (see `horizon_march.wgsl`). Filterable,
+// of the configured heightfield ray-march (see `horizon_march.wgsl`). Filterable,
 // so the GPU bilinearly interpolates the cache for free.
 @group(#{MATERIAL_BIND_GROUP}) @binding(10)
 var shadow_cache: texture_2d<f32>;
@@ -250,7 +252,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (march_blend > 0.0) {
         let sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
-            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
+            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
+            mat.horizon_march_steps, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, sun_vis, march_blend), color.a);
     }
 #endif

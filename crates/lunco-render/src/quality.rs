@@ -45,6 +45,10 @@ impl RenderingQuality {
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
                 shadow_budget_bytes: 16 * 1024 * 1024,
+                horizon_shadow_cache_enabled: true,
+                horizon_shadow_cache_sun_threshold_deg: 0.05,
+                horizon_march_steps: 48,
+                horizon_cache_samples_per_axis: 2,
                 shadow_minimum_distance: 0.1,
                 shadow_first_cascade_far_bound: 40.0,
                 shadow_maximum_distance: 1500.0,
@@ -93,6 +97,10 @@ impl RenderingQuality {
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
                 shadow_budget_bytes: 8 * 1024 * 1024,
+                horizon_shadow_cache_enabled: false,
+                horizon_shadow_cache_sun_threshold_deg: 0.2,
+                horizon_march_steps: 24,
+                horizon_cache_samples_per_axis: 1,
                 shadow_minimum_distance: 0.1,
                 shadow_first_cascade_far_bound: 20.0,
                 shadow_maximum_distance: 600.0,
@@ -141,6 +149,10 @@ impl RenderingQuality {
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
                 shadow_budget_bytes: 64 * 1024 * 1024,
+                horizon_shadow_cache_enabled: true,
+                horizon_shadow_cache_sun_threshold_deg: 0.02,
+                horizon_march_steps: 96,
+                horizon_cache_samples_per_axis: 3,
                 shadow_minimum_distance: 0.1,
                 shadow_first_cascade_far_bound: 80.0,
                 shadow_maximum_distance: 3000.0,
@@ -195,6 +207,16 @@ pub struct RenderQualityProfile {
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
     pub shadow_budget_bytes: u64,
+    /// Whether the renderer may replace the per-pixel horizon march with a
+    /// pre-baked visibility cache. This is an explicit quality choice; it is
+    /// never changed by the target platform or adapter.
+    pub horizon_shadow_cache_enabled: bool,
+    /// Sun-direction change in degrees that invalidates a horizon cache.
+    pub horizon_shadow_cache_sun_threshold_deg: f32,
+    /// Maximum iterations of the live horizon ray march.
+    pub horizon_march_steps: usize,
+    /// Cache bake supersamples per axis (1 means one ray; 2 means 2×2, etc.).
+    pub horizon_cache_samples_per_axis: usize,
     /// Default nearest distance for unauthored directional shadow cascades.
     pub shadow_minimum_distance: f32,
     /// Default far bound of the first directional shadow cascade.
@@ -328,6 +350,14 @@ pub struct RenderingQualitySettings {
     pub max_spot_shadow_casters: usize,
     #[serde(default = "default_shadow_budget_bytes")]
     pub shadow_budget_bytes: u64,
+    #[serde(default = "default_horizon_shadow_cache_enabled")]
+    pub horizon_shadow_cache_enabled: bool,
+    #[serde(default = "default_horizon_shadow_cache_sun_threshold_deg")]
+    pub horizon_shadow_cache_sun_threshold_deg: f32,
+    #[serde(default = "default_horizon_march_steps")]
+    pub horizon_march_steps: usize,
+    #[serde(default = "default_horizon_cache_samples_per_axis")]
+    pub horizon_cache_samples_per_axis: usize,
     #[serde(default = "default_shadow_minimum_distance")]
     pub shadow_minimum_distance: f32,
     #[serde(default = "default_shadow_first_cascade_far_bound")]
@@ -438,6 +468,22 @@ const fn default_max_spot_shadow_casters() -> usize {
 
 const fn default_shadow_budget_bytes() -> u64 {
     balanced_profile().shadow_budget_bytes
+}
+
+const fn default_horizon_shadow_cache_enabled() -> bool {
+    balanced_profile().horizon_shadow_cache_enabled
+}
+
+const fn default_horizon_shadow_cache_sun_threshold_deg() -> f32 {
+    balanced_profile().horizon_shadow_cache_sun_threshold_deg
+}
+
+const fn default_horizon_march_steps() -> usize {
+    balanced_profile().horizon_march_steps
+}
+
+const fn default_horizon_cache_samples_per_axis() -> usize {
+    balanced_profile().horizon_cache_samples_per_axis
 }
 
 const fn default_shadow_minimum_distance() -> f32 {
@@ -647,6 +693,10 @@ impl RenderingQualitySettings {
             max_point_shadow_casters: self.max_point_shadow_casters,
             max_spot_shadow_casters: self.max_spot_shadow_casters,
             shadow_budget_bytes: self.shadow_budget_bytes,
+            horizon_shadow_cache_enabled: self.horizon_shadow_cache_enabled,
+            horizon_shadow_cache_sun_threshold_deg: self.horizon_shadow_cache_sun_threshold_deg,
+            horizon_march_steps: self.horizon_march_steps,
+            horizon_cache_samples_per_axis: self.horizon_cache_samples_per_axis,
             shadow_minimum_distance: self.shadow_minimum_distance,
             shadow_first_cascade_far_bound: self.shadow_first_cascade_far_bound,
             shadow_maximum_distance: self.shadow_maximum_distance,
@@ -707,6 +757,11 @@ impl RenderingQualitySettings {
         self.max_point_shadow_casters = profile.max_point_shadow_casters;
         self.max_spot_shadow_casters = profile.max_spot_shadow_casters;
         self.shadow_budget_bytes = profile.shadow_budget_bytes;
+        self.horizon_shadow_cache_enabled = profile.horizon_shadow_cache_enabled;
+        self.horizon_shadow_cache_sun_threshold_deg =
+            profile.horizon_shadow_cache_sun_threshold_deg;
+        self.horizon_march_steps = profile.horizon_march_steps;
+        self.horizon_cache_samples_per_axis = profile.horizon_cache_samples_per_axis;
         self.shadow_minimum_distance = profile.shadow_minimum_distance;
         self.shadow_first_cascade_far_bound = profile.shadow_first_cascade_far_bound;
         self.shadow_maximum_distance = profile.shadow_maximum_distance;
@@ -765,6 +820,19 @@ impl RenderingQualitySettings {
         }
         if profile.shadow_budget_bytes == 0 {
             return Err("shadow byte ceiling must be greater than zero");
+        }
+        if !profile.horizon_shadow_cache_sun_threshold_deg.is_finite()
+            || profile.horizon_shadow_cache_sun_threshold_deg <= 0.0
+            || profile.horizon_shadow_cache_sun_threshold_deg >= 180.0
+        {
+            return Err("horizon cache sun threshold must be finite and in (0, 180) degrees");
+        }
+        if profile.horizon_march_steps == 0 || profile.horizon_march_steps > 4096 {
+            return Err("horizon march steps must be between 1 and 4096");
+        }
+        if profile.horizon_cache_samples_per_axis == 0 || profile.horizon_cache_samples_per_axis > 8
+        {
+            return Err("horizon cache samples per axis must be between 1 and 8");
         }
         if !profile.shadow_minimum_distance.is_finite() || profile.shadow_minimum_distance < 0.0 {
             return Err("shadow minimum distance must be finite and non-negative");
@@ -924,6 +992,10 @@ impl Default for RenderingQualitySettings {
             max_point_shadow_casters: profile.max_point_shadow_casters,
             max_spot_shadow_casters: profile.max_spot_shadow_casters,
             shadow_budget_bytes: profile.shadow_budget_bytes,
+            horizon_shadow_cache_enabled: profile.horizon_shadow_cache_enabled,
+            horizon_shadow_cache_sun_threshold_deg: profile.horizon_shadow_cache_sun_threshold_deg,
+            horizon_march_steps: profile.horizon_march_steps,
+            horizon_cache_samples_per_axis: profile.horizon_cache_samples_per_axis,
             shadow_minimum_distance: profile.shadow_minimum_distance,
             shadow_first_cascade_far_bound: profile.shadow_first_cascade_far_bound,
             shadow_maximum_distance: profile.shadow_maximum_distance,
@@ -1078,6 +1150,34 @@ mod tests {
         assert_eq!(settings.profile().directional_shadow_map_size, 2048);
         assert_eq!(settings.profile().shadow_budget_bytes, 64 * 1024 * 1024);
         assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
+    }
+
+    #[test]
+    fn horizon_shadow_quality_is_explicit_and_validated() {
+        let mut settings = RenderingQualitySettings::default();
+        assert_eq!(settings.profile().horizon_march_steps, 48);
+        assert_eq!(settings.profile().horizon_cache_samples_per_axis, 2);
+        assert!(settings.validate().is_ok());
+
+        settings.horizon_march_steps = 0;
+        assert_eq!(
+            settings.validate(),
+            Err("horizon march steps must be between 1 and 4096")
+        );
+
+        settings.horizon_march_steps = 48;
+        settings.horizon_cache_samples_per_axis = 9;
+        assert_eq!(
+            settings.validate(),
+            Err("horizon cache samples per axis must be between 1 and 8")
+        );
+
+        settings.horizon_cache_samples_per_axis = 2;
+        settings.horizon_shadow_cache_sun_threshold_deg = 180.0;
+        assert_eq!(
+            settings.validate(),
+            Err("horizon cache sun threshold must be finite and in (0, 180) degrees")
+        );
     }
 
     #[test]

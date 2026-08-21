@@ -125,6 +125,15 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
             schema.is_engine("shadow_cache_on"),
             "{name} marks shadow_cache_on as an engine field"
         );
+        assert_eq!(
+            schema.field("horizon_march_steps").map(|f| f.ty),
+            Some(ParamType::F32),
+            "{name} reflects horizon_march_steps as f32"
+        );
+        assert!(
+            schema.is_engine("horizon_march_steps"),
+            "{name} marks horizon_march_steps as an engine field"
+        );
         assert!(
             schema.size <= 256,
             "{name} params overflow uniform block: {}",

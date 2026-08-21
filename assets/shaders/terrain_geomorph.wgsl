@@ -148,7 +148,7 @@ var normal_smp: sampler;
 
 // Pre-baked horizon shadow cache (R8Unorm 0..1 sun visibility, whole-DEM
 // planar UV — same texture the static regolith/layered shaders sample). One
-// fetch replaces the 48-step ray-march; gated by `shadow_cache_on`. Streamed
+// fetch replaces the live ray-march; gated by `shadow_cache_on`. Streamed
 // terrain does not cast into the directional cascade, so this is the one
 // terrain-on-terrain self-shadow solution at every distance. Tiles still
 // receive the cascade, which carries rover/rock shadows independently.

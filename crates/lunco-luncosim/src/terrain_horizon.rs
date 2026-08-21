@@ -243,6 +243,7 @@ pub(crate) fn wire_tile_shadow_cache(
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
     // is left is the scene's sun, so there is nothing to rank.
     let sun = pick_sun(&sun).map(|(sun_gt, _, _)| sun_gt);
+    let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, cache, wired) in &terrains {
         let (image, on) = match cache {
@@ -254,7 +255,9 @@ pub(crate) fn wire_tile_shadow_cache(
                         .inverse()
                         .transform_vector3(to_sun_world)
                         .normalize_or_zero();
-                    cfg.enabled && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
+                    cache_quality_valid
+                        && cfg.enabled
+                        && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
                 });
                 (Some(c.image.clone()), if on { 1.0 } else { 0.0 })
             }

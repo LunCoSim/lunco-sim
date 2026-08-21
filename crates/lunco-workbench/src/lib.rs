@@ -5235,6 +5235,38 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .suffix(" m"),
                 );
             });
+            ui.collapsing("Horizon terrain shadows", |ui| {
+                ui.checkbox(
+                    &mut settings.horizon_shadow_cache_enabled,
+                    "Use pre-baked horizon shadow cache",
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_shadow_cache_sun_threshold_deg)
+                        .speed(0.01)
+                        .range(0.001..=179.0)
+                        .prefix("Cache refresh angle: ")
+                        .suffix("°"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_march_steps)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Live march steps: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_cache_samples_per_axis)
+                        .speed(1.0)
+                        .range(1..=8)
+                        .prefix("Cache samples per axis: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These are explicit terrain-shadow quality controls. Cache use and bake sampling are never changed automatically by the platform or memory budget.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Light defaults", |ui| {
                 ui.label(
                     egui::RichText::new(

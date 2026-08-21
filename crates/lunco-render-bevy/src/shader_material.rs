@@ -127,7 +127,7 @@ pub struct ShaderMaterial {
     /// `horizon_march.wgsl::sun_visibility`, computed once per sun-direction
     /// change instead of per pixel. The terrain fragment shader does a single
     /// `textureSampleLevel` of this (guarded by the `shadow_cache_on` uniform)
-    /// instead of the 48-step march loop. `None` binds Bevy's fallback image;
+    /// instead of the configured march loop. `None` binds Bevy's fallback image;
     /// shaders that don't declare the binding are unaffected (same contract as
     /// `height_map` / the layer maps). Sampled by planar UV (`in.uv`).
     #[texture(10)]

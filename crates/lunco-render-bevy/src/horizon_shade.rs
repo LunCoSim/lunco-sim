@@ -37,9 +37,15 @@ pub(crate) fn build(app: &mut App) {
     // no-op when it is already there. Doing it here too means adding the render
     // plugin without the environment plugin cannot fail system-param validation.
     app.init_resource::<HorizonShadowCacheConfig>();
+    app.init_resource::<lunco_render::RenderingQualitySettings>();
     app.add_systems(
         Update,
-        (wire_terrain_materials, wire_sun_for_non_terrain_materials)
+        (
+            sync_horizon_quality_settings
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+            wire_terrain_materials,
+            wire_sun_for_non_terrain_materials,
+        )
             .chain()
             .after(finish_shadow_cache_bake)
             // The bake half is gated on the asset stores existing; the material
@@ -47,6 +53,26 @@ pub(crate) fn build(app: &mut App) {
             // below so an app without `ShaderMaterialPlugin` degrades quietly).
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
+}
+
+/// Project the persisted Graphics quality settings into the render-free horizon
+/// bake resource. The environment crate owns the bake implementation, while
+/// Graphics owns the user's rendering-quality intent; this is the sole bridge.
+/// Invalid settings remain unapplied and are reported by the camera/shadow
+/// policy that already validates the same resource.
+fn sync_horizon_quality_settings(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut cfg: ResMut<HorizonShadowCacheConfig>,
+) {
+    let Err(reason) = settings.validate() else {
+        let profile = settings.profile();
+        cfg.enabled = profile.horizon_shadow_cache_enabled;
+        cfg.sun_threshold_deg = profile.horizon_shadow_cache_sun_threshold_deg;
+        cfg.march_steps = profile.horizon_march_steps;
+        cfg.samples_per_axis = profile.horizon_cache_samples_per_axis;
+        return;
+    };
+    warn!("invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -103,7 +129,7 @@ pub fn wire_terrain_materials(
         return;
     };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — inside it the live 48-step march is
+    // gate, not just cosmetics — inside it the configured live march is
     // skipped (CSM owns the near field), and "march everywhere" turned low
     // flight into a slideshow. (Streamed tiles DO get a baked cache on
     // native — `lunco-luncosim/src/terrain_horizon.rs` samples the oracle
@@ -115,6 +141,7 @@ pub fn wire_terrain_materials(
     // it would make the terrain obey a different illumination model from every
     // dynamic PBR object and would incorrectly look like bounced light.
     let to_sun_world: Vec3 = sun_gt.back().into();
+    let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
         // The world→terrain inverse only moves when the terrain does; `sun_local`
@@ -161,11 +188,13 @@ pub fn wire_terrain_materials(
         };
         let cache_current = shadow_cache
             .is_some_and(|cache| cache.is_valid_for_sun(sun_local, cfg.sun_threshold_deg));
-        let shadow_cache_on: f32 = if cfg.enabled && engaged && cache_current {
+        let shadow_cache_on: f32 = if cache_quality_valid && cfg.enabled && engaged && cache_current
+        {
             1.0
         } else {
             0.0
         };
+        let horizon_march_steps = cfg.march_steps as f32;
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
@@ -197,6 +226,7 @@ pub fn wire_terrain_materials(
                 ("hf_res", ParamValue::F32(hf_res)),
                 ("csm_far", ParamValue::F32(csm_far)),
                 ("shadow_cache_on", ParamValue::F32(shadow_cache_on)),
+                ("horizon_march_steps", ParamValue::F32(horizon_march_steps)),
             ]);
         };
 
@@ -232,6 +262,8 @@ pub fn wire_terrain_materials(
                         .is_none_or(|r| (r - hf_res).abs() > 1e-3)
                     || m.get_scalar("csm_far")
                         .is_none_or(|c| (c - csm_far).abs() > 1e-3)
+                    || m.get_scalar("horizon_march_steps")
+                        .is_none_or(|s| (s - horizon_march_steps).abs() > 1e-3)
             });
             if needs {
                 if let Some(mut m) = shader_mats.get_mut(&handle.0) {
