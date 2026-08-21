@@ -2698,17 +2698,10 @@ pub fn update_lod_tiles(
                 // Tracy (`--features tracy`) its own zone.
                 let _span = bevy::log::info_span!("terrain_tile_bake").entered();
                 // Content-addressed bake: a warm reload of the same composed
-                // surface streams this tile from the `cache://` dir; a miss
+                // surface streams this tile from the platform cache; a miss
                 // samples the oracle (over-zoom Nyquist-gated at this tile's
                 // vertex spacing inside the bake) and persists for next time.
-                //
-                // TODO(R1): on wasm this cache ALWAYS misses — every tile, every
-                // session. `bake_tile_mesh_cached` → `lunco_precompute::bake_or_load`
-                // → `lunco_precompute::{load_blob, store_blob}`, both hard no-ops on
-                // `target_arch = "wasm32"` (lunco-precompute/src/lib.rs). The seam to
-                // wire is `lunco_storage::opfs_blob::{read, write}` (already used for
-                // the DEM grid blob in `terrain.rs`), which is async — so
-                // `bake_or_load` needs an async twin. Owner: lunco-precompute.
+                #[cfg(not(target_arch = "wasm32"))]
                 let tm = crate::tile_cache::bake_tile_mesh_cached(
                     oracle_arc.as_ref(),
                     coord,
@@ -2717,6 +2710,16 @@ pub fn update_lod_tiles(
                     half,
                     center,
                 );
+                #[cfg(target_arch = "wasm32")]
+                let tm = crate::tile_cache::bake_tile_mesh_cached_async(
+                    oracle_arc.clone(),
+                    coord,
+                    region,
+                    tile_res,
+                    half,
+                    center,
+                )
+                .await;
                 // RENDER_WORLD only: nothing reads a tile mesh's CPU vertex data back
                 // (physics rides the collider ring, picking rides the oracle), so the
                 // ~160 KB CPU copy per tile — ~164 MB across a full cache, doubled
