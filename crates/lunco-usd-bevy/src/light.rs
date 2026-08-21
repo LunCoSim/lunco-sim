@@ -190,20 +190,6 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
     other_domes_total > requested_total
 }
 
-/// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32(
-    reader: &crate::StageView<'_>,
-    path: &SdfPath,
-    attr: &str,
-) -> Option<f32> {
-    match reader.attr_value(path, attr)? {
-        Value::Float(f) => Some(f),
-        Value::Double(d) => Some(d as f32),
-        Value::Int(i) => Some(i as f32),
-        _ => None,
-    }
-}
-
 /// Read a UsdLux light's authored intensity scaled by its exposure stops:
 /// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
 /// turned into a Bevy light — the *unit* of the result depends on the target
@@ -571,7 +557,8 @@ pub(crate) fn instantiate_light_prim(
             const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
             let default_sphere_radius = convention.length(DEFAULT_SPHERE_RADIUS as f64) as f32;
             let light_radius = convention.length(
-                get_attribute_as_f32(reader, sdf_path, "inputs:radius")
+                reader
+                    .real_f32(sdf_path, "inputs:radius")
                     .unwrap_or(DEFAULT_SPHERE_RADIUS) as f64,
             ) as f32;
             let normalize =
@@ -715,10 +702,14 @@ pub(crate) fn instantiate_light_prim(
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
             let width = convention.length(
-                get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0) as f64,
+                reader
+                    .real_f32(sdf_path, "inputs:width")
+                    .unwrap_or(1.0) as f64,
             ) as f32;
             let height = convention.length(
-                get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0) as f64,
+                reader
+                    .real_f32(sdf_path, "inputs:height")
+                    .unwrap_or(1.0) as f64,
             ) as f32;
             // `inputs:normalize` — the same UsdLux area rule the SphereLight arm
             // implements (see the long derivation there): with normalize OFF (the
@@ -1000,7 +991,7 @@ def Xform "World"
 
         assert_eq!(read_light_range(&view, &lamp, 30.0, convention), 0.9);
         assert_eq!(
-            convention.length(get_attribute_as_f32(&view, &lamp, "inputs:radius").unwrap() as f64)
+            convention.length(view.real_f32(&lamp, "inputs:radius").unwrap() as f64)
                 as f32,
             0.02
         );
