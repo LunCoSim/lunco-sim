@@ -1282,6 +1282,13 @@ fn extract_avian_prim(
 
     // ── TERRAIN ── static collider + TerrainTile; mesh DEMs defer their collider.
     if has_terrain_api {
+        if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
+            error!(
+                "[usd-avian] {sdf_path} has malformed physics-material values — refusing terrain projection"
+            );
+            commands.entity(entity).try_insert(UsdAvianProcessed);
+            return;
+        }
         commands.entity(entity).try_insert((
             RigidBody::Static,
             lunco_core::Mobility::Static,
@@ -1292,7 +1299,6 @@ fn extract_avian_prim(
         // solver combines the ground's friction/restitution with the touching
         // body's material exactly as it does for a dynamic body.  Keeping this
         // on the classification branch avoids a scene-specific ground override.
-        apply_physics_material(commands, entity, reader, sdf_path);
         if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
             commands.entity(entity).try_insert(collider);
         } else {
@@ -1419,6 +1425,13 @@ fn extract_avian_prim(
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
         // standalone as one at `/Ground`, and must collide the same way.
         if !has_rigid_body_ancestor(reader, sdf_path) {
+            if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
+                error!(
+                    "[usd-avian] {sdf_path} has malformed physics-material values — refusing static collider projection"
+                );
+                commands.entity(entity).try_insert(UsdAvianProcessed);
+                return;
+            }
             commands
                 .entity(entity)
                 .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
@@ -3306,12 +3319,11 @@ fn apply_rigid_body_mass_props(
         }
         None => None,
     };
-    let collider_density = if let Some(density) = body_density.or_else(|| {
-        read_physics_material(reader, sdf_path)
-            .and_then(|pm| pm.density)
-            .filter(|d| *d > 0.0)
-            .map(f64::from)
-    }) {
+    let material_density = read_physics_material(reader, sdf_path)?
+        .and_then(|pm| pm.density)
+        .filter(|d| *d > 0.0)
+        .map(f64::from);
+    let collider_density = if let Some(density) = body_density.or(material_density) {
         let collider_density = density / (mpu * mpu * mpu);
         if !collider_density.is_finite() || collider_density > f32::MAX as f64 {
             return Err(());
@@ -3380,7 +3392,7 @@ fn apply_rigid_body_mass_props(
     if let Some(d) = angular_damping {
         commands.entity(entity).try_insert(AngularDamping(d));
     }
-    apply_physics_material(commands, entity, reader, sdf_path);
+    apply_physics_material(commands, entity, reader, sdf_path)?;
     // The spec frames both velocities in the BODY's local space: convert the
     // components by the stage convention (`physics:velocity` is units/s so it
     // scales like a point; `physics:angularVelocity` is DEG/s about local axes),
@@ -3407,7 +3419,7 @@ fn apply_physics_material(
     entity: Entity,
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
-) {
+) -> Result<(), ()> {
     // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
     // NOT from a `physics:friction` attribute on the body, which is not a thing
     // UsdPhysics defines (see `read_physics_material`).
@@ -3420,7 +3432,7 @@ fn apply_physics_material(
     //
     // The pairwise combination remains Avian's responsibility. USD describes
     // each surface; it does not average the two surfaces at load time.
-    if let Some(pm) = read_physics_material(reader, sdf_path) {
+    if let Some(pm) = read_physics_material(reader, sdf_path)? {
         if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
             let d = Friction::default();
             commands.entity(entity).try_insert(Friction {
@@ -3441,6 +3453,7 @@ fn apply_physics_material(
             });
         }
     }
+    Ok(())
 }
 
 /// Damping is **not** a UsdPhysics concept — the core spec has no damping
@@ -3462,19 +3475,13 @@ const PHYSX_RESTITUTION_COMBINE_MODE: &str = "physxMaterial:restitutionCombineMo
 /// `average` is the default in both, so an unauthored mode behaves identically.
 /// (Avian additionally offers `GeometricMean`, which PhysX has no token for; it
 /// is reachable only from Rust.)
-fn combine_mode(token: Option<&str>) -> Option<CoefficientCombine> {
-    match token? {
+fn combine_mode(token: &str) -> Option<CoefficientCombine> {
+    match token {
         "average" => Some(CoefficientCombine::Average),
         "min" => Some(CoefficientCombine::Min),
         "multiply" => Some(CoefficientCombine::Multiply),
         "max" => Some(CoefficientCombine::Max),
-        other => {
-            bevy::log::warn!(
-                "[usd-avian] unknown frictionCombineMode `{other}` — expected \
-                 average/min/multiply/max; using the default (average)"
-            );
-            None
-        }
+        _ => None,
     }
 }
 
@@ -3534,26 +3541,58 @@ pub struct PhysicsMaterial {
 /// with the renderer ([`lunco_usd_bevy::resolve_bound_material`]). A physical and
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
-pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<PhysicsMaterial> {
+pub fn read_physics_material(
+    reader: &StageView<'_>,
+    prim: &SdfPath,
+) -> Result<Option<PhysicsMaterial>, ()> {
     use openusd::schemas::physics::tokens as ptok;
 
     let mat = lunco_usd_bevy::resolve_bound_material(
         reader,
         prim,
         lunco_usd_bevy::MaterialPurpose::Physics,
-    )?;
-    let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
-    let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
-    let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
-    let density = reader.real_f32(&mat, ptok::A_DENSITY);
-    let friction_combine = combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
-    let restitution_combine =
-        combine_mode(reader.text(&mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref());
+    );
+    let Some(mat) = mat else {
+        return Ok(None);
+    };
+    if !reader.has_api_schema(&mat, "PhysicsMaterialAPI") {
+        return Ok(None);
+    }
+    let read_coefficient = |attr: &str, upper: Option<f64>| -> Result<Option<f32>, ()> {
+        match read_authored_real(reader, &mat, attr)? {
+            None => Ok(None),
+            Some(value)
+                if value.is_finite()
+                    && value >= 0.0
+                    && upper.is_none_or(|maximum| value <= maximum)
+                    && value <= f32::MAX as f64 =>
+            {
+                Ok(Some(value as f32))
+            }
+            Some(_) => Err(()),
+        }
+    };
+    let dynamic_friction = read_coefficient(ptok::A_DYNAMIC_FRICTION, None)?;
+    let static_friction = read_coefficient(ptok::A_STATIC_FRICTION, None)?;
+    let restitution = read_coefficient(ptok::A_RESTITUTION, Some(1.0))?;
+    let density = read_coefficient(ptok::A_DENSITY, None)?;
+    let read_combine = |attr: &str| -> Result<Option<CoefficientCombine>, ()> {
+        if !reader.has_authored_attribute(&mat, attr) {
+            return Ok(None);
+        }
+        let token = match reader.attr_value(&mat, attr) {
+            Some(openusd::sdf::Value::Token(token)) => token.to_string(),
+            _ => return Err(()),
+        };
+        Ok(Some(combine_mode(&token).ok_or(())?))
+    };
+    let friction_combine = read_combine(PHYSX_FRICTION_COMBINE_MODE)?;
+    let restitution_combine = read_combine(PHYSX_RESTITUTION_COMBINE_MODE)?;
 
     // A Material bound only for LOOKS resolves here via the purpose→all-purpose
     // fallback but carries no `PhysicsMaterialAPI` properties. That is not a
     // physics material — don't fabricate a zero-friction one out of it.
-    (dynamic_friction.is_some()
+    Ok((dynamic_friction.is_some()
         || static_friction.is_some()
         || restitution.is_some()
         || density.is_some())
@@ -3564,7 +3603,7 @@ pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<P
         density,
         friction_combine,
         restitution_combine,
-    })
+    }))
 }
 
 /// Marker component to hold a rigid body as Kinematic until all joints
@@ -3671,7 +3710,7 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `read_transform_from_usd`
     //! → `local_transform_at` → mass props).
 
-    use super::{extract_avian_prim, CollisionGroupTable};
+    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
@@ -3681,6 +3720,33 @@ mod extract_parity_tests {
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
     // (CollisionAPI) offset by an authored xformOp:translate — the compound path.
     const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Rover\" (\n    prepend apiSchemas = [\"PhysicsRigidBodyAPI\"]\n)\n{\n    double physics:mass = 500\n    def Cube \"Body\" (\n        prepend apiSchemas = [\"PhysicsCollisionAPI\"]\n    )\n    {\n        double size = 2\n        double3 xformOp:translate = (0, 1, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+
+    const MATERIAL_FIXTURE: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "World"
+{
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Regolith" ( prepend apiSchemas = ["PhysicsMaterialAPI"] )
+        {
+            float physics:dynamicFriction = 0.7
+            float physics:staticFriction = 0.9
+            float physics:restitution = 0.2
+            token physxMaterial:frictionCombineMode = "min"
+        }
+    }
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 4
+        rel material:binding:physics = </World/PhysicsMaterials/Regolith>
+    }
+}
+"#;
 
     /// Run `extract_avian_prim` on a fresh world and read back the physics the
     /// chassis received: (body type, collider Debug, mass, has ShouldBeDynamic).
@@ -3812,6 +3878,79 @@ mod extract_parity_tests {
                 live.2, None,
                 "malformed rigid-body field in {name} must not create mass"
             );
+        }
+    }
+
+    #[test]
+    fn physics_material_reader_rejects_malformed_values_and_tokens() {
+        let cases = [
+            (
+                "bad_friction",
+                MATERIAL_FIXTURE.replace(
+                    "float physics:dynamicFriction = 0.7",
+                    "string physics:dynamicFriction = \"not-friction\"",
+                ),
+            ),
+            (
+                "bad_combine",
+                MATERIAL_FIXTURE.replace(
+                    "token physxMaterial:frictionCombineMode = \"min\"",
+                    "token physxMaterial:frictionCombineMode = \"unknown\"",
+                ),
+            ),
+            (
+                "negative_restitution",
+                MATERIAL_FIXTURE.replace(
+                    "float physics:restitution = 0.2",
+                    "float physics:restitution = -0.1",
+                ),
+            ),
+        ];
+
+        for (name, source) in cases {
+            let dir = std::env::temp_dir().join("lunco_material_parity");
+            std::fs::create_dir_all(&dir).unwrap();
+            let f = dir.join(format!("{name}.usda"));
+            std::fs::write(&f, source).unwrap();
+            let stage = compose_file_to_stage(&f).expect("compose material stage");
+            let view = StageView::new(&stage);
+            assert!(
+                read_physics_material(&view, &SdfPath::new("/World/Ground").unwrap()).is_err(),
+                "malformed material value in {name} must not disappear into Avian defaults"
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_static_colliders_receive_their_bound_physics_material() {
+        let dir = std::env::temp_dir().join("lunco_material_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("valid_material.usda");
+        std::fs::write(&f, MATERIAL_FIXTURE).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose material stage");
+        let view = StageView::new(&stage);
+        {
+            let mut world = World::new();
+            let entity = world.spawn_empty().id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                extract_avian_prim(
+                    &view,
+                    entity,
+                    &SdfPath::new("/World/Ground").unwrap(),
+                    &CollisionGroupTable::default(),
+                    &mut commands,
+                );
+            }
+            queue.apply(&mut world);
+            let friction = world
+                .get::<Friction>(entity)
+                .copied()
+                .expect("static ground receives its physics material");
+            assert!((friction.dynamic_coefficient - 0.7).abs() < 1e-6);
+            assert!((friction.static_coefficient - 0.9).abs() < 1e-6);
+            assert_eq!(friction.combine_rule, CoefficientCombine::Min);
         }
     }
 }
