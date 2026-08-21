@@ -103,8 +103,14 @@ pub(crate) fn update_wheel_spin(
             .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
 
         // All dynamics coefficients are USD-derived (stored on the component).
-        let r = wheel.wheel_radius.max(1e-3);
-        let inertia = wheel.axle_inertia();
+        let Some(r) = (wheel.wheel_radius.is_finite() && wheel.wheel_radius > 0.0)
+            .then_some(wheel.wheel_radius)
+        else {
+            continue;
+        };
+        let Some(inertia) = wheel.axle_inertia() else {
+            continue;
+        };
         let k_slip = wheel.slip_stiffness;
         let c_bearing = wheel.bearing_damping;
         let friction_mu = wheel.friction_mu;
@@ -468,6 +474,20 @@ mod tests {
             dt,
         )));
         app
+    }
+
+    #[test]
+    fn wheel_inertia_rejects_unprojected_values_instead_of_using_a_floor() {
+        assert_eq!(WheelRaycast::default().axle_inertia(), None);
+
+        let wheel = WheelRaycast {
+            wheel_radius: 0.5,
+            mass: 8.0,
+            moment_of_inertia: 0.0,
+            reflected_inertia: 0.0,
+            ..default()
+        };
+        assert_eq!(wheel.axle_inertia(), Some(1.0));
     }
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and

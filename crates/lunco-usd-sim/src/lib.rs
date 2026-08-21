@@ -3539,8 +3539,9 @@ fn animate_proxy_physical_wheels(
         );
         let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, chassis_pos);
         let forward = VehicleFrame::forward(GridRot(wheel_rot.0));
-        let r = (wheel.wheel_radius as f64).max(1e-3);
-        let w = wheel_roll_rate(hub_vel, forward, r);
+        let Some(w) = wheel_roll_rate(hub_vel, forward, wheel.wheel_radius as f64) else {
+            continue;
+        };
 
         let angle = (wheel.spin_angle as f64 + ROLL_SIGN * w * dt).rem_euclid(TAU);
         wheel.spin_angle = angle as f32;

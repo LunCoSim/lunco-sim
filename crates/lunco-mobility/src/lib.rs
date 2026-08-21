@@ -326,9 +326,12 @@ fn publish_raycast_support_footprints(
                     &parents,
                     &transforms,
                 )?;
-                (owner == root).then(|| lunco_physics::PhysicsSupportContact {
+                if owner != root || !wheel.wheel_radius.is_finite() || wheel.wheel_radius <= 0.0 {
+                    return None;
+                }
+                Some(lunco_physics::PhysicsSupportContact {
                     local_offset: local.translation.as_dvec3(),
-                    radius: wheel.wheel_radius.max(0.0),
+                    radius: wheel.wheel_radius,
                     probe_origin: local.translation.as_dvec3()
                         + local.rotation.as_dquat()
                             * DVec3::Y
@@ -893,16 +896,25 @@ impl WheelRaycast {
     /// Rotational inertia about the axle in kg·m²: the tire's own inertia
     /// (USD-authored `physxVehicleWheel:moi` when set, else the solid-disk
     /// estimate `½·m·r²` from mass and radius) plus the drivetrain's
-    /// [`reflected rotor inertia`](Self::reflected_inertia).
+    /// [`reflected rotor inertia`](Self::reflected_inertia). Returns `None`
+    /// when the runtime projection does not contain a finite, positive
+    /// physical input or when the combined inertia is not usable.
     #[inline]
-    pub fn axle_inertia(&self) -> f64 {
-        let tire = if self.moment_of_inertia > 0.0 {
+    pub fn axle_inertia(&self) -> Option<f64> {
+        let tire = if self.moment_of_inertia.is_finite() && self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
         } else {
-            let r = self.wheel_radius.max(1e-3);
-            0.5 * self.mass * r * r
+            if !(self.wheel_radius.is_finite()
+                && self.wheel_radius > 0.0
+                && self.mass.is_finite()
+                && self.mass > 0.0)
+            {
+                return None;
+            }
+            0.5 * self.mass * self.wheel_radius * self.wheel_radius
         };
-        (tire + self.reflected_inertia).max(1e-4)
+        let inertia = tire + self.reflected_inertia;
+        (inertia.is_finite() && inertia > 0.0).then_some(inertia)
     }
 }
 

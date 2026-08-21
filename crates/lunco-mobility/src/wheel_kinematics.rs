@@ -76,8 +76,10 @@ pub fn wheel_hub_velocity(
 /// against this convention to match its `axis_rot · Y` axle). Keep the visual
 /// sign at the call site; do not bake it in here.
 #[inline]
-pub fn wheel_roll_rate(hub_vel: DVec3, forward: DVec3, radius: f64) -> f64 {
-    hub_vel.dot(forward) / radius.max(1e-3)
+pub fn wheel_roll_rate(hub_vel: DVec3, forward: DVec3, radius: f64) -> Option<f64> {
+    (radius.is_finite() && radius > 0.0)
+        .then(|| hub_vel.dot(forward) / radius)
+        .filter(|rate| rate.is_finite())
 }
 
 #[cfg(test)]
@@ -116,9 +118,8 @@ mod tests {
     fn roll_rate_is_v_long_over_radius() {
         let forward = VehicleFrame::FORWARD_LOCAL;
         let hub_vel = DVec3::new(0.0, 0.0, -4.0); // 4 m/s forward
-        assert!((wheel_roll_rate(hub_vel, forward, 2.0) - 2.0).abs() < 1e-9);
-        // Radius is floored to avoid div-by-zero.
-        assert!(wheel_roll_rate(hub_vel, forward, 0.0).is_finite());
+        assert!((wheel_roll_rate(hub_vel, forward, 2.0).unwrap() - 2.0).abs() < 1e-9);
+        assert!(wheel_roll_rate(hub_vel, forward, 0.0).is_none());
     }
 
     #[test]
