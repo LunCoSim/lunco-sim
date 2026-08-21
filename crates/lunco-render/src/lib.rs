@@ -36,7 +36,15 @@ pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_D
 /// viewer. The default is deliberately off so a scenario never gains extra
 /// visual clutter merely by declaring a communication graph.
 #[derive(
-    bevy::prelude::Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug,
+    bevy::prelude::Resource,
+    serde::Serialize,
+    serde::Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    Default,
 )]
 pub struct CommunicationLineSettings {
     /// Show runtime-generated communication lines.
@@ -50,12 +58,6 @@ pub struct CommunicationLineSettings {
 #[derive(bevy::prelude::Resource, Clone, Copy, PartialEq, Debug, Default)]
 pub struct SceneBloomOverride {
     pub intensity: Option<f32>,
-}
-
-impl Default for CommunicationLineSettings {
-    fn default() -> Self {
-        Self { show: false }
-    }
 }
 
 impl lunco_settings::SettingsSection for CommunicationLineSettings {
