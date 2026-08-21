@@ -110,15 +110,15 @@ fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
 /// transform from a malformed authored transform.
 fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<Transform> {
     match local_transform_at(reader, path, 0.0) {
-        Some(transform) => Some(transform),
-        None if reader.has_authored_attribute(path, "xformOpOrder") => {
+        Ok(Some(transform)) => Some(transform),
+        Ok(None) => Some(Transform::IDENTITY),
+        Err(error) => {
             bevy::log::warn!(
-                "mount frame {} has malformed authored xformOpOrder or xform op; mount rejected",
-                path.as_str()
+                "mount frame {} has malformed authored transform ({error}); mount rejected",
+                path.as_str(),
             );
             None
         }
-        None => Some(Transform::IDENTITY),
     }
 }
 

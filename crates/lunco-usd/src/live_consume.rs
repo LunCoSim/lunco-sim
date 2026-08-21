@@ -284,8 +284,14 @@ pub(crate) fn apply_translates_live(
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::local_transform_at(&view, &sp, 0.0)
-                    .map(|transform| (p.clone(), transform.translation))
+                match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
+                    Ok(Some(transform)) => Some((p.clone(), transform.translation)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        error!("[usd] translate edit rejected for {p}: {error}");
+                        None
+                    }
+                }
             })
             .collect()
     };
@@ -463,8 +469,14 @@ pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, 
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::local_transform_at(&view, &sp, 0.0)
-                    .map(|transform| (p.clone(), transform.rotation))
+                match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
+                    Ok(Some(transform)) => Some((p.clone(), transform.rotation)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        error!("[usd] rotate edit rejected for {p}: {error}");
+                        None
+                    }
+                }
             })
             .collect()
     };
@@ -782,10 +794,17 @@ pub(crate) fn reconcile_structural_live(
                 // observer builds the subtree from the still-present stage.
                 let tf = {
                     let stages = world.non_send::<CanonicalStages>();
-                    stages
-                        .get(id)
-                        .and_then(|cs| lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0))
-                        .unwrap_or_default()
+                    let Some(cs) = stages.get(id) else {
+                        continue;
+                    };
+                    match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
+                        Ok(Some(transform)) => transform,
+                        Ok(None) => Transform::IDENTITY,
+                        Err(error) => {
+                            error!("[usd] incremental spawn rejected for {path}: {error}");
+                            continue;
+                        }
+                    }
                 };
                 lunco_usd_sim::cosim::spawn_usd_child_with_translate(world, id, path, tf);
             }
@@ -816,10 +835,17 @@ pub(crate) fn reconcile_structural_live(
                     let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                         return;
                     };
-                    stages.get(id).and_then(|cs| {
-                        lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0)
-                            .map(|transform| transform.translation)
-                    })
+                    let Some(cs) = stages.get(id) else {
+                        return;
+                    };
+                    match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
+                        Ok(Some(transform)) => Some(transform.translation),
+                        Ok(None) => None,
+                        Err(error) => {
+                            error!("[usd] resync transform rejected for {path}: {error}");
+                            None
+                        }
+                    }
                 };
                 if let Some(translate) = v {
                     seat_authored_translate(world, entity, translate);

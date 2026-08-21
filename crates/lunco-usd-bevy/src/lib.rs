@@ -625,6 +625,13 @@ pub fn bump_usd_stage_revision(
 #[derive(Component)]
 pub struct UsdVisualSynced;
 
+/// The composed USD prim had malformed authored data and was intentionally not
+/// projected into the visual/physics pipeline. Keeping this explicit failure
+/// state prevents an identity/stale-transform retry from looking successful.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct UsdVisualSyncFailed(pub String);
+
 /// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
 /// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack
 /// alone — the ancestor chain is not part of it.
@@ -1447,12 +1454,23 @@ fn instantiate_usd_prim_from_stage(
         // Only override position/rotation if the USD prim has explicit NON-ZERO values.
         // A zero translation in USD means "no offset" — it shouldn't overwrite a spawn position.
         let mut transform = existing_tf.cloned().unwrap_or_default();
-        // Full local transform: `xformOpOrder` composition when authored, else a
-        // full `xformOp:transform` matrix, else piecewise translate + the full
-        // rotation set (Euler orders, `orient`, single-axis) + scale. Each
-        // component is applied with a spawn-preservation guard so an identity/zero
-        // USD value doesn't clobber a code-set spawn pose.
-        let usd_tf = local_transform_at(reader, &sdf_path, 0.0);
+        // Full local transform: the authoritative USD `xformOpOrder` stack. An
+        // omitted stack is the USD identity and preserves the code-set spawn
+        // pose; malformed authored data rejects this prim instead of being guessed.
+        let usd_tf = match local_transform_at(reader, &sdf_path, 0.0) {
+            Ok(transform) => transform,
+            Err(error) => {
+                error!(
+                    "[usd-bevy] {} has malformed authored transform; visual projection rejected: {}",
+                    sdf_path.as_str(),
+                    error
+                );
+                commands
+                    .entity(entity)
+                    .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
+                return;
+            }
+        };
         if let Some(v) = usd_tf.map(|t| t.translation) {
             // Only apply USD translation if it's non-zero (avoid overwriting spawn positions).
             if v.length_squared() > 1e-6 {
@@ -1594,7 +1612,20 @@ fn instantiate_usd_prim_from_stage(
             }
 
             // Pre-read child transform from USD (canonical decoder).
-            let child_tf = read_transform_from_usd(reader, &child_path);
+            let child_tf = match read_transform_from_usd(reader, &child_path) {
+                Ok(transform) => transform,
+                Err(error) => {
+                    error!(
+                        "[usd-bevy] {} has malformed authored transform; visual projection rejected: {}",
+                        child_path.as_str(),
+                        error
+                    );
+                    commands
+                        .entity(entity)
+                        .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
+                    return;
+                }
+            };
 
             let base_components = (
                 Name::new(child_path.to_string()),
@@ -3432,7 +3463,7 @@ pub fn sample_usd_animation(
         let conv = stage_convention(reader);
         match &plan.xform {
             XformDrive::OpOrder => {
-                if let Some(m) = compose_xform_order_at(reader, sdf_path, t) {
+                if let Ok(Some(m)) = compose_xform_order_at(reader, sdf_path, t) {
                     let m = conv.local_transform(m);
                     tf.translation = m.translation;
                     tf.rotation = m.rotation;
@@ -3913,7 +3944,7 @@ fn prim_rotation_animated(reader: &StageView<'_>, path: &SdfPath) -> bool {
 /// The prim's authored `xformOpOrder` (the ordered op-token list), or `None`
 /// when unauthored or empty. When authored it is the **authoritative** op
 /// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
-/// orders the piecewise decode can't express.
+/// orders that no hand-written decomposition should guess.
 fn read_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<String>> {
     let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
         Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
@@ -4013,7 +4044,7 @@ struct ResetXformStackApplied;
 ///
 /// Position matters: UsdGeomXformable gives the sentinel meaning only as the
 /// first entry — anywhere else it is a malformed stack, which
-/// [`compose_xform_order_at`] already rejects by returning `None`.
+/// [`compose_xform_order_at`] already rejects with [`TransformReadError`].
 fn prim_resets_xform_stack(reader: &StageView<'_>, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path)
         .is_some_and(|order| order.first().is_some_and(|op| op == RESET_XFORM_STACK))
@@ -4190,6 +4221,26 @@ mod reset_xform_stack_tests {
     }
 }
 
+/// A USD transform stack was authored but could not be composed safely.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransformReadError {
+    pub prim: String,
+}
+
+impl std::fmt::Display for TransformReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "malformed authored transform at {}", self.prim)
+    }
+}
+
+impl std::error::Error for TransformReadError {}
+
+fn malformed_transform(path: &SdfPath) -> TransformReadError {
+    TransformReadError {
+        prim: path.as_str().to_owned(),
+    }
+}
+
 /// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
 /// via openusd's spec implementation
 /// ([`Xformable::local_to_parent_transform`](openusd::schemas::geom::Xformable::local_to_parent_transform)):
@@ -4199,31 +4250,37 @@ mod reset_xform_stack_tests {
 /// to Bevy's `Transform`. USD matrices are row-major / row-vector — glam's
 /// column-major / column-vector layout transposed, and the two transposes
 /// cancel (see [`read_matrix_transform_at`]), so the raw 16 elements feed
-/// `Mat4::from_cols_array` directly. `None` when no `xformOpOrder` is authored,
-/// or when the stack is malformed (a misplaced `!resetXformStack!`, a singular
-/// `!invert!` op) — the caller then keeps the entity's existing transform.
+/// `Mat4::from_cols_array` directly. `Ok(None)` means no transform stack is
+/// authored. A malformed authored stack is an error; it must not be converted
+/// into identity or the entity's previous transform.
 pub fn compose_xform_order_at(
     reader: &StageView<'_>,
     path: &SdfPath,
     time: f64,
-) -> Option<Transform> {
+) -> Result<Option<Transform>, TransformReadError> {
     use openusd::schemas::geom::Xformable as _;
-    let order = read_xform_op_order(reader, path)?;
+    let Some(order) = read_xform_op_order(reader, path) else {
+        return if reader.has_authored_attribute(path, "xformOpOrder")
+            && !authored_empty_xform_op_order(reader, path)
+        {
+            Err(malformed_transform(path))
+        } else {
+            Ok(None)
+        };
+    };
     if !valid_xform_op_order(&order) {
-        return None;
+        return Err(malformed_transform(path));
     }
     let m = XformablePrim(reader.usd_stage().prim(path.clone()))
         .local_to_parent_transform(time)
-        .ok()?;
+        .map_err(|_| malformed_transform(path))?;
     let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
-    Some(Transform::from_matrix(Mat4::from_cols_array(&cols)))
+    Ok(Some(Transform::from_matrix(Mat4::from_cols_array(&cols))))
 }
 
 /// The prim's full local `Transform` at time `time`, **in the canonical frame**:
-/// `xformOpOrder` composition when authored (authoritative), else a full
-/// `xformOp:transform` matrix, else the implicit-order piecewise fallback
-/// (translate + [`local_rotation_at`] + scale). `None` when the prim authors no
-/// xform op at all — the caller then keeps the entity's existing transform.
+/// `xformOpOrder` composition when authored (authoritative). `Ok(None)` when the
+/// prim authors no transform stack; malformed authored data is an error.
 /// Shared by the static decoder and the animation sampler so both agree.
 ///
 /// **Units/axes convert here** (`docs/architecture/41-axes-and-units.md`): the
@@ -4233,15 +4290,25 @@ pub fn compose_xform_order_at(
 /// A canonical stage (all our own assets) takes the identity path — unchanged.
 /// Every downstream consumer (visual sync, avian colliders, mounts, the gizmo)
 /// funnels through here, so none of them sees stage units.
-pub fn local_transform_at(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
-    let raw = local_transform_at_raw(reader, path, time)?;
-    Some(stage_convention(reader).local_transform(raw))
+pub fn local_transform_at(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<Transform>, TransformReadError> {
+    let Some(raw) = local_transform_at_raw(reader, path, time)? else {
+        return Ok(None);
+    };
+    Ok(Some(stage_convention(reader).local_transform(raw)))
 }
 
 /// [`local_transform_at`] **before** the canonical conversion — the transform as
 /// authored, in the stage's own frame and units. Private: no consumer may hold a
 /// raw spatial value (doc 41 — "visibility is the guardrail").
-fn local_transform_at_raw(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
+fn local_transform_at_raw(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<Transform>, TransformReadError> {
     // `xformOpOrder` IS the transform. UsdGeomXformable defines a prim's local
     // transform as the ordered composition of exactly the ops that attribute lists;
     // an `xformOp:*` attribute the order does not name is inert data, and a prim
@@ -4261,19 +4328,20 @@ fn local_transform_at_raw(reader: &StageView<'_>, path: &SdfPath, time: f64) -> 
     compose_xform_order_at(reader, path, time)
 }
 
-/// Canonical local-transform decode via [`local_transform_at`] — `xformOpOrder`
-/// composition when authored, else a full `xformOp:transform`, else piecewise
-/// translate + the full rotation set ([`local_rotation_at`]). Scale is forced to
-/// `ONE` (callers that need `xformOp:scale` compose it themselves; avian
-/// pre-applies scale onto the collider instead). Avian downcasts the resulting
-/// `Transform` to `DVec3`/`DQuat` at its call site.
-pub fn read_transform_from_usd(reader: &StageView<'_>, path: &SdfPath) -> Transform {
+/// Canonical local-transform decode via [`local_transform_at`]. An omitted
+/// transform stack is the USD identity; malformed authored data is returned to
+/// the caller instead of becoming identity.
+pub fn read_transform_from_usd(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Transform, TransformReadError> {
     match local_transform_at(reader, path, 0.0) {
-        Some(tf) => Transform {
+        Ok(Some(tf)) => Ok(Transform {
             scale: Vec3::ONE,
             ..tf
-        },
-        None => Transform::IDENTITY,
+        }),
+        Ok(None) => Ok(Transform::IDENTITY),
+        Err(error) => Err(error),
     }
 }
 
@@ -4381,15 +4449,11 @@ fn collision_local_transform(
     path: &SdfPath,
 ) -> Result<Transform, CollisionAabbError> {
     match local_transform_at(reader, path, 0.0) {
-        Some(transform) => Ok(transform),
-        None if reader.has_authored_attribute(path, "xformOpOrder")
-            && !authored_empty_xform_op_order(reader, path) =>
-        {
-            Err(CollisionAabbError::MalformedTransform {
-                prim: path.as_str().to_owned(),
-            })
-        }
-        None => Ok(Transform::IDENTITY),
+        Ok(Some(transform)) => Ok(transform),
+        Ok(None) => Ok(Transform::IDENTITY),
+        Err(_) => Err(CollisionAabbError::MalformedTransform {
+            prim: path.as_str().to_owned(),
+        }),
     }
 }
 
@@ -4550,6 +4614,15 @@ def Xform "Root"
         assert!(
             collision_aabb(&stage.view(), "/Root").is_err(),
             "a malformed authored transform must reject spawn AABB derivation"
+        );
+        let root = SdfPath::new("/Root").unwrap();
+        assert!(
+            local_transform_at(&stage.view(), &root, 0.0).is_err(),
+            "the shared transform reader must preserve malformed-data errors"
+        );
+        assert!(
+            read_transform_from_usd(&stage.view(), &root).is_err(),
+            "the identity-producing convenience path must not hide malformed data"
         );
     }
 
@@ -7455,26 +7528,29 @@ def Xform "Std"
         let reader = __cs.view();
         // `["scale","translate"]`: translate is the LAST op → applied first to the
         // geometry, then `scale` (first op) scales it → translation (2,0,0).
-        let sf =
-            compose_xform_order_at(&reader, &SdfPath::new("/ScaleFirst").unwrap(), 0.0).unwrap();
+        let sf = compose_xform_order_at(&reader, &SdfPath::new("/ScaleFirst").unwrap(), 0.0)
+            .unwrap()
+            .unwrap();
         assert!(sf.translation.abs_diff_eq(Vec3::new(2.0, 0.0, 0.0), 1e-5));
         assert!(sf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
         // `["translate","scale"]` (standard order): scale applied first, then the
         // unscaled translate → (1,0,0). Different result ⇒ op order is honored.
         let tf = compose_xform_order_at(&reader, &SdfPath::new("/TranslateFirst").unwrap(), 0.0)
+            .unwrap()
             .unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-5));
         assert!(tf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
     }
 
     #[test]
-    fn xform_op_order_standard_matches_piecewise() {
-        // Standard-order content (`["translate","rotateXYZ"]`, what the rover
-        // assets author) decodes identically to the implicit piecewise path —
-        // no regression.
+    fn xform_op_order_standard_composes_as_expected() {
+        // Standard-order content (`["translate","rotateXYZ"]`) composes its
+        // authored translation and rotation without a parallel decoder.
         let __cs = parse(ORDER_SCENE);
         let reader = __cs.view();
-        let tf = local_transform_at(&reader, &SdfPath::new("/Std").unwrap(), 0.0).unwrap();
+        let tf = local_transform_at(&reader, &SdfPath::new("/Std").unwrap(), 0.0)
+            .unwrap()
+            .unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(5.0, 6.0, 7.0), 1e-5));
         assert!(tf
             .rotation
@@ -7493,7 +7569,7 @@ def Xform "Std"
         assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-5));
         assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-5));
         // And `read_transform_from_usd` prefers the matrix.
-        let full = read_transform_from_usd(&reader, &SdfPath::new("/Matrixed").unwrap());
+        let full = read_transform_from_usd(&reader, &SdfPath::new("/Matrixed").unwrap()).unwrap();
         assert!(full.translation.abs_diff_eq(Vec3::new(3.0, 4.0, 5.0), 1e-5));
     }
 
@@ -7630,7 +7706,9 @@ def Xform "World"
         let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
 
-        let tf = local_transform_at(&reader, &tower, 0.0).expect("prim authors an xform");
+        let tf = local_transform_at(&reader, &tower, 0.0)
+            .expect("transform stack is valid")
+            .expect("prim authors an xform");
         // (100, 0, 300) cm, Z-up  →  (1, 3, 0) m, Y-up: the stage's +Z (up) is now
         // canonical +Y (up); +X is untouched; the metre scale is 1/100.
         assert!(
@@ -7679,8 +7757,8 @@ def Xform "World"
         let yup = __yup.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
 
-        let a = local_transform_at(&zup, &tower, 0.0).unwrap();
-        let b = local_transform_at(&yup, &tower, 0.0).unwrap();
+        let a = local_transform_at(&zup, &tower, 0.0).unwrap().unwrap();
+        let b = local_transform_at(&yup, &tower, 0.0).unwrap().unwrap();
         assert!(a.translation.abs_diff_eq(b.translation, 1e-5));
 
         assert_eq!(
@@ -7697,7 +7775,7 @@ def Xform "World"
         let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
         assert!(stage_convention(&reader).is_identity());
-        let tf = local_transform_at(&reader, &tower, 0.0).unwrap();
+        let tf = local_transform_at(&reader, &tower, 0.0).unwrap().unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 3.0, 0.0), 1e-6));
         assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-6));
         assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-6));

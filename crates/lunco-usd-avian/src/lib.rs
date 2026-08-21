@@ -57,7 +57,7 @@ use lunco_core::coords::GridPos;
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_primitive_axis, read_shape_dims,
     read_transform_from_usd, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView,
-    UsdAnimated, UsdRead, UsdSceneRoot, UsdVisualSynced,
+    TransformReadError, UsdAnimated, UsdRead, UsdSceneRoot, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -587,7 +587,7 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 fn collect_child_colliders_from_usd(
     reader: &StageView<'_>,
     parent_path: &SdfPath,
-) -> Vec<(Position, Rotation, Collider)> {
+) -> Result<Vec<(Position, Rotation, Collider)>, TransformReadError> {
     let mut shapes = Vec::new();
 
     // Per the spec a rigid body aggregates ALL descendant colliders, not only
@@ -596,7 +596,7 @@ fn collect_child_colliders_from_usd(
     // each prim's transform composed in the root's frame; recursion stops at a
     // nested-body boundary (see `gather_compound_candidates`).
     let mut candidates = Vec::new();
-    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates);
+    gather_compound_candidates(reader, parent_path, Transform::IDENTITY, &mut candidates)?;
 
     // `UsdGeomImageable.purpose` decides which of a body's descendants are its
     // COLLISION geometry, when the body carries more than one description of its
@@ -682,7 +682,7 @@ fn collect_child_colliders_from_usd(
         }
     }
 
-    shapes
+    Ok(shapes)
 }
 
 /// Walks every descendant of a compound body root, composing each prim's local
@@ -707,7 +707,7 @@ fn gather_compound_candidates(
     path: &SdfPath,
     acc: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
-) {
+) -> Result<(), TransformReadError> {
     for child in reader.children(path) {
         if reader.has_api_schema(&child, ptok::API_RIGID_BODY) {
             continue;
@@ -720,10 +720,11 @@ fn gather_compound_candidates(
         }
         // Local transform in the canonical decoder shared with usd-bevy, folded
         // into the accumulated root-relative frame.
-        let tf = acc.mul_transform(read_transform_from_usd(reader, &child));
+        let tf = acc.mul_transform(read_transform_from_usd(reader, &child)?);
         out.push((child.clone(), tf));
-        gather_compound_candidates(reader, &child, tf, out);
+        gather_compound_candidates(reader, &child, tf, out)?;
     }
+    Ok(())
 }
 
 /// Builds a Collider from a USD prim's geometry type and dimensions.
@@ -1380,7 +1381,16 @@ fn extract_avian_prim(
         }
 
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
-        let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
+        let compound_shapes = match collect_child_colliders_from_usd(reader, sdf_path) {
+            Ok(shapes) => shapes,
+            Err(error) => {
+                error!(
+                    "[usd-avian] {sdf_path} has malformed descendant transform; refusing compound body: {error}"
+                );
+                commands.entity(entity).try_insert(UsdAvianProcessed);
+                return;
+            }
+        };
         if !compound_shapes.is_empty() {
             commands
                 .entity(entity)
@@ -1511,8 +1521,12 @@ fn apply_collision_groups(
 /// The composed local-to-world [`Transform`] of `path`: folds the LOCAL transforms
 /// (translate + rotate + **scale**) of every prim from the stage root down to it, so
 /// an ancestor's scale is baked into a descendant's world position — exactly how the
-/// renderer places it. Missing xform ops compose as identity.
-pub fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
+/// renderer places it. An omitted xform stack composes as USD identity; malformed
+/// authored data is returned as an error.
+pub fn world_transform(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Transform, TransformReadError> {
     let mut chain = Vec::new();
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
@@ -1524,17 +1538,23 @@ pub fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     }
     let mut acc = Transform::IDENTITY;
     for p in chain.iter().rev() {
-        acc = acc.mul_transform(local_transform_at(reader, p, 0.0).unwrap_or(Transform::IDENTITY));
+        if let Some(local) = local_transform_at(reader, p, 0.0)? {
+            acc = acc.mul_transform(local);
+        }
     }
-    acc
+    Ok(acc)
 }
 
 /// Rotate a vector authored in a prim's local frame into the composed world
 /// frame. USD physics velocity attributes are local-frame vectors, while
 /// Avian's runtime velocity components are world-frame. Keep that rotation in
 /// one helper so linear and angular initial state share the same convention.
-fn local_vector_to_world(reader: &StageView<'_>, path: &SdfPath, local: DVec3) -> DVec3 {
-    world_transform(reader, path).rotation.as_dquat() * local
+fn local_vector_to_world(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    local: DVec3,
+) -> Result<DVec3, TransformReadError> {
+    Ok(world_transform(reader, path)?.rotation.as_dquat() * local)
 }
 
 /// Compose a prim's transform in the local frame of an authored body.
@@ -1548,8 +1568,8 @@ pub fn transform_in_body_frame(
     body_path: &SdfPath,
     prim_path: &SdfPath,
 ) -> Option<Transform> {
-    let body = world_transform(reader, body_path);
-    let prim = world_transform(reader, prim_path);
+    let body = world_transform(reader, body_path).ok()?;
+    let prim = world_transform(reader, prim_path).ok()?;
     let inv = body.rotation.inverse();
     Some(Transform {
         translation: inv * (prim.translation - body.translation),
@@ -1581,8 +1601,8 @@ pub fn transform_in_body_frame(
 fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Option<(DVec3, DVec3)> {
     let p0 = SdfPath::new(body0).ok()?;
     let p1 = SdfPath::new(body1).ok()?;
-    let w0 = world_transform(reader, &p0);
-    let w1 = world_transform(reader, &p1);
+    let w0 = world_transform(reader, &p0).ok()?;
+    let w1 = world_transform(reader, &p1).ok()?;
     let rel = w0.rotation.inverse() * (w1.translation - w0.translation);
     Some((
         DVec3::new(rel.x as f64, rel.y as f64, rel.z as f64),
@@ -3297,7 +3317,7 @@ fn apply_rigid_body_mass_props(
     };
     let authored_linear = match read_authored_vec3(reader, sdf_path, ptok::A_VELOCITY)? {
         Some(vel) => {
-            let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel));
+            let vel = local_vector_to_world(reader, sdf_path, conv.point_d(vel)).map_err(|_| ())?;
             if !vel.is_finite() {
                 return Err(());
             }
@@ -3311,7 +3331,8 @@ fn apply_rigid_body_mass_props(
                 reader,
                 sdf_path,
                 conv.dir_d(ang) * std::f64::consts::PI / 180.0,
-            );
+            )
+            .map_err(|_| ())?;
             if !ang.is_finite() {
                 return Err(());
             }
@@ -4567,6 +4588,26 @@ mod collider_ownership_tests {
     use super::*;
     use lunco_usd_bevy::{CanonicalStage, StageRecipe};
 
+    #[test]
+    fn malformed_compound_child_transform_is_rejected_not_identity() {
+        let source = r#"#usda 1.0
+def Xform "Root" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
+{
+    def Cube "Body" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    {
+        double size = 2
+        uniform token[] xformOpOrder = ["xformOp:unsupported"]
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("bad.usda", source))
+            .expect("build stage");
+        let root = SdfPath::new("/Root").unwrap();
+        let error = collect_child_colliders_from_usd(&stage.view(), &root)
+            .expect_err("malformed authored transform must reject compound discovery");
+        assert_eq!(error.prim, "/Root/Body");
+    }
+
     /// A ground plane one level under a plain `Xform` (the shape every scene and
     /// tutorial authors), plus a rigid-body lander whose only collider is its own
     /// root geometry, plus a lander with a collider CHILD.
@@ -4691,7 +4732,7 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let leg = SdfPath::new("/Rig/Leg").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &leg);
+        let pieces = collect_child_colliders_from_usd(&view, &leg).expect("valid transforms");
         assert_eq!(
             pieces.len(),
             1,
@@ -4737,7 +4778,7 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
         let hull = SdfPath::new("/Rig/Hull").unwrap();
-        let pieces = collect_child_colliders_from_usd(&view, &hull);
+        let pieces = collect_child_colliders_from_usd(&view, &hull).expect("valid transforms");
         assert_eq!(
             pieces.len(),
             1,
@@ -4800,7 +4841,9 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(collect_child_colliders_from_usd(&view, &lander).is_empty());
+        assert!(collect_child_colliders_from_usd(&view, &lander)
+            .expect("valid transforms")
+            .is_empty());
         assert!(build_collider_from_usd(&view, &lander).is_some());
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
