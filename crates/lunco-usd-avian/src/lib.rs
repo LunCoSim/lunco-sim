@@ -776,7 +776,8 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
         // `meshSimplification`) = exact triangle mesh — correct for STATIC terrain.
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
-        // the standard token so it works off either the live stage or the flatten.
+        // the standard token so it works off either the live stage or the flatten;
+        // an authored approximation that this adapter cannot realize is rejected.
         // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
         // it only means anything when that schema is applied.
         let approximation = reader
@@ -784,13 +785,14 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
             .then(|| reader.text(sdf_path, ptok::A_APPROXIMATION))
             .flatten();
         let collider = match approximation.as_deref() {
-            Some("convexHull") => Collider::convex_hull(verts.clone())
-                .unwrap_or_else(|| Collider::trimesh(verts, tris)),
+            Some("convexHull") => Collider::convex_hull(verts)?,
             Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
-            // `boundingCube`/`boundingSphere`/`meshSimplification` aren't mapped
-            // to a distinct parry shape yet — fall back to the exact trimesh
-            // rather than silently mis-sizing the body.
-            _ => Collider::trimesh(verts, tris),
+            None | Some("none") => Collider::trimesh(verts, tris),
+            // The authored approximation is a physical contract. Do not
+            // silently replace an unsupported approximation with a different
+            // shape, and do not turn a failed convex hull into a dynamic
+            // triangle mesh that Avian cannot use as a moving body.
+            Some(_) => return None,
         };
         return Some(apply_collider_scale(collider, reader, sdf_path));
     }
@@ -3481,6 +3483,18 @@ mod collider_parity_tests {
             int[] faceVertexCounts = [3,3,3,3]\n\
             int[] faceVertexIndices = [0,1,4, 1,2,4, 2,3,4, 3,0,4]\n\
             uniform token physics:approximation = \"convexHull\"\n\
+        }\n\
+        def Mesh \"BadHull\" ( prepend apiSchemas = [\"PhysicsCollisionAPI\", \"PhysicsMeshCollisionAPI\"] )\n{\n\
+            point3f[] points = [(0,0,0),(1,0,0),(2,0,0),(3,0,0)]\n\
+            int[] faceVertexCounts = [3,3]\n\
+            int[] faceVertexIndices = [0,1,2, 1,2,3]\n\
+            uniform token physics:approximation = \"convexHull\"\n\
+        }\n\
+        def Mesh \"BoundingCube\" ( prepend apiSchemas = [\"PhysicsCollisionAPI\", \"PhysicsMeshCollisionAPI\"] )\n{\n\
+            point3f[] points = [(0,0,0),(2,0,0),(2,2,0),(0,2,0),(1,1,2)]\n\
+            int[] faceVertexCounts = [3,3,3,3]\n\
+            int[] faceVertexIndices = [0,1,4, 1,2,4, 2,3,4, 3,0,4]\n\
+            uniform token physics:approximation = \"boundingCube\"\n\
         }\n";
 
     #[test]
@@ -3500,6 +3514,14 @@ mod collider_parity_tests {
             format!("{trimesh:?}"),
             format!("{hull:?}"),
             "`physics:approximation = convexHull` must build a DIFFERENT collider than the default trimesh"
+        );
+        assert!(
+            build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap()).is_none(),
+            "a failed authored convex hull must not silently become a triangle mesh"
+        );
+        assert!(
+            build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap()).is_none(),
+            "an unsupported authored approximation must not silently become a triangle mesh"
         );
     }
 }
