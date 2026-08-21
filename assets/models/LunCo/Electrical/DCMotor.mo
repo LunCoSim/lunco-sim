@@ -7,11 +7,11 @@ within LunCo.Electrical;
 model DCMotor
   extends LunCo.Icons.Motor;
   parameter Real efficiency = 0.85 "Electrical-to-mechanical efficiency, 0..1";
-  parameter Real rated_power = 2000.0 "Continuous rated shaft power, W";
+  parameter Real rated_power = 500.0 "Continuous electrical nameplate power, W";
   // Bus voltage the drive is rated at. Used to turn the nameplate power rating
   // into the rated CURRENT the controller commands — a property of the machine's
   // rating, not a reading of the node.
-  parameter Real v_rated = 48.0 "Bus voltage the drive is rated at, V";
+  parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 
   input Real demand "Normalized motor demand, -1..1";
 

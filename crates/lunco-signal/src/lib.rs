@@ -454,6 +454,42 @@ impl SignalRegistry {
         true
     }
 
+    /// Record one simulation-time sample at a fixed rate, independent of display
+    /// deadband.
+    ///
+    /// Histories are the source for plots, export, and runtime inspection. They
+    /// therefore must advance with the simulation clock even when the value is
+    /// steady. Operator notification policy belongs to the producer/event lane,
+    /// not to this recording primitive. A backwards time jump starts a new
+    /// history segment instead of appending out-of-order points.
+    pub fn record_scalar_at_rate(
+        &mut self,
+        sig: SignalRef,
+        time: f64,
+        value: f64,
+        rate_hz: f64,
+        capacity: usize,
+    ) -> bool {
+        if !time.is_finite() || !value.is_finite() || !rate_hz.is_finite() || rate_hz <= 0.0 {
+            return false;
+        }
+
+        let previous = self
+            .scalar_history(&sig)
+            .and_then(|history| history.samples.back())
+            .copied();
+        if let Some(previous) = previous {
+            if time < previous.time {
+                self.clear_history(&sig);
+            } else if time - previous.time < 1.0 / rate_hz {
+                return false;
+            }
+        }
+
+        self.push_scalar_with_capacity(sig, time, value, capacity);
+        true
+    }
+
     pub fn update_meta(&mut self, sig: SignalRef, meta: SignalMeta) {
         if self.meta.get(&sig) != Some(&meta) {
             self.meta.insert(sig, meta);
@@ -788,5 +824,17 @@ mod tests {
         let history = reg.scalar_history(&signal).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history.samples.back().unwrap().value, 3.0);
+    }
+
+    #[test]
+    fn recording_keeps_simulation_time_when_value_is_steady() {
+        let mut reg = SignalRegistry::default();
+        let signal = SignalRef::global("steady");
+        assert!(reg.record_scalar_at_rate(signal.clone(), 0.0, 1.0, 10.0, 8));
+        assert!(!reg.record_scalar_at_rate(signal.clone(), 0.05, 1.0, 10.0, 8));
+        assert!(reg.record_scalar_at_rate(signal.clone(), 0.11, 1.0, 10.0, 8));
+        let history = reg.scalar_history(&signal).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.samples.back().unwrap().time, 0.11);
     }
 }

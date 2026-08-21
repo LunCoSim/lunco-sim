@@ -183,10 +183,10 @@ def Xform "Motor" (
     # ceiling bought spin, not travel. A ceiling the tyre can approach is worth more
     # road speed than a ceiling it cannot.
     #
-    # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm; peak mechanical
-    # power (stall·noLoad/4) is ~1.8 kW, which now at least sits under the 2000 W
-    # `inputs:rated_power` below (nothing enforces that rating today — the powertrain
-    # reads only the two curve scalars, `usd-sim/powertrain.rs`).
+    # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm. The mechanical
+    # curve and the electrical facet are separate until the Modelica motor is
+    # shaft-coupled; the electrical nameplate below is therefore calibrated to
+    # the compact rover winding rather than guessed from the base speed tier.
     #
     # ⚠ THE RIM CEILING IS NOT THE ROAD SPEED. `vessels/rovers/rocker_bogie.usda`
     # `Motor_FL` holds the measured table (12 rad/s → 2.71 m/s, 19.5 rad/s →
@@ -219,7 +219,12 @@ def Xform "Motor" (
     # or the motor is rated to sustain more than it can ever produce.
     float lunco:motor:continuousTorque = 0.9
     float inputs:efficiency = 0.85
-    float inputs:rated_power = 2000.0
+    # The current-controlled electrical facet is a compact 28 V, 500 W drive.
+    # This is the continuous electrical nameplate used by the composed Modelica
+    # network; it keeps the Lunokhod winding's ~500 W mechanical envelope and
+    # the 83 Ah pack in the same operating regime. Larger authored windings must
+    # author a different electrical nameplate at their component boundary.
+    float inputs:rated_power = 500.0
     # A small rotor, reflected to the axle multiplied by the ratio SQUARED —
     # 1.2e-4 × 200² ≈ 4.8 kg·m², the same order as the wheel's own ½mr² ≈ 2 kg·m².
     # That reflected inertia is a real part of what a geared rover feels, which is why

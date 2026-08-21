@@ -404,6 +404,10 @@ fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) ->
 fn on_runtime_ui_action(
     trigger: On<runtime_exposure::RuntimeUiAction>,
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
+    q_control: Query<
+        &lunco_controller::ControllerLink,
+        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
+    >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut commands: Commands,
@@ -440,6 +444,18 @@ fn on_runtime_ui_action(
         }
         runtime_exposure::RuntimeUiActionKind::DismissTerrainOverlay => {
             commands.trigger(DismissTerrainOverlay)
+        }
+        runtime_exposure::RuntimeUiActionKind::ToggleAutopilot => {
+            let Ok(link) = q_control.single() else {
+                report_runtime_ui_failure(
+                    &mut commands,
+                    "No locally controlled vessel is available",
+                );
+                return;
+            };
+            commands.trigger(lunco_luncosim_edit::ui::checkpoint_click::ToggleAutopilot {
+                vessel: link.vessel_entity,
+            });
         }
     }
 }

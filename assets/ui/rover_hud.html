@@ -23,7 +23,7 @@
   <property name="caution_width">44%</property>
   <property name="danger_start">44%</property>
   <property name="danger_width">22%</property>
-  <property name="autopilot_display">none</property>
+  <property name="autopilot_color">var(--muted-color)</property>
   <property name="geo_display">none</property>
   <property name="local_display">flex</property>
   <property name="comms_display">none</property>
@@ -60,7 +60,7 @@
     <node id="rover-hud-nav">
       <node id="rover-hud-nav-heading">
         <text id="rover-hud-label">{label}</text>
-        <text id="rover-hud-autopilot">AUTOPILOT</text>
+        <button id="rover-hud-autopilot" on_press="runtime_toggle_autopilot">AUTOPILOT</button>
       </node>
       <text id="rover-hud-frame">site frame · metres</text>
       <node id="rover-hud-altitude-block">
@@ -90,7 +90,7 @@
 
       <node id="rover-hud-power">
         <node id="rover-hud-power-heading">
-          <text id="rover-hud-power-label">POWER</text>
+          <text id="rover-hud-power-label">BATTERY</text>
           <text id="rover-hud-power-value">{power_value}</text>
         </node>
         <text id="rover-hud-power-detail">{power_detail}</text>

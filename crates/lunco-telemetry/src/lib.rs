@@ -371,7 +371,7 @@ fn spawn_engine_health_channels(
 struct ChannelClock {
     /// Next due time, in the channel's domain seconds.
     next_due_t: f64,
-    /// Value at the last *emitted* sample — the deadband reference.
+    /// Value at the last operator-notification sample — the deadband reference.
     last_emitted: Option<f64>,
     /// Port handle, resolved once. Resolving by name every sample is exactly what
     /// `ResolvedPort` exists to avoid.
@@ -734,28 +734,33 @@ fn sample_parameters(world: &mut World) {
         // An authored absolute deadband is an explicit per-channel override;
         // otherwise use the subsystem's shared absolute/relative policy.
         let numeric = numeric_of(&value);
-        let suppressed = match (param.deadband, numeric, clock.last_emitted) {
-            (Some(db), Some(v), Some(last)) => (v - last).abs() <= db,
-            (None, Some(v), Some(last)) => !settings.default_deadband.changed(last, v),
-            _ => false,
+        let changed = match (param.deadband, numeric, clock.last_emitted) {
+            (Some(db), Some(v), Some(last)) => (v - last).abs() > db,
+            (None, Some(v), Some(last)) => settings.default_deadband.changed(last, v),
+            _ => true,
         };
 
-        if !suppressed {
+        if changed {
             if let Some(v) = numeric {
                 clock.last_emitted = Some(v);
             }
-            samples.push(SampledParameter {
-                channel: entity,
-                name: param.name.clone(),
-                value,
-                unit: param.unit.clone(),
-                timestamp: world_time.epoch_jd,
-                sim_secs: t,
-                // The MEASURED entity, not the channel entity — "whose value is this" is what
-                // a subscriber needs to tell two rovers' `motor_current` apart.
-                source: measured,
-            });
         }
+
+        // Recording is clock-driven; `changed` is only the operator/API
+        // notification decision. Keeping both on the sample prevents a
+        // deadband from making a time-series appear frozen.
+        samples.push(SampledParameter {
+            channel: entity,
+            name: param.name.clone(),
+            value,
+            unit: param.unit.clone(),
+            timestamp: world_time.epoch_jd,
+            sim_secs: t,
+            // The MEASURED entity, not the channel entity — "whose value is this" is what
+            // a subscriber needs to tell two rovers' `motor_current` apart.
+            source: measured,
+            changed,
+        });
 
         advance(&mut clock, t, rate);
         clock_writes.push((entity, clock));
@@ -1118,7 +1123,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         app.add_observer(move |trigger: On<SampledParameter>| {
-            sink.lock().unwrap().push(trigger.event().clone());
+            if trigger.event().changed {
+                sink.lock().unwrap().push(trigger.event().clone());
+            }
         });
         seen
     }

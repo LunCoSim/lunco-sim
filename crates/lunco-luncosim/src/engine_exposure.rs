@@ -91,6 +91,9 @@ struct EnergyInfo {
     energy_wh: Option<f32>,
     /// Pack capacity in Wh, if known.
     capacity_wh: Option<f32>,
+    /// Signed electrical power into the battery: positive charges, negative
+    /// discharges. This is the canonical flow state shown by the HUD.
+    net_power_w: Option<f32>,
 }
 
 /// Information about a driven vessel's motor temperatures.
@@ -400,11 +403,19 @@ fn resolve_energy(
             let capacity_wh = capacity_wh(sim);
 
             let energy_wh = capacity_wh.map(|cap| (soc_frac as f32) * cap);
+            let net_power_w = sim
+                .outputs
+                .get("battery_net_power")
+                .or_else(|| sim.outputs.get("net_power_w"))
+                .or_else(|| sim.outputs.get("battery_net_power_w"))
+                .copied()
+                .filter(|value| value.is_finite());
 
             return Some(EnergyInfo {
                 soc_pct,
                 energy_wh,
                 capacity_wh,
+                net_power_w,
             });
         }
     }
@@ -973,7 +984,7 @@ pub(crate) fn publish_exposure(
     let autopilot = geo
         .autopilots
         .iter()
-        .any(|pilot| pilot.vessel == vessel.entity);
+        .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
     ui.visible(true);
     publish_vessel_values(&mut ui, &vessel, autopilot);
     drop(ui);
@@ -1911,7 +1922,14 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     ui.property("caution_width", percent(v.caution_deg / 45.0 * 100.0));
     ui.property("danger_start", percent(v.caution_deg / 45.0 * 100.0));
     ui.property("danger_width", percent(danger_width));
-    ui.property("autopilot_display", if autopilot { "flex" } else { "none" });
+    ui.property(
+        "autopilot_color",
+        if autopilot {
+            "var(--danger-color)"
+        } else {
+            "var(--muted-color)"
+        },
+    );
     ui.property("label", v.label.clone());
     ui.property("tilt", format!("{:.0}°", v.tilt_deg));
     ui.property("tilt_limits", limits);
@@ -1984,31 +2002,19 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     ui.property("comms_color", comms_color);
 
     if let Some(energy) = &v.energy {
-        let power_color = if energy.soc_pct > 30.0 {
-            "var(--ok-color)"
-        } else if energy.soc_pct > 15.0 {
-            "var(--caution-color)"
-        } else {
-            "var(--danger-color)"
+        const POWER_FLOW_DEADBAND_W: f32 = 1.0;
+        let (detail, power_color) = match energy.net_power_w {
+            Some(power) if power > POWER_FLOW_DEADBAND_W => (
+                format!("CHARGING · {}", format_power(power)),
+                "var(--ok-color)",
+            ),
+            Some(power) if power < -POWER_FLOW_DEADBAND_W => (
+                format!("DISCHARGING · {}", format_power(-power)),
+                "var(--danger-color)",
+            ),
+            Some(_) => ("STANDBY".to_owned(), "var(--muted-color)"),
+            None => ("POWER FLOW UNAVAILABLE".to_owned(), "var(--muted-color)"),
         };
-        let detail = energy.energy_wh.map_or_else(
-            || format!("charge {:.1}%", energy.soc_pct),
-            |wh| {
-                let energy_str = if wh >= 1000.0 {
-                    format!("{:.2} kWh", wh / 1000.0)
-                } else {
-                    format!("{:.0} Wh", wh)
-                };
-                let capacity = energy.capacity_wh.map_or_else(String::new, |cap| {
-                    if cap >= 1000.0 {
-                        format!(" · cap {:.1} kWh", cap / 1000.0)
-                    } else {
-                        format!(" · cap {:.0} Wh", cap)
-                    }
-                });
-                format!("{energy_str}{capacity}")
-            },
-        );
         ui.property("power_display", "flex");
         ui.property("power_color", power_color);
         ui.property("power_value", format!("{:.0}%", energy.soc_pct));
@@ -2036,5 +2042,13 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
         ui.property("thermal_detail", detail);
     } else {
         ui.property("thermal_display", "none");
+    }
+}
+
+fn format_power(power_w: f32) -> String {
+    if power_w >= 1000.0 {
+        format!("{:.1} kW", power_w / 1000.0)
+    } else {
+        format!("{power_w:.0} W")
     }
 }

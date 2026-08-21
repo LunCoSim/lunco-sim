@@ -284,6 +284,13 @@ pub struct SampledParameter {
     /// The channel's own entity is [`channel`](Self::channel); keeping both
     /// makes subscriber identity and channel policy unambiguous.
     pub source: Entity,
+    /// Whether this sample crossed the channel's operator-facing deadband.
+    ///
+    /// Every due sample is retained for simulation-time histories and plots. This
+    /// flag is the separate notification policy: API subscriptions and other
+    /// event consumers can ignore unchanged samples without making a graph lose
+    /// elapsed-time information.
+    pub changed: bool,
 }
 
 /// Extension for projecting native/foreign Bevy **messages** onto the neutral

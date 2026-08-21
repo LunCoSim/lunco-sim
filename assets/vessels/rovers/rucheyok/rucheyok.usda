@@ -241,7 +241,7 @@ def Xform "Rucheyok" (
 
     # --- Hub motors + reductions ---------------------------------------------
     # The four hub motors the `Electrical` circuit above already budgets for
-    # (`inputs:motor_rated_power = 2000` W each) are now REAL PARTS rather than a
+    # (`inputs:rated_power = 500` W each) are now REAL PARTS rather than a
     # parameter on a Modelica model: a mass, a housing, a torque curve, an
     # efficiency and a waste-heat port each. The circuit's `torque_fl..rr` /
     # `omega_fl..rr` boundary inputs are exactly what these produce, so the

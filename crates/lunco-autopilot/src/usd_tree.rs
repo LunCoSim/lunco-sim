@@ -101,9 +101,10 @@ pub struct BehaviorXmlHandle(pub Handle<BehaviorXmlAsset>);
 /// Prim path → live entity, for every spatial leaf the XML references. Written by
 /// the USD bridge (which owns prim-path resolution); read here to bake coordinates.
 ///
-/// A path that does not resolve is simply absent — [`compile_behavior_xml`] refuses
-/// to compile a tree with a dangling target rather than silently driving to the
-/// origin.
+/// A path that does not resolve is absent — [`compile_behavior_xml`] refuses to
+/// compile a tree with a dangling target rather than silently driving to the
+/// origin. The USD projection publishes an empty set while it is waiting for the
+/// composed prim, so an old binding cannot remain authoritative.
 #[derive(Component, Debug, Clone, Default)]
 pub struct TargetBindings(pub HashMap<String, Entity>);
 
@@ -819,11 +820,24 @@ pub fn compile_behavior_xml(
         );
         if !missing.is_empty() {
             // Dangling reference: a waypoint prim the tree names has been deleted (or
-            // has not spawned yet). Keep the last good tree — compiling this one would
-            // send the rover to the world origin.
-            debug!(
-                "[autopilot/usd] behaviour tree for {vessel:?} references unresolved waypoint(s) \
-                 {missing:?}; not recompiling"
+            // has not spawned yet). Do not retain the last good tree: that would make
+            // the rover continue driving to a route the user no longer authored.
+            // Install the canonical brake state until the USD projection publishes a
+            // complete binding set. The route source/spec remains visible for repair.
+            last_derived.remove(&vessel);
+            if let Some((actor, _, _, _, state)) = q_autopilots
+                .iter()
+                .find(|(_, autopilot, ..)| autopilot.vessel == vessel)
+            {
+                if !state.is_some_and(|state| *state == AutopilotExecutionState::Failed) {
+                    commands.entity(actor).try_insert((
+                        AutopilotBehavior::new(&BehaviorSpec::Brake),
+                        AutopilotExecutionState::Failed,
+                    ));
+                }
+            }
+            warn!(
+                "[autopilot/usd] behaviour tree for {vessel:?} is paused: unresolved waypoint(s) {missing:?}"
             );
             continue;
         }

@@ -4,9 +4,10 @@
 //! [`ModelicaModel::variables`].  Retaining that state is a simulation concern,
 //! not a plot concern: an inspector, API client, recorder, or graph may all
 //! consume the same history.  This module therefore owns the render-free
-//! projection and applies the shared telemetry rate, deadband, retention, and
-//! channel-limit policy.  It does not add attributes to USD or require a
-//! visualization binding.
+//! projection and applies the shared telemetry rate, retention, and
+//! channel-limit policy.  Operator deadband is a display/notification concern;
+//! it must not remove simulation-time samples from the retained model history.
+//! It does not add attributes to USD or require a visualization binding.
 
 use bevy::prelude::*;
 use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, SignalSource};
@@ -122,12 +123,6 @@ pub fn retain_modelica_runtime_state(
         );
         return;
     }
-    if !settings.default_deadband.is_valid() {
-        warn_once!(
-            "modelica telemetry: invalid default deadband; runtime state retention is skipped until it is corrected"
-        );
-        return;
-    }
     let Some(signals) = signals.as_deref_mut() else {
         // The projection is optional for a host that intentionally does not
         // install telemetry.  It must not fabricate a private fallback store.
@@ -168,15 +163,15 @@ pub fn retain_modelica_runtime_state(
                 continue;
             }
 
-            // The shared signal registry owns due-time, time-reversal, and
-            // deadband policy for every runtime producer. Modelica contributes
-            // only the value and its solver time here.
-            if signals.retain_scalar_if_changed(
+            // The shared signal registry owns due-time and time-reversal for
+            // every runtime producer. Modelica histories are complete at the
+            // recording rate; notification deadband must not remove elapsed
+            // simulation-time samples from a graph.
+            if signals.record_scalar_at_rate(
                 signal.clone(),
                 model.current_time,
                 value,
                 settings.default_rate_hz,
-                settings.default_deadband,
                 settings.default_retention,
             ) {
                 session.signals.insert(signal);
@@ -296,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_uses_rate_and_deadband_policy() {
+    fn runtime_state_uses_rate_and_retains_steady_time_samples() {
         let mut model = ModelicaModel::default();
         model.variables.insert("speed".to_string(), 1.0);
         let (mut app, entity) = app_with_model(model);
@@ -350,14 +345,14 @@ mod tests {
                 .scalar_history(&signal)
                 .unwrap()
                 .len(),
-            2,
-            "deadband should suppress an unchanged value"
+            3,
+            "a steady value still needs a simulation-time sample for graphs"
         );
 
         {
             let mut model = app.world_mut().entity_mut(entity);
             let mut value = model.get_mut::<ModelicaModel>().unwrap();
-            value.current_time = 0.6;
+            value.current_time = 0.61;
             value.variables.insert("speed".to_string(), 2.1);
         }
         app.update();
@@ -367,7 +362,7 @@ mod tests {
                 .scalar_history(&signal)
                 .unwrap()
                 .len(),
-            3
+            4
         );
     }
 

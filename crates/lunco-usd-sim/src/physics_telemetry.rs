@@ -33,8 +33,9 @@ struct PreviousKinematics {
 ///
 /// The system is installed in `FixedPostUpdate` after Avian's physics step, so
 /// one retained sample corresponds to one integrated physics state. The
-/// shared registry policy applies the same rate, deadband, retention, and
-/// channel-limit rules as all other runtime producers.
+/// shared registry policy applies the same rate, retention, and channel-limit
+/// rules as all other runtime recorders; display deadband never removes a
+/// simulation-time point from a history.
 pub fn retain_physics_telemetry(
     mut commands: Commands,
     settings: Option<Res<TelemetrySettings>>,
@@ -56,10 +57,7 @@ pub fn retain_physics_telemetry(
         state.previous.clear();
         return;
     };
-    if !settings.enabled
-        || !settings.default_rate_hz.is_finite()
-        || settings.default_rate_hz <= 0.0
-        || !settings.default_deadband.is_valid()
+    if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
     {
         state.previous.clear();
         return;
@@ -164,12 +162,11 @@ pub fn retain_physics_telemetry(
                     exposure: Default::default(),
                 },
             );
-            if signals.retain_scalar_if_changed(
+            if signals.record_scalar_at_rate(
                 signal,
                 time,
                 value,
                 settings.default_rate_hz,
-                settings.default_deadband,
                 settings.default_retention,
             ) {
                 retained_any.insert(entity);
