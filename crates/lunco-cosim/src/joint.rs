@@ -251,11 +251,11 @@ fn solve_passive_prismatic_material(
         match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
             core::cmp::Ordering::Greater => {
                 inv_mass1 = DVec3::ZERO;
-                inv_inertia1 = inv_inertia1 * 0.0;
+                inv_inertia1 *= 0.0;
             }
             core::cmp::Ordering::Less => {
                 inv_mass2 = DVec3::ZERO;
-                inv_inertia2 = inv_inertia2 * 0.0;
+                inv_inertia2 *= 0.0;
             }
             core::cmp::Ordering::Equal => {}
         }
