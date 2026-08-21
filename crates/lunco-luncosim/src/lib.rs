@@ -1854,6 +1854,18 @@ pub struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
 }
 
+/// Clear scene-owned environment opinions before the next composition epoch.
+///
+/// `AuthoredEnv` deliberately outlives individual camera entities so cameras
+/// spawned after stage composition inherit a value authored by that scene. It
+/// must therefore be reset at the same lifecycle boundary as the scene, rather
+/// than relying on camera despawn or on the next scene happening to author a
+/// replacement value.
+#[cfg(feature = "ui")]
+fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
+    *authored = AuthoredEnv::default();
+}
+
 /// Apply the authored environment exposure to every camera that exists RIGHT NOW.
 ///
 /// Runs every frame and is a no-op when the values already match, so a camera
@@ -2961,6 +2973,8 @@ impl Plugin for SandboxCorePlugin {
         // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
         app.init_resource::<AuthoredEnv>();
+        #[cfg(feature = "ui")]
+        app.add_systems(lunco_core::SceneTeardown, reset_authored_env);
         // Read-on-stage-change, then apply-every-frame. The application is a
         // separate system because cameras outlive neither the stage change nor
         // each other: possession reparents them, the recorder spawns its own.
