@@ -55,7 +55,7 @@
 //!   -error with a logging handler, so the render system no longer unwinds
 //!   mid-frame and panic (2) is avoided.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -223,6 +223,64 @@ impl FailureKind {
 /// Main-world handle to the shared [`RenderHealth`].
 #[derive(Resource, Clone, Debug)]
 pub struct RenderHealthHandle(pub Arc<RenderHealth>);
+
+/// Values discovered from the actual render device. They are published from
+/// the render world because the main world must not guess an adapter's limits.
+#[derive(Debug, Default)]
+struct RenderCapabilityShared {
+    ready: AtomicBool,
+    max_texture_dimension_2d: AtomicU32,
+    max_texture_array_layers: AtomicU32,
+}
+
+/// Main/render-world bridge for the adapter limits used by graphics-settings
+/// admission. A settings request is held until these values are known; it is
+/// never replaced with a lower preset while waiting for them.
+#[derive(Resource, Clone, Debug)]
+pub(crate) struct RenderCapabilitiesHandle(Arc<RenderCapabilityShared>);
+
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RenderCapabilities {
+    ready: bool,
+    max_texture_dimension_2d: u32,
+    max_texture_array_layers: u32,
+}
+
+fn publish_render_capabilities(
+    device: Res<RenderDevice>,
+    capabilities: Res<RenderCapabilitiesHandle>,
+) {
+    let limits = device.limits();
+    capabilities
+        .0
+        .max_texture_dimension_2d
+        .store(limits.max_texture_dimension_2d, Ordering::Release);
+    capabilities
+        .0
+        .max_texture_array_layers
+        .store(limits.max_texture_array_layers, Ordering::Release);
+    capabilities.0.ready.store(true, Ordering::Release);
+}
+
+fn poll_render_capabilities(
+    capabilities: Res<RenderCapabilitiesHandle>,
+    mut state: ResMut<RenderCapabilities>,
+) {
+    let next = RenderCapabilities {
+        ready: capabilities.0.ready.load(Ordering::Acquire),
+        max_texture_dimension_2d: capabilities
+            .0
+            .max_texture_dimension_2d
+            .load(Ordering::Acquire),
+        max_texture_array_layers: capabilities
+            .0
+            .max_texture_array_layers
+            .load(Ordering::Acquire),
+    };
+    if *state != next {
+        *state = next;
+    }
+}
 
 /// Present once presentation has been abandoned, carrying why.
 ///
@@ -439,12 +497,16 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 
     let health = Arc::new(RenderHealth::default());
     app.insert_resource(RenderHealthHandle(health.clone()));
+    let capabilities = Arc::new(RenderCapabilityShared::default());
+    app.insert_resource(RenderCapabilitiesHandle(capabilities.clone()));
+    app.init_resource::<RenderCapabilities>();
     app.init_resource::<Ladder>();
     app.init_resource::<PresentationState>();
     app.add_plugins(ExtractResourcePlugin::<PresentationState>::default());
     app.add_systems(
         Update,
         (
+            poll_render_capabilities,
             escalate_render_recovery,
             apply_render_quality.run_if(render_quality_changed),
         )
@@ -458,6 +520,7 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
+    render_app.insert_resource(RenderCapabilitiesHandle(capabilities));
     // Once the presentation decision is terminal, stop all render-stage work,
     // including `render_system`, whose only caller presents the swapchain.
     // Extraction may run one final time to propagate this resource; no render
@@ -480,7 +543,10 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
         )
             .run_if(presentation_is_active),
     );
-    render_app.add_systems(RenderStartup, set_error_handler);
+    render_app.add_systems(
+        RenderStartup,
+        (set_error_handler, publish_render_capabilities).chain(),
+    );
     // This runs after Bevy has probed the adapter and initialized the resource.
     // It affects only the known-bad Quadro/Vulkan combination above.
     render_app.add_systems(
@@ -491,6 +557,7 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
+    capabilities: Option<Res<RenderCapabilities>>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_map: Res<bevy::light::PointLightShadowMap>,
     directionals: Query<(), Added<bevy::light::DirectionalLight>>,
@@ -499,12 +566,79 @@ fn render_quality_changed(
     rects: Query<(), Added<bevy::light::RectLight>>,
 ) -> bool {
     settings.is_changed()
+        || capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.is_changed())
         || directional_map.is_changed()
         || point_map.is_changed()
         || !directionals.is_empty()
         || !points.is_empty()
         || !spots.is_empty()
         || !rects.is_empty()
+}
+
+/// Validate settings against the limits that Bevy's PBR light pipeline and
+/// the current adapter will actually use. Bevy otherwise truncates light
+/// lists/layers in the render world, which would silently change an explicit
+/// graphics request or allocate an unsupported point-shadow texture.
+fn validate_profile_for_capabilities(
+    profile: lunco_render::RenderQualityProfile,
+    capabilities: &RenderCapabilities,
+) -> Result<(), String> {
+    if !capabilities.ready {
+        return Err("render-device capabilities are not available yet".to_string());
+    }
+    if profile.directional_cascades > bevy::pbr::MAX_CASCADES_PER_LIGHT {
+        return Err(format!(
+            "directional cascade count {} exceeds Bevy's limit of {}",
+            profile.directional_cascades,
+            bevy::pbr::MAX_CASCADES_PER_LIGHT
+        ));
+    }
+    if profile.max_directional_shadow_casters > bevy::pbr::MAX_DIRECTIONAL_LIGHTS {
+        return Err(format!(
+            "directional shadow caster limit {} exceeds Bevy's limit of {}",
+            profile.max_directional_shadow_casters,
+            bevy::pbr::MAX_DIRECTIONAL_LIGHTS
+        ));
+    }
+    if profile.directional_shadow_map_size > capabilities.max_texture_dimension_2d {
+        return Err(format!(
+            "directional shadow-map size {} exceeds the adapter limit of {}",
+            profile.directional_shadow_map_size, capabilities.max_texture_dimension_2d
+        ));
+    }
+    if profile.point_shadow_map_size > capabilities.max_texture_dimension_2d {
+        return Err(format!(
+            "point shadow-map size {} exceeds the adapter limit of {}",
+            profile.point_shadow_map_size, capabilities.max_texture_dimension_2d
+        ));
+    }
+
+    let max_layers = usize::try_from(capabilities.max_texture_array_layers)
+        .map_err(|_| "adapter texture-array layer limit is not representable".to_string())?;
+    let point_layers = profile
+        .max_point_shadow_casters
+        .checked_mul(6)
+        .ok_or_else(|| "point shadow caster layer count overflows".to_string())?;
+    if point_layers > max_layers {
+        return Err(format!(
+            "point shadow caster limit requires {} texture-array layers, but the adapter supports {}",
+            point_layers, max_layers
+        ));
+    }
+    let directional_layers = profile
+        .max_directional_shadow_casters
+        .checked_mul(profile.directional_cascades)
+        .and_then(|layers| layers.checked_add(profile.max_spot_shadow_casters))
+        .ok_or_else(|| "directional shadow layer count overflows".to_string())?;
+    if directional_layers > max_layers {
+        return Err(format!(
+            "directional and spot shadow limits require {} texture-array layers, but the adapter supports {}",
+            directional_layers, max_layers
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -617,6 +751,7 @@ fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
 /// persistent-failure timer.
 fn apply_render_quality(
     settings: Res<RenderingQualitySettings>,
+    capabilities: Option<Res<RenderCapabilities>>,
     mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_map: ResMut<bevy::light::PointLightShadowMap>,
     mut directional_lights: Query<(
@@ -653,6 +788,22 @@ fn apply_render_quality(
             return;
         }
     };
+
+    if let Some(capabilities) = capabilities {
+        if !capabilities.ready {
+            return;
+        }
+        if let Err(reason) = validate_profile_for_capabilities(profile, &capabilities) {
+            if warning.is_none() {
+                commands.insert_resource(RenderWarning {
+                    message: format!(
+                        "Unsupported graphics shadow settings: {reason}. The requested settings were not applied."
+                    ),
+                });
+            }
+            return;
+        }
+    }
 
     if directional_map.size != profile.directional_shadow_map_size as usize {
         directional_map.size = profile.directional_shadow_map_size as usize;
@@ -1006,7 +1157,9 @@ fn set_error_handler(
 /// no camera-distance heuristic whose result can change merely because the
 /// viewer moved. The shared byte estimate is the admission test for the complete
 /// configured caster set, so the resulting set is guaranteed to fit the published
-/// budget rather than merely fit three unrelated per-class caps.
+/// logical allocation ceiling rather than merely fit three unrelated per-class
+/// caps. The estimate does not account for unrelated GPU allocations or driver
+/// overhead; adapter limits are validated separately before settings apply.
 fn apply_shadow_caster_policy(
     mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
@@ -1617,6 +1770,66 @@ mod windows_tests {
 mod tests {
     use super::*;
 
+    fn capabilities(
+        max_texture_dimension_2d: u32,
+        max_texture_array_layers: u32,
+    ) -> RenderCapabilities {
+        RenderCapabilities {
+            ready: true,
+            max_texture_dimension_2d,
+            max_texture_array_layers,
+        }
+    }
+
+    #[test]
+    fn shadow_settings_reject_bevy_shader_limits() {
+        let mut profile = RenderingQualitySettings::default().profile();
+        profile.directional_cascades = bevy::pbr::MAX_CASCADES_PER_LIGHT + 1;
+        assert!(
+            validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
+                .unwrap_err()
+                .contains("cascade count")
+        );
+
+        profile = RenderingQualitySettings::default().profile();
+        profile.max_directional_shadow_casters = bevy::pbr::MAX_DIRECTIONAL_LIGHTS + 1;
+        assert!(
+            validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
+                .unwrap_err()
+                .contains("directional shadow caster limit")
+        );
+    }
+
+    #[test]
+    fn shadow_settings_reject_adapter_texture_limits() {
+        let mut profile = RenderingQualitySettings::default().profile();
+        profile.directional_shadow_map_size = 8192;
+        assert!(
+            validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
+                .unwrap_err()
+                .contains("directional shadow-map size")
+        );
+
+        profile = RenderingQualitySettings::default().profile();
+        profile.max_point_shadow_casters = 2;
+        assert!(
+            validate_profile_for_capabilities(profile, &capabilities(4096, 6))
+                .unwrap_err()
+                .contains("point shadow caster limit")
+        );
+
+        profile = RenderingQualitySettings::default().profile();
+        profile.max_directional_shadow_casters = 2;
+        profile.directional_cascades = 2;
+        profile.max_spot_shadow_casters = 1;
+        profile.max_point_shadow_casters = 0;
+        assert!(
+            validate_profile_for_capabilities(profile, &capabilities(4096, 4))
+                .unwrap_err()
+                .contains("directional and spot shadow limits")
+        );
+    }
+
     #[derive(Resource, Default)]
     struct SubmittedFrames(u32);
 
@@ -2138,7 +2351,7 @@ mod tests {
                     ..default()
                 },
                 bevy::light::CascadeShadowConfig {
-                    bounds: (0..64).map(|index| index as f32 + 1.0).collect(),
+                    bounds: (0..128).map(|index| index as f32 + 1.0).collect(),
                     overlap_proportion: 0.2,
                     minimum_distance: 0.1,
                 },

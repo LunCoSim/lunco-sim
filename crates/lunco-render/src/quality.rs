@@ -251,6 +251,9 @@ pub struct RenderQualityProfile {
     pub max_directional_shadow_casters: usize,
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
+    /// Explicit logical `Depth32Float` shadow-storage ceiling. This is not a
+    /// physical-GPU-memory guarantee; adapter limits and render failures are
+    /// handled independently at the render boundary.
     pub shadow_budget_bytes: u64,
     /// Whether the renderer may replace the per-pixel horizon march with a
     /// pre-baked visibility cache. This is an explicit quality choice; it is
@@ -1379,14 +1382,17 @@ pub fn estimate_directional_shadow_bytes(
     )
 }
 
-/// Conservative allocation estimate for Bevy's shadow resources.
+/// Logical allocation estimate for Bevy's shadow resources.
 ///
 /// Directional cascades and spot shadows use the directional shadow-map
 /// texture. Point and spot lights are separate light classes in Bevy, but a
 /// spot still consumes one layer of the directional atlas while a point light
 /// consumes six faces of the point-light cubemap. The estimate is deliberately
 /// expressed in terms of the resources and per-light layer counts so every preflight can
-/// use the same accounting instead of maintaining a second approximation.
+/// use the same accounting instead of maintaining a second approximation. The estimate is
+/// the requested depth-texture storage (`Depth32Float`, four bytes per texel); it is an
+/// admission-policy number, not a promise about total physical GPU memory consumed by a
+/// driver or by unrelated render resources.
 pub fn estimate_shadow_allocation_bytes(
     directional_map_size: usize,
     point_map_size: usize,
@@ -1409,13 +1415,13 @@ pub fn estimate_shadow_allocation_bytes(
         .saturating_mul(6)
         .saturating_mul(point_light_count as u64);
 
-    // Depth32 plus a conservative 50% allowance for views/alignment/driver use.
-    // The factor is exactly six, so keep the multiplication saturating. Persisted
-    // settings are user input; an overflow here must not turn an enormous request
-    // into a small estimate that slips through the explicit byte ceiling.
+    // Bevy's shadow maps use a depth texture. Keep the format size explicit rather than
+    // hiding a safety multiplier in the byte-ceiling semantics: the ceiling is an
+    // authoritative, user-authored logical allocation limit, while device capability
+    // validation is performed separately at the render boundary.
     directional_texels
         .saturating_add(point_texels)
-        .saturating_mul(6)
+        .saturating_mul(4)
 }
 
 #[cfg(test)]
@@ -1777,10 +1783,10 @@ mod tests {
     }
 
     #[test]
-    fn all_shadow_classes_share_one_conservative_estimate() {
+    fn all_shadow_classes_share_one_logical_allocation_estimate() {
         assert_eq!(
             estimate_shadow_allocation_bytes(1024, 512, 2, 1, 1, 1),
-            27 * 1024 * 1024
+            18 * 1024 * 1024
         );
     }
 }

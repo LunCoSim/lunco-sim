@@ -5153,11 +5153,13 @@ fn register_graphics_settings_menu(world: &mut World) {
                 ui.add(
                     egui::DragValue::new(&mut settings.directional_cascades)
                         .speed(1.0)
+                        .range(1..=bevy::pbr::MAX_CASCADES_PER_LIGHT)
                         .prefix("Directional cascades: "),
                 );
                 ui.add(
                     egui::DragValue::new(&mut settings.max_directional_shadow_casters)
                         .speed(1.0)
+                        .range(0..=bevy::pbr::MAX_DIRECTIONAL_LIGHTS)
                         .prefix("Directional shadow casters: "),
                 );
                 ui.add(
@@ -5184,12 +5186,12 @@ fn register_graphics_settings_menu(world: &mut World) {
                     egui::DragValue::new(&mut settings.shadow_budget_bytes)
                         .speed(1024.0 * 1024.0)
                         .range(1..=u64::MAX)
-                        .prefix("Shadow byte ceiling: ")
+                        .prefix("Logical shadow byte ceiling: ")
                         .suffix(" bytes"),
                 );
                 ui.label(
                     egui::RichText::new(
-                        "This explicit ceiling must cover the configured caster limits; it never changes map sizes, cascades, or caster limits automatically.",
+                        "This explicit Depth32 shadow-storage ceiling must cover the configured caster limits. It never changes map sizes, cascades, or caster limits automatically; adapter limits are reported separately.",
                     )
                     .weak()
                     .small(),
