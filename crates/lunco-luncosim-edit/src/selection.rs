@@ -47,6 +47,7 @@ pub(crate) fn on_select_entity_target(
         request.extend,
         request.toggle,
     );
+    commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
 }
 
 /// Select an entity by API id — the headless/scriptable equivalent of a
@@ -133,7 +134,6 @@ pub(crate) fn apply_selection(
             selected.entities.push(target);
         }
     }
-    commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
 }
 
 /// Replaces the Inspector/command focus without enabling edit manipulation.
@@ -401,8 +401,7 @@ pub fn on_scene_click_select(
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_prims: Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
-    q_selected_old: Query<Entity, With<Selected>>,
-    mut selected: ResMut<SelectedEntities>,
+    selected: Res<SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
@@ -475,16 +474,15 @@ pub fn on_scene_click_select(
         return;
     }
 
-    // Shift+click toggles this entity in the multi-selection (extend + toggle),
-    // through the same `apply_selection` the API command and Explorer use.
-    apply_selection(
-        &mut commands,
-        &mut selected,
-        q_selected_old.iter(),
-        entity,
-        true,
-        true,
-    );
+    // Shift+click toggles this entity in the multi-selection (extend + toggle)
+    // through the same internal selection event used by the Explorer. The
+    // event observer owns mutation and the shared script event, so this path
+    // cannot drift from other selection surfaces.
+    commands.trigger(SelectEntityTarget {
+        target: entity,
+        extend: true,
+        toggle: true,
+    });
     inspector_target.part = None;
 }
 

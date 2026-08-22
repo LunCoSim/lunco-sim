@@ -93,10 +93,12 @@ pub struct TutorialMeta {
 
 /// One TRACK's presentation, as composed.
 ///
-/// Both fields are COMPOSITION facts, never authored. An app offers a track by
-/// sublayering it (`assets/tutorials/<app>.usda`), so the layer stack answers
-/// both "which tracks" and "in what order"; a track shown somewhere else is
-/// composed somewhere else.
+/// The map is a composition projection: the track's label and presentation are
+/// authored on the track, while its presence and order come from the app's
+/// composed layer stack. An app offers a track by sublayering it
+/// (`assets/tutorials/<app>.usda`), so the layer stack answers both "which
+/// tracks" and "in what order"; a track shown somewhere else is composed
+/// somewhere else.
 #[derive(Clone, Debug)]
 pub struct TrackMeta {
     /// Heading shown for this track in the 🎓 menu (`lunco:track:label`).
@@ -202,32 +204,49 @@ impl CurriculumRoot {
     /// Read an authored asset path through THIS root.
     ///
     /// `lunco://` goes through [`lunco_assets::tutorials::tutorial_source`] —
-    /// on-disk first (so a lesson edit replays with no rebuild), embedded
-    /// fallback (a packaged binary, wasm). `twin://<Name>/…` resolves against the
-    /// root's own twin directory: the name is not looked up, because provenance
-    /// already decided which twin is asking — that is what stopped a bundled
-    /// lesson and a twin's from shadowing each other by relative path.
-    pub fn read(&self, asset: &str) -> Option<String> {
+    /// on-disk first (so a lesson edit replays with no rebuild), with the
+    /// packaged asset source used by installed and wasm builds.
+    /// `twin://<Name>/…` resolves against the root's own twin directory: the
+    /// name is not looked up, because provenance already decided which twin is
+    /// asking — that is what stopped a bundled lesson and a twin's from
+    /// shadowing each other by relative path.
+    pub fn read(&self, asset: &str) -> Result<String, String> {
         // URI identity is slash-based on every platform. Twin-authored USD
         // can arrive from a Windows editor with backslashes in both the
         // scheme remainder and the twin/relative separator; normalize before
         // splitting so the same curriculum composes on native Windows and
         // Linux.
         let asset = lunco_assets::asset_path::slashed(asset);
-        let (scheme, rest) = asset.split_once("://")?;
+        let (scheme, rest) = asset
+            .split_once("://")
+            .ok_or_else(|| format!("lesson source is not a URI: {asset:?}"))?;
         match scheme {
-            "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
+            "lunco" => {
+                let relative = rest.strip_prefix("tutorials/").ok_or_else(|| {
+                    format!("bundled lesson source must use lunco://tutorials/: {asset:?}")
+                })?;
+                lunco_assets::tutorials::tutorial_source(relative)
+                    .ok_or_else(|| format!("bundled lesson source is unavailable: {asset:?}"))
+            }
             "twin" => {
-                let (_twin, rel) = rest.split_once('/')?;
+                let (_twin, rel) = rest
+                    .split_once('/')
+                    .ok_or_else(|| format!("twin lesson source has no relative path: {asset:?}"))?;
                 if !lunco_assets::asset_path::is_safe_relative_path(rel) {
                     warn!("[tutorial] rejecting unsafe twin lesson source path: {asset:?}");
-                    return None;
+                    return Err(format!("unsafe twin lesson source path: {asset:?}"));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let root = self.base.as_ref()?;
-                    let path = lunco_assets::existing_path_within_root(root, Path::new(rel))?;
-                    lunco_assets::read_asset_file_string(&path).ok()
+                    let root = self
+                        .base
+                        .as_ref()
+                        .ok_or_else(|| format!("twin source has no filesystem root: {asset:?}"))?;
+                    let path = lunco_assets::existing_path_within_root(root, Path::new(rel))
+                        .ok_or_else(|| format!("twin lesson source does not exist: {asset:?}"))?;
+                    lunco_assets::read_asset_file_string(&path).map_err(|error| {
+                        format!("could not read twin lesson source {asset:?}: {error}")
+                    })
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -235,12 +254,15 @@ impl CurriculumRoot {
                     // This synchronous curriculum reader has no browser byte
                     // source. Twin lessons on wasm must arrive through the
                     // async AssetServer/UsdLoader projection, just like their
-                    // curriculum layer; do not pretend a filesystem read is a
-                    // portable fallback.
-                    None
+                    // curriculum layer.
+                    Err(format!(
+                        "twin lesson sources require the async asset projection on wasm: {asset:?}"
+                    ))
                 }
             }
-            _ => None,
+            _ => Err(format!(
+                "unsupported lesson source scheme '{scheme}': {asset:?}"
+            )),
         }
     }
 
@@ -661,13 +683,19 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             )));
             return;
         };
-        let Some(source) = root.read(&meta.script) else {
-            warn!("[tutorial] no source for '{}' ({})", id, meta.script);
-            world.trigger(tutorial_failed(format!(
-                "no lesson source for '{}' ({})",
-                id, meta.script
-            )));
-            return;
+        let source = match root.read(&meta.script) {
+            Ok(source) => source,
+            Err(error) => {
+                warn!(
+                    "[tutorial] could not read source for '{}' ({}): {}",
+                    id, meta.script, error
+                );
+                world.trigger(tutorial_failed(format!(
+                    "could not read lesson source for '{}' ({}): {}",
+                    id, meta.script, error
+                )));
+                return;
+            }
         };
 
         // The outgoing lesson owns its declared world until this boundary. A
@@ -686,14 +714,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                     .and_then(|pending| pending.world.clone())
             });
 
-        // A tutorial is a guided presentation, not a continuation of the
-        // user's previous editor session. Reset the shared workbench owner at
-        // the canonical launch boundary so menu, panel, F1, API, and chained
-        // launches all get the same perspective and layout semantics.
         #[cfg(feature = "ui")]
-        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
-            layout.reset_to_default_perspective();
-        }
         let perspective = world
             .resource::<TutorialRegistry>()
             .tracks
@@ -701,14 +722,45 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             .and_then(|track| track.perspective.clone());
         #[cfg(feature = "ui")]
         if let Some(id) = perspective.as_deref() {
-            if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
-                if !layout.activate_perspective_by_str(id) {
-                    world.trigger(tutorial_failed(format!(
-                        "tutorial '{}' declares unknown workbench perspective '{}'",
-                        meta.id, id
-                    )));
-                    return;
-                }
+            let Some(layout) = world.get_resource::<WorkbenchLayout>() else {
+                world.trigger(tutorial_failed(format!(
+                    "tutorial '{}' declares perspective '{}' but the workbench layout is unavailable",
+                    meta.id, id
+                )));
+                return;
+            };
+            if !layout.has_perspective(id) {
+                world.trigger(tutorial_failed(format!(
+                    "tutorial '{}' declares unknown workbench perspective '{}'",
+                    meta.id, id
+                )));
+                return;
+            }
+        }
+        // A tutorial is a guided presentation, not a continuation of the
+        // user's previous editor session. Reset the shared workbench owner at
+        // the canonical launch boundary so menu, panel, F1, API, and chained
+        // launches all get the same perspective and layout semantics. The
+        // authored id was validated above, before this mutating boundary.
+        #[cfg(feature = "ui")]
+        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+            layout.reset_to_default_perspective();
+        }
+        #[cfg(feature = "ui")]
+        if let Some(id) = perspective.as_deref() {
+            let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+                world.trigger(tutorial_failed(format!(
+                    "tutorial '{}' declares perspective '{}' but the workbench layout is unavailable",
+                    meta.id, id
+                )));
+                return;
+            };
+            if !layout.activate_perspective_by_str(id) {
+                world.trigger(tutorial_failed(format!(
+                    "tutorial '{}' declares unknown workbench perspective '{}'",
+                    meta.id, id
+                )));
+                return;
             }
         }
         clear_tutorial_hud(world);
@@ -2033,8 +2085,7 @@ mod tests {
         }
         app.insert_resource(TransitionsSeen::default());
         app.add_observer(
-            |trigger: On<lunco_core::SceneTransitionIntent>,
-             mut seen: ResMut<TransitionsSeen>| {
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
                 seen.0.push(trigger.event().request.clone());
             },
         );
@@ -2304,7 +2355,7 @@ mod tests {
         );
         // Without the shared asset-boundary guard this would read the
         // workspace manifest through the tutorial root.
-        assert!(root.read("twin://untrusted/../../Cargo.toml").is_none());
-        assert!(root.read(r"twin://untrusted\..\Cargo.toml").is_none());
+        assert!(root.read("twin://untrusted/../../Cargo.toml").is_err());
+        assert!(root.read(r"twin://untrusted\..\Cargo.toml").is_err());
     }
 }

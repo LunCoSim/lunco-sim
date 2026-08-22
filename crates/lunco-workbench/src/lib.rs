@@ -1897,6 +1897,16 @@ impl WorkbenchLayout {
         self.active_perspective
     }
 
+    /// Whether the host registered a perspective with this authored id.
+    ///
+    /// This is a read-only validation seam for data-driven callers. They can
+    /// reject an unknown id before resetting or changing the active layout.
+    pub fn has_perspective(&self, id: &str) -> bool {
+        self.perspectives
+            .iter()
+            .any(|perspective| perspective.id().as_str() == id)
+    }
+
     /// Reset the dock to a clean state by re-applying the active perspective's
     /// slot preset from scratch (or the first-registered perspective if none is
     /// active). Restores panels a stale persisted layout dropped — most

@@ -292,6 +292,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let existing_params: Vec<_> = func.sig.inputs.iter().skip(1).collect();
 
     let register_fn_name = Ident::new(&format!("__register_{}", fn_name), fn_name.span());
+    let project_fn_name = Ident::new(&format!("__project_{}", fn_name), fn_name.span());
 
     // A handler with a return type (`-> Result<Ack, String>`) opts into
     // result recording: the wrapper runs the body, then — if a transport
@@ -331,10 +332,19 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
+        /// Project this typed command onto the shared script/telemetry event bus.
+        #fn_vis fn #project_fn_name(
+            _trigger: bevy::prelude::On<#cmd_type>,
+            mut commands: bevy::prelude::Commands,
+        ) {
+            commands.trigger(::lunco_core::command_telemetry_event(stringify!(#cmd_type)));
+        }
+
         /// Generated registration function — call via `register_commands!`.
         #fn_vis fn #register_fn_name(app: &mut bevy::prelude::App) {
             app.register_type::<#cmd_type>();
             app.add_observer(#fn_name);
+            app.add_observer(#project_fn_name);
         }
 
         #observer_fn

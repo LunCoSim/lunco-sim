@@ -3,16 +3,17 @@
 //! The tip-over lesson, on the deliberately top-heavy Hauler. Two truths a driver
 //! must feel: (1) a borderline grade is climbable straight up the fall-line but
 //! (2) steering ACROSS it rolls a high-centre-of-mass rover. The student is
-//! coached to first make it lean on purpose, use recovery if it rolls, then climb
-//! properly. Completion is possess → feel >15 degrees tilt → enter the top
-//! marker's authored Trigger; recovery is coached but is not completion. The tilt
-//! itself is read with `is_tipped` / `tilt_deg` (prelude, off `world_rotation`).
+//! coached to first make it lean on purpose, use the recovery control if it rolls,
+//! then climb it properly. Completion is possess → feel more than 15 degrees of
+//! tilt → enter the top marker's authored waypoint trigger; recovery is coached
+//! when needed but is not a completion condition. Tilt is read with `is_tipped` /
+//! `tilt_deg` (prelude, off `world_rotation`).
 
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
-    cmd("FocusPanel", #{ id: "sandbox_inspector" });
-    spotlight("panel.sandbox_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
+    focus_panel("sandbox_inspector");
+    spotlight("panel.right_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it, then click Possess in the Inspector or Command Deck.");
 }
@@ -56,8 +57,7 @@ fn b3_cross_grade(me) {
 }
 
 fn b3_cross_grade_done(me) {
-    let rover = find("/SlopeTest/Rover");
-    rover >= 0 && tilt_deg(rover) > 15.0
+    tilt_deg(find("/SlopeTest/Rover")) > 15.0
 }
 
 fn b3_climb(me) {
@@ -121,14 +121,13 @@ fn task(me) {
         wait(1.0),
         once(Fn("b3_autopilot_possess")),
         wait(0.5),
-        // Cross the grade first so the debug run also satisfies `feel_the_edge` —
-        // the demo must exercise the same objective chain a student does, or CI
-        // proves a path nobody takes.
+        // Cross the grade first so the debug run satisfies `feel_the_edge` — the
+        // demo must exercise the same objective chain a student does, or CI proves
+        // a path nobody takes.
         step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
-        // Keep steering until this lesson's named Trigger Sensor emits its
-        // waypoint event. The source is explicit so another sensor cannot advance it.
-        act_until_event(Fn("b3_climb"), "enter:waypoint", "/SlopeTest/Marker/Trigger"),
+        // The task event is scoped to this lesson's authored Trigger Sensor.
+        #{ act: Fn("b3_climb"), event: "enter:waypoint", src: "/SlopeTest/Marker/Trigger" },
         once(Fn("b3_report_tip")),
-        act_for(Fn("b3_brake"), 1.5),
+        #{ act: Fn("b3_brake"), secs: 1.5 },
     ])
 }

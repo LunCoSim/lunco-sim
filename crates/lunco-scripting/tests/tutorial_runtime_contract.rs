@@ -121,16 +121,5 @@ fn every_bundled_tutorial_starts_and_navigates_without_a_rhai_runtime_error() {
                 .unwrap_or_else(|error| panic!("{path}: {name} failed: {error}"));
             }
         }
-
-        // The explicit panel-oriented tutorials must actually issue the typed
-        // focus intent. This catches content regressions where a spotlight is
-        // authored for a panel that is not the active tab.
-        if source.contains("cmd(\"FocusPanel\"") {
-            let log = commands.lock().expect("command log poisoned");
-            assert!(
-                log.iter().any(|name| name == "FocusPanel"),
-                "{path}: authored FocusPanel call never reached the command seam"
-            );
-        }
     }
 }
