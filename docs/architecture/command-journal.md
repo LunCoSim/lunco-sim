@@ -2,56 +2,21 @@
 
 > Status: Design · Audience: contributors adding new domain mutations
 >
-> **The title is aspirational — the journal does NOT journal commands today.**
->
-> ### What exists
->
-> - **The op-log substrate is real and load-bearing:** `lunco-twin-journal`
->   (`record_op` forward+inverse, `EntryId`, `LamportClock`, `ChangeSet`, `Marker`,
->   `merged_order`, `to_bytes`) + the Bevy bridge (`lunco-doc-bevy`:
->   `JournalResource`, `BevyJournalSink`, the auto-recorder `JournalOpRecorder`).
-> - **It records *authoring-document* ops only** — `DomainKind::{Usd, Modelica,
->   Script, Shader, Experiment, ObstacleField, ToolLibrary, Timeline}`. Those DO
->   get identity, inverse/undo, journal-plane sync, persistence, and doc-level
->   replay, with no per-op code.
->
-> ### What does NOT exist
->
-> - **`#[Command]`s are not journaled.** `api_command_dispatcher`
->   (`lunco-api::executor`) — the single funnel every HTTP / MCP / rhai / UI command
->   passes through — has **zero** journal interaction. There is no
->   `DomainKind::Command`.
-> - ⇒ `SpawnEntity`, `PossessVessel`, `SetPorts`, `SetTerrainOverlay`,
->   `SpawnDemTerrain` and all time control are **not** recorded, **not** undoable and
->   **not** replayable. Load a twin, drive a rover, spawn terrain, reopen: the journal
->   replays *document* state only — the runtime mutation history is gone.
-> - ⇒ **Session-level deterministic replay does not exist.** The Input Log of
->   [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay)
->   User Story 3 is **unbuilt**; this document describes how it would be built.
-> - Terrain edits do not ride the journal yet either (Phase 1 below is not done).
->
-> ### What it would take (why it is not "one call away")
->
-> Recording at the dispatcher is easy; making the recording *mean* something is not:
-> 1. **Selection.** Journaling every command floods a persisted, network-synced log
->    with per-frame `SetPorts`/time-control traffic. Needs an opt-in marker on the
->    command type (a reflect attribute → `lunco-command-macro`), i.e. mutations only.
-> 2. **Inverses.** Undo needs a per-command inverse (or an explicit "non-undoable,
->    replay-only" declaration). See "Decisions" §2.
-> 3. **Determinism.** Entries carry `lamport`/`at_ms`, not a **sim tick**. Replay needs
->    tick + RNG seed in the payload and a replay driver that re-dispatches at the right
->    tick (spec 020 US3).
-> 4. **Netcode.** The journal IS the sync plane. Command entries would replicate to
->    peers *in addition to* the existing command-replication path — a double-execution
->    hazard that has to be designed against `lunco-networking`'s journal-merge plane
->    first.
->
-> Until those land, do not describe command journaling as existing. Everything below
-> the line is the **design**, in the future tense it deserves.
+> This page covers the future command/session journal. The current authored
+> document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
 
-The command journal substrate is [`lunco-twin-journal`](../../crates/lunco-twin-journal) + the Bevy bridge (`lunco-doc-bevy`: `JournalResource`, `BevyJournalSink`, and the auto-recorder `JournalOpRecorder` — `impl<O: OpPayload> OpRecorder<O>` records forward + inverse, undo/redo included). Domains plug in via `impl OpPayload` + a `DomainKind` variant (`Usd`, `Modelica`, `Script`, `Shader`, `Experiment`, `ObstacleField`, `ToolLibrary`, `Timeline`, …). Sync rides the **journal plane** (see the [networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
+`#[Command]` execution is not currently journaled. Runtime actions such as
+`SpawnEntity`, `PossessVessel`, `SetPorts`, terrain spawning, and time control
+remain transient; deterministic session replay is therefore not built.
 
-This design records how *every* mutating interaction — terrain edit, spawn, possess, model edit, USD prim edit — **would** become a single kind of thing: an **op in one journal**. Identity, ordering, undo/redo, multi-peer sync, and deterministic replay would then all come from one substrate instead of each feature reinventing a sliver of it. It is how the **Input Log** of [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) (User Story 3) is meant to be realized — today, only the document domains are on it.
+The command journal must remain separate from high-rate controls and telemetry:
+it needs an explicit mutation subset, reversible payloads, simulation-tick
+ordering, and a single interaction with the existing journal replication plane.
+Recording every per-frame control sample would produce an unusable persistent
+log and could double-apply networked commands.
+
+The design below defines those constraints and the intended adoption path. It
+does not describe command journaling as shipped.
 
 ## The thesis
 
@@ -81,23 +46,12 @@ layers,"* *"dynamic tool edits,"* *"per-layer identity"* — and to the tool que
 (*"spawn/possess as tools"*). They are one capability: **an addressable op in a shared
 journal.**
 
-## Don't rebuild — the substrate already exists
+## Existing substrate
 
-`lunco-twin-journal` is not a sketch; it is a fully-formed op log:
-
-- **`record_op<O: OpPayload, I: OpPayload>(author, doc, &op, &inverse, change_set) ->
-  EntryId`** — records a typed op *and its inverse* in one call. Undo is not a feature
-  to add; it is the second argument.
-- **`EntryId { author, lamport }`** — *"two authors can never produce the same id;
-  same author monotonically."* The universal handle.
-- **`AuthorTag::for_tool(name)` / `local_user()`** — authorship is first-class, and
-  **tools are authors**. A rhai `terrain::dig` is authored by `for_tool("terrain")`.
-- **`LamportClock`** — causal ordering across peers.
-- **`Stream` / `Branch` / `Composition` / `MergeStrategy` / `merged_order_ids_with(policy)`**
-  — the merge plane, with a policy hook (RBAC / merge-policy — see
-  the hook architecture).
-- **`ChangeSet`** (group ops into one undo unit) and **`Marker`** (named checkpoints).
-- **`to_bytes` / `from_bytes`** — persistence, replay input, audit.
+The current document-journal implementation and ownership boundaries are
+defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
+The command work reuses its `Journal`, `EntryId`, inverse, change-set, and
+journal-plane machinery; it must not create a second log.
 
 And the **command bus** is the other half already in place: `#[Command]` types are
 `Serialize + Reflect`, and **every** call path — rhai `cmd(...)`, HTTP `/api`, MCP
