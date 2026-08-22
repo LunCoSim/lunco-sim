@@ -19,6 +19,12 @@ fn scalar_ok(v) {
     v != () && v.is_finite();
 }
 
+fn high(id, port) {
+    if id < 0 { return false; }
+    let value = get(id, port);
+    scalar_ok(value) && value >= 0.5
+}
+
 fn on_start(me) {
     this.done = false;
     this.elapsed = 0.0;
@@ -30,8 +36,16 @@ fn on_start(me) {
     this.main = find("/LanderTest/Lander/MainPropulsion");
     this.rcs = find("/LanderTest/Lander/AttitudePropulsion");
     this.lander = find("/LanderTest/Lander");
+    this.gnc = find("/LanderTest/Lander/GNC");
+    this.pad_px = find("/LanderTest/Lander/LegPX/PadPX");
+    this.pad_nx = find("/LanderTest/Lander/LegNX/PadNX");
+    this.pad_pz = find("/LanderTest/Lander/LegPZ/PadPZ");
+    this.pad_nz = find("/LanderTest/Lander/LegNZ/PadNZ");
     this.rover = find("/LanderTest/SkidRover");
     this.goal = find("/LanderTest/RoverTarget3");
+    this.event_sources_ok = true;
+    this.native_contacts_seen = false;
+    this.model_contacts_seen = false;
     this.initial_mass = ();
     this.final_mass = ();
     this.initial_propellant = ();
@@ -39,16 +53,20 @@ fn on_start(me) {
     this.max_thrust = 0.0;
     this.max_rcs_flow = 0.0;
     print("[descent-runtime] lander=" + this.lander +
-          " main=" + this.main + " rcs=" + this.rcs + " rover=" + this.rover);
+          " gnc=" + this.gnc + " main=" + this.main + " rcs=" + this.rcs +
+          " rover=" + this.rover);
 }
 
 fn on_event(me, evt) {
     if this.done { return; }
     if evt.name == "lander_engine_cutoff" {
+        if evt.source != this.gnc { this.event_sources_ok = false; }
         this.engine_cutoff = true;
     } else if evt.name == "lander_flight_handoff" {
+        if evt.source != this.gnc { this.event_sources_ok = false; }
         this.flight_handoff = true;
     } else if evt.name == "lander_touchdown" {
+        if evt.source != this.lander { this.event_sources_ok = false; }
         this.touchdown = true;
     } else if evt.name == "rover_deployed" {
         this.deployed = true;
@@ -60,6 +78,7 @@ fn on_event(me, evt) {
         // The mission's final event is the authoritative transaction boundary.
         // Finalize here as well as from on_tick: an event may be delivered on
         // the update that ends the headless test, with no subsequent tick.
+        this.done = true;
         finish(this);
     } else if evt.name == "MISSION_FAILED" {
         this.done = true;
@@ -94,7 +113,16 @@ fn on_tick(me) {
         }
     }
 
+    if high(this.pad_px, "contact") && high(this.pad_nx, "contact") &&
+       high(this.pad_pz, "contact") && high(this.pad_nz, "contact") {
+        this.native_contacts_seen = true;
+    }
+    if high(this.lander, "all_legs_contact") {
+        this.model_contacts_seen = true;
+    }
+
     if this.course_complete {
+        this.done = true;
         finish(this);
         return;
     }
@@ -105,8 +133,6 @@ fn on_tick(me) {
 }
 
 fn finish(me) {
-    if me.done { return; }
-    me.done = true;
     let mass_ok = scalar_ok(me.initial_mass) && scalar_ok(me.final_mass);
     let prop_ok = scalar_ok(me.initial_propellant) && scalar_ok(me.final_propellant);
     let state_ok = mass_ok && prop_ok && me.initial_mass > 0.0 &&
@@ -117,12 +143,21 @@ fn finish(me) {
     let pose_ok = t_bounded(world_pos(me.lander), 1000.0, "lander pose");
     let goal_ok = false;
     if me.rover >= 0 && me.goal >= 0 { goal_ok = distance(me.rover, me.goal) < 6.0; }
+    let cutoff_latched = high(me.gnc, "landing_engine_cutoff_latched");
+    let handoff_latched = high(me.gnc, "landing_handoff_latched");
     let reason = "engine_cutoff=" + me.engine_cutoff +
                 " flight_handoff=" + me.flight_handoff +
                 " touchdown=" + me.touchdown + " deployed=" + me.deployed +
+                " cutoff_latched=" + cutoff_latched +
+                " handoff_latched=" + handoff_latched +
+                " event_sources_ok=" + me.event_sources_ok +
+                " native_contacts=" + me.native_contacts_seen +
+                " model_contacts=" + me.model_contacts_seen +
                 " course=" + me.course_complete + " max_thrust=" + me.max_thrust +
                 " max_rcs_flow=" + me.max_rcs_flow;
-    if !me.engine_cutoff || !me.flight_handoff || !me.touchdown || !state_ok ||
+    if !me.engine_cutoff || !me.flight_handoff || !me.touchdown ||
+       !cutoff_latched || !handoff_latched || !me.event_sources_ok ||
+       !me.native_contacts_seen || !me.model_contacts_seen || !state_ok ||
        !thrust_ok || !rover_ok || !goal_ok || pose_ok != "" {
         verdict(false, reason + " state/motion contract failed");
         return;
@@ -131,5 +166,8 @@ fn finish(me) {
 }
 
 fn on_stop(me) {
-    finish(me);
+    if !this.done {
+        this.done = true;
+        finish(this);
+    }
 }

@@ -178,8 +178,11 @@ def Scope "Scenario" ( kind = "component" )
 ```
 
 - **Orchestration script** (rhai) owns phases via the sequencer: `descend →
-  touchdown → deploy → handover → task_1 … task_n`, advancing on port-read
-  predicates (altitude, joint presence, battery SoC, distance-to-target, temp).
+  landing-transition-join → deploy → handover → task_1 … task_n`, advancing on
+  authored event projections and port-read predicates (altitude, joint presence,
+  battery SoC, distance-to-target, temp). A landing join is explicit: it waits for
+  engine cutoff and flight handoff from the GNC plus physical touchdown from the
+  airframe, with source-qualified event waits.
 - **Per-vehicle scripts** own local behavior (lander manual-flight assist, rover
   autonomy helpers).
 - **Objectives / scoring** are rhai predicates over ports — no new engine, reuse

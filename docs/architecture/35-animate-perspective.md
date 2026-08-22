@@ -31,7 +31,8 @@ The Animate perspective turns that same cinematic into an editable timeline:
   → PadCam → RoverCam), draggable to retime, driving `SetActiveCamera` at each
   cut boundary;
 - **xform lanes** for the keyframed `OrbitView` dolly (already USD `timeSamples`);
-- an **event lane** with the `lander_touchdown` / `rover_deployed` markers as
+- an **event lane** with the landing-transition (`lander_engine_cutoff`,
+  `lander_flight_handoff`, `lander_touchdown`) and `rover_deployed` markers as
   labelled jump targets;
 - a **transport** (play/pause/rate/seek) scrubbing the whole thing.
 
@@ -149,8 +150,9 @@ worst opaque cinematic piece (the `set_camera` calls) into inspectable data.
 
 ## Decision 3 — Marker-anchored keys for gated beats
 
-Some cuts are **not** at a fixed time — they fire on a sim event
-(`wait_for("lander_touchdown")`). Two ways to reconcile with a fixed-time track:
+Some cuts are **not** at a fixed time — they fire on a sim event or an explicit
+landing-transition join (`wait_for_from("lander_touchdown", "/Lander/Lander")`).
+Two ways to reconcile with a fixed-time track:
 
 - **Marker anchor (preferred).** A key can reference a named marker instead of an
   absolute time: `"@touchdown": "PadCam"`. The event lane owns marker→time

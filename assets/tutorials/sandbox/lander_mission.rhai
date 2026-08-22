@@ -4,8 +4,9 @@
 //! The lesson IS this script (run by the launcher on the tutorial host). It loads
 //! `lander_ops.usda`, whose OWN embedded scenarios fly the mission:
 //!   • `/LanderTest/Scenario` → `rover_surface_ops.rhai`: powered descent →
-//!     `lander_touchdown` → detach the joint → `rover_deployed` → consume the
-//!     three marker Sensor events, announcing `waypoint_N_reached` / `course_complete`.
+//!     the explicit engine-cutoff + flight-handoff + touchdown join → detach the
+//!     joint → `rover_deployed` → consume the three marker Sensor events,
+//!     announcing `waypoint_N_reached` / `course_complete`.
 //!   • `/LanderTest/SkidRover` → `lander_rover_patrol.btxml`: drives the course after
 //!     `rover_deployed`, and yields the moment a human takes the rover.
 //! Both emit their phase events on the global bus, so this tutorial just *watches*:
@@ -14,10 +15,12 @@
 //! tutorial owns the pedagogy.
 //!
 //! The declarative `mission(me)` advances on the REAL things happening — the
-//! lander's touchdown event, the rover coming free, the student actually holding
-//! the rover, the rover reaching the final gate — never on a timer. The engine
-//! auto-publishes the checklist to the HUD and emits `MISSION_COMPLETE` when every
-//! objective is done (→ chain end).
+//! lander's physical touchdown, the rover coming free, the student actually
+//! holding the rover, and the rover reaching the final gate — never on a timer.
+//! The scene's deployment gate joins all three authored landing transitions;
+//! this tutorial observes the physical touchdown as its first teaching objective.
+//! The engine auto-publishes the checklist to the HUD and emits `MISSION_COMPLETE`
+//! when every objective is done (→ chain end).
 //!
 //! ## Why `takeover` is a state read, not an event latch
 //! `requires_event: "cmd:PossessVessel"` would complete on ANY possession — the
@@ -103,7 +106,8 @@ fn mission(me) {
     // first_drive.rhai. Each objective completes on a real event / world state.
     [
         // 1 — passive: the lander's own supervisor emits `lander_touchdown` when it
-        // settles on its legs. We just wait for that event (no polling the descent).
+        // settles on its legs. This is the teaching observation; the scene's
+        // deployment task separately joins all landing-transition events.
         objective("touchdown", #{
             text: "Watch the powered descent land the rover",
             requires_event: "lander_touchdown",

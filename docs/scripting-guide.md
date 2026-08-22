@@ -421,6 +421,10 @@ Available nodes include:
     and replicates like any other.
   - `custom float lunco:param:<key> = <v>` — one typed attribute per per-instance setting,
     read in-script by `param(me, "<key>", default)`.
+  The program child is the authored attachment point, but the runtime binds `me` to
+  its immediate owning prim. Use `name(me)` for the vessel or mission host that owns
+  the program; `parent(me)` refers to the scene hierarchy above that owner and is not
+  a replacement for the program host.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
 - **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
 - **Model events → USD:** express the condition in Modelica as a 0/1 output, then connect

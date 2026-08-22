@@ -64,7 +64,7 @@ When building any vehicle assembly in LunCoSim:
    - **Control Algorithms & Flight Software** read **sensor telemetry outputs ONLY** (`IMUSensor`, `ThermalSensor`, `ElectricalSensor`, `StarTracker`, `Altimeter`).
 
 6. **Continuous Math in Modelica; Assembly Policy in Rhai**:
-   - Rhai scenario scripts handle **high-level mission events and state switches ONLY** (`wait_for("touchdown")`, `state = "SAFE_MODE"`).
+   - Rhai scenario scripts handle **high-level mission events and state switches ONLY** (`wait_for_from("lander_touchdown", "/Mission/Lander")`, `state = "SAFE_MODE"`).
    - Per-tick PID loops, numerical integration, matrix math, and thruster mapping run natively inside **Modelica** (`LunCo.GNC`) or **Rust**. Rhai may decide which authored members are merged into generated Modelica units and where those units/members are placed visually, but it does not read USD or replace continuous equations with a per-tick script.
 
 ### 1.1 Mounted parts have one physical owner

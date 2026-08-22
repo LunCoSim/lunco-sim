@@ -66,6 +66,11 @@ same vessel as a `def Scope "Subsystems" (prepend apiSchemas = ["LunCoProgramAPI
 the prim removes it. It does **not** drive the lander — it only reacts, which is the
 right shape for cosim orchestration:
 
+The child is the authored attachment point, while the runtime passes the owning
+vessel as `me`. That is why the supervisor resolves `/GNC` from `name(me)`; walking
+to `parent(me)` would address the scene above the vessel and lose the typed latch
+handoff.
+
 ```rhai
 fn on_event(me, evt) {
     // The fuel events, from the connected `LunCoEvent` prims above.
@@ -74,11 +79,15 @@ fn on_event(me, evt) {
 }
 ```
 
-Landing transitions use the same explicit projection. The GNC publishes
-`landing_engine_cutoff_request` and `landing_handoff_request`, while `Lander.mo`
-publishes the settled `touchdown` predicate; USD maps them to the latched
-`lander_engine_cutoff`, `lander_flight_handoff`, and `lander_touchdown` events.
-The script contains no polling, threshold math, or second touchdown state owner.
+Landing transitions use the same explicit projection. The scene wires the native
+`engine_cutoff_contact` predicate into the GNC, and wires the GNC's accepted
+`landing_engine_cutoff`/`landing_handoff` modes back into `Lander.mo`. The GNC then
+publishes `landing_engine_cutoff_request` and `landing_handoff_request`, while
+`Lander.mo` publishes the settled `touchdown` predicate; USD maps them to the
+latched `lander_engine_cutoff`, `lander_flight_handoff`, and `lander_touchdown`
+events. A mission joins those three source-qualified events before releasing a
+payload. The script contains no polling, threshold math, or second touchdown state
+owner.
 
 ## Verify the chain is live
 

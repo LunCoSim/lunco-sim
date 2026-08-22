@@ -1161,20 +1161,19 @@ def Xform "DescentLander" (
     # Touchdown is a flight-software contact measurement, not the spring drive's
     # commanded reaction. The spring force remains available on each joint for
     # strut-load visualization; the controller reads the actual native contact
-    # force from the Avian compound body that carries the welded pad shape.
+    # force from the Avian body that carries the pad collider.
     #
-    # PadPX/PadNX/PadPZ/PadNZ are child shapes, not independent rigid bodies.
-    # USD composition therefore projects each enabled child shape into the
-    # parent Leg* compound collider. The native contact API is owned by that
-    # Leg* body; reading a child shape would silently miss the contact graph.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
-    float inputs:leg_contact_px.connect = </DescentLander/LegPX.outputs:contact>
-    float inputs:leg_contact_nx.connect = </DescentLander/LegNX.outputs:contact>
-    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ.outputs:contact>
-    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ.outputs:contact>
+    # Each Pad* is an authored rigid body connected to its Leg* by a spherical
+    # joint, so the native contact API is owned by the pad body that meets the
+    # terrain. Reading the Leg* frame would silently miss the contact graph.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
+    float inputs:leg_contact_px.connect = </DescentLander/LegPX/PadPX.outputs:contact>
+    float inputs:leg_contact_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact>
+    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact>
+    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact>
     float inputs:leg_displacement_px.connect = </DescentLander/LegPX_Spring.outputs:displacement>
     float inputs:leg_displacement_nx.connect = </DescentLander/LegNX_Spring.outputs:displacement>
     float inputs:leg_displacement_pz.connect = </DescentLander/LegPZ_Spring.outputs:displacement>
@@ -1238,8 +1237,10 @@ def Xform "DescentLander" (
     # ── Onboard supervisor ───────────────────────────────────────────────────
     # Watches for touchdown and reacts to the propellant events above. It does NOT
     # fly the descent — mission orchestration is a separate concern and lives on a
-    # scene's own `Scenario` prim. A program prim, so it can be deleted, replaced, or
-    # referenced in without touching the airframe.
+    # scene's own `Scenario` prim. A program child is the attachment point, but the
+    # runtime invokes its source with the owning `DescentLander` as `me`; this keeps
+    # the sibling GNC path explicit and stable. The child can be deleted, replaced,
+    # or referenced in without touching the airframe.
     def Scope "Subsystems" (
         prepend apiSchemas = ["LunCoProgramAPI"]
         doc = "Reacts to touchdown and propellant events. Does not fly the vehicle."

@@ -8,8 +8,11 @@
 // (`wait_until` reads the live world / model ports). No hand-rolled tick counting
 // or `dt()` integration in rhai — timing and state come from the simulation.
 //
-// Phases: follow the lander down → wait for its `lander_touchdown` event → detach
-// the rover → `rover_deployed` → consume the marker Sensor's waypoint events.
+// Phases: follow the lander down → wait for the three explicit landing
+// transition events → detach the rover → `rover_deployed` → consume the marker
+// Sensor's waypoint events. The transition waits run concurrently because the
+// physical touchdown predicate and the target-qualified GNC handoff are
+// independent producers and may become true on different simulation steps.
 //
 // Every phase it reaches, it ANNOUNCES on the bus: `rover_deployed`,
 // `waypoint_1_reached` … `waypoint_3_reached`, `course_complete`. That's the whole
@@ -66,13 +69,18 @@ fn gate_three_notice(me) {
 }
 
 /// The engine auto-runs a `task(me)` if defined (prelude `__init_task`). Phases:
-/// land (wait for the lander's own `lander_touchdown` event) → deploy rover →
+/// land (join the lander's three explicit transition events) → deploy rover →
 /// drive a 3-gate course, with each arrival reported by its marker Sensor.
 fn descent() {
     seq([
         once(Fn("begin_descent")),
-        // The lander's supervisor emits `lander_touchdown` when it settles.
-        wait_for("lander_touchdown"),
+        // These are independent latched projections. `par_all` makes the
+        // mission order-independent without polling or duplicating latch state.
+        par_all([
+            wait_for_from("lander_engine_cutoff", "/LanderTest/Lander/GNC"),
+            wait_for_from("lander_flight_handoff", "/LanderTest/Lander/GNC"),
+            wait_for_from("lander_touchdown", "/LanderTest/Lander"),
+        ]),
         once(Fn("touchdown_notice")),
     ])
 }

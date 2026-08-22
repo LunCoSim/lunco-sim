@@ -136,6 +136,11 @@ def Xform "LanderTest" (
         float inputs:guidance_pitch.connect = </LanderTest/Lander/GNC.outputs:pitch_cmd>
         float inputs:guidance_roll.connect = </LanderTest/Lander/GNC.outputs:roll_cmd>
         float inputs:guidance_yaw.connect = </LanderTest/Lander/GNC.outputs:yaw_cmd>
+        # Accepted GNC modes are fed back to the airframe's typed control
+        # boundary. Without these authored wires the event bus could report a
+        # transition while the physical plant continued in flight mode.
+        float inputs:landing_engine_cutoff.connect = </LanderTest/Lander/GNC.outputs:landing_engine_cutoff>
+        float inputs:landing_handoff.connect = </LanderTest/Lander/GNC.outputs:landing_handoff>
 
         # The guidance component exposes its Modelica inputs below this child.
         # The scene owns the initial estimator state and live target wiring.
@@ -146,6 +151,10 @@ def Xform "LanderTest" (
             # Modelica `GNC` prim; the composed root is a visual/component
             # namespace, not a runtime scalar owner.
             float inputs:touchdown.connect = </LanderTest/Lander.outputs:touchdown>
+            # The GNC consumes the native low-speed contact predicate that
+            # qualifies the explicit engine-cutoff transition. This wire is the
+            # only bridge from the airframe contact sensor to guidance.
+            float inputs:engine_cutoff_contact.connect = </LanderTest/Lander.outputs:engine_cutoff_contact>
             # Contact is an earlier physical authority boundary than settled
             # touchdown: once all upright pads carry load, the GNC must stop
             # steering against the legs while its low-speed touchdown filter
@@ -271,9 +280,10 @@ def Xform "LanderTest" (
     # machine. It references the vehicles by path with `find(...)` (never `me`),
     # so the orchestration is decoupled from any one entity and a scene can host
     # several scenarios / several vehicle scripts independently. The phases:
-    #   descending → touchdown (the GNC lands it) → deployed (joint detached, rover
-    #   falls clear) → the 3-gate course, driven by the rover's autopilot until the
-    #   player takes over.
+    #   descending → explicit engine-cutoff + flight-handoff + touchdown join
+    #   (the GNC and airframe publish these independently) → deployed (joint
+    #   detached, rover falls clear) → the 3-gate course, driven by the rover's
+    #   autopilot until the player takes over.
     # Player-task objectives (drive-to-rock, photo, thermal/energy budgets) plug
     # in as a `fn mission(me)` returning prelude `objective(...)`s — see the
     # objectives/mission engine in `assets/scripting/prelude/mission.rhai`.

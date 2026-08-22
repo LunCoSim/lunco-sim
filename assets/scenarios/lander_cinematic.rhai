@@ -4,13 +4,15 @@
 //   • ANIMATION — starts the keyframed-camera transport (`play_animation()`),
 //     then cuts between an authored `timeSamples` dolly (`OrbitView`) and
 //     mounted cameras that RIDE the moving lander/rover.
-//   • PLANNING  — after touchdown it deploys the rover and drives the same
-//     3-gate survey course, consuming the marker Sensor events.
+//   • PLANNING  — after the explicit landing-transition join it deploys the
+//     rover and drives the same 3-gate survey course, consuming the marker
+//     Sensor events.
 //
 // The camera CUTS are the cinematic layer; the land→deploy→survey PHASES are
-// gated on real simulation state (`wait_for("lander_touchdown")`, waypoint Sensor
-// events), never on hand-counted ticks. The lander flies itself (the onboard
-// GNC in scenarios/lander_subsystems.rhai) — this script only DIRECTS the view.
+// gated on real simulation state (the three source-qualified landing events and
+// waypoint Sensor events), never on hand-counted ticks. The lander flies itself
+// (the onboard GNC in scenarios/lander_subsystems.rhai) — this script only
+// DIRECTS the view.
 
 fn on_event(me, evt) {
     let rover = find("/LanderTest/SkidRover");
@@ -39,8 +41,9 @@ fn approach_notice(me) {
 
 fn touchdown_notice(me) {
     set_camera("PadCam");
-    set(find("/LanderTest/Lander"), "engine_enable", 0.0);
-    notify_kind("Touchdown. Engine safed.", "success");
+    // Engine cutoff is already accepted by the typed GNC landing transition
+    // before this join completes; the director only changes the camera and UI.
+    notify_kind("Touchdown. Engine cutoff accepted.", "success");
 }
 
 fn deploy_notice(me) {
@@ -95,8 +98,14 @@ fn cinematic_approach() {
         // ── Beat 3: onboard descent POV (cut driven by CameraTrack) ─────────
         once(Fn("approach_notice")),
 
-        // ── Beat 4: touchdown (gated on the lander's own event) ─────────────
-        wait_for("lander_touchdown"),
+        // ── Beat 4: landing transition join ────────────────────────────────
+        // The physical touchdown and both GNC mode transitions are independent
+        // producers; release/camera policy waits for all three explicitly.
+        par_all([
+            wait_for_from("lander_engine_cutoff", "/LanderTest/Lander/GNC"),
+            wait_for_from("lander_flight_handoff", "/LanderTest/Lander/GNC"),
+            wait_for_from("lander_touchdown", "/LanderTest/Lander"),
+        ]),
         once(Fn("touchdown_notice")),
     ])
 }

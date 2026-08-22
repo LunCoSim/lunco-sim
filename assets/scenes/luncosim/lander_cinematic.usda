@@ -26,7 +26,7 @@
 #
 # The camera CUTS are authored in `scenarios/lander_cinematic.rhai` as a
 # declarative `seq([...])` task: cut to a `def Camera`, `wait`, cut again,
-# `wait_for("lander_touchdown")`, then chase the rover through the course.
+# the explicit landing-transition join, then chase the rover through the course.
 #
 #   target/debug/luncosim --api 4101 --scene scenes/luncosim/lander_cinematic.usda
 

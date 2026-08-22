@@ -807,11 +807,12 @@ only its starting pose. `localPos0 = (0, -1.5, 0)` bolts the rover to the unders
 of the lander's tank — into the clearance the legs bought you in Step 3.
 
 The joint holds the two together through the descent, and the mission breaks it with
-`detach_joint(...)` **only after touchdown** (Step 9 waits on the `lander_touchdown`
-event before it detaches). That ordering is not cosmetic: cut the rover loose in
-flight and it falls from altitude; leave it bolted on and it never drives. Land
-first, then release — the rover drops the last metre onto the regolith and rolls
-away. We point it at an autopilot script now and write that in Step 10.
+`detach_joint(...)` only after the explicit landing-transition join (engine cutoff,
+flight-control handoff, and physical touchdown). That ordering is not cosmetic:
+cut the rover loose in flight and it falls from altitude; release before the GNC
+has handed control to the gear and it can still be under powered-flight authority.
+The rover drops the last metre onto the regolith and rolls away. We point it at an
+autopilot script now and write that in Step 10.
 
 ---
 
@@ -906,8 +907,13 @@ fn task(me) {
             notify_kind("Powered descent - the GNC is flying the lander down.", "info");
         }),
 
-        // Hold here until the lander's supervisor tells us it touched down.
-        wait_for("lander_touchdown"),
+        // Join all three authored transition projections. They are independent
+        // event producers, so do not assume their arrival order.
+        par_all([
+            wait_for_from("lander_engine_cutoff", "/Mission/Lander/GNC"),
+            wait_for_from("lander_flight_handoff", "/Mission/Lander/GNC"),
+            wait_for_from("lander_touchdown", "/Mission/Lander"),
+        ]),
         once(|m| notify_kind("Touchdown.", "success")),
 
         wait(1.5),                                     // brief settle (sim seconds)
