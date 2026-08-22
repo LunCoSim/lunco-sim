@@ -7,6 +7,7 @@ use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::*;
 use lunco_usd_bevy::*;
+use lunco_usd_sim::cosim::spawn_scene_root_with_stage;
 use lunco_usd_sim::*;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
@@ -732,20 +733,19 @@ fn test_full_scene_loads_with_rovers() {
     // test checks (wheels, DriveMix, steer wires) is built in PreUpdate/Update.
     app.insert_resource(Time::<Fixed>::from_hz(0.0001));
 
-    // Spawn scene — rovers come from scene references
+    // Spawn through the production mount boundary so the scene root is placed
+    // under the canonical WorldGrid. The USD sim contract requires every
+    // avatar/camera and physical scene entity to resolve an explicit BigSpace
+    // frame; manually spawning an unparented stage root would test a hierarchy
+    // the runtime never creates.
     let scene_handle = add_canonical_from_file(&mut app, scene_path);
-    app.world_mut().spawn((
-        Name::new("TestScene"),
-        UsdPrimPath {
-            stage_handle: scene_handle,
-            path: "/SandboxScene".to_string(),
-        },
-        Transform::default(),
-        CellCoord::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-    ));
+    spawn_scene_root_with_stage(
+        app.world_mut(),
+        &scene_path.display().to_string(),
+        "/SandboxScene",
+        scene_handle,
+    )
+    .expect("production scene mount creates a root");
 
     for _ in 0..10 {
         app.update();

@@ -93,6 +93,22 @@ impl EmptyViewportReason {
 /// gets the document surface, even headless / sandbox bins.
 pub struct UsdCommandsPlugin;
 
+/// Promote an authored document when the live twin projection is installed.
+///
+/// `apply_ops_as_change_set` is also the reusable headless document-editing
+/// boundary, so a caller that only installs `DocumentRegistry` must not panic
+/// merely because no live twin projection exists. In the production USD
+/// command plugin this resource is always initialized; when it is absent there
+/// is no scene lease to promote and no ownership event to publish.
+fn claim_user_document_if_projected(world: &mut World, doc: DocumentId) {
+    let claimed = world
+        .get_resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .is_some_and(|mut backed| backed.claim_user(doc));
+    if claimed {
+        world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+    }
+}
+
 /// Session restore is the one document-open path that does not carry an
 /// explicit user-open command. A restored document is therefore promoted to a
 /// user lease here, while an automatically opened Twin scene is already linked
@@ -992,12 +1008,7 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
                     .open_file(load.path.clone(), source);
-                if world
-                    .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-                    .claim_user(doc)
-                {
-                    world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
-                }
+                claim_user_document_if_projected(world, doc);
                 // A re-open that couldn't take the disk bytes is not an error,
                 // but it IS a surprise the user should see — "I opened the file
                 // and nothing happened" otherwise. `warn!` alone was invisible
@@ -1069,12 +1080,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
             lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
         );
         drop(registry);
-        if world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-            .claim_user(doc_id)
-        {
-            world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc: doc_id });
-        }
+        claim_user_document_if_projected(world, doc_id);
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
 }
@@ -1214,12 +1220,7 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
             .apply(doc, op);
         match result {
             Ok(ack) => {
-                if world
-                    .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-                    .claim_user(doc)
-                {
-                    world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
-                }
+                claim_user_document_if_projected(world, doc);
                 bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
             }
             Err(reject) => {
@@ -1409,12 +1410,8 @@ pub fn apply_ops_as_change_set(
         Some(j) => j.change_set(label, || apply_all(world)),
         None => apply_all(world),
     };
-    if applied != 0
-        && world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-            .claim_user(doc)
-    {
-        world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+    if applied != 0 {
+        claim_user_document_if_projected(world, doc);
     }
     (applied, total)
 }

@@ -4236,17 +4236,23 @@ pub fn spawn_scene_root_with_stage(
     // hierarchy where avian rigid bodies on rover roots compute
     // `Position` relative to the scene-root anchor instead of needing
     // their own CellCoord, which conflicted with avian's writeback.
-    // Atomic spawn: `ChildOf(grid)` in the bundle so parent + CellCoord +
-    // Transform land together — same contract as `migrate_to_grid`. Avoids
-    // the observer race that mis-tagged rover chassis as `RigidBody::Static`.
+    // Register the mount before inserting `UsdPrimPath`. Adding that component
+    // synchronously triggers the USD projection observer, which queues child
+    // entities behind the scene-ownership fence. If the path were part of this
+    // initial bundle, the observer could run before this root entered
+    // `SceneMountState` and every queued child would be rejected as stale.
+    //
+    // The spatial components still land atomically with the root itself:
+    // `ChildOf(grid)` + `CellCoord` + `Transform` are the same contract as
+    // `migrate_to_grid`, avoiding the observer race that mis-tagged rover
+    // chassis as `RigidBody::Static`.
+    let primary = world
+        .get_resource::<SceneLoadInFlight>()
+        .is_some_and(|load| load.stage_id == new_id && load.path == asset_path);
     let root = world
         .spawn((
             Name::new(format!("Scene:{}", asset_path)),
             UsdSceneRoot,
-            UsdPrimPath {
-                stage_handle: handle,
-                path: root_prim.clone(),
-            },
             Transform::default(),
             GlobalTransform::default(),
             Visibility::Visible,
@@ -4257,12 +4263,13 @@ pub fn spawn_scene_root_with_stage(
             ChildOf(grid),
         ))
         .id();
-    let primary = world
-        .get_resource::<SceneLoadInFlight>()
-        .is_some_and(|load| load.stage_id == new_id && load.path == asset_path);
     if let Some(mut state) = world.get_resource_mut::<lunco_core::SceneMountState>() {
         state.register_root(root, primary);
     }
+    world.entity_mut(root).insert(UsdPrimPath {
+        stage_handle: handle,
+        path: root_prim.clone(),
+    });
     info!(
         "[scene] spawned `{}` @ `{}` (entity {})",
         asset_path, root_prim, root

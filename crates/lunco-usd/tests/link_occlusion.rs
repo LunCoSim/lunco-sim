@@ -18,10 +18,10 @@
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use big_space::prelude::CellCoord;
 use lunco_celestial::link::{LinkNode, LinkOccluder};
 use lunco_usd_avian::*;
 use lunco_usd_bevy::*;
+use lunco_usd_sim::cosim::spawn_scene_root_with_stage;
 use lunco_usd_sim::*;
 use std::path::Path;
 
@@ -66,18 +66,8 @@ fn load_through_bevy(file: &str, prim_path: &str) -> App {
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, &Path::new("../../assets/").join(file));
-    app.world_mut().spawn((
-        Name::new("TestRoot"),
-        UsdPrimPath {
-            stage_handle: handle,
-            path: prim_path.to_string(),
-        },
-        Transform::default(),
-        CellCoord::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-    ));
+    spawn_scene_root_with_stage(app.world_mut(), file, prim_path, handle)
+        .expect("production scene mount creates a root");
     for _ in 0..10 {
         app.update();
     }
@@ -175,6 +165,9 @@ fn comms_mast_is_a_link_node_at_dish_height() {
             .get::<Transform>(cur)
             .expect("every mast prim has a Transform");
         composed = local * composed;
+        if app.world().get::<UsdSceneRoot>(cur).is_some() {
+            break;
+        }
         match app.world().get::<bevy::prelude::ChildOf>(cur) {
             Some(parent) => cur = parent.parent(),
             None => break,

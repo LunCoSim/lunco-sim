@@ -392,13 +392,21 @@ pub fn enable_static_friction_contact_hooks(
 /// bridge owns the hook component it adds; synchronize the corresponding proxy
 /// flags here, without changing any contact or body state.
 pub fn synchronize_collision_hook_flags(
-    mut trees: ResMut<ColliderTrees>,
+    trees: Option<ResMut<ColliderTrees>>,
     query: Query<(
         &ColliderTreeProxyKey,
         &ActiveCollisionHooks,
         Option<&UsdPrimPath>,
     )>,
 ) {
+    let Some(mut trees) = trees else {
+        // `UsdAvianPlugin` also supplies the USD-to-Avian mapping observers to
+        // focused/headless composition harnesses that do not install Avian's
+        // physics runtime. Without a collider-tree resource there is no proxy
+        // flag to synchronize; the authored hook component remains authoritative
+        // until the physics plugin creates the proxy.
+        return;
+    };
     for (key, hooks, prim) in &query {
         if *key == ColliderTreeProxyKey::PLACEHOLDER {
             continue;
