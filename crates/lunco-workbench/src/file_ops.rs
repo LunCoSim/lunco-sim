@@ -261,7 +261,7 @@ fn on_open_file(
     if is_scene_path(&path) && !is_path_inside_open_twin(std::path::Path::new(&path), &workspace) {
         // VS Code semantics, same as OpenFolder: opening replaces the workspace
         // root rather than accumulating one per scene.
-        close_all_open_folders(&mut workspace, &mut commands, "OpenFile");
+        close_all_open_folders(&mut workspace, &mut pending, &mut commands, "OpenFile");
         spawn_twin_from_scene(std::path::Path::new(&path), &mut pending, "OpenFile");
     }
 }

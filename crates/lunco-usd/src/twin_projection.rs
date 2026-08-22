@@ -234,6 +234,21 @@ pub struct PendingRefSpawns {
     items: Vec<RefSpawn>,
 }
 
+/// Clear all asynchronous USD projection work owned by the outgoing scene.
+///
+/// These queues are not scene entities, so despawning the USD root cannot
+/// reclaim them. Keeping an old default-scene load or referenced-spawn recipe
+/// alive lets it publish into the replacement Twin after a slow asset load.
+pub(crate) fn reset_scene_projection_state(
+    mut pending_docs: ResMut<PendingTwinDocs>,
+    mut pending_refs: ResMut<PendingRefSpawns>,
+    mut backed: ResMut<DocBackedTwinScenes>,
+) {
+    pending_docs.items.clear();
+    pending_refs.items.clear();
+    backed.map.clear();
+}
+
 /// Give up on a pending twin doc after this many frames without its source
 /// loading (a missing / unreadable scene), so it doesn't retry forever.
 const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
@@ -507,12 +522,15 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // recorded op is already reflected — just reconcile restored runtime
             // spawns idempotently (never replay ops → double-author). This is the
             // only consumer of the whole-stage recompose.
-            let composed = {
-                let reg = world.resource::<DocumentRegistry<UsdDocument>>();
-                reg.host(doc)
-                    .expect("doc host present: generation read above, exclusive system")
-                    .document()
-                    .composed_arc()
+            let Some(composed) = world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .map(|host| host.document().composed_arc())
+            else {
+                warn!("[usd-e1b] document {doc} disappeared before initial projection");
+                world.resource::<TwinRoots>().clear_overlay(&name, &rel);
+                world.resource_mut::<DocBackedTwinScenes>().map.remove(&doc);
+                continue;
             };
             reconcile_full_to_composed(world, scene_id, &composed);
         } else {

@@ -45,7 +45,7 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
-use lunco_workspace::{TwinAdded, WorkspaceResource};
+use lunco_workspace::{TwinAdded, TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
 use lunco_doc::OpenOutcome;
@@ -88,11 +88,30 @@ impl EmptyViewportReason {
 /// gets the document surface, even headless / sandbox bins.
 pub struct UsdCommandsPlugin;
 
+/// Workspace replacement owns the scene boundary. Closing the old Twin must
+/// clear its mounted USD scene immediately, even when the replacement Twin's
+/// asynchronous folder scan later fails or takes a long time.
+fn clear_scene_on_twin_closed(
+    trigger: On<TwinClosed>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut commands: Commands,
+) {
+    if let Some(twin_roots) = twin_roots {
+        twin_roots.unregister_root(&trigger.event().root);
+    }
+    commands.trigger(ClearScene {});
+}
+
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
+        app.add_observer(clear_scene_on_twin_closed);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::twin_projection::reset_scene_projection_state,
+        );
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where

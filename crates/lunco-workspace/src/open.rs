@@ -95,7 +95,7 @@ fn on_open_twin(
         );
         return;
     }
-    close_all_open_folders(&mut workspace, &mut commands, "OpenTwin");
+    close_all_open_folders(&mut workspace, &mut pending, &mut commands, "OpenTwin");
     spawn_twin_from_path(folder, &mut pending, "OpenTwin");
 }
 
@@ -140,7 +140,7 @@ fn on_open_folder(
     // VS Code semantics: "Open Folder" *replaces* the current workspace
     // folders. Callers that want to keep existing roots and add another fire
     // `AddFolderToWorkspace` instead.
-    close_all_open_folders(&mut workspace, &mut commands, "OpenFolder");
+    close_all_open_folders(&mut workspace, &mut pending, &mut commands, "OpenFolder");
     spawn_twin_from_path(folder, &mut pending, "OpenFolder");
 }
 
@@ -213,13 +213,21 @@ fn on_add_twin(trigger: On<AddTwin>, mut pending: ResMut<PendingTwinOpens>) {
 /// the same thing everywhere.
 pub fn close_all_open_folders(
     workspace: &mut WorkspaceResource,
+    pending: &mut PendingTwinOpens,
     commands: &mut Commands,
     log_tag: &str,
 ) {
+    // Replace semantics invalidate an older folder scan before the new one is
+    // admitted. A stale scan must never add the Twin that the user had already
+    // replaced while its filesystem walk was still running.
+    pending.cancel_all();
     let ids: Vec<crate::TwinId> = workspace.twins().map(|(id, _)| id).collect();
     for id in ids {
+        let Some(root) = workspace.twin(id).map(|twin| twin.root.clone()) else {
+            continue;
+        };
         workspace.close_twin(id);
-        commands.trigger(TwinClosed { twin: id });
+        commands.trigger(TwinClosed { twin: id, root });
         info!("[{log_tag}] closed pre-existing Twin {:?}", id);
     }
 }
@@ -234,6 +242,15 @@ pub fn close_all_open_folders(
 #[derive(Resource, Default)]
 pub struct PendingTwinOpens {
     tasks: Vec<TwinOpenTask>,
+}
+
+impl PendingTwinOpens {
+    /// Cancel scans that belong to a replaced workspace-open request. Dropping
+    /// the task handles prevents their results from being observed; the
+    /// replacement command owns the next scan exclusively.
+    fn cancel_all(&mut self) {
+        self.tasks.clear();
+    }
 }
 
 struct TwinOpenTask {

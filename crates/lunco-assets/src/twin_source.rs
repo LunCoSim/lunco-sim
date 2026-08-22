@@ -100,6 +100,10 @@ pub struct TwinRoots {
     overlays: Arc<RwLock<HashMap<PathBuf, Arc<Vec<u8>>>>>,
 }
 
+fn canonical_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+}
+
 impl TwinRoots {
     /// Map a Twin `name` to its absolute root folder, returning the name
     /// actually assigned — **callers must use the returned name**, not the one
@@ -123,13 +127,11 @@ impl TwinRoots {
     pub fn register(&self, name: impl Into<String>, root: impl Into<PathBuf>) -> String {
         let requested = name.into();
         let root = root.into();
-        let canonical = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let canonical = canonical_root(&root);
         let Ok(mut m) = self.roots.write() else {
             return requested;
         };
-        let same_root = |existing: &PathBuf| {
-            std::fs::canonicalize(existing).unwrap_or_else(|_| existing.clone()) == canonical
-        };
+        let same_root = |existing: &PathBuf| canonical_root(existing) == canonical;
         let mut candidate = requested.clone();
         let mut n = 1u32;
         loop {
@@ -225,6 +227,40 @@ impl TwinRoots {
             .into_iter()
             .next()
             .and_then(|n| self.root_for(&n).map(|r| (n, r)))
+    }
+
+    /// Retire every registered Twin authority backed by `root`, including its
+    /// composed-document overlays. A closed workspace Twin must not remain a
+    /// valid source for a late asset request from the outgoing scene.
+    pub fn unregister_root(&self, root: impl AsRef<Path>) {
+        let target = canonical_root(root.as_ref());
+        let removed = self
+            .roots
+            .write()
+            .ok()
+            .map(|mut roots| {
+                let mut names = Vec::new();
+                roots.retain(|name, existing| {
+                    let same = canonical_root(existing) == target;
+                    if same {
+                        names.push(name.clone());
+                    }
+                    !same
+                });
+                names
+            })
+            .unwrap_or_default();
+        if removed.is_empty() {
+            return;
+        }
+        if let Ok(mut overlays) = self.overlays.write() {
+            overlays.retain(|path, _| {
+                path.components()
+                    .next()
+                    .and_then(|component| component.as_os_str().to_str())
+                    .is_none_or(|name| !removed.iter().any(|removed| removed == name))
+            });
+        }
     }
 }
 
@@ -486,6 +522,21 @@ mod tests {
         assert_eq!(first, "moonbase");
         assert_eq!(again, first, "reopen must reuse the existing name");
         assert_eq!(roots.names().len(), 1, "no duplicate registration");
+    }
+
+    #[test]
+    fn unregistering_a_root_removes_its_authority_and_overlays() {
+        let roots = TwinRoots::default();
+        let name = roots.register("moonbase", "/tmp/moonbase");
+        roots.set_overlay(&name, "scene.usda", Arc::new(b"#usda 1.0\n".to_vec()));
+
+        roots.unregister_root("/tmp/moonbase");
+
+        assert!(roots.names().is_empty());
+        assert!(roots.root_of(&name).is_none());
+        assert!(roots
+            .overlay_for(Path::new("moonbase/scene.usda"))
+            .is_none());
     }
 
     #[cfg(unix)]
