@@ -252,6 +252,16 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`/`wait_for_from(event, source_id)`; `seq([steps])` shorthand to build and run immediately.
 - **Task trees (`this.task`):** composites `seq`/`par_all`/`par_race`/`repeat`/`forever` plus the failure-aware kernel vocabulary `check(pred)`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and TICKED NATIVELY on the `lunco-behavior` kernel (the same engine the rover autopilot uses) — a `seq` advances through instantly-done steps within one tick, so use `wait`/`wait_until`/`wait_for` as the suspension points. Emits `TASK_COMPLETE` on root success, `TASK_FAILED` on root failure.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
+- **Script-first authoring:** `usd_document` / `usd_apply_ops` / `usd_add_prim`,
+  `attach_fixed` / `attach_revolute`, `modelica_apply` and typed Modelica op
+  constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
+  These are policy wrappers over the existing journaled command surfaces; USD
+  remains the scene/topology authority and Modelica remains the equation/graph
+  authority.
+- **Mission durability:** `mission_checkpoint` and
+  `mission_checkpoint_read` author phase state on the program prim as USD string
+  attributes. Use them at objective/phase boundaries so a task can resume after
+  a hot reload or restart without a second persistence mechanism.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
@@ -473,6 +483,8 @@ produces the same sequence — no explicit seeding needed.
 | [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via `run_plan` |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | the Layer-1 step sequencer |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
+| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and no `on_tick` loop |
+| [`script_first_robot.rhai`](../assets/scripting/examples/script_first_robot.rhai) | USD component assembly plus a Modelica control graph batch |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
