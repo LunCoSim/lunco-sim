@@ -57,6 +57,7 @@ impl RenderingQuality {
                 shadow_normal_bias: 2.5,
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::X2,
+                camera_exposure_ev100: 16.0,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -124,6 +125,7 @@ impl RenderingQuality {
                 shadow_normal_bias: 4.0,
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::Off,
+                camera_exposure_ev100: 16.0,
                 camera_bloom_intensity: 0.0,
                 camera_bloom_low_frequency_boost: 0.0,
                 distant_light_default_illuminance: 128_000.0,
@@ -191,6 +193,7 @@ impl RenderingQuality {
                 shadow_normal_bias: 1.5,
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::X4,
+                camera_exposure_ev100: 16.0,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -281,6 +284,8 @@ pub struct RenderQualityProfile {
     pub camera_tone_map: ToneMap,
     /// Multisampling level for scene cameras.
     pub camera_msaa: MsaaLevel,
+    /// EV100 used by scene cameras when USD does not author exposure.
+    pub camera_exposure_ev100: f32,
     /// Bloom intensity used when the USD environment omits bloom.
     pub camera_bloom_intensity: f32,
     /// Bloom low-frequency boost used when the USD environment omits bloom.
@@ -465,6 +470,8 @@ pub struct RenderingQualitySettings {
     pub camera_tone_map: ToneMap,
     #[serde(default = "default_camera_msaa")]
     pub camera_msaa: MsaaLevel,
+    #[serde(default = "default_camera_exposure_ev100")]
+    pub camera_exposure_ev100: f32,
     #[serde(default = "default_camera_bloom_intensity")]
     pub camera_bloom_intensity: f32,
     #[serde(default = "default_camera_bloom_low_frequency_boost")]
@@ -739,6 +746,10 @@ const fn default_camera_msaa() -> MsaaLevel {
     balanced_profile().camera_msaa
 }
 
+const fn default_camera_exposure_ev100() -> f32 {
+    balanced_profile().camera_exposure_ev100
+}
+
 const fn default_camera_bloom_intensity() -> f32 {
     balanced_profile().camera_bloom_intensity
 }
@@ -846,6 +857,7 @@ impl RenderingQualitySettings {
             shadow_normal_bias: self.shadow_normal_bias,
             camera_tone_map: self.camera_tone_map,
             camera_msaa: self.camera_msaa,
+            camera_exposure_ev100: self.camera_exposure_ev100,
             camera_bloom_intensity: self.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: self.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: self.distant_light_default_illuminance,
@@ -934,6 +946,7 @@ impl RenderingQualitySettings {
         self.shadow_normal_bias = profile.shadow_normal_bias;
         self.camera_tone_map = profile.camera_tone_map;
         self.camera_msaa = profile.camera_msaa;
+        self.camera_exposure_ev100 = profile.camera_exposure_ev100;
         self.camera_bloom_intensity = profile.camera_bloom_intensity;
         self.camera_bloom_low_frequency_boost = profile.camera_bloom_low_frequency_boost;
         self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
@@ -1047,6 +1060,9 @@ impl RenderingQualitySettings {
         }
         if !profile.camera_bloom_intensity.is_finite() || profile.camera_bloom_intensity < 0.0 {
             return Err("camera bloom intensity must be finite and non-negative");
+        }
+        if !profile.camera_exposure_ev100.is_finite() {
+            return Err("camera exposure EV100 must be finite");
         }
         if !profile.camera_bloom_low_frequency_boost.is_finite()
             || profile.camera_bloom_low_frequency_boost < 0.0
@@ -1267,6 +1283,7 @@ impl Default for RenderingQualitySettings {
             shadow_normal_bias: profile.shadow_normal_bias,
             camera_tone_map: profile.camera_tone_map,
             camera_msaa: profile.camera_msaa,
+            camera_exposure_ev100: profile.camera_exposure_ev100,
             camera_bloom_intensity: profile.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: profile.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: profile.distant_light_default_illuminance,
@@ -1736,6 +1753,7 @@ mod tests {
     fn camera_quality_is_explicit_and_preset_only() {
         let mut settings = RenderingQualitySettings::default();
         assert_eq!(settings.profile().camera_tone_map, ToneMap::AgX);
+        assert_eq!(settings.profile().camera_exposure_ev100, 16.0);
         assert!(settings.profile().camera_bloom_intensity > 0.0);
 
         settings.camera_bloom_intensity = 0.0;
@@ -1746,6 +1764,18 @@ mod tests {
         assert_eq!(settings.profile().camera_bloom_intensity, 0.0);
         assert_eq!(settings.profile().camera_msaa, MsaaLevel::Off);
         assert_eq!(settings.preset(), Some(RenderingQuality::Low));
+    }
+
+    #[test]
+    fn camera_exposure_rejects_non_finite_values_without_normalization() {
+        let settings = RenderingQualitySettings {
+            camera_exposure_ev100: f32::NAN,
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.validate(),
+            Err("camera exposure EV100 must be finite")
+        );
     }
 
     #[test]

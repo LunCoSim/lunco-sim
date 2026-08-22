@@ -281,12 +281,19 @@ pub fn insert_celestial_comms_components(
     // celestial stack on (`lunco_celestial::celestial_declared`). No such prim ⇒ no
     // sky. This replaces `CelestialConfig.spawn_hierarchy`, a code-side boolean that
     // a scene could only trip as a side effect, never actually *request*.
-    if let Some(naif) = reader.scalar::<i32>(sdf_path, "lunco:body") {
-        if naif != 0 {
+    match read_i32_strict(reader, sdf_path, "lunco:body") {
+        Ok(Some(naif)) if naif != 0 => {
             commands
                 .entity(entity)
                 .try_insert(lunco_celestial::CelestialBodyDecl { naif });
             info!("[usd-celestial] scene declares celestial body {naif} at {prim_path_str}");
+        }
+        Ok(Some(_)) | Ok(None) => {}
+        Err(()) => {
+            warn!(
+                "[usd-celestial] {} has malformed `lunco:body`; celestial body declaration refused",
+                prim_path_str
+            );
         }
     }
 
@@ -308,14 +315,20 @@ pub fn insert_celestial_comms_components(
     // The fill used to be spawned from Rust at startup, which is why it had no
     // USD identity to filter on in the first place.
     if reader.prim_type_name(sdf_path).as_deref() == Some("DistantLight") {
-        let parent_is_body = sdf_path
-            .parent()
-            .map(|p| {
-                reader
-                    .scalar::<i32>(&p, "lunco:body")
-                    .is_some_and(|n| n != 0)
-            })
-            .unwrap_or(false);
+        let parent_is_body = match sdf_path.parent() {
+            Some(parent) => match read_i32_strict(reader, &parent, "lunco:body") {
+                Ok(Some(naif)) => naif != 0,
+                Ok(None) => false,
+                Err(()) => {
+                    warn!(
+                        "[usd-celestial] {} has malformed parent `lunco:body`; body fill classification refused",
+                        prim_path_str
+                    );
+                    false
+                }
+            },
+            None => false,
+        };
         if parent_is_body {
             // WEB: WebGL2 supports ONE `DirectionalLight`, and a second culls
             // the sun — so on wasm the fill is dropped rather than composed. The

@@ -760,9 +760,9 @@ impl Plugin for WorkbenchPlugin {
         // Survive transient GPU validation errors (e.g. the Windows
         // window-resize depth/color size mismatch) instead of panicking the
         // render thread. No-op when there's no RenderApp (headless/API-only).
-        // The companion backend preference lives in
-        // `preferred_wgpu_settings()`, which each binary feeds into its
-        // `RenderPlugin` at `DefaultPlugins` build time.
+        // The render-health systems install only after the host has selected
+        // its explicit adapter/backend settings at `DefaultPlugins` build
+        // time.
         render_robustness::install_wgpu_error_handler(app);
 
         // Screenshot backend. Its ABSENCE (a headless server, which links no workbench) is
@@ -5466,6 +5466,11 @@ fn register_graphics_settings_menu(world: &mut World) {
                             "4x",
                         );
                     });
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_exposure_ev100)
+                        .speed(0.1)
+                        .prefix("Unauthored camera exposure (EV100): "),
+                );
                 ui.add(
                     egui::DragValue::new(&mut settings.camera_bloom_intensity)
                         .speed(0.01)

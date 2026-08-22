@@ -446,7 +446,10 @@ pub fn setup_big_space_hierarchy(
     // Per-scene display exposure belongs to a composed `UsdGeomCamera`, which
     // is recreated with the scene; carrying the prior `LunarSun` resource here
     // would leak one scenario's grade into the next.
-    let ls = lunco_environment::LunarSun::default();
+    let ls = lunco_environment::LunarSun {
+        exposure_ev100: sun_profile.camera_exposure_ev100,
+        ..Default::default()
+    };
     // Physical sun identity is environmental state. Camera exposure remains
     // authored by each `UsdGeomCamera`: changing every live `Exposure` here
     // used to overwrite a scene's standard ISO/shutter/f-stop immediately

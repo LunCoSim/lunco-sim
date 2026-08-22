@@ -174,12 +174,9 @@ pub(crate) fn instantiate_camera_prim(
     // Spawn INACTIVE: exactly one window scene camera renders at a time, and the
     // switch mechanism (lunco-avatar) chooses it by toggling `is_active`.
     //
-    // `SceneCamera::agx()` (AgX tonemapping) + a calibrated `Exposure` mirror
-    // the avatar camera's filmic look so a switch doesn't jump the grade. The
-    // exposure is the shared `LUNAR_SUN_EXPOSURE_EV100` (EV 16) — the SAME
-    // number `lunco_environment::LunarSun` defaults to and the celestial sun is
-    // calibrated against — so the camera is exposed for the real ~131 klx sun
-    // from frame one. Spawning at Bevy's `Exposure::default()` (EV 9.7) instead
+    // `SceneCamera::agx()` (AgX tonemapping) + the authoritative Graphics
+    // profile's `Exposure` mirror the avatar camera's filmic look so a switch
+    // doesn't jump the grade. Spawning at Bevy's `Exposure::default()` (EV 9.7) instead
     // left a load-time window in which the celestial system had already raised
     // the sun to 131 klux but the camera still sat ~5 stops too open, blowing
     // out the terrain until the late `project_env_settings`/celestial EV write

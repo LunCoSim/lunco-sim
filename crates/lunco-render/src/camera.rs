@@ -188,10 +188,9 @@ impl SceneCamera {
 /// **The one photometric setup every scene camera gets** — grade + exposure, as a
 /// single pair no spawn path may split.
 ///
-/// Exposure is not a per-camera preference: it is calibrated against the physical
-/// sun the celestial system drives (`LUNAR_SUN_EXPOSURE_EV100`, the same number
-/// `lunco_environment::LunarSun` defaults to). A camera that picks its own is
-/// simply wrong by a measurable number of stops.
+/// Exposure is a Graphics setting when USD does not author a camera opinion. A
+/// camera that picks an unrelated renderer default is wrong by a measurable
+/// number of stops; the profile keeps the scene-camera and avatar paths aligned.
 ///
 /// It exists because there were two spawn paths and only one of them was
 /// calibrated: the USD camera projection paired `agx()` with the calibrated
@@ -227,7 +226,7 @@ pub fn scene_camera_look_with_profile(
     (
         camera,
         Exposure {
-            ev100: authored_ev100.unwrap_or(crate::LUNAR_SUN_EXPOSURE_EV100),
+            ev100: authored_ev100.unwrap_or(profile.camera_exposure_ev100),
         },
     )
 }

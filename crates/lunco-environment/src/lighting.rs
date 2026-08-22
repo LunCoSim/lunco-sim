@@ -76,12 +76,12 @@ impl Default for LunarSun {
             // `DistantLight` loader sits under this crate and needs the same
             // number as the fallback for an unauthored `inputs:angle`.
             angular_diameter_deg: lunco_core::SOLAR_ANGULAR_DIAMETER_DEG,
-            // Shared with `lunco-usd-bevy`'s USD camera spawn via the one
-            // constant both crates can reach (`lunco_render::
-            // LUNAR_SUN_EXPOSURE_EV100`). Inlining a literal here would let it
-            // drift from the camera spawn and re-open the load-time blowout
-            // window where the 131 klx sun renders against an EV-9.7 camera.
-            exposure_ev100: lunco_render::LUNAR_SUN_EXPOSURE_EV100,
+            // The balanced Graphics profile owns the unauthored camera
+            // exposure. A live scene may replace it with an authored
+            // environment/camera opinion through the normal command path.
+            exposure_ev100: lunco_render::RenderingQuality::Balanced
+                .profile()
+                .camera_exposure_ev100,
         }
     }
 }
