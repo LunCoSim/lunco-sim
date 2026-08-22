@@ -153,5 +153,5 @@ See also:
 - [`23-domain-environment.md`](23-domain-environment.md) — environmental facts
 - [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) — the
   unresolved fixed-step deterministic solver contract
-- [`../reviews/open-2026-08-02-episode-01-recording-containment-followup.md`](../reviews/open-2026-08-02-episode-01-recording-containment-followup.md)
-  — current recording and solver follow-up evidence
+- [`../landing_coordinate_frame_failure.md`](../landing_coordinate_frame_failure.md)
+  — current coordinate-frame, recording, and solver follow-up evidence

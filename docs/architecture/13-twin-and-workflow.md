@@ -604,8 +604,9 @@ system) reads and writes through it.
 
 ## 6. Startup flow
 
-All three apps (`lunco-luncosim`, `luncosim`, `lunica`)
-share the same logic:
+The two workbench apps (`luncosim` and `lunica`) share the same document and
+Twin startup logic. `luncosim-server` reuses the simulation lifecycle without
+the windowed workbench:
 
 ```
 App launches
@@ -662,8 +663,8 @@ The Examples list is **filtered per app** to what it knows how to open:
 | App | Examples shown |
 |-----|----------------|
 | `lunica` | Modelica-only models |
-| `lunco-luncosim` | 3D luncosim scenarios |
-| `luncosim` | All examples |
+| `luncosim` | USD scenes, ground-physics scenarios, and embedded Modelica |
+| `luncosim-server` | Headless USD scenarios and automation |
 
 ## 7. Creating a new Document — unified across types
 

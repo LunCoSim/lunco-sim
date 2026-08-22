@@ -77,9 +77,9 @@ scene that breaks silently when the seed changes.
 
 ## 3. Where the scene lives
 
-Moonbase is **a separate repo**, not this one: `/home/rod/Documents/lunco/moonbase`
-(twin folder `twin/`, manifest `twin.toml` → `default_scene = "moonbase_scene.usda"`).
-The copy under `main/dist/luncosim/assets/twins/moonbase/` is a stale deploy — do not edit it.
+Moonbase is **a separate repository**, not this workspace. Work in its `twin/`
+folder (manifest `twin.toml` → `default_scene = "moonbase_scene.usda"`). Do not
+edit a packaged or deployed copy.
 
 Derive exactly as `lander_cinematic.usda` derives from `lander_ops.usda`:
 
@@ -102,15 +102,15 @@ over "MoonbaseScene" ( doc = "Cinematic crater orbit." )
 }
 ```
 
-New file: `/home/rod/Documents/lunco/moonbase/twin/moonbase_cinematic.usda`.
+New file: `<moonbase-repo>/twin/moonbase_cinematic.usda`.
 
 Two notes. Moonbase authors **no `def Camera`** at all today (camera state rides on the
 `Avatar` prim via `lunco:cameraMode`/`cameraYaw`/`cameraPitch`), so this scene introduces
 the first one. And `timeCodesPerSecond` defaults to 24 — set it to 1 as the precedent does,
 so keys read as seconds and line up with transport.
 
-To surface it in the web UI: `LC_TWIN_EXTRA="moonbase_cine=moonbase_cinematic.usda=/home/rod/Documents/lunco/moonbase/twin"`
-at build, or edit `dist/luncosim/scenes.json` post-deploy. Desktop picks it up via `--scene`.
+To surface it in the web UI, set `LC_TWIN_EXTRA` to the moonbase twin folder at
+build time. Desktop picks it up via `--scene`.
 
 ## 4. Core decision — knot prims, baked to timeSamples
 
@@ -284,8 +284,8 @@ is worth. Also forces the crater-centre decision (§2) immediately.
 **Phase 1 — bake, headless.** `LunCoCameraPathAPI` schema + orbit generator + Catmull-Rom/ease
 bake → `SetTimeSample` via `ApplyUsdOp`. Testable with no UI: author a path prim, run the bake,
 assert timeSamples on the target. Registering the schema means `generatedSchema.usda` +
-`plugInfo` Types, **not** `schema.usda` — that file is inert (memory: schema.usda is inert,
-generated is real; there is no sync test).
+`plugInfo` Types, **not** `schema.usda` — that file is inert in this repository, and no
+sync test currently guards the generated/schema split.
 
 **Phase 2 — live capture tool.** Pose-capture keybind, `CameraPathToolActive` gate,
 `CancelCameraPathEdit`, knot visuals + path ribbon, right-click menu (move / insert-after /
@@ -308,7 +308,8 @@ delete / dwell / focal length). Re-bake on change, signature-gated.
 
 ## 8a. VERIFIED — Phase 0 run, and the bug it found
 
-Ran `luncosim --scene /home/rod/Documents/lunco/moonbase/twin/moonbase_cinematic.usda --api 3001`.
+The historical Phase 0 run used `luncosim --scene <moonbase-repo>/twin/moonbase_cinematic.usda --api 3001`.
+New runs should use the canonical API port 4101 or another explicit free port.
 
 **Works:**
 - Composition. `twin://moonbase/moonbase_cinematic.usda` mounts doc-backed, sublayers the base,
@@ -526,9 +527,10 @@ So: evaluate the curve at the path clock's time on the interaction step; let `In
 ease the camera Transform to display rate. The cadence is stepped and the clock is whatever the
 path hangs on — cadence ≠ clock, chosen independently.
 
-## 8e. OUTSTANDING — next session, in dependency order
+## 8e. OUTSTANDING — remaining work, in dependency order
 
-Everything below is unbuilt. Ordered so each unblocks the next.
+These are the remaining implementation and acceptance items, ordered so each
+unblocks the next.
 
 1. **Verify the gizmo fix** (written, compiles, NOT run). `gizmo::sync_gizmo_camera` now selects
    only the active window camera that carries the canonical `lunco_render::SceneCamera` intent; it
@@ -553,11 +555,7 @@ Everything below is unbuilt. Ordered so each unblocks the next.
    `grep -rn 'lod_bias|max_lod|split_distance' crates/lunco-usd-terrain/src/` returns nothing, so start
    by finding what actually selects LOD and which camera it keys off (suspect: the ACTIVE camera, which
    is now a flying path camera ⇒ constant re-streaming, i.e. the popping). Wanted: pin max detail and
-   freeze re-selection while a shot plays. See [[project_terrain_streaming_architecture]].
-
-Housekeeping: test-debris cameras (`View_1`, `View_2`, `S0`–`S19`, `Probe_t*`) are recorded in
-`~/Documents/lunco/moonbase/twin/history/journal.json` and will replay on load. The `.usda` on disk is
-clean.
+   freeze re-selection while a shot plays. See [terrain-precompute-plan.md](terrain-precompute-plan.md).
 
 ## 8f. AS-BUILT — authoring a path against the shipped driver
 

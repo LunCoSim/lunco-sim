@@ -1,41 +1,10 @@
 # Numeric experiments — solver / model integration
 
-This folder captures detailed write-ups of numerical experiments where we
-diagnosed why a model wouldn't integrate, what we tried, what worked, and
-what to remember next time. Each file is a session record, not a spec.
-
-The goal is twofold:
-
-1. **Don't re-derive the same fix.** When a stiff DAE or solver-config
-   problem comes back, future-you reads the matching write-up and gets
-   the working configuration immediately, plus the *why*.
-2. **Surface design debt with concrete evidence.** Each report ends with a
-   "TBDs / future work" section that links back to specific rumoca files
-   and behaviours. Those TBDs feed the ranked rumoca / lunco-modelica backlog
-   maintained in this folder (see the solver-tuning notes below), which
-   `AGENTS.md` §9 points back to as the solver-tuning reference.
-
-## File naming
-
-`YYYY-MM-DD-<short-topic>.md`. Date is when the diagnosis happened; the
-file is immutable history, not a living doc.
-
-## Structure
-
-Each report has these sections (in order):
-
-1. **Problem** — model + what failed, exact error text.
-2. **Symptoms** — observable behaviour, repro recipe.
-3. **Investigation** — what we tried, what we ruled out (failed
-   hypotheses are as important as wins).
-4. **Root cause(s)** — the actual diagnosis.
-5. **Fix** — what changed (rumoca settings, model annotations, ...).
-6. **Validation** — sweep results / numbers that prove it works.
-7. **TBDs / future work** — design debt + concrete next-step ideas.
-
-A report is deleted once its findings are folded into the solver-tuning
-reference below (git remembers the full diagnosis). The reference is the
-living part; reports are the evidence trail.
+This is the living solver/numerics reference: working configurations,
+known-failing models, and the ranked rumoca / `lunco-modelica` backlog. Detailed
+dated experiment reports are deleted after their durable findings are folded
+here; Git history retains the full diagnosis. The related rumoca workarounds
+are indexed in [`architecture/29-rumoca-workarounds.md`](../architecture/29-rumoca-workarounds.md).
 
 ## Index
 

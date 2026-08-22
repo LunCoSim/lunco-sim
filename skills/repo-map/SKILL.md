@@ -10,9 +10,9 @@ description: >
   trigger when you catch yourself about to run a bare `cargo run` (ambiguous —
   needs a target), confusing `lunica` with the main simulator, reaching for
   `pkill`, or guessing an API port. It's project-specific: there is NO `apps/`
-  dir (binaries live inside crates), `lunica` is the *Modelica* workbench (not
-  the flagship sim), `luncosim` / `luncosim` / `luncosim-server` are three
-  different entry points into overlapping stacks, and the canonical API port is
+  dir (binaries live inside crates), `lunica` is the *Modelica* workbench, and
+  `luncosim` / `luncosim-server` / `lunica` are separate
+  entry points into the shared stacks, and the canonical API port is
   4101. Authoritative indexes: docs/apps/README.md (every binary) and
   docs/crates-index.md (every library crate, grouped by domain).
 ---
@@ -46,8 +46,7 @@ When those disagree with anything here, they win.
 
 | I want to… | Run | Why |
 |---|---|---|
-| Full lunar mission (celestial + ephemeris + solar-scale + full vehicle stack) | **`luncosim`** | The flagship windowed simulator. |
-| Ground physics / rovers / USD scenes / edit tools | **`luncosim`** | Physics test bed — windowed, or headless with `--no-ui`. |
+| Ground physics / rovers / USD scenes / Modelica / edit tools | **`luncosim`** | The production windowed simulator — or headless with `--no-ui`. |
 | Multiplayer host / CI automation (no GUI ever linked) | **`luncosim-server`** | Same sim as `luncosim` via `run_headless()`, GUI stack never compiled in. |
 | Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets`** | `-- download\|list\|process`. |
@@ -58,8 +57,10 @@ Launch (workspace `default-members` make a bare `cargo run` ambiguous — **alwa
 cargo build -p lunco-luncosim --bin luncosim
 target/debug/luncosim
 target/debug/luncosim --api 4101
-cargo run -p lunco-luncosim-server
-cargo run --bin lunica
+cargo build -p lunco-luncosim-server --bin luncosim-server
+target/debug/luncosim-server --api 4101
+cargo build -p lunco-modelica --bin lunica
+target/debug/lunica --api 4101
 ```
 
 **Utility / dev bins** (all in `lunco-modelica` unless noted): `modelica_run`
@@ -101,7 +102,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, tutorials | `lunco-modelica`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-tutorial` |
-| **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunco-modelica` |
+| **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |
 
 ## Where does X live? (routing)
 
@@ -121,7 +122,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 ## Gotchas / naming traps
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
-- **`lunica` ≠ the main sim.** It's the Modelica workbench (crate `lunco-modelica`). The flagship is `luncosim`; the physics bed is `luncosim`.
+- **`lunica` ≠ the main sim.** It is the Modelica workbench (crate `lunco-modelica`); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
 - **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
   then execute `target/debug/luncosim` directly. Bare `cargo run` is also
   ambiguous because the default members are `lunco-luncosim` and `lunco-modelica`.

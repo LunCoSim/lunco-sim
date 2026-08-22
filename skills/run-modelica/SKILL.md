@@ -23,16 +23,17 @@ the primary surface; only fall back to MCP if a human explicitly asks.
 ## 0. Launch an app in API mode
 
 Modelica runs inside any app that embeds `LunCoApiPlugin` + the Modelica
-workbench. The API server only exists when you pass `--api`. Default port is
+workbench. Build the named binary in the current worktree, then invoke it
+directly. The API server only exists when you pass `--api`. Default port is
 **4101** (`lunco_core::session::DEFAULT_API_PORT`).
 
 | App | Launch | Modelica surface |
 |---|---|---|
-| **`lunica`** | `cargo run --bin lunica -- --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
-| **`luncosim`** | `target/debug/luncosim --api 4101` | Mission simulator; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. Build the binary in the current worktree first. |
-| **`luncosim-server`** | `cargo run -p lunco-luncosim-server -- --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
+| **`lunica`** | `target/debug/lunica --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
+| **`luncosim`** | `target/debug/luncosim --api 4101` | Ground-physics simulator; Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
+| **`luncosim-server`** | `target/debug/luncosim-server --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
 
-**In `luncosim`/`luncosim`, switch to the Modelica view before plotting/screenshotting.**
+**In `luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're
 headless-safe), but the diagram/plot panels only paint when their perspective is
 active. Switch with:
@@ -332,7 +333,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   `OpenFile` is filesystem-only.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
-- **Blank plot/diagram in `luncosim`/`luncosim`** → the Modelica perspective
+- **Blank plot/diagram in `luncosim`** → the Modelica perspective
   isn't active. `ActivatePerspective{"id":"modelica_analyze"}` before capturing
   (§0). In `lunica` it's already the whole app. Commands/results don't need it —
   only the visible panels do.

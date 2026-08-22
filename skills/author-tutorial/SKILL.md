@@ -16,7 +16,7 @@ description: >
   event or a `done` predicate — never a timer), the HUD auto-publishes from
   `mission(me)`, and adding one is two steps (drop a `.rhai`, register a row) —
   no Rust per lesson. Builds on author-scenario (a tutorial is a scenario with a
-  teaching HUD). Reference impls: assets/tutorials/luncosim/first_drive.rhai,
+  teaching HUD). Reference impls: assets/tutorials/sandbox/first_drive.rhai,
   assets/tutorials/lunica/*.rhai. Design: specs/011-interactive-tutorials/.
 ---
 
@@ -31,7 +31,7 @@ the shared HUD + the rhai prelude — **no Rust per lesson.**
 
 This is [`author-scenario`](../author-scenario/SKILL.md) plus a teaching HUD —
 read that first for hooks, `this`-state, and verbs. Reference lesson:
-`assets/tutorials/luncosim/first_drive.rhai`. Overview: `assets/tutorials/README.md`.
+`assets/tutorials/sandbox/first_drive.rhai`. Overview: `assets/tutorials/README.md`.
 
 ## Layout & the two-step add
 
@@ -52,10 +52,10 @@ A lesson is a prim applying `LunCoTutorialAPI` (presentation) and
 ```usda
 def Scope "FirstDrive" (
     prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-    prepend payload = @lunco://tutorials/luncosim/first_drive.usda@
+    prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
 )
 {
-    uniform asset info:sourceAsset = @lunco://tutorials/luncosim/first_drive.rhai@
+    uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
     string lunco:tutorial:title = "First Drive"
     string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag."
     uniform token lunco:tutorial:difficulty = "beginner"
@@ -97,7 +97,7 @@ it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch i
   `cmd:TutorialBack` / `cmd:TutorialSkip` (the card's own buttons). **Guaranteed
   completable** — it depends on nothing in the scene, so it's the safe default for
   teaching *concepts* and UI. End by `emit("MISSION_COMPLETE", 0)`. Reference:
-  `assets/tutorials/luncosim/sandbox_intro.rhai`.
+  `assets/tutorials/sandbox/sandbox_intro.rhai`.
 - **Objective mission** — `mission(me)` with objectives that advance on **real
   user actions** (a `cmd:*` event or a `done` predicate). Best for *doing*
   (drive, land). Only gate on events you've confirmed fire — `cmd:PossessVessel`
