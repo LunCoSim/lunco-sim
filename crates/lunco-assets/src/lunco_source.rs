@@ -103,6 +103,30 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
     std::fs::read(path)
 }
 
+/// Resolve an existing file-system entry under `root` without following a
+/// symlink outside that root.
+///
+/// Lexical traversal checks are necessary for URI paths, but they do not stop
+/// an authored or downloaded Twin from placing a symlink inside the root. A
+/// canonicalized result is returned so the subsequent read does not repeat the
+/// symlink lookup. Missing entries return `None`; callers can preserve their
+/// normal not-found handling.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn existing_path_within_root(root: &Path, relative: &Path) -> Option<PathBuf> {
+    if !crate::asset_path::is_safe_relative_components(relative) {
+        return None;
+    }
+    let candidate = root.join(relative);
+    if !candidate.exists() {
+        return None;
+    }
+    let canonical_root = std::fs::canonicalize(root).ok()?;
+    let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
+    canonical_candidate
+        .starts_with(canonical_root)
+        .then_some(canonical_candidate)
+}
+
 /// Read a canonical asset identity when the composing document belongs to an
 /// open Twin.  The synchronous USD composer cannot call Bevy's async reader,
 /// so it uses this asset-owned equivalent of the registered `twin://` source.
@@ -128,11 +152,16 @@ pub fn read_asset_bytes_with_twin_root(
             ));
         }
         let relative = PathBuf::from(rel);
-        let authored = root.join(&relative);
-        if authored.is_file() {
-            return std::fs::read(authored);
+        if let Some(path) = existing_path_within_root(root, &relative).filter(|p| p.is_file()) {
+            return std::fs::read(path);
         }
-        let cached = crate::twin_cache_dir(root).join(relative);
+        let cache_root = crate::twin_cache_dir(root);
+        let cached = cache_root.join(&relative);
+        if let Some(path) =
+            existing_path_within_root(&cache_root, &relative).filter(|p| p.is_file())
+        {
+            return std::fs::read(path);
+        }
         return std::fs::read(cached);
     }
     read_asset_bytes(id, assets_root)
@@ -180,6 +209,22 @@ mod tests {
                 "unsafe library id must be rejected: {id}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn twin_reads_reject_symlinks_that_leave_the_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "must not be read").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+
+        assert!(existing_path_within_root(root.path(), Path::new("linked.txt")).is_none());
+        let error =
+            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
+                .expect_err("Twin symlink must not escape its root");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 }
 

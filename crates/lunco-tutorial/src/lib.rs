@@ -44,6 +44,8 @@ use lunco_workbench::tutorial_overlay::{TutorialHud, TutorialStopRequested};
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 
 /// One tutorial's catalog entry — a lesson prim, flattened for the menu/panel.
 ///
@@ -219,7 +221,9 @@ impl CurriculumRoot {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                    let root = self.base.as_ref()?;
+                    let path = lunco_assets::existing_path_within_root(root, Path::new(rel))?;
+                    lunco_assets::read_asset_file_string(&path).ok()
                 }
                 #[cfg(target_arch = "wasm32")]
                 {

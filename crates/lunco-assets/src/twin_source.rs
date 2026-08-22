@@ -286,12 +286,34 @@ impl TwinReader {
             rel.push(comp.as_os_str());
         }
         let authored = root.join(&rel);
-        if authored.exists() {
-            return Some(authored);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::existing_path_within_root(&root, &rel) {
+            return Some(path);
         }
-        let cached = crate::twin_cache_dir(&root).join(&rel);
+        #[cfg(target_arch = "wasm32")]
+        if authored.exists() {
+            return Some(authored.clone());
+        }
+        if authored.exists() {
+            // A present entry that failed canonical containment is either an
+            // escaping symlink or an entry the native filesystem refused to
+            // canonicalize. Do not hand it to the storage backend.
+            return None;
+        }
+        let cache_root = crate::twin_cache_dir(&root);
+        let cached = cache_root.join(&rel);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::existing_path_within_root(&cache_root, &rel) {
+            return Some(path);
+        }
+        #[cfg(target_arch = "wasm32")]
         if cached.exists() {
-            return Some(cached);
+            return Some(cached.clone());
+        }
+        if cached.exists() {
+            // See the authored-tree guard above; a cache entry is not allowed
+            // to turn a remote Twin reference into a host filesystem read.
+            return None;
         }
         // Neither exists — return the authored path so the error names where
         // the file was expected, not where it was cached.
@@ -423,5 +445,22 @@ mod tests {
         assert_eq!(first, "moonbase");
         assert_eq!(again, first, "reopen must reuse the existing name");
         assert_eq!(roots.names().len(), 1, "no duplicate registration");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reader_resolution_rejects_symlinks_that_leave_a_twin_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.usda");
+        std::fs::write(&secret, "#usda 1.0").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.usda")).expect("symlink");
+
+        let roots = TwinRoots::default();
+        let name = roots.register("example", root.path());
+        let reader = TwinReader { roots };
+        assert!(reader
+            .resolve(Path::new(&format!("{name}/linked.usda")))
+            .is_none());
     }
 }
