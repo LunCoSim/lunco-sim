@@ -5487,6 +5487,29 @@ fn register_graphics_settings_menu(world: &mut World) {
                     .small(),
                 );
             });
+            ui.collapsing("Presentation recovery", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These are safety timings for render failures, not quality fallbacks. The renderer never changes quality automatically.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.render_failure_quiet_period_secs)
+                        .speed(0.1)
+                        .range(0.01..=settings.render_failure_give_up_after_secs)
+                        .prefix("Failure quiet period: ")
+                        .suffix(" s"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.render_failure_give_up_after_secs)
+                        .speed(0.5)
+                        .range(settings.render_failure_quiet_period_secs..=3600.0)
+                        .prefix("Stop presentation after: ")
+                        .suffix(" s"),
+                );
+            });
             ui.collapsing("Terrain mesh cache", |ui| {
                 ui.add(
                     egui::DragValue::new(&mut settings.terrain_mesh_cache_bytes)

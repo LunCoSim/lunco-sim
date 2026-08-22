@@ -58,6 +58,8 @@ impl RenderingQuality {
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::X2,
                 camera_exposure_ev100: 16.0,
+                render_failure_quiet_period_secs: 0.5,
+                render_failure_give_up_after_secs: 5.0,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -126,6 +128,8 @@ impl RenderingQuality {
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::Off,
                 camera_exposure_ev100: 16.0,
+                render_failure_quiet_period_secs: 0.5,
+                render_failure_give_up_after_secs: 5.0,
                 camera_bloom_intensity: 0.0,
                 camera_bloom_low_frequency_boost: 0.0,
                 distant_light_default_illuminance: 128_000.0,
@@ -194,6 +198,8 @@ impl RenderingQuality {
                 camera_tone_map: ToneMap::AgX,
                 camera_msaa: MsaaLevel::X4,
                 camera_exposure_ev100: 16.0,
+                render_failure_quiet_period_secs: 0.5,
+                render_failure_give_up_after_secs: 5.0,
                 camera_bloom_intensity: 0.15,
                 camera_bloom_low_frequency_boost: 0.7,
                 distant_light_default_illuminance: 128_000.0,
@@ -286,6 +292,10 @@ pub struct RenderQualityProfile {
     pub camera_msaa: MsaaLevel,
     /// EV100 used by scene cameras when USD does not author exposure.
     pub camera_exposure_ev100: f32,
+    /// Callback quiet period before a render failure is considered recovered.
+    pub render_failure_quiet_period_secs: f64,
+    /// Wall-clock grace period before a persistent render failure stops presentation.
+    pub render_failure_give_up_after_secs: f64,
     /// Bloom intensity used when the USD environment omits bloom.
     pub camera_bloom_intensity: f32,
     /// Bloom low-frequency boost used when the USD environment omits bloom.
@@ -472,6 +482,10 @@ pub struct RenderingQualitySettings {
     pub camera_msaa: MsaaLevel,
     #[serde(default = "default_camera_exposure_ev100")]
     pub camera_exposure_ev100: f32,
+    #[serde(default = "default_render_failure_quiet_period_secs")]
+    pub render_failure_quiet_period_secs: f64,
+    #[serde(default = "default_render_failure_give_up_after_secs")]
+    pub render_failure_give_up_after_secs: f64,
     #[serde(default = "default_camera_bloom_intensity")]
     pub camera_bloom_intensity: f32,
     #[serde(default = "default_camera_bloom_low_frequency_boost")]
@@ -750,6 +764,14 @@ const fn default_camera_exposure_ev100() -> f32 {
     balanced_profile().camera_exposure_ev100
 }
 
+const fn default_render_failure_quiet_period_secs() -> f64 {
+    balanced_profile().render_failure_quiet_period_secs
+}
+
+const fn default_render_failure_give_up_after_secs() -> f64 {
+    balanced_profile().render_failure_give_up_after_secs
+}
+
 const fn default_camera_bloom_intensity() -> f32 {
     balanced_profile().camera_bloom_intensity
 }
@@ -858,6 +880,8 @@ impl RenderingQualitySettings {
             camera_tone_map: self.camera_tone_map,
             camera_msaa: self.camera_msaa,
             camera_exposure_ev100: self.camera_exposure_ev100,
+            render_failure_quiet_period_secs: self.render_failure_quiet_period_secs,
+            render_failure_give_up_after_secs: self.render_failure_give_up_after_secs,
             camera_bloom_intensity: self.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: self.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: self.distant_light_default_illuminance,
@@ -947,6 +971,8 @@ impl RenderingQualitySettings {
         self.camera_tone_map = profile.camera_tone_map;
         self.camera_msaa = profile.camera_msaa;
         self.camera_exposure_ev100 = profile.camera_exposure_ev100;
+        self.render_failure_quiet_period_secs = profile.render_failure_quiet_period_secs;
+        self.render_failure_give_up_after_secs = profile.render_failure_give_up_after_secs;
         self.camera_bloom_intensity = profile.camera_bloom_intensity;
         self.camera_bloom_low_frequency_boost = profile.camera_bloom_low_frequency_boost;
         self.distant_light_default_illuminance = profile.distant_light_default_illuminance;
@@ -1063,6 +1089,18 @@ impl RenderingQualitySettings {
         }
         if !profile.camera_exposure_ev100.is_finite() {
             return Err("camera exposure EV100 must be finite");
+        }
+        if !profile.render_failure_quiet_period_secs.is_finite()
+            || profile.render_failure_quiet_period_secs <= 0.0
+        {
+            return Err("render failure quiet period must be finite and greater than zero");
+        }
+        if !profile.render_failure_give_up_after_secs.is_finite()
+            || profile.render_failure_give_up_after_secs <= profile.render_failure_quiet_period_secs
+        {
+            return Err(
+                "render failure give-up period must be finite and greater than the quiet period",
+            );
         }
         if !profile.camera_bloom_low_frequency_boost.is_finite()
             || profile.camera_bloom_low_frequency_boost < 0.0
@@ -1284,6 +1322,8 @@ impl Default for RenderingQualitySettings {
             camera_tone_map: profile.camera_tone_map,
             camera_msaa: profile.camera_msaa,
             camera_exposure_ev100: profile.camera_exposure_ev100,
+            render_failure_quiet_period_secs: profile.render_failure_quiet_period_secs,
+            render_failure_give_up_after_secs: profile.render_failure_give_up_after_secs,
             camera_bloom_intensity: profile.camera_bloom_intensity,
             camera_bloom_low_frequency_boost: profile.camera_bloom_low_frequency_boost,
             distant_light_default_illuminance: profile.distant_light_default_illuminance,
@@ -1775,6 +1815,20 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("camera exposure EV100 must be finite")
+        );
+    }
+
+    #[test]
+    fn render_recovery_timings_are_explicit_and_ordered() {
+        let mut settings = RenderingQualitySettings::default();
+        settings.render_failure_quiet_period_secs = 0.75;
+        settings.render_failure_give_up_after_secs = 12.0;
+        assert!(settings.validate().is_ok());
+
+        settings.render_failure_give_up_after_secs = 0.75;
+        assert_eq!(
+            settings.validate(),
+            Err("render failure give-up period must be finite and greater than the quiet period")
         );
     }
 

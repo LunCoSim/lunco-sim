@@ -33,7 +33,7 @@
 //! |---|---|---|
 //! | `Healthy` | — | drop the bad frame, log rate-limited (transient skew) |
 //! | `PersistentFailure` | first render failure | preserve the authored and configured scene state and wait for a bounded give-up decision |
-//! | `GaveUp` | still failing [`GIVE_UP_AFTER_SECS`] later, or device lost | deactivate every camera, log once, loudly |
+//! | `GaveUp` | still failing for the configured presentation grace period, or device lost | deactivate every camera, log once, loudly |
 //!
 //! `GaveUp` stops the null loop rather than the process: the sim, the API and
 //! the document model are all still healthy and worth keeping alive — it is only
@@ -66,16 +66,6 @@ use lunco_render::{
     ShadowMapSuppressed, ShadowMapSuppressionReason, ShadowRangeAuthorship,
 };
 use lunco_settings::AppSettingsExt;
-
-/// How long a failure must persist after the first observed error before
-/// presentation is abandoned.
-///
-/// Measured in wall-clock, not frames, deliberately: the failure mode this exists
-/// for renders nothing and therefore runs *fast* (~339 fps was measured), so a
-/// frame count would give wildly different grace periods to a wedged app and a
-/// healthy one. Long enough that a slow shadow-atlas reallocation is not mistaken
-/// for a wedge; short enough that nobody cooks a laptop waiting for it.
-const GIVE_UP_AFTER_SECS: f64 = 5.0;
 
 /// Error tallies shared between the wgpu callback (render thread, no `World`)
 /// and the escalation system (main world).
@@ -318,7 +308,7 @@ pub(crate) enum Action {
 }
 
 /// The escalation state machine — pure, so it is testable without a GPU.
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub(crate) struct Ladder {
     pub(crate) rung: Rung,
     /// Error total at the previous evaluation, to detect "did it fail again".
@@ -330,6 +320,25 @@ pub(crate) struct Ladder {
     /// a wedged render path look healthy merely because no callback arrived.
     last_failure_at: Option<f64>,
     failure_kind: FailureKind,
+    /// Configured quiet period for deciding that callbacks have stopped.
+    failure_quiet_period_secs: f64,
+    /// Configured wall-clock grace period before presentation is stopped.
+    failure_give_up_after_secs: f64,
+}
+
+impl Default for Ladder {
+    fn default() -> Self {
+        let profile = RenderingQualitySettings::default().profile();
+        Self {
+            rung: Rung::default(),
+            last_total: 0,
+            failing_since: None,
+            last_failure_at: None,
+            failure_kind: FailureKind::default(),
+            failure_quiet_period_secs: profile.render_failure_quiet_period_secs,
+            failure_give_up_after_secs: profile.render_failure_give_up_after_secs,
+        }
+    }
 }
 
 /// Tracks the scene structure for shadow admission. A scene loads
@@ -350,9 +359,20 @@ pub(crate) struct ShadowAdmissionState {
     policy_signature: Option<u64>,
 }
 
-const FAILURE_QUIET_SECS: f64 = 0.5;
-
 impl Ladder {
+    fn set_recovery_policy(&mut self, profile: lunco_render::RenderQualityProfile) {
+        self.failure_quiet_period_secs = profile.render_failure_quiet_period_secs;
+        self.failure_give_up_after_secs = profile.render_failure_give_up_after_secs;
+    }
+
+    fn reset_state(&mut self) {
+        self.rung = Rung::Healthy;
+        self.last_total = 0;
+        self.failing_since = None;
+        self.last_failure_at = None;
+        self.failure_kind = FailureKind::Other;
+    }
+
     /// Re-arm after an explicit user quality change. Device loss remains
     /// terminal because changing a setting cannot recreate the device.
     fn rearm(&mut self, total: u64, device_lost: bool) {
@@ -395,7 +415,7 @@ impl Ladder {
             // one-frame resize skew.
             if self
                 .last_failure_at
-                .is_some_and(|last| now - last >= FAILURE_QUIET_SECS)
+                .is_some_and(|last| now - last >= self.failure_quiet_period_secs)
             {
                 self.failing_since = None;
                 self.last_failure_at = None;
@@ -414,7 +434,7 @@ impl Ladder {
                 self.failing_since = Some(now);
                 None
             }
-            Rung::PersistentFailure if now - since >= GIVE_UP_AFTER_SECS => {
+            Rung::PersistentFailure if now - since >= self.failure_give_up_after_secs => {
                 self.rung = Rung::GaveUp;
                 Some(Action::GiveUp)
             }
@@ -720,6 +740,7 @@ fn apply_render_quality(
             return;
         }
     };
+    ladder.set_recovery_policy(profile);
 
     if let Some(capabilities) = capabilities {
         if !capabilities.ready {
@@ -1548,7 +1569,7 @@ pub(crate) fn reset_render_recovery(
         return;
     }
     health.0.reset_for_scene();
-    *ladder = Ladder::default();
+    ladder.reset_state();
     *budget = ShadowAdmissionState::default();
     restore_suppressed_shadow_maps(
         &mut commands,
@@ -1609,8 +1630,9 @@ fn escalate_render_recovery(
                 "the GPU device was lost".to_string()
             } else {
                 format!(
-                    "{} persisted for {GIVE_UP_AFTER_SECS:.0}s ({} total, {} shadow-map, {} out-of-memory)",
+                    "{} persisted for {:.0}s ({} total, {} shadow-map, {} out-of-memory)",
                     kind.label(),
+                    ladder.failure_give_up_after_secs,
                     h.total(),
                     h.shadow.load(Ordering::Relaxed),
                     h.oom.load(Ordering::Relaxed)
@@ -1642,6 +1664,10 @@ fn escalate_render_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn default_give_up_after_secs() -> f64 {
+        RenderingQualitySettings::default().render_failure_give_up_after_secs
+    }
 
     fn capabilities(
         max_texture_dimension_2d: u32,
@@ -2441,7 +2467,7 @@ mod tests {
         // Still failing, but inside the grace period: hold.
         let mut total = 1;
         let mut t = 0.0;
-        while t + 0.5 < GIVE_UP_AFTER_SECS - 0.1 {
+        while t + 0.5 < default_give_up_after_secs() - 0.1 {
             t += 0.5;
             total += 1;
             assert_eq!(
@@ -2458,7 +2484,7 @@ mod tests {
                 total,
                 FailureKind::ShadowMap,
                 false,
-                GIVE_UP_AFTER_SECS + 0.01
+                default_give_up_after_secs() + 0.01
             ),
             Some(Action::GiveUp)
         );
