@@ -36,7 +36,7 @@ What remains is a different shape of problem. Nothing crashes now, so every defe
 |---|---|
 | 1. Renderer wedges after shadow-map invalidation | **Fixed** — ladder fired, recovered, no further errors |
 | 2. Failed load leaks readiness ticket | Not exercised — the scene loaded |
-| 3. GPU device lost on DX12 | Not exercised — Vulkan is now the Windows default (`preferred_wgpu_settings`) |
+| 3. GPU device lost on DX12 | Not exercised — this captured run used Vulkan; the current renderer does not force a backend |
 | 4. `lunco://` resolves to empty AppData cache | **Fixed / not reproduced** — 243 assets resolved from the install dir |
 | 5. `BigSpace` second floating origin | Not reproduced — 4 cameras mounted cleanly as grid-direct followers |
 | 6. Sim setup deadlock on unresolvable prim | Not reproduced |
