@@ -82,7 +82,7 @@ use lunco_mobility::{
     DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
     SuspensionSpring, WheelRaycast,
 };
-use lunco_render::{PbrLook, SceneCamera};
+use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -1886,6 +1886,10 @@ fn process_usd_sim_prim_read(
                 // and it is what every "which entity is the scene camera?"
                 // query filters on.
                 SceneCamera::agx(),
+                // This avatar camera is renderer-owned intent. The render
+                // binder must keep it synchronized with live Graphics settings
+                // just like canonical USD and native avatar cameras.
+                GraphicsCameraDefaults,
             )
         };
 
