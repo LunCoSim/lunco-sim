@@ -14,28 +14,25 @@ const ARRIVE_RADIUS = 2.0;        // "arrived" tolerance (m)
 const PROBE = 6.0;                // obstacle look-ahead distance (m)
 const TURN = 0.6;                 // steer magnitude while avoiding
 
-fn on_start(me) {
-    this.done = false;
-    print("avoid: heading for goal, probing " + PROBE + "m ahead");
-}
-
-fn on_tick(me) {
-    if this.done { return; }
-
-    // SENSE: is a collider within PROBE metres straight ahead?
-    if obstacle_ahead(me, PROBE) {
-        // AVOID: keep creeping forward but turn away. (A richer policy would
-        // raycast left and right and steer toward the clearer side — see the
-        // raycast() verb; this keeps the example short.)
-        drive(me, SPEED * 0.5, TURN);
-        emit("AVOIDING", true);
-        return;
-    }
-
-    // CLEAR: navigate toward the goal. nav_to brakes + returns true on arrival.
-    if nav_to(me, GOAL, SPEED, ARRIVE_RADIUS) {
-        this.done = true;
-        emit("GOAL_REACHED", true);
-        print("avoid: goal reached");
-    }
+fn task(me) {
+    seq([
+        // SENSE and AVOID are one task leaf. The native task kernel invokes the
+        // closure once per fixed tick; Rhai only supplies the policy.
+        step(
+            |m| {
+                if obstacle_ahead(m, PROBE) {
+                    drive(m, SPEED * 0.5, TURN);
+                    emit("AVOIDING", true);
+                } else {
+                    nav_to(m, GOAL, SPEED, ARRIVE_RADIUS);
+                }
+            },
+            |m| arrived(m, GOAL, ARRIVE_RADIUS),
+        ),
+        once(|m| {
+            emit("GOAL_REACHED", true);
+            print("avoid: goal reached");
+        }),
+        wait(3600000.0), // terminal hold; never re-run the completion action
+    ])
 }

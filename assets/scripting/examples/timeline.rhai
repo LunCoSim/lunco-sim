@@ -4,8 +4,9 @@
 // `RunTimeline { target, timeline }` with NO rhai authored at all; this file
 // just shows the equivalent in-scenario form.
 //
-// compile_timeline lowers the data steps to Layer-1 steps once in on_start; the
-// generic three-hook executor below is what RunTimeline injects automatically.
+// compile_timeline lowers the data steps to Layer-1 steps once when `task(me)`
+// is initialized; the native task kernel owns fixed-tick progression and event
+// delivery.
 
 const TIMELINE = #{
     name: "survey",
@@ -19,16 +20,7 @@ const TIMELINE = #{
     ],
 };
 
-fn on_start(me) {
-    this.cur = seq_init();
-    this.steps = compile_timeline(TIMELINE.steps);
-    print("timeline '" + TIMELINE.name + "': " + this.steps.len() + " steps queued");
-}
-
-fn on_tick(me) {
-    this.cur = run_steps(me, this.steps, this.cur);
-}
-
-fn on_event(me, evt) {
-    this.cur = seq_note_event(this.cur, evt);
+fn task(me) {
+    print("timeline '" + TIMELINE.name + "': " + TIMELINE.steps.len() + " steps queued");
+    seq(compile_timeline(TIMELINE.steps))
 }

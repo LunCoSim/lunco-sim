@@ -4,7 +4,8 @@
 //
 // Attach to a rover via ScriptedModel { language: Rhai }. Each waypoint emits
 // OBJECTIVE_COMPLETE; the last emits PLAN_COMPLETE. External clients see those
-// over SubscribeTelemetry; other scripts can react via on_event.
+// over SubscribeTelemetry. The native task kernel owns progression; there is no
+// hand-written on_tick loop.
 
 const PLAN = [
     [ 12.0, 0.0,   0.0],   // 0: drive out
@@ -15,19 +16,23 @@ const PLAN = [
 const SPEED = 1.0;
 const RADIUS = 2.0;
 
-fn on_start(me) {
-    this.idx = 0;
-    print("mission_plan: " + PLAN.len() + " objectives queued");
+fn waypoint(wp, index) {
+    seq([
+        step(|m| nav_to(m, wp, SPEED, RADIUS),
+             |m| arrived(m, wp, RADIUS)),
+        once(|m| emit("OBJECTIVE_COMPLETE", index)),
+    ])
 }
 
-fn on_tick(me) {
-    if "done_at" in this { return; }   // latch when finished
-
-    // run_plan is stateless — `this` holds the index (only the hook has `this`).
-    this.idx = run_plan(me, PLAN, this.idx, SPEED, RADIUS);
-
-    if this.idx >= PLAN.len() {
-        this.done_at = sim_tick();
-        print("mission_plan: all objectives complete at tick " + this.done_at);
+fn task(me) {
+    let steps = [];
+    for i in 0..PLAN.len() {
+        steps.push(waypoint(PLAN[i], i));
     }
+    steps.push(once(|m| {
+        emit("PLAN_COMPLETE", true);
+        print("mission_plan: all objectives complete at tick " + sim_tick());
+    }));
+    steps.push(wait(3600000.0));
+    seq(steps)
 }
