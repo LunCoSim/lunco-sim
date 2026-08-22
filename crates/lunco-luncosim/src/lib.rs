@@ -2516,16 +2516,13 @@ impl Plugin for SandboxCorePlugin {
                 commands.insert_resource(SANDBOX_GRAVITY)
             })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
-            // calibrated lunar surface (the canonical 128 klx / EV16 `LunarSun`
-            // crushes the dark blueprint ground to black). Inserted BEFORE
-            // `EnvironmentPlugin` so its `init_resource` keeps these. The sun
-            // spawn AND every camera's exposure read this one resource, so lux
-            // and EV stay matched. Tunable live via `SetEnvironmentLight`.
-            .insert_resource(lunco_environment::LunarSun {
-                illuminance_lux: 128_000.0,
-                exposure_ev100: 16.0,
-                ..Default::default()
-            })
+            // calibrated lunar surface (the canonical `LunarSun` defaults
+            // crush the dark blueprint ground to black). Inserted BEFORE
+            // `EnvironmentPlugin` so its `init_resource` keeps this one
+            // authoritative resource. The sun spawn AND every camera's
+            // exposure read it, so lux and EV stay matched. Tunable live via
+            // `SetEnvironmentLight`.
+            .insert_resource(lunco_environment::LunarSun::default())
             // Persistent world shell: one BigSpace root + `WorldGrid` + one
             // `FloatingOrigin`. The validation plugin (debug builds only, logs
             // errors, never panics) is ENABLED: WorldRoot is Transform-free —
