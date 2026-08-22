@@ -55,7 +55,7 @@ use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_render::{RenderQualityProfile, SceneCamera};
+use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
@@ -85,6 +85,11 @@ pub struct UsdDomeEnvironment {
     pub format: DomeFormat,
     /// `inputs:intensity` × 2^`inputs:exposure`.
     pub intensity: f32,
+    /// Whether `intensity` uses the Graphics default and may change when the
+    /// user edits that setting.
+    pub intensity_uses_graphics_default: bool,
+    /// Exposure multiplier retained for a live Graphics-default update.
+    pub intensity_exposure_scale: f32,
     /// `inputs:color` (× the blackbody colour when
     /// `inputs:enableColorTemperature` is on), multiplied into the image.
     pub tint: LinearRgba,
@@ -127,7 +132,12 @@ pub struct DomeCubemap(pub Handle<Image>);
 /// `Without<DomeProjection>` guard on [`project_dome_textures`] is what makes
 /// the work fire exactly once.
 #[derive(Component)]
-pub struct DomeProjection(Task<Option<Image>>);
+pub struct DomeProjection {
+    task: Task<Option<Image>>,
+    texture: Handle<Image>,
+    face_size: u32,
+    tint: LinearRgba,
+}
 
 /// The dome's authored image/tint/size changed and its [`DomeCubemap`] is now
 /// stale. Set by [`refresh_dome_entity`] on a live edit.
@@ -148,10 +158,61 @@ pub struct DomePlugin;
 
 impl Plugin for DomePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<RenderingQualitySettings>();
         app.add_systems(
             Update,
-            (project_dome_textures, bind_dome_to_cameras).chain(),
+            (
+                apply_graphics_dome_quality.run_if(resource_changed::<RenderingQualitySettings>),
+                project_dome_textures,
+                bind_dome_to_cameras,
+            )
+                .chain(),
         );
+    }
+}
+
+/// Apply live Graphics changes to dome state that was not authored by USD.
+///
+/// Intensity is a uniform/camera input and therefore updates without a bake.
+/// Face size is baked into the cubemap, so it marks the dome dirty and lets the
+/// existing async projection path replace the image. Invalid settings remain
+/// unapplied; they are never converted into a lower preset or a guessed value.
+fn apply_graphics_dome_quality(
+    settings: Res<RenderingQualitySettings>,
+    mut environments: Query<(Entity, &mut UsdDomeEnvironment)>,
+    mut ambient_domes: Query<&mut crate::light::UsdDomeAmbient>,
+    mut ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
+    mut commands: Commands,
+) {
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("invalid Graphics dome settings; preserving current dome state: {reason}");
+            return;
+        }
+    };
+
+    for (entity, mut dome) in &mut environments {
+        if dome.intensity_uses_graphics_default {
+            dome.intensity = profile.dome_default_intensity * dome.intensity_exposure_scale;
+        }
+        if dome.face_size != profile.dome_cubemap_face_size {
+            dome.face_size = profile.dome_cubemap_face_size;
+            commands.entity(entity).insert(DomeDirty);
+        }
+    }
+
+    let mut ambient_changed = false;
+    for mut dome in &mut ambient_domes {
+        if dome.uses_graphics_default {
+            dome.value = profile.dome_default_intensity * dome.exposure_scale;
+            ambient_changed = true;
+        }
+    }
+    if ambient_changed {
+        if let Some(ambient) = ambient.as_deref_mut() {
+            ambient.brightness = ambient_domes.iter().map(|dome| dome.value).sum();
+        }
     }
 }
 
@@ -210,10 +271,13 @@ pub fn read_dome_environment(
     // carry 6 layers. An authored value with the wrong type is not omission.
     read_dome_format(reader, sdf_path)?;
 
+    let intensity = crate::light::read_dome_intensity(reader, sdf_path, quality)?;
     Ok(Some(UsdDomeEnvironment {
         texture: load_dome_texture(asset_server, &texture_path),
         format: DomeFormat::LatLong,
-        intensity: crate::light::read_dome_intensity(reader, sdf_path, quality)?,
+        intensity: intensity.value,
+        intensity_uses_graphics_default: intensity.uses_graphics_default,
+        intensity_exposure_scale: intensity.exposure_scale,
         tint: {
             let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)
@@ -299,14 +363,29 @@ fn project_dome_textures(
             .spawn(async move { equirect_to_cubemap(&equirect, face_size, tint) });
         commands
             .entity(entity)
-            .try_insert(DomeProjection(task))
+            .try_insert(DomeProjection {
+                task,
+                texture: dome.texture.clone(),
+                face_size,
+                tint,
+            })
             .remove::<DomeDirty>();
     }
 
     for (entity, dome, mut proj) in &mut running {
-        let Some(cube) = block_on(future::poll_once(&mut proj.0)) else {
+        let Some(cube) = block_on(future::poll_once(&mut proj.task)) else {
             continue;
         };
+        let stale = proj.texture != dome.texture
+            || proj.face_size != dome.face_size
+            || proj.tint != dome.tint;
+        if stale {
+            commands
+                .entity(entity)
+                .remove::<DomeProjection>()
+                .try_insert(DomeDirty);
+            continue;
+        }
         let Some(cube) = cube else {
             warn!(
                 "[usd-bevy] dome projection rejected face size {}; keeping the previous environment",
@@ -341,7 +420,7 @@ pub fn refresh_dome_entity(
     world: &mut World,
     entity: Entity,
     next: Option<UsdDomeEnvironment>,
-    ambient: f32,
+    ambient: Option<crate::light::DomeIntensity>,
 ) {
     use crate::light::{UsdAuthoredLight, UsdDomeAmbient};
 
@@ -363,11 +442,18 @@ pub fn refresh_dome_entity(
             }
         }
         None => {
+            let Some(ambient) = ambient else {
+                return;
+            };
             e.remove::<UsdDomeEnvironment>();
             e.remove::<DomeCubemap>();
             e.remove::<DomeProjection>();
             e.remove::<DomeDirty>();
-            e.insert(UsdDomeAmbient(ambient));
+            e.insert(UsdDomeAmbient {
+                value: ambient.value,
+                uses_graphics_default: ambient.uses_graphics_default,
+                exposure_scale: ambient.exposure_scale,
+            });
         }
     }
     // `on_usd_light_added` recomputes `GlobalAmbientLight` from the authored
@@ -746,6 +832,8 @@ def DomeLight "Dome"
             texture: Handle::default(),
             format: DomeFormat::LatLong,
             intensity: 1.0,
+            intensity_uses_graphics_default: false,
+            intensity_exposure_scale: 1.0,
             tint: LinearRgba::WHITE,
             face_size: 1,
             skybox: true,
@@ -769,5 +857,81 @@ def DomeLight "Dome"
         assert!(world.get::<Skybox>(camera).is_none());
         assert!(world.get::<GeneratedEnvironmentMapLight>(camera).is_none());
         assert!(world.get::<DomeBoundCamera>(camera).is_none());
+    }
+
+    #[test]
+    fn graphics_quality_updates_unauthored_dome_state_without_rewriting_authored_values() {
+        let mut app = App::new();
+        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(bevy::light::GlobalAmbientLight::default());
+        app.add_systems(Update, apply_graphics_dome_quality);
+
+        let default_dome = app
+            .world_mut()
+            .spawn(UsdDomeEnvironment {
+                texture: Handle::default(),
+                format: DomeFormat::LatLong,
+                intensity: 2_000.0,
+                intensity_uses_graphics_default: true,
+                intensity_exposure_scale: 2.0,
+                tint: LinearRgba::WHITE,
+                face_size: 1024,
+                skybox: true,
+            })
+            .id();
+        let authored_dome = app
+            .world_mut()
+            .spawn(UsdDomeEnvironment {
+                texture: Handle::default(),
+                format: DomeFormat::LatLong,
+                intensity: 23.0,
+                intensity_uses_graphics_default: false,
+                intensity_exposure_scale: 1.0,
+                tint: LinearRgba::WHITE,
+                face_size: 1024,
+                skybox: true,
+            })
+            .id();
+        let ambient_dome = app
+            .world_mut()
+            .spawn(crate::light::UsdDomeAmbient {
+                value: 2_000.0,
+                uses_graphics_default: true,
+                exposure_scale: 2.0,
+            })
+            .id();
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<RenderingQualitySettings>()
+            .dome_default_intensity = 2_000.0;
+        app.world_mut()
+            .resource_mut::<RenderingQualitySettings>()
+            .dome_cubemap_face_size = 2048;
+        app.update();
+
+        let default_dome_state = app.world().get::<UsdDomeEnvironment>(default_dome).unwrap();
+        assert_eq!(default_dome_state.intensity, 4_000.0);
+        assert_eq!(default_dome_state.face_size, 2048);
+        assert!(app.world().get::<DomeDirty>(default_dome).is_some());
+        let authored_dome_state = app
+            .world()
+            .get::<UsdDomeEnvironment>(authored_dome)
+            .unwrap();
+        assert_eq!(authored_dome_state.intensity, 23.0);
+        assert_eq!(authored_dome_state.face_size, 2048);
+        assert_eq!(
+            app.world()
+                .get::<crate::light::UsdDomeAmbient>(ambient_dome)
+                .unwrap()
+                .value,
+            4_000.0
+        );
+        assert_eq!(
+            app.world()
+                .resource::<bevy::light::GlobalAmbientLight>()
+                .brightness,
+            4_000.0
+        );
     }
 }

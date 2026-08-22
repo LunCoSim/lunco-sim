@@ -79,7 +79,11 @@ pub struct UsdAuthoredLight;
 /// `inputs:intensity` × 2^`inputs:exposure`, in `GlobalAmbientLight::brightness`
 /// units).
 #[derive(Component)]
-pub(crate) struct UsdDomeAmbient(pub(crate) f32);
+pub(crate) struct UsdDomeAmbient {
+    pub(crate) value: f32,
+    pub(crate) uses_graphics_default: bool,
+    pub(crate) exposure_scale: f32,
+}
 
 /// The USD attribute that turns a `DomeLight` from a scalar ambient term into an
 /// HDRI environment. Named once here because two crates now have to agree on the
@@ -295,12 +299,21 @@ pub fn read_intensity_with_exposure(
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<f32, LightReadError> {
-    let intensity =
-        read_authored_real(reader, path, "inputs:intensity")?.unwrap_or(default_intensity);
+    Ok(resolve_intensity_with_exposure(reader, path, default_intensity)?.0)
+}
+
+fn resolve_intensity_with_exposure(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    default_intensity: f32,
+) -> Result<(f32, bool, f32), LightReadError> {
+    let authored_intensity = read_authored_real(reader, path, "inputs:intensity")?;
+    let intensity = authored_intensity.unwrap_or(default_intensity);
     let exposure = read_authored_real(reader, path, "inputs:exposure")?.unwrap_or(0.0);
-    let scaled = intensity * exposure.exp2();
+    let exposure_scale = exposure.exp2();
+    let scaled = intensity * exposure_scale;
     if scaled.is_finite() && scaled >= 0.0 {
-        Ok(scaled)
+        Ok((scaled, authored_intensity.is_none(), exposure_scale))
     } else {
         error!(
             "[usd-bevy] {} has non-finite or negative light intensity after exposure",
@@ -310,6 +323,17 @@ pub fn read_intensity_with_exposure(
     }
 }
 
+/// The resolved intensity parts shared by scalar and textured dome paths.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DomeIntensity {
+    /// Effective `inputs:intensity` × 2^`inputs:exposure`.
+    pub value: f32,
+    /// Whether the base intensity came from Graphics because USD omitted it.
+    pub uses_graphics_default: bool,
+    /// The exposure multiplier retained for a live Graphics-default update.
+    pub exposure_scale: f32,
+}
+
 /// Read the effective intensity of a `DomeLight`, using the Graphics setting
 /// only when USD omits `inputs:intensity` and preserving authored intensity and
 /// exposure exactly.
@@ -317,8 +341,14 @@ pub fn read_dome_intensity(
     reader: &crate::StageView<'_>,
     path: &SdfPath,
     quality: RenderQualityProfile,
-) -> Result<f32, LightReadError> {
-    read_intensity_with_exposure(reader, path, quality.dome_default_intensity)
+) -> Result<DomeIntensity, LightReadError> {
+    let (value, uses_graphics_default, exposure_scale) =
+        resolve_intensity_with_exposure(reader, path, quality.dome_default_intensity)?;
+    Ok(DomeIntensity {
+        value,
+        uses_graphics_default,
+        exposure_scale,
+    })
 }
 
 /// Read a real-valued USD light attribute only when an authored opinion exists.
@@ -794,12 +824,18 @@ pub(crate) fn instantiate_light_prim(
                     let Ok(intensity) = read_dome_intensity(reader, sdf_path, quality) else {
                         return false;
                     };
-                    commands
-                        .entity(entity)
-                        .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
+                    commands.entity(entity).try_insert((
+                        UsdDomeAmbient {
+                            value: intensity.value,
+                            uses_graphics_default: intensity.uses_graphics_default,
+                            exposure_scale: intensity.exposure_scale,
+                        },
+                        UsdAuthoredLight,
+                    ));
                     debug!(
-                        "[usd-bevy] {} DomeLight ambient={intensity}",
-                        sdf_path.as_str()
+                        "[usd-bevy] {} DomeLight ambient={}",
+                        sdf_path.as_str(),
+                        intensity.value
                     );
                     return true;
                 }
@@ -1209,7 +1245,7 @@ pub(crate) fn on_usd_light_added(
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
     if let Some(mut ambient) = ambient {
-        ambient.brightness = domes.iter().map(|d| d.0).sum();
+        ambient.brightness = domes.iter().map(|d| d.value).sum();
     }
 }
 
@@ -1525,11 +1561,19 @@ def Xform "World"
 
         assert_eq!(
             read_dome_intensity(&view, &SdfPath::new("/World/Ambient").unwrap(), quality),
-            Ok(quality.dome_default_intensity)
+            Ok(DomeIntensity {
+                value: quality.dome_default_intensity,
+                uses_graphics_default: true,
+                exposure_scale: 1.0,
+            })
         );
         assert_eq!(
             read_dome_intensity(&view, &SdfPath::new("/World/Authored").unwrap(), quality),
-            Ok(23.0)
+            Ok(DomeIntensity {
+                value: 23.0,
+                uses_graphics_default: false,
+                exposure_scale: 1.0,
+            })
         );
     }
 }

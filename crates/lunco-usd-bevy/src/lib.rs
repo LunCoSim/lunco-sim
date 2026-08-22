@@ -91,7 +91,7 @@ mod light;
 pub mod scene_ports;
 pub use camera::{read_camera_exposure_ev100, CameraExposureError, UsdCameraPose, UsdSensorCamera};
 pub use camera_switch::SetActiveCamera;
-pub use light::{read_dome_intensity, read_intensity_with_exposure, LightReadError};
+pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
 pub mod author;
 pub mod camera_path;
 pub mod canonical;

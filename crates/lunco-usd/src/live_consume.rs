@@ -515,7 +515,11 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     };
 
     // Re-read the intent under one short borrow of the `!Send` stage.
-    let domes: Vec<(String, Option<dome::UsdDomeEnvironment>, f32)> = {
+    let domes: Vec<(
+        String,
+        Option<dome::UsdDomeEnvironment>,
+        Option<lunco_usd_bevy::DomeIntensity>,
+    )> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
@@ -548,7 +552,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 // a scalar ambient, read through the same photometry path as load.
                 let ambient = if env.is_none() {
                     match lunco_usd_bevy::read_dome_intensity(&view, &sp, quality) {
-                        Ok(intensity) => intensity,
+                        Ok(intensity) => Some(intensity),
                         Err(_) => {
                             bevy::log::error!(
                                 "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
@@ -558,7 +562,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                         }
                     }
                 } else {
-                    0.0
+                    None
                 };
                 Some((p.clone(), env, ambient))
             })
