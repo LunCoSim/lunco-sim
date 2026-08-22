@@ -213,6 +213,10 @@ impl CurriculumRoot {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
             "twin" => {
                 let (_twin, rel) = rest.split_once('/')?;
+                if !lunco_assets::asset_path::is_safe_relative_path(rel) {
+                    warn!("[tutorial] rejecting unsafe twin lesson source path: {asset:?}");
+                    return None;
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
@@ -2110,5 +2114,17 @@ mod tests {
             seen.iter().any(|s| s.contains("/No/Such/Lesson")),
             "TUTORIAL_FAILED naming the unknown id was not published; saw {seen:?}"
         );
+    }
+
+    #[test]
+    fn twin_lesson_source_cannot_escape_its_root() {
+        let root = CurriculumRoot::twin(
+            lunco_workspace::TwinId::new(1),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf(),
+        );
+        // Without the shared asset-boundary guard this would read the
+        // workspace manifest through the tutorial root.
+        assert!(root.read("twin://untrusted/../../Cargo.toml").is_none());
+        assert!(root.read(r"twin://untrusted\..\Cargo.toml").is_none());
     }
 }

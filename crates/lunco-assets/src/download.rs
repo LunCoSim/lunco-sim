@@ -166,7 +166,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
         .split(['?', '#'])
         .next()
         .and_then(|u| u.rsplit('/').next())
-        .filter(|s| !s.is_empty() && is_safe_rel_dest(s))
+        .filter(|s| !s.is_empty() && crate::asset_path::is_safe_relative_path(s))
         .unwrap_or("download.bin");
     root.join("sources").join(&hash[..16]).join(base)
 }
@@ -333,7 +333,8 @@ pub fn download_asset(
 /// (`--twin <DIR>`) so a Twin's `Assets.toml` materialises files inside the
 /// Twin, where its `demSource` / USD `references` expect to find them.
 /// When a `dest_root` is supplied, `entry.dest` is validated to be a
-/// strictly relative path with no `..` segments (see [`is_safe_rel_dest`])
+/// strictly relative path with no `..` segments (see
+/// [`crate::asset_path::is_safe_relative_path`])
 /// so a manifest can never escape the Twin root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_asset_with_control(
@@ -345,7 +346,7 @@ pub fn download_asset_with_control(
     // Twin-relative downloads must not let a manifest's `dest` walk outside
     // the Twin root. Cache-relative downloads are plain relative paths.
     if let (Some(_root), Some(d)) = (dest_root, entry.dest.as_deref()) {
-        if !is_safe_rel_dest(d) {
+        if !crate::asset_path::is_safe_relative_path(d) {
             return Err(DownloadError::ManifestFailed(format!(
                 "asset `{key}` has an unsafe `dest` for a twin download: {d:?} \
                  (must be relative, no `..`, no absolute, no backslash)"
@@ -941,37 +942,6 @@ pub fn list_group(group: &str) -> Result<(), std::io::Error> {
     )
 }
 
-/// A `dest` path is "twin-safe" iff it is strictly relative, contains no
-/// `..` or root/ prefix component, and uses no backslash — i.e. joining it
-/// to a Twin root can never escape that root. Mirrors the traversal guard
-/// `scenario_sync::safe_rel_path` applies to downloaded-scenario paths, so
-/// a Twin's `Assets.toml` is held to the same standard as the network
-/// download layer.
-pub fn is_safe_rel_dest(dest: &str) -> bool {
-    if dest.is_empty() || dest.contains('\\') {
-        return false;
-    }
-    // Build from the string directly (not `Path::components`, which on this
-    // target would normalise `..` away) — we want to SEE the `..`.
-    for seg in dest.split(['/', '\\']) {
-        if seg.is_empty() || seg == "." || seg == ".." {
-            return false;
-        }
-    }
-    // Reject absolute paths. `Path::is_absolute` covers Unix roots and
-    // Windows UNC on Windows, but on *this* target a Windows drive path
-    // like `C:/Users/x` is NOT absolute (Linux has no drive concept) — so
-    // also reject any leading `X:` drive-letter form, regardless of host.
-    if Path::new(dest).is_absolute() {
-        return false;
-    }
-    let bytes = dest.as_bytes();
-    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        return false;
-    }
-    true
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     #[error("Failed to read manifest: {0}")]
@@ -1054,26 +1024,34 @@ mod tests {
 
     #[test]
     fn safe_rel_dest_accepts_plain_relative() {
-        assert!(is_safe_rel_dest("terrain/apollo15/.cache/dtm.tif"));
-        assert!(is_safe_rel_dest("textures/moon.png"));
-        assert!(is_safe_rel_dest("fonts/DejaVuSans.ttf"));
+        assert!(crate::asset_path::is_safe_relative_path(
+            "terrain/apollo15/.cache/dtm.tif"
+        ));
+        assert!(crate::asset_path::is_safe_relative_path(
+            "textures/moon.png"
+        ));
+        assert!(crate::asset_path::is_safe_relative_path(
+            "fonts/DejaVuSans.ttf"
+        ));
     }
 
     #[test]
     fn safe_rel_dest_rejects_traversal_and_absolute() {
         // Parent escape — the whole point of the guard.
-        assert!(!is_safe_rel_dest("../escape.tif"));
-        assert!(!is_safe_rel_dest("terrain/../../escape.tif"));
-        assert!(!is_safe_rel_dest("a/../b/../../x"));
+        assert!(!crate::asset_path::is_safe_relative_path("../escape.tif"));
+        assert!(!crate::asset_path::is_safe_relative_path(
+            "terrain/../../escape.tif"
+        ));
+        assert!(!crate::asset_path::is_safe_relative_path("a/../b/../../x"));
         // Absolute (Unix + Windows drive).
-        assert!(!is_safe_rel_dest("/etc/passwd"));
-        assert!(!is_safe_rel_dest("C:/Users/x"));
+        assert!(!crate::asset_path::is_safe_relative_path("/etc/passwd"));
+        assert!(!crate::asset_path::is_safe_relative_path("C:/Users/x"));
         // Backslash is a traversal vector on Windows; reject everywhere.
-        assert!(!is_safe_rel_dest("terrain\\..\\x"));
+        assert!(!crate::asset_path::is_safe_relative_path(r"terrain\..\x"));
         // Empty / leading-slash-adjacent.
-        assert!(!is_safe_rel_dest(""));
-        assert!(!is_safe_rel_dest("."));
-        assert!(!is_safe_rel_dest(".."));
+        assert!(!crate::asset_path::is_safe_relative_path(""));
+        assert!(!crate::asset_path::is_safe_relative_path("."));
+        assert!(!crate::asset_path::is_safe_relative_path(".."));
     }
 
     /// A `dest_root = Some(twin)` download that fails the traversal guard

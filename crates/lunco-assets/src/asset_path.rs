@@ -70,6 +70,34 @@ pub fn slashed(p: impl AsRef<Path>) -> String {
     p.as_ref().to_string_lossy().replace('\\', "/")
 }
 
+/// Whether `rel` is safe to join to an owned root directory.
+///
+/// Asset references that cross a root are scheme-qualified. A root-relative
+/// path therefore has to be strictly relative and must not contain a segment
+/// whose meaning changes when it is joined on another platform. Keep this
+/// check at the asset boundary so Twin readers, downloads, and tutorial
+/// sources cannot disagree about traversal.
+pub fn is_safe_relative_path(rel: &str) -> bool {
+    if rel.is_empty() || rel.contains('\\') {
+        return false;
+    }
+    // Inspect the spelling directly: Path::components can hide the `..` that
+    // this boundary must reject, and URI identities use `/` on every platform.
+    if rel
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return false;
+    }
+    // Reject absolute paths on the host and Windows drive paths even when the
+    // current host is Unix, where `C:/...` is not considered absolute.
+    if Path::new(rel).is_absolute() {
+        return false;
+    }
+    let bytes = rel.as_bytes();
+    !(bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
 /// Resolve `asset_path`, as named inside the document at `anchor`, to a stable
 /// asset-source-relative identifier.
 ///
@@ -284,5 +312,28 @@ mod tests {
     fn a_relative_root_reference_is_assets_root_relative() {
         assert_eq!(canonicalize_root("scenes/x.usda"), "scenes/x.usda");
         assert_eq!(canonicalize_root("a/./b/../c.usda"), "a/c.usda");
+    }
+
+    #[test]
+    fn root_relative_paths_reject_traversal_and_absolute_spellings() {
+        for path in [
+            "tutorials/basic/lesson.rhai",
+            "terrain/apollo15/.cache/dtm.tif",
+        ] {
+            assert!(is_safe_relative_path(path), "{path} should be safe");
+        }
+        for path in [
+            "",
+            ".",
+            "..",
+            "../outside.rhai",
+            "tutorials/../../outside.rhai",
+            "/etc/passwd",
+            "C:/Users/user/secret.rhai",
+            r"tutorials\..\outside.rhai",
+            "tutorials//lesson.rhai",
+        ] {
+            assert!(!is_safe_relative_path(path), "{path} should be rejected");
+        }
     }
 }
