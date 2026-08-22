@@ -141,9 +141,9 @@ fn spawn_robot(entry_id, position) {
 }
 
 /// Attach a referenced component with one derived joint anchor.
-fn attach_fixed(host_path, name, asset, placement) {
+fn attach_fixed_in(doc, host_path, name, asset, placement) {
     cmd("AttachComponent", #{
-        doc: usd_document(),
+        doc: doc,
         spec: #{
             edit_target: "@root@",
             host_path: host_path,
@@ -156,9 +156,13 @@ fn attach_fixed(host_path, name, asset, placement) {
     })
 }
 
-fn attach_revolute(host_path, name, asset, placement, rotate_deg, axis) {
+fn attach_fixed(host_path, name, asset, placement) {
+    attach_fixed_in(usd_document(), host_path, name, asset, placement)
+}
+
+fn attach_revolute_in(doc, host_path, name, asset, placement, rotate_deg, axis) {
     cmd("AttachComponent", #{
-        doc: usd_document(),
+        doc: doc,
         spec: #{
             edit_target: "@root@",
             host_path: host_path,
@@ -171,9 +175,13 @@ fn attach_revolute(host_path, name, asset, placement, rotate_deg, axis) {
     })
 }
 
-fn attach_prismatic(host_path, name, asset, placement, rotate_deg, axis) {
+fn attach_revolute(host_path, name, asset, placement, rotate_deg, axis) {
+    attach_revolute_in(usd_document(), host_path, name, asset, placement, rotate_deg, axis)
+}
+
+fn attach_prismatic_in(doc, host_path, name, asset, placement, rotate_deg, axis) {
     cmd("AttachComponent", #{
-        doc: usd_document(),
+        doc: doc,
         spec: #{
             edit_target: "@root@",
             host_path: host_path,
@@ -184,6 +192,10 @@ fn attach_prismatic(host_path, name, asset, placement, rotate_deg, axis) {
             joint: #{ Prismatic: #{ axis: axis } },
         },
     })
+}
+
+fn attach_prismatic(host_path, name, asset, placement, rotate_deg, axis) {
+    attach_prismatic_in(usd_document(), host_path, name, asset, placement, rotate_deg, axis)
 }
 
 // ── Modelica graph authoring ───────────────────────────────────────────────
