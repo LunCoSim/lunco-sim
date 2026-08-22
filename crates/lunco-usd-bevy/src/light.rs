@@ -53,7 +53,7 @@
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use lunco_render::{LunarSunShadow, ShadowRangeAuthorship};
+use lunco_render::{LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
@@ -308,6 +308,17 @@ pub fn read_intensity_with_exposure(
         );
         Err(LightReadError)
     }
+}
+
+/// Read the effective intensity of a `DomeLight`, using the Graphics setting
+/// only when USD omits `inputs:intensity` and preserving authored intensity and
+/// exposure exactly.
+pub fn read_dome_intensity(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    quality: RenderQualityProfile,
+) -> Result<f32, LightReadError> {
+    read_intensity_with_exposure(reader, path, quality.dome_default_intensity)
 }
 
 /// Read a real-valued USD light attribute only when an authored opinion exists.
@@ -780,7 +791,7 @@ pub(crate) fn instantiate_light_prim(
             ) {
                 Ok(Some(env)) => env,
                 Ok(None) => {
-                    let Ok(intensity) = read_intensity_with_exposure(reader, sdf_path, 1.0) else {
+                    let Ok(intensity) = read_dome_intensity(reader, sdf_path, quality) else {
                         return false;
                     };
                     commands
@@ -1488,6 +1499,36 @@ def Xform "World"
         );
         assert_eq!(
             read_intensity_with_exposure(&view, &SdfPath::new("/World/Panel").unwrap(), 10_000.0),
+            Ok(23.0)
+        );
+    }
+
+    #[test]
+    fn omitted_dome_intensity_uses_graphics_default_and_authored_intensity_wins() {
+        let source = r#"#usda 1.0
+
+def Xform "World"
+{
+    def DomeLight "Ambient"
+    {
+    }
+    def DomeLight "Authored"
+    {
+        float inputs:intensity = 23
+    }
+}
+"#;
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
+            .expect("stage builds");
+        let view = stage.view();
+        let quality = lunco_render::RenderingQuality::High.profile();
+
+        assert_eq!(
+            read_dome_intensity(&view, &SdfPath::new("/World/Ambient").unwrap(), quality),
+            Ok(quality.dome_default_intensity)
+        );
+        assert_eq!(
+            read_dome_intensity(&view, &SdfPath::new("/World/Authored").unwrap(), quality),
             Ok(23.0)
         );
     }

@@ -213,11 +213,7 @@ pub fn read_dome_environment(
     Ok(Some(UsdDomeEnvironment {
         texture: load_dome_texture(asset_server, &texture_path),
         format: DomeFormat::LatLong,
-        intensity: crate::light::read_intensity_with_exposure(
-            reader,
-            sdf_path,
-            quality.dome_default_intensity,
-        )?,
+        intensity: crate::light::read_dome_intensity(reader, sdf_path, quality)?,
         tint: {
             let c = crate::light::read_light_color(reader, sdf_path)?;
             LinearRgba::rgb(c.x, c.y, c.z)

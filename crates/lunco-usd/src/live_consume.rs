@@ -547,7 +547,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 // The fallback if the author dropped the texture: a bare dome is
                 // a scalar ambient, read through the same photometry path as load.
                 let ambient = if env.is_none() {
-                    match lunco_usd_bevy::read_intensity_with_exposure(&view, &sp, 1.0) {
+                    match lunco_usd_bevy::read_dome_intensity(&view, &sp, quality) {
                         Ok(intensity) => intensity,
                         Err(_) => {
                             bevy::log::error!(
