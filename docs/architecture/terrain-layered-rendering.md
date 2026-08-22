@@ -320,58 +320,21 @@ to XZ via `TerrainGeoref`, samples the `SurfaceOracle` for Y so the lines hug re
 and draws them with `Gizmos`. Per-viewer toggle, no material change, works in every
 shader mode.
 
-## Phasing
+## Current status and next work
 
-> **Implementation status (2026-07-12).** The headless **data + transfer** half of Phase 1
-> plus the render VIEW are landed and verified on the streamed DEM:
-> - `SurfaceField` (`lunco-terrain-core::field`) — slope / aspect / elevation as pure,
->   headless, deterministic fields; `field_map` materialises a region raster.
-> - `TransferFn` (`lunco-terrain-core::transfer`) — Ramp / Threshold / **SlopeHazard**
->   (live critical-angle, reusing `hazard_from_slope`) / Palette; `sample(v) → Rgba`,
->   shared by the shader, the legend, and any headless export so they always agree.
-> - `TerrainField` query (`lunco-terrain-surface::query`) —
->   `query("TerrainField", {field, x, z, half, res})` returns a headless region raster.
-> - **Overlay VIEW** — `TerrainOverlayParams` + `SetTerrainOverlay` command +
->   `sync_terrain_overlay` live-tune, and overlay uniforms + the slope-hazard blend in
->   `terrain_geomorph.wgsl` / `_web.wgsl` (slope from the geometric normal, running the
->   same transfer math on-GPU as `transfer.rs`).
->
->   **Every `SetTerrainOverlay` field is `Option<T>`** — `enabled`, `safe_deg`,
->   `cliff_deg`, `opacity`. An omitted field means *leave it alone*. When `enabled` was
->   a plain `#[Command(default)]` bool it was written unconditionally on every call, so
->   `{"cliff_deg": 25}` **silently switched the overlay off** while appearing to tune
->   it. A partial-update command whose fields are not optional cannot express "change
->   only this" — it can only express "set everything, defaulting what you didn't say."
-> - **Inspector legend + sliders** (`lunco-luncosim-edit::ui::inspector`) — enable +
->   Safe/Cliff/Opacity sliders + a gradient legend coloured by the same
->   `hazard_from_slope` + `hazard_color`, so the legend matches the terrain exactly.
->
-> Remaining in Phase 1: the `lunco:layer = "field"` USD descriptor + tiled materialisation
-> (the field is headless-queryable but not yet an addressable USD layer). Phases 2–5
-> (graticule, tiled overlay stack, dynamic maps, manual paint) are unstarted. The overlay
-> paints the **streamed CDLOD** terrain (`terrain_geomorph`); a statically-meshed DEM
-> (`lod_viz = false`) would need the same uniforms wired into its material.
+Implemented: deterministic `SurfaceField` and `TransferFn` queries, the
+`TerrainField` region query, streamed-CDLOD overlay uniforms, live
+`SetTerrainOverlay` partial updates, and the inspector legend/sliders. The
+headless field is not yet addressable as a USD layer, and the overlay is wired
+to the streamed `terrain_geomorph` material rather than the static DEM path.
 
-1. **Slope as a `SurfaceField` (data-first, headless).** Define slope as a field on the
-   oracle (reuse `derive.rs::slope_map` + `normal_at`); the point query already returns
-   it. Add a `lunco:layer = "field"` USD descriptor `{ field: slope }` so it's
-   addressable / headless-queryable by other tools, and region/tile materialisation.
-   *Then* the view: Threshold transfer (live **critical-angle** uniform defaulting to
-   `hazard_from_slope`'s safe/cliff angles) → Blend, inspector slider + legend. The
-   render is the last step; the field is usable headless first. Terrain crates + luncosim-edit.
-2. **Lat/lon grid.** `TerrainGeoref` forward/inverse (equirectangular first) + gizmo
-   graticule + toggle.
-3. **Tiled overlay stack.** The per-tile pyramid + residency (reusing terrain tile
-   streaming) + `texture_2d_array` + per-layer uniform array + the `texture_layer()`
-   contribution kind + `lunco:layer = "texture"` parser + shader loop. Delivers LOD
-   parity, intrinsic coverage/NoData, and view-bounded memory; unlocks minerals
-   (authored raster tiled on ingest + Palette + legend) and any N tiled layers.
-4. **Dynamic maps.** The `Dynamic { driver, cadence }` provider + connectivity layer
-   (reusing the horizon oracle + ephemeris + comms substrate) + illumination-over-time.
-   Polar-stereographic georef for the polar sites lands here if not before.
-5. **Manual maps.** The paint brush (raster, reusing the height-brush pipeline —
-   `SparsePaintField` + USD authoring) and vector-annotation drawing (Plane 2).
-   Independent of Phase 3/4 — it can follow Phase 1 since it reuses the existing edit tools.
+Remaining work, in dependency order:
+
+1. Add the `lunco:layer = "field"` USD descriptor and tiled field materialisation.
+2. Add `TerrainGeoref` forward/inverse projection and the lat/lon graticule.
+3. Add a tiled overlay stack with terrain-LOD residency and NoData coverage.
+4. Add dynamic providers and illumination-over-time maps.
+5. Add manual raster and vector authoring on the existing edit-tool pipeline.
 
 ## Resolved by the tiled model
 

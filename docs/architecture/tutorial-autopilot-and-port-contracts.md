@@ -140,12 +140,10 @@ because a body, solver, joint, or autopilot state diverges.
 
 ## 5. Current follow-up boundary
 
-The `DeclaredOutputPorts` change fixes the missing environment-source contract;
-it does not claim that every tutorial mission is green. The remaining lander
-mission failure observed during this work was a physical/runtime failure after
-EarthTracker binding: the landing legs left the world and the scenario timed
-out. Investigate that through the force/solver/joint/finite-state containment
-boundary, not by changing environment port declarations.
+The `DeclaredOutputPorts` change fixes the missing environment-source contract.
+Physical lander acceptance remains a separate force/solver/joint/finite-state
+boundary; investigate it through the powered-lander and BigSpace contracts,
+not by changing environment port declarations.
 
 See also:
 
@@ -153,5 +151,7 @@ See also:
 - [`23-domain-environment.md`](23-domain-environment.md) — environmental facts
 - [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) — the
   unresolved fixed-step deterministic solver contract
-- [`../landing_coordinate_frame_failure.md`](../landing_coordinate_frame_failure.md)
-  — current coordinate-frame, recording, and solver follow-up evidence
+- [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) — current
+  coordinate-frame and physics-bridge maintenance contract
+- [`lander-actuation-modelica.md`](lander-actuation-modelica.md) — current
+  powered-lander force, torque, and Modelica boundary

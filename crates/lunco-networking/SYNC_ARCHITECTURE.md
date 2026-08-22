@@ -109,9 +109,8 @@ coordinates (M2) remain orthogonal.
 
 The abstract "reconcile predicted (smooth error-correct, not rollback)" above is
 realised on the client as **physics-space error reduction** (Fiedler / Rocket
-League model). Canonical as-built summary: README → *Client-Side Prediction* (the
-full write-up + debugging story lived in `PREDICT_AND_SMOOTH_PLAN.md` /
-`PREDICTION_MEMBERSHIP.md`, now in git history). Shape:
+League model). Canonical as-built summary: README → *Client-Side Prediction*.
+Shape:
 
 - **Membership (which bodies predict locally).** Three disjoint sets, all client-only:
   - *Owned, actively driven* (`OwnedLocally`, computability rule + drive-grace):
@@ -233,8 +232,8 @@ mechanism is independently convergent — therefore the world converges.**
   built — it *is* the op-log).
 - **M5** ⇐ the Yjs/yrs plan in the README (Modelica text).
 - **M7** ⇐ today's local components (camera, selection) — unchanged.
-- The hard project-specific work (the former `DESIGN_GAPS.md` A–D; open items now in
-  README → *Known gaps*) lives inside M1 (identity), M2 (big_space pose,
+- The hard project-specific work (the open items in README → *Known gaps*) lives
+  inside M1 (identity), M2 (big_space pose,
   cosim-eligibility), and M6 (sim clock) — each has a home.
 
 The architecture is complete: four axes, seven mechanisms, one tick pipeline, one

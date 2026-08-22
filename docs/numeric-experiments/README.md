@@ -1,18 +1,9 @@
 # Numeric experiments — solver / model integration
 
 This is the living solver/numerics reference: working configurations,
-known-failing models, and the ranked rumoca / `lunco-modelica` backlog. Detailed
-dated experiment reports are deleted after their durable findings are folded
-here; Git history retains the full diagnosis. The related rumoca workarounds
-are indexed in [`architecture/29-rumoca-workarounds.md`](../architecture/29-rumoca-workarounds.md).
-
-## Index
-
-- *2026-05-28 — Lunar rover thermal model* (deleted; `git log -- docs/numeric-experiments/`):
-  stiff radiative DAE failing at t=2.5e-7 across all solvers; root cause was
-  FD-Jacobian degeneracy at the consistent-IC solve combined with insufficient
-  retry budgets. Its durable conclusions live in the reference below — note
-  that its TR-BDF2 recommendation was later **overturned** (see next section).
+known-failing models, and the ranked rumoca / `lunco-modelica` backlog. Durable
+solver findings belong here; the related rumoca workarounds are indexed in
+[`architecture/29-rumoca-workarounds.md`](../architecture/29-rumoca-workarounds.md).
 
 ## Solver tuning reference — known configs, known-failing models, and the rumoca/lunco-modelica backlog
 

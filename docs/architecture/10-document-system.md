@@ -546,8 +546,8 @@ replace typed domain ops like `AddConnection { from, to }`; they're
 candidates for use *inside* specific Document types (e.g. equation
 bodies as `YText`), not in place of `Document`.
 
-Full research write-up, maturity comparison, and triggers to revisit
-this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md).
+Revisit this only if live document merging becomes an active product
+requirement, or if a specific document type needs CRDT-backed text editing.
 
 ## 15. See also
 
@@ -556,4 +556,3 @@ this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.
 - [`11-workbench.md`](11-workbench.md) — how panels (DocumentViews) are hosted by the workbench
 - [`20-domain-modelica.md`](20-domain-modelica.md) — first domain implementation (ModelicaDocument)
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as a second Document domain
-- [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md) — library survey & decision rationale

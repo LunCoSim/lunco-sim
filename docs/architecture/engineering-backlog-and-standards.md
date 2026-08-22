@@ -12,9 +12,9 @@ Security and multiplayer-hardening decisions are recorded in
 The network command/session boundaries are enforced; only the explicitly trusted
 loopback API authoring boundary remains outside that session model.
 
-Sourced from the 2026-07-19 static review (`REVIEW-2026-07-19.md` §8) and its
-deferred-work companion. When an item lands, delete it here and let the
-subsystem doc describe the result.
+This file contains only work that is still active or deliberately deferred.
+When an item lands, delete it here and let the subsystem doc describe the
+result.
 
 ---
 
@@ -152,62 +152,7 @@ spot-checked. Findings are fixed in the fork
 
 **Scope:** medium; mostly harness work, then a burn-down of findings.
 
-### Resolved: USDA nesting is bounded at the engine asset boundary
-
-**Resolution:** Every engine-owned USDA entry point now performs a delimiter
-depth preflight before invoking openusd's recursive text parser. The shared
-composition resolver rejects more than 128 structural levels as invalid asset
-data, so untrusted Twin content cannot consume the process stack. Comments,
-strings, and asset literals are skipped by the preflight and ordinary syntax
-continues to be validated by openusd.
-
-**Why:** openusd's USDA parser is recursive, so a stack bound must be enforced
-before untrusted text reaches it. The preflight is intentionally structural and
-small; the parser remains the authority for USDA syntax and diagnostics.
-
-**Scope:** closed for production engine paths. Direct third-party uses of the
-upstream parser remain responsible for their own resource policy; LunCoSim's
-asset, composition, authoring, and browser paths all use the bounded entry point.
-
-### Resolved: time-sampled values are unit-converted
-
-**Resolution:** `UsdDocument::apply` now applies the canonical→stage conversion
-to `UsdOp::SetTimeSample` through the same typed/unit path as `SetAttribute`.
-
-**Evidence:** the conversion is covered by the document authoring tests; keep
-the tests as the regression gate when adding new sampled attribute roles.
-
-**Scope:** closed. No compatibility path or alternate authoring mechanism is
-required.
-
-### Resolved: `!resetXformStack!` keeps the mount but drops the USD ancestor stack
-
-**Resolution:** A reset prim is reparented to its stage-root entity, preserving
-the twin/grid mount frame, and its local matrix is re-expressed in that root's
-frame. This removes the stage root's authored transform as well as every
-intermediate USD ancestor, matching `UsdGeomXformable`'s strict world-stack
-semantics without making the prim grid-direct.
-
-**Evidence:** The USD-Bevy regression test authors a translated stage root and a
-reset descendant and asserts the descendant's corrected local transform. The
-same path remains idempotent when ancestry materialises asynchronously.
-
 ## 6. Architecture debt
-
-### Core purity: dynamic subsystem registration
-
-**What:** Subsystems register their toggle names from their owning plugins;
-`lunco-core` supplies only the shared toggle resource.
-
-**Why:** The standing rule is that nothing domain-specific enters `lunco-core`
-([`38-domains-as-packages.md`](38-domains-as-packages.md)). The drive kernels
-half of this has landed — `DriveInputs`/`DriveMix`/`ControlKernelRegistry` now
-live in `lunco-mobility` with the systems that consume them, and core no longer
-names a vehicle concept. Subsystem names now follow the same ownership rule:
-adding one is registration by its domain plugin, not a core edit.
-
-**Status:** complete. The registration API rejects unregistered writes and
-the obstacle-field plugin is the first production owner.
 
 ### `UsdDocument` stores `sdf::Data`, so every edit round-trips through text
 
@@ -279,31 +224,6 @@ remains is the Storage-API migration, which needs a dependency line from
 `lunco-scripting` to the storage crate.
 
 **Scope:** small.
-
-### Event-driven USD connection binding transaction — implemented
-
-USD composition publishes inert `SimConnection` specifications. The runtime
-marks every executable endpoint `Pending`, `Ready`, or `Failed`, and the
-`lunco-cosim` binder is the only path that adds `BoundConnection`. Fixed-step
-propagation sees bound edges only; it neither discovers topology nor diagnoses
-ports.
-
-`BindingRevision` makes the transaction reactive: prim, Modelica, joint, wheel,
-and differential projection changes request an epoch; USD holds readiness while
-that epoch is unsettled and seals it after its pending projectors reach a
-terminal state. A sealed exact-port miss becomes one `CosimDiagnostics` fault
-at binding time. It is never re-emitted by the per-tick exchange loop.
-
-Modelica lifecycle publication and binding run in one Update transaction. This
-is important: a `Compiling → Ready` transition is visible to the binder before
-its revision is consumed, so a generated boundary cannot need an incidental
-later tick to become live. The regression in `lunco-cosim` covers that exact
-transition; binding-unit coverage also pins the one-shot terminal-miss rule.
-
-Ownership remains strict: `lunco-usd-compose` composes USD facts,
-`lunco-usd-sim` projects them and owns scene readiness, and `PortRegistry`
-resolves already-live values. No layer polls files, retries a connection each
-physics tick, or uses a delay as a substitute for endpoint readiness.
 
 ## 7. Dependencies & supply chain
 

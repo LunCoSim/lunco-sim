@@ -314,10 +314,10 @@ integrator advances velocity and position. Gravity is applied by
 `apply_gravity_to_rigid_bodies` system — Modelica models no longer subtract
 weight; they only produce aerodynamic / buoyancy force.
 
-Historical note: earlier designs used Kinematic bodies with direct `Position`
-writes. That caused (a) change-detection conflicts with gizmo drags,
-(b) double-integration when `LinearVelocity` was also written, (c) missing
-collision response on joints. Current Dynamic-body design avoids all three.
+Current invariant: subsystem-driven bodies are Dynamic and receive forces
+through the Avian force path. Direct `Position` writes are not a co-simulation
+mechanism; this preserves change detection, single integration, and joint
+collision response.
 
 ## Pause and time warp
 
@@ -338,11 +338,9 @@ dispatched through the Twin resource. The master-loop pipeline reads
   proportionally. Global slider → same factor applied to every clock's
   rate (see [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md)).
 
-Historical note (pre-Run model): earlier designs used a per-entity
-`SimPaused` marker and ad-hoc `Time<Physics>::pause()`. That remains a
-correct low-level mechanism, but the Run-centric model is now the
-single source of truth — toolbar / API / scripts all go through
-TwinCommand, not direct component mutation.
+The Run resource is the single source of truth for pause, reset, and rate
+changes. Toolbar, API, and scripts dispatch `TwinCommand`; they do not mutate
+per-entity pause markers or physics time directly.
 
 ## Convention: Modelica `output` requirement
 

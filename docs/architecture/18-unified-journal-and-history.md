@@ -5,7 +5,7 @@
 > Realized in [`lunco-twin-journal`](../../crates/lunco-twin-journal) (`JournalEntry`,
 > `EntryId {author, lamport}`, DAG `parents`, `EntryKind::{Op, TextEdit, Snapshot,
 > Lifecycle}`, `LamportClock`) with the Bevy bridge in `lunco-doc-bevy` and network
-> replication via the journal plane ([`31-networking-and-state-sync.md`](31-networking-and-state-sync.md)).
+> replication via the journal plane ([networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
 
 ## Goal
 

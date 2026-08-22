@@ -1825,7 +1825,7 @@ type and literal, journals the edit, and re-composes the live stage.
 | Field | Type | Description |
 |---|---|---|
 | `mode` | `Option < String >` |  `"dark"` / `"light"` (case-insensitive). When `None`, toggles. |
-| `persist` | `Option < bool >` |  `false` = apply for this session only, leave `settings.json` alone.  Default `true` (the historical behavior). |
+| `persist` | `Option < bool >` |  `false` = apply for this session only, leave `settings.json` alone. Default `true`. |
 
 #### `SetTourStep`
 

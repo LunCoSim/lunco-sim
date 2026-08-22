@@ -1,6 +1,6 @@
 # 27 — Simulation Target & Run-Configuration Resolution
 
-> Status: Implemented · Audience: contributors working on target/run-config resolution.
+> Status: Active · Audience: contributors working on target/run-config resolution.
 
 **Scope:** how LunCoSim decides *which* thing to simulate and *with what bounds*, why the current logic breeds drift bugs, how to make that bug class unrepresentable, and how the same machinery generalizes from Modelica to USD (framed against the FMI / SSP standards).
 

@@ -97,6 +97,6 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H 'Content-Type: application
 - **`read_ports` without an `api_id` is huge** — always `name_filter` and/or `ports`.
 - **`api_id` (API-stable) ≠ the rhai `GlobalEntityId`** — get `api_id` from `list_entities`, don't reuse a gid from a script.
 - **Port not found / empty?** The entity may be pre-compile (Modelica hasn't produced variables yet — `cosim_status` shows nulls until it does), or the name is a USD-path substring you haven't matched. List its ports first with `read_ports {api_id}` (no `ports` filter) to see the real names.
-- **Wrong port?** The MCP bridge historically defaulted to 3000 — the canonical API port is **4101**; set `LUNCO_API_PORT=4101` if the MCP tools miss.
+- **Wrong port?** The canonical API port is **4101**; set `LUNCO_API_PORT=4101` if the MCP tools miss.
 - **Don't restart to "get clean state"** — read the running instance; see the ⚠️ in [`test-via-api`](../test-via-api/SKILL.md).
 - **One-shot vs series:** `read_ports` samples once (call again for fresh values); use `watch_ports` for a time-series — don't sleep-loop `read_ports`.

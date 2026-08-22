@@ -58,20 +58,10 @@ Terminology mapping:
 
 All defined in [`01-ontology.md`](01-ontology.md) § 4d–§4f.
 
-> **Naming note.** Earlier drafts of this doc used "Workspace" for the
-> layout-preset concept (CATIA/Blender naming). That collides with the
-> VS Code sense of Workspace we needed for the editor-session type, so
-> the trait was renamed to **Perspective** (Eclipse naming). Historical
-> code or docs that say "Workspace trait" or `BuildWorkspace` refer to
-> the Perspective concept.
-
 ## 2. Why we're building this
 
 The initial plan used `bevy_workbench` (an `egui_tiles`-based docking crate).
-It got us off the ground but revealed architectural mismatches for a
-3D-canvas engineering app — see
-[`research/ui-ux-inspiration.md`](research/ui-ux-inspiration.md) § "Rejected
-paths" for details. Summary:
+It revealed architectural mismatches for a 3D-canvas engineering app:
 
 - **Viewport is not a tile.** `egui_tiles` treats every tile as equal; our
   3D scene must be structurally persistent, always central, never closable,
@@ -656,5 +646,4 @@ launches LunCoSim) is a later task — see task #90.
 - [`01-ontology.md`](01-ontology.md) § 4d — workbench vocabulary
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Run/Scenario control surface
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific panels
-- [`research/ui-ux-inspiration.md`](research/ui-ux-inspiration.md) — patterns from professional tools
 - `specs/008-developer-experience` — detailed spec
