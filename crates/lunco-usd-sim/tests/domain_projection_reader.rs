@@ -61,14 +61,16 @@ fn reads_a_composed_collection_into_one_generated_model() {
         "an unconnected input is the model's parameter"
     );
 
-    // Instances are named by their composed path relative to the network root;
-    // a member that lives OUTSIDE the scope's subtree (the normal shape — parts
-    // hang off the vessel, the scope only collects them) keeps its full path,
-    // spelled injectively.
+    // The generated root owns the public boundary and instantiates one
+    // synthesizer-owned child unit for this connected island. Member instances
+    // and their equations stay inside that unit; a member that lives OUTSIDE
+    // the scope's subtree (the normal shape — parts hang off the vessel, the
+    // scope only collects them) keeps its full path, spelled injectively.
     let source = emit_modelica(&network, "Rig_Electrical_System");
     assert!(source.contains("input Real drive_left;"));
+    assert!(source.contains("Unit_Rig_x2f_Battery unit_1_Rig_Battery"));
     assert!(
-        source.contains("connect(Rig_x2f_Battery.p, Rig_x2f_Motor.p);"),
+        source.contains("connect(Rig_x2f_Battery.p, Rig_x2f_Motor.p) annotation(Line(points="),
         "acausal edge missing from:\n{source}"
     );
     assert!(
