@@ -71,3 +71,4 @@ workspace = true
 
 [dev-dependencies]
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+rumoca-phase-parse = { workspace = true }

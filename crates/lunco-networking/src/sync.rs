@@ -3332,7 +3332,7 @@ impl Plugin for SyncPlugin {
             // Scripted-policy plane: the active rhai policy set (merge / authz /
             // drive-kernel). Host-authoritative; clients fill it from the host's
             // broadcast (`drain_sync_inbox`). Present on every peer.
-            .init_resource::<crate::scripted_policy::ScriptedPolicyRegistry>()
+            .init_resource::<lunco_scripting::policy::ScriptedPolicyRegistry>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()

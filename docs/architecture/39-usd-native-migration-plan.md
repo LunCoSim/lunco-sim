@@ -212,7 +212,9 @@ domain-op selection + scripted merge-policy hook + machine-unique `AuthorTag` + 
   primitives + hooks; doc 37 §3, §8): `DomainSynthesizer` implementations are selected by the authored
   `lunco:synthesizer` token, the default acausal network and actuator-wrench implementations are registered,
   and `register_hook_synthesizer` provides the authored-policy seam. A hook receives Rust-owned composed
-  network facts and returns the generated Modelica source; it never re-reads USD.
+  network facts and returns the generated Modelica source, its explicit unit
+  merge, and diagram placements; it never re-reads USD. The result is validated
+  against the composed member set and public boundary before projection.
 - **P5.3 [in place] — Enforce the two-level rule** (doc 37 §1): acausal within a `.mo`, causal across via
   connections. The registered acausal synthesizer emits disconnected graph units below one runtime root;
   the unit boundary does not create a second ECS participant or a second wiring path.

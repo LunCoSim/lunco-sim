@@ -20,6 +20,10 @@ pub mod doc;
 /// ids come from `lunco_assets::script_source::ScriptSources`.
 #[cfg(feature = "rhai")]
 pub mod module_resolver;
+/// Runtime policy activation for every rhai hook seam, including generated
+/// Modelica synthesis policies.
+#[cfg(feature = "rhai")]
+pub mod policy;
 pub mod python;
 /// Journaling for named registrations (tool libraries + timelines) — so a
 /// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
@@ -288,6 +292,8 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.init_resource::<ScriptRegistry>();
+        #[cfg(feature = "rhai")]
+        app.init_resource::<policy::ScriptedPolicyRegistry>();
         // Attended (a person is watching) or not — read by the `is_unattended()`
         // verb so a lesson knows whether to drive itself. Resolved in Startup,
         // once windows exist; the `Default` until then is `Unattended`, which is

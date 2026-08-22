@@ -7640,8 +7640,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
- "lunco-hooks",
- "lunco-hooks-rhai",
+ "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
  "lunco-twin",
@@ -8160,6 +8159,7 @@ dependencies = [
  "lunco-usd-avian",
  "lunco-usd-bevy",
  "openusd",
+ "rumoca-phase-parse",
  "serde_json",
 ]
 

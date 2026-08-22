@@ -72,6 +72,8 @@ pub struct GeneratedModelicaSource {
     pub member_output_aliases: Vec<(String, String, String)>,
     /// Deterministic composite units selected by the synthesizer.
     pub units: Vec<SynthesisUnit>,
+    /// Unit and member positions selected by the synthesizer policy.
+    pub layout: SynthesisLayout,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -135,6 +137,22 @@ pub struct SynthesisUnit {
     pub outputs: BTreeSet<String>,
 }
 
+/// Visual placement selected alongside a generated Modelica plan.
+///
+/// Positions are presentation facts, not simulation inputs. The built-in
+/// synthesizer supplies a deterministic topology layout; a hook-backed
+/// synthesizer may replace it by returning a `layout` map. Keeping the
+/// positions in the plan makes the policy result inspectable through the
+/// generated-source API instead of leaving the visual decision implicit in a
+/// separate Rust pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SynthesisLayout {
+    /// Generated child-unit class name to Modelica diagram position.
+    pub unit_positions: BTreeMap<String, (i32, i32)>,
+    /// Composed USD member path to Modelica diagram position.
+    pub member_positions: BTreeMap<String, (i32, i32)>,
+}
+
 /// One authoring error that prevents a safe runtime projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DomainProjectionError {
@@ -166,6 +184,8 @@ pub struct SynthesisPlan {
     pub members: Vec<(String, String, String)>,
     /// Connected composite units emitted below the root model.
     pub units: Vec<SynthesisUnit>,
+    /// Presentation placements selected by the synthesizer.
+    pub layout: SynthesisLayout,
 }
 
 /// One way of turning a composed USD scope into ONE Modelica compilation unit.
@@ -175,12 +195,14 @@ pub struct SynthesisPlan {
 /// not an edit to [`project_domain_islands`]. A scope selects one with
 /// `uniform token lunco:synthesizer`; absent means the default.
 ///
-/// Not yet rhai-authored: a rhai body would need an emit surface of its own
-/// (`ApplyModelicaOp`-style verbs) before policy could live outside Rust. The
-/// registry is what makes that a later addition rather than a rewrite.
+/// Hook-backed entries use the existing `lunco_hooks` substrate: Rust supplies
+/// the composed facts and Rhai returns the Modelica source, merge units, and
+/// diagram placements. The registry keeps that policy selection independent of
+/// `project_domain_islands`, so changing dynamic building behaviour does not
+/// require a Rust branch.
 pub trait DomainSynthesizer: Send + Sync + 'static {
     /// Registry key, and the token a scope names.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     /// Turn one composed scope into a compilation unit.
     fn synthesize(
         &self,
@@ -256,20 +278,21 @@ impl SynthesizerRegistry {
 /// of it should require a rebuild to change.
 ///
 /// The hook receives one argument — [`network_facts`] — and returns a map with
-/// a required `source` key (room for a policy to report its own diagnostics
-/// later). A single result shape keeps the extension boundary typed for every
-/// authored emitter.
+/// a required `source` key. It may also return `units` and `layout`: those are
+/// the policy's explicit merge and presentation decisions. Omitting either
+/// keeps the documented deterministic default, which is supplied as facts to
+/// the policy and remains visible in the resulting plan.
 ///
 /// Registered through [`register_hook_synthesizer`]; the hook id is by convention
 /// `synth.<name>`, reached exactly like `lint.usd`.
 pub struct HookSynthesizer {
-    name: &'static str,
+    name: String,
     hook_id: String,
 }
 
 impl DomainSynthesizer for HookSynthesizer {
-    fn name(&self) -> &'static str {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
     fn synthesize(
         &self,
@@ -326,11 +349,39 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]);
         };
+        let default_units = partition_network(&network);
+        let units = parse_policy_units(
+            hook_map_value(map, "units"),
+            &network,
+            &network_root,
+            &self.name,
+            default_units,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message,
+            }]
+        })?;
+        let layout = parse_policy_layout(
+            hook_map_value(map, "layout"),
+            &network,
+            &units,
+            &network_root,
+            &self.name,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message,
+            }]
+        })?;
         Ok(SynthOutcome::Ready(SynthesisPlan {
             source: source.to_string(),
-            // The BOUNDARY and unit partition stay Rust's answer even when the
-            // emitter body is authored: they are the runtime contract and the
-            // topology facts supplied to the policy.
+            // The BOUNDARY remains Rust's composed-USD answer. The policy owns
+            // the emitted source, merge partition, and visual placement, but
+            // cannot invent a runtime port surface or a member outside the
+            // composed network.
             inputs: network.inputs.clone(),
             outputs: network.outputs.keys().cloned().collect(),
             component_paths: network
@@ -349,7 +400,8 @@ impl DomainSynthesizer for HookSynthesizer {
                     )
                 })
                 .collect(),
-            units: partition_network(&network),
+            units,
+            layout,
         }))
     }
 }
@@ -359,11 +411,253 @@ impl DomainSynthesizer for HookSynthesizer {
 /// The hook itself is registered by whatever compiled it — `lunco_hooks_rhai::register_rhai_hook`
 /// for a rhai policy — so this crate needs no scripting dependency and any
 /// language that implements [`lunco_hooks::ScriptHook`] can author one.
-pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'static str) {
+pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: impl Into<String>) {
+    let name = name.into();
     registry.register(HookSynthesizer {
-        name,
         hook_id: format!("synth.{name}"),
+        name,
     });
+}
+
+/// Remove a policy-owned hook synthesizer. Removing a policy that overrides a
+/// shipped name restores that name's documented built-in synthesizer; a custom
+/// policy name simply leaves the open registry without that entry.
+pub fn unregister_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &str) {
+    registry.0.remove(name);
+    match name {
+        DEFAULT_SYNTHESIZER => registry.register(AcausalNetworkSynthesizer),
+        ACTUATOR_WRENCH_SYNTHESIZER => registry.register(ActuatorWrenchSynthesizer),
+        _ => {}
+    }
+}
+
+fn hook_map_value<'a>(
+    map: &'a [(String, lunco_hooks::HookValue)],
+    key: &str,
+) -> Option<&'a lunco_hooks::HookValue> {
+    map.iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+}
+
+fn hook_map_string(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<String, String> {
+    hook_map_value(map, key)
+        .and_then(lunco_hooks::HookValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{context} must contain a non-empty string `{key}`"))
+}
+
+fn hook_map_string_array(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = hook_map_value(map, key) else {
+        return Ok(Vec::new());
+    };
+    let lunco_hooks::HookValue::Array(values) = value else {
+        return Err(format!("{context}.{key} must be an array of strings"));
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{context}.{key}[{index}] must be a string"))
+        })
+        .collect()
+}
+
+/// Read a policy-owned unit partition and prove that it is only rearranging
+/// the composed graph. USD facts stay authoritative for membership and public
+/// boundaries; Rhai chooses how those members are merged into Modelica units.
+fn parse_policy_units(
+    value: Option<&lunco_hooks::HookValue>,
+    network: &DomainNetwork,
+    root: &str,
+    policy_name: &str,
+    default_units: Vec<SynthesisUnit>,
+) -> Result<Vec<SynthesisUnit>, String> {
+    let Some(value) = value else {
+        return Ok(default_units);
+    };
+    let lunco_hooks::HookValue::Array(raw_units) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `units`, which must be an array"
+        ));
+    };
+    let known_components: BTreeSet<String> = network
+        .components
+        .iter()
+        .map(|component| component.path.clone())
+        .collect();
+    let known_inputs = &network.inputs;
+    let known_outputs: BTreeSet<_> = network.outputs.keys().map(String::as_str).collect();
+    let mut seen_components = BTreeSet::new();
+    let mut seen_names = BTreeSet::new();
+    let mut units = Vec::with_capacity(raw_units.len());
+
+    for (index, raw_unit) in raw_units.iter().enumerate() {
+        let context = format!("synthesizer `{policy_name}` units[{index}]");
+        let lunco_hooks::HookValue::Map(map) = raw_unit else {
+            return Err(format!("{context} must be a map"));
+        };
+        let name = hook_map_string(map, "name", &context)?;
+        if !is_modelica_identifier(&name) {
+            return Err(format!(
+                "{context}.name `{name}` is not a valid Modelica identifier"
+            ));
+        }
+        if !seen_names.insert(name.clone()) {
+            return Err(format!("{context}.name `{name}` is duplicated"));
+        }
+        let component_paths = hook_map_string_array(map, "components", &context)?;
+        if component_paths.is_empty() {
+            return Err(format!("{context}.components must not be empty"));
+        }
+        for path in &component_paths {
+            if !known_components.contains(path) {
+                return Err(format!(
+                    "{context}.components contains `{path}`, which is not in `{root}`"
+                ));
+            }
+            if !seen_components.insert(path.clone()) {
+                return Err(format!(
+                    "component `{path}` occurs in more than one policy unit"
+                ));
+            }
+        }
+        let inputs = hook_map_string_array(map, "inputs", &context)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for input in &inputs {
+            if !known_inputs.contains(input) {
+                return Err(format!(
+                    "{context}.inputs contains `{input}`, which is not a network boundary input"
+                ));
+            }
+        }
+        let outputs = hook_map_string_array(map, "outputs", &context)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for output in &outputs {
+            if !known_outputs.contains(output.as_str()) {
+                return Err(format!(
+                    "{context}.outputs contains `{output}`, which is not a network boundary output"
+                ));
+            }
+        }
+        units.push(SynthesisUnit {
+            name,
+            component_paths,
+            inputs,
+            outputs,
+        });
+    }
+
+    if seen_components != known_components {
+        let missing = known_components
+            .difference(&seen_components)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "synthesizer `{policy_name}` units do not cover every composed component; missing: {}",
+            missing.join(", ")
+        ));
+    }
+    if units.is_empty() {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned an empty unit partition for `{root}`"
+        ));
+    }
+    Ok(units)
+}
+
+fn parse_policy_coordinate(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<i32, String> {
+    let value = hook_map_value(map, key)
+        .and_then(lunco_hooks::HookValue::as_i64)
+        .ok_or_else(|| format!("{context} must contain integer `{key}`"))?;
+    i32::try_from(value)
+        .map_err(|_| format!("{context}.{key} is outside Modelica coordinate range"))
+}
+
+/// Read the optional policy-owned unit/member diagram placements. Missing
+/// entries use the deterministic default only as an authored-schema default;
+/// every returned placement is still checked against the composed plan.
+fn parse_policy_layout(
+    value: Option<&lunco_hooks::HookValue>,
+    network: &DomainNetwork,
+    units: &[SynthesisUnit],
+    root: &str,
+    policy_name: &str,
+) -> Result<SynthesisLayout, String> {
+    let mut layout = default_synthesis_layout(network, units);
+    let Some(value) = value else {
+        return Ok(layout);
+    };
+    let lunco_hooks::HookValue::Map(map) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `layout`, which must be a map"
+        ));
+    };
+    let known_units: BTreeSet<_> = units.iter().map(|unit| unit.name.as_str()).collect();
+    let known_members: BTreeSet<_> = network
+        .components
+        .iter()
+        .map(|component| component.path.as_str())
+        .collect();
+
+    for (section, key, known, target) in [
+        ("unit", "units", known_units, &mut layout.unit_positions),
+        (
+            "member",
+            "members",
+            known_members,
+            &mut layout.member_positions,
+        ),
+    ] {
+        let Some(value) = hook_map_value(map, key) else {
+            continue;
+        };
+        let lunco_hooks::HookValue::Array(placements) = value else {
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.{key} must be an array"
+            ));
+        };
+        let mut provided = BTreeSet::new();
+        for (index, placement) in placements.iter().enumerate() {
+            let context = format!("synthesizer `{policy_name}` layout.{key}[{index}]");
+            let lunco_hooks::HookValue::Map(placement) = placement else {
+                return Err(format!("{context} must be a map"));
+            };
+            let identity_key = if section == "unit" { "name" } else { "path" };
+            let identity = hook_map_string(placement, identity_key, &context)?;
+            if !known.contains(identity.as_str()) {
+                return Err(format!(
+                    "{context}.{identity_key} `{identity}` is not part of `{root}`"
+                ));
+            }
+            if !provided.insert(identity.clone()) {
+                return Err(format!(
+                    "{context}.{identity_key} `{identity}` is duplicated"
+                ));
+            }
+            let x = parse_policy_coordinate(placement, "x", &context)?;
+            let y = parse_policy_coordinate(placement, "y", &context)?;
+            target.insert(identity, (x, y));
+        }
+    }
+    Ok(layout)
 }
 
 /// The composed network, as a map an authored policy can read.
@@ -374,6 +668,8 @@ pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'sta
 /// reason for the policy to go read USD itself.
 pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::HookValue {
     use lunco_hooks::HookValue as H;
+    let units = partition_network(network);
+    let layout = default_synthesis_layout(network, &units);
     let components: Vec<H> = network
         .components
         .iter()
@@ -477,7 +773,7 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
         (
             "units",
             H::Array(
-                partition_network(network)
+                units
                     .into_iter()
                     .map(|unit| {
                         H::map([
@@ -498,6 +794,43 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
                     })
                     .collect(),
             ),
+        ),
+        (
+            "layout",
+            H::map([
+                (
+                    "units",
+                    H::Array(
+                        layout
+                            .unit_positions
+                            .into_iter()
+                            .map(|(name, (x, y))| {
+                                H::map([
+                                    ("name", H::str(name)),
+                                    ("x", H::Int(i64::from(x))),
+                                    ("y", H::Int(i64::from(y))),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
+                    "members",
+                    H::Array(
+                        layout
+                            .member_positions
+                            .into_iter()
+                            .map(|(path, (x, y))| {
+                                H::map([
+                                    ("path", H::str(path)),
+                                    ("x", H::Int(i64::from(x))),
+                                    ("y", H::Int(i64::from(y))),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
         ),
     ])
 }
@@ -602,7 +935,7 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
 pub struct AcausalNetworkSynthesizer;
 
 impl DomainSynthesizer for AcausalNetworkSynthesizer {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         DEFAULT_SYNTHESIZER
     }
     fn synthesize(
@@ -646,6 +979,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
                 })
                 .collect(),
             units: partition_network(&network),
+            layout: default_synthesis_layout(&network, &partition_network(&network)),
         }))
     }
 }
@@ -661,7 +995,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
 pub struct ActuatorWrenchSynthesizer;
 
 impl DomainSynthesizer for ActuatorWrenchSynthesizer {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         ACTUATOR_WRENCH_SYNTHESIZER
     }
 
@@ -770,11 +1104,17 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message,
             }]
         })?;
-        let source = emit_actuator_wrench_model(model_name, &inputs, &outputs, &allocation);
         let component_paths = actuators
             .values()
             .map(|(path, _)| path.to_string())
             .collect::<Vec<_>>();
+        let source = emit_actuator_wrench_model(
+            model_name,
+            &inputs,
+            &outputs,
+            &allocation,
+            &component_paths,
+        );
         let unit = SynthesisUnit {
             name: format!("{model_name}_ActuatorWrench"),
             component_paths: component_paths.clone(),
@@ -788,6 +1128,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             component_paths,
             members: Vec::new(),
             units: vec![unit],
+            layout: SynthesisLayout::default(),
         }))
     }
 }
@@ -869,6 +1210,7 @@ fn emit_actuator_wrench_model(
     inputs: &BTreeSet<String>,
     outputs: &BTreeSet<String>,
     allocation: &[[f64; 3]],
+    actuator_paths: &[String],
 ) -> String {
     let mut source = format!("model {model_name}\n");
     for input in inputs {
@@ -895,7 +1237,9 @@ fn emit_actuator_wrench_model(
     source.push_str(&vec!["0.0"; allocation.len()].join(", "));
     source.push_str("},\n    upper_command = {");
     source.push_str(&vec!["1.0"; allocation.len()].join(", "));
-    source.push_str("});\n\nequation\n");
+    source.push_str(
+        "}) annotation(Placement(transformation(origin = {0, 0}, extent = {{-55, -35}, {55, 35}})));\n\nequation\n",
+    );
 
     for name in [
         "desired_force_x",
@@ -915,8 +1259,499 @@ fn emit_actuator_wrench_model(
     for (index, output) in outputs.iter().enumerate() {
         writeln!(source, "  {output} = allocator.command[{}];", index + 1).expect("String write");
     }
+    let extent = modelica_coordinate_extent(220, 160);
+    let members = modelica_string_literal(&format!(
+        "USD FORCE-ACTUATOR ALLOCATION\nActuators: {}\nInputs: {}\nOutputs: {}",
+        actuator_paths.join(" | "),
+        join_visual_names(inputs),
+        join_visual_names(outputs),
+    ));
+    writeln!(
+        source,
+        "annotation(Icon(coordinateSystem(extent={}), graphics={{Rectangle(extent={{{{-85,-52}},{{85,52}}}}, lineColor={{165,105,45}}, fillColor={{230,175,85}}, fillPattern=FillPattern.Solid, radius=8), Text(extent={{{{-78,-16}},{{78,16}}}}, textString=\"%name\", textColor={{40,30,15}}, fontSize=14)}}), Diagram(coordinateSystem(extent={}), graphics={{Text(extent={{{{-205,125}},{{205,150}}}}, textString={}, textColor={{125,85,35}}, fontSize=12)}}));",
+        extent,
+        extent,
+        members,
+    )
+    .expect("String write");
     writeln!(source, "end {model_name};").expect("String write");
     source
+}
+
+/// Visual coordinate-space constants for generated Modelica classes.
+///
+/// These values are part of the generated document's presentation contract,
+/// not simulation constants. Keeping them named makes the generated layout
+/// readable and keeps the source emitter from scattering unexplained numbers.
+const GENERATED_UNIT_COLUMN_SPACING: i32 = 150;
+const GENERATED_UNIT_ROW_SPACING: i32 = 100;
+const GENERATED_UNIT_ICON_HALF_WIDTH: i32 = 135;
+const GENERATED_UNIT_ICON_HALF_HEIGHT: i32 = 68;
+const GENERATED_MIN_DIAGRAM_HALF_WIDTH: i32 = 220;
+const GENERATED_MIN_DIAGRAM_HALF_HEIGHT: i32 = 160;
+
+/// Encode a Modelica string literal without allowing a USD path or model name
+/// to break the generated annotation syntax.
+fn modelica_string_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            _ => escaped.push(character),
+        }
+    }
+    format!("\"{escaped}\"")
+}
+
+/// Format the standard Modelica rectangle/extent syntax used by graphical
+/// annotations. The result is `{{x1,y1},{x2,y2}}`.
+fn modelica_rect(x1: i32, y1: i32, x2: i32, y2: i32) -> String {
+    format!("{{{{{x1},{y1}}},{{{x2},{y2}}}}}")
+}
+
+/// Format the coordinate system extent for a generated class.
+fn modelica_coordinate_extent(half_width: i32, half_height: i32) -> String {
+    modelica_rect(-half_width, -half_height, half_width, half_height)
+}
+
+/// Format a straight visual route for a generated `connect()` equation.
+/// Component placements are the only layout facts owned by this emitter; the
+/// Modelica canvas still resolves the connector endpoints from the component
+/// icons, while this route gives standard tools a deterministic initial line.
+fn modelica_line_points(start: (i32, i32), end: (i32, i32)) -> String {
+    modelica_rect(start.0, start.1, end.0, end.1)
+}
+
+/// Format an RGB colour literal for a Modelica graphic primitive.
+fn modelica_color(color: [u8; 3]) -> String {
+    format!("{{{},{},{}}}", color[0], color[1], color[2])
+}
+
+/// Format a readable leaf name for the generated root banner.
+fn generated_model_display_name(model_name: &str) -> String {
+    let leaf = model_name.rsplit("_x2f_").next().unwrap_or(model_name);
+    leaf.strip_suffix("_System").unwrap_or(leaf).to_string()
+}
+
+/// Join public names for a compact, readable diagram callout.
+fn join_visual_names(names: &BTreeSet<String>) -> String {
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.iter().cloned().collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// Group the executable members by their authored Modelica class for the
+/// generated unit's compact icon. This stays generic: a new class appears by
+/// its own leaf name without adding a vehicle- or domain-specific branch.
+fn generated_member_role_groups(
+    unit: &SynthesisUnit,
+    network: &DomainNetwork,
+) -> Vec<(String, usize)> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for path in &unit.component_paths {
+        let Some(component) = network
+            .components
+            .iter()
+            .find(|component| component.path == *path)
+        else {
+            continue;
+        };
+        let class_name = generated_member_class_name(component);
+        *counts.entry(class_name).or_default() += 1;
+    }
+    counts.into_iter().collect()
+}
+
+fn generated_member_class_name(component: &DomainComponent) -> String {
+    component
+        .model_class
+        .rsplit('.')
+        .next()
+        .unwrap_or(component.model_class.as_str())
+        .to_string()
+}
+
+/// Collapse the authored acausal connections to role-level edges for the
+/// composite icon. The detailed member-to-member `connect()` equations remain
+/// in the generated unit diagram; this is only the compact topology visible
+/// before opening that diagram.
+fn generated_unit_role_edges(
+    unit: &SynthesisUnit,
+    network: &DomainNetwork,
+) -> Vec<(String, String, usize)> {
+    let role_by_path: BTreeMap<String, String> = network
+        .components
+        .iter()
+        .filter(|component| {
+            unit.component_paths
+                .iter()
+                .any(|path| path == &component.path)
+        })
+        .map(|component| {
+            (
+                component.path.clone(),
+                generated_member_class_name(component),
+            )
+        })
+        .collect();
+    let mut member_edges = BTreeSet::<(String, String)>::new();
+    let mut edges = BTreeMap::<(String, String), usize>::new();
+    for component in &network.components {
+        let Some(source_role) = role_by_path.get(&component.path) else {
+            continue;
+        };
+        for target in component.connectors.values().flatten() {
+            let Some((target_path, _)) = target.split_once(".connectors:") else {
+                continue;
+            };
+            let Some(target_role) = role_by_path.get(target_path) else {
+                continue;
+            };
+            if source_role == target_role {
+                continue;
+            }
+            let member_edge = if component.path.as_str() <= target_path {
+                (component.path.clone(), target_path.to_string())
+            } else {
+                (target_path.to_string(), component.path.clone())
+            };
+            if !member_edges.insert(member_edge) {
+                continue;
+            }
+            let role_edge = if source_role <= target_role {
+                (source_role.clone(), target_role.clone())
+            } else {
+                (target_role.clone(), source_role.clone())
+            };
+            *edges.entry(role_edge).or_default() += 1;
+        }
+    }
+    edges
+        .into_iter()
+        .map(|((left, right), count)| (left, right, count))
+        .collect()
+}
+
+/// Use a compact, stable source name for the visual/runtime child instance.
+/// The full USD path remains in comments, unit metadata, and member mappings;
+/// the node label should tell a human what they are looking at.
+fn unit_instance_identifier(unit_name: &str, unit_index: usize) -> String {
+    let encoded_path = unit_name.strip_prefix("Unit_").unwrap_or(unit_name);
+    let path_parts = encoded_path.split("_x2f_").collect::<Vec<_>>();
+    let readable = path_parts
+        .iter()
+        .rev()
+        .take(2)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("_");
+    modelica_identifier(&format!("unit_{}_{}", unit_index + 1, readable))
+}
+
+/// Place generated synthesis units on the root diagram in a stable grid.
+fn generated_unit_layout(units: &[SynthesisUnit]) -> BTreeMap<String, (i32, i32)> {
+    let columns = (units.len() as f64).sqrt().ceil().max(1.0) as i32;
+    let rows = ((units.len() as i32 + columns - 1) / columns).max(1);
+    let origin_x = -((columns - 1) * GENERATED_UNIT_COLUMN_SPACING) / 2;
+    let origin_y = ((rows - 1) * GENERATED_UNIT_ROW_SPACING) / 2;
+
+    units
+        .iter()
+        .enumerate()
+        .map(|(index, unit)| {
+            let index = index as i32;
+            (
+                unit.name.clone(),
+                (
+                    origin_x + (index % columns) * GENERATED_UNIT_COLUMN_SPACING,
+                    origin_y - (index / columns) * GENERATED_UNIT_ROW_SPACING,
+                ),
+            )
+        })
+        .collect()
+}
+
+/// The deterministic presentation supplied when a policy does not override
+/// the diagram. Hook policies receive this exact result in `net.layout`, so a
+/// layout author can start from the current topology and change only the
+/// positions it cares about.
+fn default_synthesis_layout(network: &DomainNetwork, units: &[SynthesisUnit]) -> SynthesisLayout {
+    SynthesisLayout {
+        unit_positions: generated_unit_layout(units),
+        member_positions: network_layout(network),
+    }
+}
+
+/// Compute a symmetric diagram extent that contains all placed nodes plus a
+/// title band. Modelica coordinate systems are symmetric by convention, so a
+/// generated network stays centered when a unit is added or removed.
+fn visual_extent(
+    positions: impl Iterator<Item = (i32, i32)>,
+    half_node_width: i32,
+    half_node_height: i32,
+) -> (i32, i32) {
+    let (max_x, max_y) = positions.fold((0, 0), |(max_x, max_y), (x, y)| {
+        (max_x.max(x.abs()), max_y.max(y.abs()))
+    });
+    (
+        (max_x + half_node_width + 25).max(GENERATED_MIN_DIAGRAM_HALF_WIDTH),
+        (max_y + half_node_height + 55).max(GENERATED_MIN_DIAGRAM_HALF_HEIGHT),
+    )
+}
+
+/// Append the standard Modelica visual schema for the generated root model.
+///
+/// The root shows the actual generated synthesis units. Each unit is a normal
+/// Modelica child class whose diagram contains the member components, so the
+/// canvas can drill from the runtime participant into the exact simulated
+/// topology without a second visual-only graph.
+fn append_generated_root_visual_schema(
+    source: &mut String,
+    model_name: &str,
+    network: &DomainNetwork,
+    units: &[SynthesisUnit],
+    unit_positions: &BTreeMap<String, (i32, i32)>,
+) {
+    let (half_width, half_height) = visual_extent(
+        unit_positions.values().copied(),
+        GENERATED_UNIT_ICON_HALF_WIDTH,
+        GENERATED_UNIT_ICON_HALF_HEIGHT,
+    );
+    let extent = modelica_coordinate_extent(half_width, half_height);
+    let title = modelica_string_literal(&format!(
+        "COMPOSED MODEL: {}\n{} synthesis unit(s)",
+        generated_model_display_name(model_name),
+        units.len(),
+    ));
+    let boundary = modelica_string_literal(&format!(
+        "Boundary: {} input(s) | {} output(s)",
+        network.inputs.len(),
+        network.outputs.len(),
+    ));
+
+    let title_extent = modelica_rect(
+        -half_width + 10,
+        half_height - 42,
+        half_width - 10,
+        half_height - 12,
+    );
+    let boundary_extent = modelica_rect(
+        -half_width + 10,
+        -half_height + 12,
+        half_width - 10,
+        -half_height + 42,
+    );
+    writeln!(
+        source,
+        "annotation(Icon(coordinateSystem(extent={}), graphics={{Rectangle(extent={{{{-88,-58}},{{88,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-80,-18}},{{80,18}}}}, textString=\"%name\", textColor={{245,250,255}}, fontSize=16)}}), Diagram(coordinateSystem(extent={}), graphics={{Text(extent={}, textString={}, textColor={{95,125,190}}, fontSize=16), Text(extent={}, textString={}, textColor={{75,95,120}}, fontSize=13)}}));",
+        extent,
+        extent,
+        title_extent,
+        title,
+        boundary_extent,
+        boundary,
+    )
+    .expect("String write");
+}
+
+/// Append a standard icon and diagram annotation to one generated composite
+/// unit. The member list is deliberately derived from the same unit used by
+/// the executable equations, making the visual a trustworthy inspection aid.
+fn append_generated_unit_visual_schema(
+    source: &mut String,
+    unit: &SynthesisUnit,
+    network: &DomainNetwork,
+    member_positions: &BTreeMap<String, (i32, i32)>,
+) {
+    let positions = unit
+        .component_paths
+        .iter()
+        .filter_map(|path| member_positions.get(path).copied());
+    let (half_width, half_height) = visual_extent(positions, 25, 25);
+    let extent = modelica_coordinate_extent(half_width, half_height);
+    let role_groups = generated_member_role_groups(unit, network);
+    let roles = role_groups
+        .iter()
+        .map(|(class_name, count)| {
+            if *count > 1 {
+                format!("{class_name} x{count}")
+            } else {
+                class_name.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let role_edges = generated_unit_role_edges(unit, network);
+    let role_names = role_groups
+        .iter()
+        .map(|(class_name, _)| class_name.clone())
+        .collect::<Vec<_>>();
+    let mut role_degrees = BTreeMap::<String, usize>::new();
+    for (left, right, count) in &role_edges {
+        *role_degrees.entry(left.clone()).or_default() += count;
+        *role_degrees.entry(right.clone()).or_default() += count;
+    }
+    let hub = role_names
+        .iter()
+        .min_by(|left, right| {
+            role_degrees
+                .get(*right)
+                .copied()
+                .unwrap_or_default()
+                .cmp(&role_degrees.get(*left).copied().unwrap_or_default())
+                .then_with(|| left.cmp(right))
+        })
+        .cloned();
+    let mut role_positions = BTreeMap::<String, (i32, i32)>::new();
+    if let Some(hub) = hub.as_deref() {
+        role_positions.insert(hub.to_string(), (-85, 0));
+        let right_roles = role_names
+            .iter()
+            .filter(|role| role.as_str() != hub)
+            .collect::<Vec<_>>();
+        let vertical_spacing = match right_roles.len() {
+            0 | 1 => 0,
+            2 => 34,
+            3 => 22,
+            4 => 18,
+            _ => 14,
+        };
+        let top = ((right_roles.len().saturating_sub(1)) as i32 * vertical_spacing) / 2;
+        for (index, role) in right_roles.into_iter().enumerate() {
+            role_positions.insert(role.clone(), (55, top - index as i32 * vertical_spacing));
+        }
+    }
+    let role_palette = [
+        [105, 145, 205],
+        [226, 176, 80],
+        [114, 184, 137],
+        [184, 135, 196],
+        [220, 125, 107],
+    ];
+    let mut icon_graphics = vec![
+        format!(
+            "Rectangle(extent={}, lineColor={}, fillColor={}, fillPattern=FillPattern.Solid, radius=10)",
+            modelica_rect(-GENERATED_UNIT_ICON_HALF_WIDTH, -GENERATED_UNIT_ICON_HALF_HEIGHT, GENERATED_UNIT_ICON_HALF_WIDTH, GENERATED_UNIT_ICON_HALF_HEIGHT),
+            modelica_color([45, 85, 70]),
+            modelica_color([215, 235, 225]),
+        ),
+        format!(
+            "Text(extent={}, textString={}, textColor={}, fontSize=13)",
+            modelica_rect(-120, 45, 120, 62),
+            modelica_string_literal("COMPOSITE UNIT"),
+            modelica_color([35, 75, 55]),
+        ),
+    ];
+
+    let mut port_positions = BTreeSet::<(i32, i32)>::new();
+    for (left, right, count) in &role_edges {
+        let Some(left_position) = role_positions.get(left).copied() else {
+            continue;
+        };
+        let Some(right_position) = role_positions.get(right).copied() else {
+            continue;
+        };
+        let (start, end) = if left_position.0 <= right_position.0 {
+            (
+                (left_position.0 + 40, left_position.1),
+                (right_position.0 - 40, right_position.1),
+            )
+        } else {
+            (
+                (right_position.0 + 40, right_position.1),
+                (left_position.0 - 40, left_position.1),
+            )
+        };
+        port_positions.insert(start);
+        port_positions.insert(end);
+        icon_graphics.push(format!(
+            "Line(points={}, color={}, thickness=2)",
+            modelica_line_points(start, end),
+            modelica_color([45, 105, 75]),
+        ));
+        if *count > 1 {
+            let midpoint = ((start.0 + end.0) / 2, (start.1 + end.1) / 2);
+            icon_graphics.push(format!(
+                "Text(extent={}, textString={}, textColor={}, fontSize=8)",
+                modelica_rect(
+                    midpoint.0 - 18,
+                    midpoint.1 + 4,
+                    midpoint.0 + 18,
+                    midpoint.1 + 16
+                ),
+                modelica_string_literal(&format!("p x{count}")),
+                modelica_color([45, 105, 75]),
+            ));
+        }
+    }
+
+    for (index, ((class_name, _count), role)) in role_groups.iter().zip(roles.iter()).enumerate() {
+        let Some((x, y)) = role_positions.get(class_name).copied() else {
+            continue;
+        };
+        icon_graphics.push(format!(
+            "Rectangle(extent={}, lineColor={}, fillColor={}, fillPattern=FillPattern.Solid, radius=4)",
+            modelica_rect(x - 39, y - 13, x + 39, y + 13),
+            modelica_color([45, 85, 70]),
+            modelica_color(role_palette[index as usize % role_palette.len()]),
+        ));
+        icon_graphics.push(format!(
+            "Text(extent={}, textString={}, textColor={}, fontSize=11)",
+            modelica_rect(x - 35, y - 9, x + 35, y + 9),
+            modelica_string_literal(role),
+            modelica_color([25, 40, 35]),
+        ));
+    }
+    for (x, y) in port_positions {
+        icon_graphics.push(format!(
+            "Ellipse(extent={}, lineColor={}, fillColor={}, fillPattern=FillPattern.Solid)",
+            modelica_rect(x - 4, y - 4, x + 4, y + 4),
+            modelica_color([35, 75, 55]),
+            modelica_color([245, 250, 245]),
+        ));
+        icon_graphics.push(format!(
+            "Text(extent={}, textString={}, textColor={}, fontSize=8)",
+            modelica_rect(x - 9, y + 5, x + 9, y + 15),
+            modelica_string_literal("p"),
+            modelica_color([35, 75, 55]),
+        ));
+    }
+    let members = unit
+        .component_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let role_summary = if roles.is_empty() {
+        "COMPOSITE UNIT".to_string()
+    } else {
+        roles.join(" | ")
+    };
+    let title = modelica_string_literal(&format!("{role_summary}\nMembers:\n{members}"));
+    let title_extent = modelica_rect(
+        -half_width + 10,
+        half_height - 35,
+        half_width - 10,
+        half_height - 10,
+    );
+    writeln!(
+        source,
+        "annotation(Icon(coordinateSystem(extent={}), graphics={{{}}}), Diagram(coordinateSystem(extent={}), graphics={{Text(extent={}, textString={}, textColor={}, fontSize=11)}}));",
+        extent,
+        icon_graphics.join(", "),
+        extent,
+        title_extent,
+        title,
+        modelica_color([45, 105, 75]),
+    )
+    .expect("String write");
 }
 
 /// Place generated components by network topology, not by source-file order.
@@ -1046,7 +1881,13 @@ fn emit_modelica_with_classes(
         .collect();
     let unit_instances: BTreeMap<_, _> = units
         .iter()
-        .map(|unit| (unit.name.as_str(), unit_instance_identifier(&unit.name)))
+        .enumerate()
+        .map(|(index, unit)| {
+            (
+                unit.name.as_str(),
+                unit_instance_identifier(&unit.name, index),
+            )
+        })
         .collect();
     let unit_for_component: BTreeMap<_, _> = units
         .iter()
@@ -1062,6 +1903,7 @@ fn emit_modelica_with_classes(
         .map(|(boundary, source)| (source.as_str(), boundary.as_str()))
         .collect();
     let placements = network_layout(network);
+    let unit_positions = generated_unit_layout(&units);
     let member_outputs = generated_member_outputs(network, classes);
     let mut source = format!("model {root_name}\n");
 
@@ -1078,10 +1920,10 @@ fn emit_modelica_with_classes(
         source.push_str(&format!("  // USD: {}\n", component.path));
     }
     for unit in &units {
+        let (x, y) = unit_positions[unit.name.as_str()];
         source.push_str(&format!(
-            "  {} {};\n",
-            unit.name,
-            unit_instances[unit.name.as_str()]
+            "  {} {} annotation(Placement(transformation(origin = {{{x}, {y}}}, extent = {{{{-135, -68}}, {{135, 68}}}})));\n",
+            unit.name, unit_instances[unit.name.as_str()]
         ));
     }
     source.push_str("equation\n");
@@ -1111,12 +1953,7 @@ fn emit_modelica_with_classes(
             source.push_str(&format!("  {alias} = {unit_instance}.{alias};\n"));
         }
     }
-    // Generated networks are ordinary Modelica documents. Their assembly
-    // annotation provides a stable canvas banner; component Icons and
-    // Placement annotations remain the source of the actual network picture.
-    source.push_str(&format!(
-        "annotation(Icon(coordinateSystem(extent={{{{-100,-100}},{{100,100}}}}), graphics={{Rectangle(extent={{{{-82,-58}},{{82,58}}}}, lineColor={{70,95,150}}, fillColor={{125,155,215}}, fillPattern=FillPattern.Solid, radius=10), Text(extent={{{{-75,-20}},{{75,20}}}}, textString=\"USD NET\", textColor={{245,250,255}}, fontSize=18)}}), Diagram(coordinateSystem(extent={{{{-240,-180}},{{240,180}}}}), graphics={{Text(extent={{{{-220,150}},{{220,175}}}}, textString=\"USD COMPOSED NETWORK: {model_name}\", textColor={{95,125,190}}, fontSize=12)}}));\n"
-    ));
+    append_generated_root_visual_schema(&mut source, model_name, network, &units, &unit_positions);
     source.push_str(&format!("end {root_name};\n\n"));
     for unit in &units {
         source.push_str(&format!("model {}\n", unit.name));
@@ -1187,12 +2024,17 @@ fn emit_modelica_with_classes(
                         modelica_identifier(target_connector)
                     );
                     let edge = if left <= right {
-                        (left, right)
+                        (left, right, placements[path], placements[target_prim])
                     } else {
-                        (right, left)
+                        (right, left, placements[target_prim], placements[path])
                     };
-                    if emitted_edges.insert(edge.clone()) {
-                        source.push_str(&format!("  connect({}, {});\n", edge.0, edge.1));
+                    if emitted_edges.insert((edge.0.clone(), edge.1.clone())) {
+                        source.push_str(&format!(
+                            "  connect({}, {}) annotation(Line(points={}));\n",
+                            edge.0,
+                            edge.1,
+                            modelica_line_points(edge.2, edge.3)
+                        ));
                     }
                 }
             }
@@ -1241,6 +2083,7 @@ fn emit_modelica_with_classes(
                 ));
             }
         }
+        append_generated_unit_visual_schema(&mut source, unit, network, &placements);
         source.push_str(&format!("end {};\n\n", unit.name));
     }
 
@@ -1435,6 +2278,7 @@ pub fn project_domain_islands(
                         members: Vec::new(),
                         member_output_aliases: Vec::new(),
                         units: Vec::new(),
+                        layout: SynthesisLayout::default(),
                     },
                 ));
                 continue;
@@ -1543,6 +2387,7 @@ pub fn project_domain_islands(
             members: synthesized.members,
             member_output_aliases,
             units: synthesized.units,
+            layout: synthesized.layout,
         };
         // A changed wrapper may expose a different port interface. Rebuild the
         // derived co-sim projection instead of retaining values and port names
@@ -1687,6 +2532,24 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                             "outputs": unit.outputs,
                         }))
                         .collect::<Vec<_>>(),
+                    "layout": {
+                        "units": generated
+                            .layout
+                            .unit_positions
+                            .iter()
+                            .map(|(name, (x, y))| serde_json::json!({
+                                "name": name, "x": x, "y": y,
+                            }))
+                            .collect::<Vec<_>>(),
+                        "members": generated
+                            .layout
+                            .member_positions
+                            .iter()
+                            .map(|(path, (x, y))| serde_json::json!({
+                                "path": path, "x": x, "y": y,
+                            }))
+                            .collect::<Vec<_>>(),
+                    },
                     "source": generated.source,
                 })
             })
@@ -2193,10 +3056,6 @@ fn instance_identifier(root: &str, path: &str) -> String {
     modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
 }
 
-fn unit_instance_identifier(unit_name: &str) -> String {
-    modelica_identifier(&format!("instance_{unit_name}"))
-}
-
 /// Resolve the generated wrapper names for member outputs that are actually
 /// declared by the composed USD and exposed by the selected synthesizer.
 ///
@@ -2324,8 +3183,8 @@ fn generated_signal_layout(
     // instance.  A longest-prefix lookup assigns all public and internal
     // variables of that member—including variables introduced by a later
     // Modelica revision—to the authored member without an output annotation.
-    for unit in units {
-        let unit_prefix = unit_instance_identifier(&unit.name);
+    for (unit_index, unit) in units.iter().enumerate() {
+        let unit_prefix = unit_instance_identifier(&unit.name, unit_index);
         for (output, owner) in layout.exact_paths.clone() {
             layout
                 .exact_paths
@@ -2615,9 +3474,11 @@ mod tests {
         motor
             .inputs
             .insert("demand".into(), "/Electrical.inputs:drive_left".into());
+        let mut battery = component("/Electrical/Battery/Model", None);
+        battery.model_class = "LunCo.Electrical.Battery".into();
         let network = DomainNetwork {
             root: "/Electrical".into(),
-            components: vec![component("/Electrical/Battery/Model", None), motor],
+            components: vec![battery, motor],
             inputs: BTreeSet::from(["drive_left".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
@@ -2626,7 +3487,13 @@ mod tests {
         let source = emit_modelica(&network, "Electrical System");
         assert!(source.contains("input Real drive_left;"));
         assert!(source.contains("Left_x2f_Motor_x2f_Model.demand = drive_left;"));
-        assert!(source.contains("connect(Battery_x2f_Model.p, Left_x2f_Motor_x2f_Model.p);"));
+        assert!(source.contains(
+            "connect(Battery_x2f_Model.p, Left_x2f_Motor_x2f_Model.p) annotation(Line(points="
+        ));
+        assert!(source.contains("annotation(Line(points="));
+        assert!(source.contains("Ellipse(extent="));
+        assert!(source.contains("textString=\"Battery\""));
+        assert!(source.contains("textString=\"DCMotor\""));
     }
 
     #[test]
@@ -2649,7 +3516,7 @@ mod tests {
         assert!(source.contains("__member_RcsJet_light_intensity = RcsJet.light_intensity;"));
         assert!(source.contains("__member_RcsJet_light_radius = RcsJet.light_radius;"));
         assert!(source.contains(
-            "__member_RcsJet_light_intensity = instance_Unit_RcsJet.__member_RcsJet_light_intensity;"
+            "__member_RcsJet_light_intensity = unit_1_RcsJet.__member_RcsJet_light_intensity;"
         ));
         let (_, _, issues) = lunco_modelica::ast_extract::strip_input_defaults_with_report(&source);
         assert!(
@@ -2752,8 +3619,74 @@ mod tests {
         let source = emit_modelica(&network, "Thermal");
         assert!(source.contains("model Thermal;".trim_end_matches(';')));
         assert!(source.matches("model Unit_").count() == 2);
-        assert!(source.contains("instance_Unit_Left_x2f_Mass.left_heat = left_heat;"));
-        assert!(source.contains("left_temp = instance_Unit_Left_x2f_Mass.left_temp;"));
+        assert!(source.contains("unit_1_Left_Mass.left_heat = left_heat;"));
+        assert!(source.contains("left_temp = unit_1_Left_Mass.left_temp;"));
+    }
+
+    #[test]
+    fn generated_network_emits_hierarchical_visual_modelica_schema() {
+        let mut left = component("/Thermal/Left/Mass", None);
+        left.model_class = "LunCo.Electrical.Battery".into();
+        left.inputs
+            .insert("heat_w".into(), "/Thermal.inputs:left_heat".into());
+        let mut right = component("/Thermal/Right/Mass", None);
+        right.model_class = "LunCo.Electrical.SolarPanel".into();
+        right
+            .inputs
+            .insert("heat_w".into(), "/Thermal.inputs:right_heat".into());
+        let network = DomainNetwork {
+            root: "/Thermal".into(),
+            components: vec![right, left],
+            inputs: BTreeSet::from(["left_heat".into(), "right_heat".into()]),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::from([
+                (
+                    "left_temp".into(),
+                    "/Thermal/Left/Mass.outputs:temp_k".into(),
+                ),
+                (
+                    "right_temp".into(),
+                    "/Thermal/Right/Mass.outputs:temp_k".into(),
+                ),
+            ]),
+            pending_sources: false,
+        };
+
+        let source = emit_modelica(&network, "Thermal");
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "generated.mo")
+            .expect("generated visual schema must remain valid Modelica");
+        let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Thermal")
+            .expect("generated root class");
+        assert!(lunco_modelica::annotations::extract_icon(&root.annotation).is_some());
+        assert!(lunco_modelica::annotations::extract_diagram(&root.annotation).is_some());
+        assert!(source.contains("COMPOSED MODEL: Thermal"));
+        assert!(source.contains("textString=\"COMPOSED MODEL: Thermal\\n"));
+        assert!(source.contains("textString=\"Battery"));
+        assert!(source.contains("textString=\"SolarPanel"));
+        assert!(source.contains("Members:\\n"));
+
+        for unit in partition_network(&network) {
+            let class = lunco_modelica::diagram::find_class_by_qualified_name(&ast, &unit.name)
+                .expect("generated synthesis-unit class");
+            assert!(lunco_modelica::annotations::extract_icon(&class.annotation).is_some());
+            assert!(lunco_modelica::annotations::extract_diagram(&class.annotation).is_some());
+
+            let root_instance = root
+                .components
+                .values()
+                .find(|component| component.type_name.to_string() == unit.name)
+                .expect("root must place every generated synthesis unit");
+            assert!(
+                lunco_modelica::annotations::extract_placement(&root_instance.annotation).is_some()
+            );
+
+            assert!(
+                class.components.values().any(|member| {
+                    lunco_modelica::annotations::extract_placement(&member.annotation).is_some()
+                }),
+                "synthesis unit must place its executable member"
+            );
+        }
     }
 
     #[test]
@@ -2779,8 +3712,12 @@ mod tests {
             pending_sources: false,
         };
         let source = emit_modelica(&network, "Electrical");
-        assert!(source.contains("connect(Bus_x2f_Model.p, LoadA_x2f_Model.p);"));
-        assert!(source.contains("connect(Bus_x2f_Model.p, LoadB_x2f_Model.p);"));
+        assert!(
+            source.contains("connect(Bus_x2f_Model.p, LoadA_x2f_Model.p) annotation(Line(points=")
+        );
+        assert!(
+            source.contains("connect(Bus_x2f_Model.p, LoadB_x2f_Model.p) annotation(Line(points=")
+        );
     }
 
     #[test]
@@ -2912,6 +3849,7 @@ mod tests {
                     members: Vec::new(),
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
+                    layout: SynthesisLayout::default(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
@@ -2996,10 +3934,19 @@ mod tests {
             &BTreeSet::from(["desired_torque_z".into()]),
             &BTreeSet::from(["valve".into()]),
             &[[0.0, 0.0, 1.0]],
+            &[],
         );
         assert!(source.contains("LunCo.Actuation.WrenchAllocator"));
         assert!(source.contains("allocator.desired_torque_z = desired_torque_z;"));
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));
+        assert!(source.contains("USD FORCE-ACTUATOR ALLOCATION\\n"));
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
+            .expect("generated actuator visual schema must remain valid Modelica");
+        let class =
+            lunco_modelica::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")
+                .expect("generated actuator model");
+        assert!(lunco_modelica::annotations::extract_icon(&class.annotation).is_some());
+        assert!(lunco_modelica::annotations::extract_diagram(&class.annotation).is_some());
     }
 }

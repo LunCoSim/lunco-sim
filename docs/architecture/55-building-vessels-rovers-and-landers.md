@@ -22,7 +22,7 @@ When building any vehicle assembly in LunCoSim:
      copies below the Scope.
    - Every included Modelica facet explicitly uses
      `info:implementationSource = "sourceAsset"` with a `.mo` source.
-   - Runtime Rust projection reads the composed stage and emits the transient Modelica wrapper. Rhai does not synthesize equations.
+   - Runtime Rust projection reads and validates the composed stage; the selected synthesizer emits the transient Modelica wrapper. The existing `synth.<name>` Rhai policy seam may own the emitted source, unit merge, and diagram layout without changing Rust.
    - One collection is one runtime compilation boundary. The synthesizer partitions
      its composed program graph into explicit connected Modelica units, so independent
      acausal units remain separate equation subgraphs without duplicate Scopes or
@@ -63,9 +63,9 @@ When building any vehicle assembly in LunCoSim:
    - **Modelica Physics Equations** read **raw ground-truth data** ($\mathbf{p}_{\text{true}}$, $\mathbf{v}_{\text{true}}$, $T_{\text{true}}$) to solve conservation laws ($\sum i = 0$, $\sum Q = 0$).
    - **Control Algorithms & Flight Software** read **sensor telemetry outputs ONLY** (`IMUSensor`, `ThermalSensor`, `ElectricalSensor`, `StarTracker`, `Altimeter`).
 
-6. **Zero Math in Rhai**:
+6. **Continuous Math in Modelica; Assembly Policy in Rhai**:
    - Rhai scenario scripts handle **high-level mission events and state switches ONLY** (`wait_for("touchdown")`, `state = "SAFE_MODE"`).
-   - Per-tick PID loops, numerical integration, matrix math, and thruster mapping run natively inside **Modelica** (`LunCo.GNC`) or **Rust**.
+   - Per-tick PID loops, numerical integration, matrix math, and thruster mapping run natively inside **Modelica** (`LunCo.GNC`) or **Rust**. Rhai may decide which authored members are merged into generated Modelica units and where those units/members are placed visually, but it does not read USD or replace continuous equations with a per-tick script.
 
 ### 1.1 Mounted parts have one physical owner
 
