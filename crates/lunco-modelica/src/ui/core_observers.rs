@@ -210,6 +210,7 @@ pub fn drain_sim_samples_to_viz(
                             provenance: Some("modelica".to_string()),
                             group_path: None,
                             exposure: Default::default(),
+                            ..Default::default()
                         },
                     );
                 }

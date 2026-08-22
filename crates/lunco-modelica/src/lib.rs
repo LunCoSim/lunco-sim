@@ -187,7 +187,7 @@ pub mod sim_target;
 /// Render-free retention of live Modelica variables in the shared telemetry
 /// registry.  Inspection does not depend on a plot binding or a UI plugin.
 pub mod runtime_telemetry;
-pub use runtime_telemetry::ModelicaSignalLayout;
+pub use runtime_telemetry::{ModelicaSignalLayout, ModelicaSignalProvenance};
 
 /// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
 /// bounds resolution — shared by the egui workbench and the headless API server.

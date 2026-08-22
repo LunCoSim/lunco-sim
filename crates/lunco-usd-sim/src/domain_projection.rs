@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use lunco_modelica::{
     ast_extract::{parse_model_interface, ModelicaVariableMetadata},
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
-    NoticeLevel,
+    ModelicaSignalProvenance, NoticeLevel,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
@@ -3115,7 +3115,7 @@ fn generated_signal_layout(
         root_path: root.to_string(),
         ..default()
     };
-    let mut public_member_outputs = BTreeSet::new();
+    let mut public_member_outputs = BTreeMap::new();
 
     // Public network outputs retain the authored connection's physical owner.
     for output in outputs {
@@ -3127,12 +3127,24 @@ fn generated_signal_layout(
         let Some((target_prim, target_output)) = target.rsplit_once(".outputs:") else {
             continue;
         };
-        public_member_outputs.insert(format!("{target_prim}.outputs:{target_output}"));
+        public_member_outputs.insert(
+            format!("{target_prim}.outputs:{target_output}"),
+            output.clone(),
+        );
         layout
             .exact_paths
             .insert(output.clone(), target_prim.to_string());
         layout.public_exact_paths.insert(output.clone());
-        if let Some((_, asset, _)) = members.iter().find(|(path, _, _)| path == target_prim) {
+        if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == target_prim) {
+            layout.exact_provenance.insert(
+                output.clone(),
+                ModelicaSignalProvenance {
+                    source_asset: Some(asset.clone()),
+                    model_class: Some(class.clone()),
+                    model_variable: Some(target_output.to_string()),
+                    canonical_name: Some(output.clone()),
+                },
+            );
             if let Some(metadata) = classes.output_metadata(asset, target_output) {
                 layout.metadata.insert(output.clone(), metadata.clone());
             }
@@ -3164,7 +3176,20 @@ fn generated_signal_layout(
 
     for (member, output, alias) in member_output_aliases {
         layout.exact_paths.insert(alias.clone(), member.clone());
-        if let Some((_, asset, _)) = members.iter().find(|(path, _, _)| path == member) {
+        if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
+            let canonical_name = public_member_outputs
+                .get(&format!("{member}.outputs:{output}"))
+                .cloned()
+                .unwrap_or_else(|| alias.clone());
+            layout.exact_provenance.insert(
+                alias.clone(),
+                ModelicaSignalProvenance {
+                    source_asset: Some(asset.clone()),
+                    model_class: Some(class.clone()),
+                    model_variable: Some(output.clone()),
+                    canonical_name: Some(canonical_name),
+                },
+            );
             if let Some(metadata) = classes.output_metadata(asset, output) {
                 layout.metadata.insert(alias.clone(), metadata.clone());
             }
@@ -3174,7 +3199,7 @@ fn generated_signal_layout(
         // same USD port under a public boundary name. This is topology-derived
         // and therefore applies equally to motors, batteries, panels, and
         // future Modelica facets without a component-name classifier.
-        if !public_member_outputs.contains(&format!("{member}.outputs:{output}")) {
+        if !public_member_outputs.contains_key(&format!("{member}.outputs:{output}")) {
             layout.public_exact_paths.insert(alias.clone());
         }
     }
@@ -3190,6 +3215,11 @@ fn generated_signal_layout(
                 .exact_paths
                 .insert(format!("{unit_prefix}.{output}"), owner);
         }
+        for (variable, identity) in layout.exact_provenance.clone() {
+            layout
+                .exact_provenance
+                .insert(format!("{unit_prefix}.{variable}"), identity);
+        }
         for (member, _, alias) in member_output_aliases
             .iter()
             .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
@@ -3200,9 +3230,18 @@ fn generated_signal_layout(
         }
         for member in &unit.component_paths {
             let member_prefix = instance_identifier(root, member);
-            layout
-                .prefixes
-                .push((format!("{unit_prefix}.{member_prefix}."), member.clone()));
+            let prefix = format!("{unit_prefix}.{member_prefix}.");
+            layout.prefixes.push((prefix.clone(), member.clone()));
+            if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
+                layout.provenance_prefixes.push((
+                    prefix,
+                    ModelicaSignalProvenance {
+                        source_asset: Some(asset.clone()),
+                        model_class: Some(class.clone()),
+                        ..default()
+                    },
+                ));
+            }
         }
     }
     // Deterministic ordering keeps the component inspectable and makes the
@@ -3210,6 +3249,9 @@ fn generated_signal_layout(
     // the longest prefix, so nested instance names remain unambiguous.
     layout
         .prefixes
+        .sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()).then(left.cmp(right)));
+    layout
+        .provenance_prefixes
         .sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()).then(left.cmp(right)));
 
     // A generated member alias may be emitted in more than one synthesized
@@ -3687,6 +3729,87 @@ mod tests {
                 "synthesis unit must place its executable member"
             );
         }
+    }
+
+    #[test]
+    fn generated_signal_layout_keeps_member_class_and_canonical_output_identity() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/electrical_network.usda");
+        let composed = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
+        let stage = lunco_usd_bevy::CanonicalStage::from_stage(
+            composed,
+            path.to_string_lossy().to_string(),
+        );
+        let view = stage.view();
+        let root_path = SdfPath::new("/Rig/Electrical").unwrap();
+        let mut classes = MemberClasses::default();
+        classes.declare(
+            "lunco://models/LunCo/Electrical/Battery.mo",
+            "LunCo.Electrical.Battery",
+        );
+        classes.declare(
+            "lunco://models/LunCo/Electrical/DCMotor.mo",
+            "LunCo.Electrical.DCMotor",
+        );
+        classes.declare(
+            "lunco://models/LunCo/Electrical/SolarPanel.mo",
+            "LunCo.Electrical.SolarPanel",
+        );
+        let SynthOutcome::Ready(plan) = AcausalNetworkSynthesizer
+            .synthesize(
+                &view,
+                &root_path,
+                "Rig_Electrical_System",
+                &SynthContext { classes: &classes },
+            )
+            .expect("fixture synthesis")
+        else {
+            panic!("fixture must be a ready acausal network");
+        };
+        let aliases =
+            generated_member_output_aliases(&view, "/Rig/Electrical", &plan.members, &plan.outputs);
+        let layout = generated_signal_layout(
+            &view,
+            &root_path,
+            "/Rig/Electrical",
+            &plan.outputs,
+            &plan.members,
+            &aliases,
+            &plan.units,
+            &classes,
+        );
+
+        let soc = layout.provenance("soc").expect("boundary output identity");
+        assert_eq!(soc.model_class.as_deref(), Some("LunCo.Electrical.Battery"));
+        assert_eq!(soc.model_variable.as_deref(), Some("soc_out"));
+        assert_eq!(soc.canonical_name.as_deref(), Some("soc"));
+        assert_eq!(
+            soc.source_asset.as_deref(),
+            Some("lunco://models/LunCo/Electrical/Battery.mo")
+        );
+
+        let battery_unit = plan
+            .units
+            .iter()
+            .find(|unit| {
+                unit.component_paths
+                    .iter()
+                    .any(|path| path == "/Rig/Battery")
+            })
+            .expect("battery synthesis unit");
+        let solver_name = format!(
+            "{}.{}.soc_out",
+            unit_instance_identifier(battery_unit.name.as_str(), 0),
+            instance_identifier("/Rig/Electrical", "/Rig/Battery"),
+        );
+        let internal = layout
+            .provenance(&solver_name)
+            .expect("member solver identity");
+        assert_eq!(
+            internal.model_class.as_deref(),
+            Some("LunCo.Electrical.Battery")
+        );
+        assert_eq!(internal.model_variable.as_deref(), Some("soc_out"));
     }
 
     #[test]

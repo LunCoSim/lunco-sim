@@ -283,6 +283,10 @@ struct Row {
     description: Option<String>,
     provenance: Option<String>,
     group_path: Option<String>,
+    model_class: Option<String>,
+    model_variable: Option<String>,
+    source_asset: Option<String>,
+    canonical_name: Option<String>,
     exposure: SignalExposure,
     in_focus: bool,
     active: bool,
@@ -362,6 +366,10 @@ fn build_tree(
             description: meta.and_then(|m| m.description.clone()),
             provenance,
             group_path: meta.and_then(|m| m.group_path.clone()),
+            model_class: meta.and_then(|m| m.model_class.clone()),
+            model_variable: meta.and_then(|m| m.model_variable.clone()),
+            source_asset: meta.and_then(|m| m.source_asset.clone()),
+            canonical_name: meta.and_then(|m| m.canonical_name.clone()),
             exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
             in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
             active: reg.is_active(sig),
@@ -508,7 +516,15 @@ fn entity_in_focus(
 
 /// Case-insensitive substring filter over authored labels, descriptions, and
 /// stable signal paths.
-fn filter_match(filter: &str, label: &str, path: &str, description: Option<&str>) -> bool {
+fn filter_match(
+    filter: &str,
+    label: &str,
+    path: &str,
+    description: Option<&str>,
+    model_class: Option<&str>,
+    model_variable: Option<&str>,
+    source_asset: Option<&str>,
+) -> bool {
     if filter.is_empty() {
         return true;
     }
@@ -516,6 +532,9 @@ fn filter_match(filter: &str, label: &str, path: &str, description: Option<&str>
     path.to_lowercase().contains(&f)
         || label.to_lowercase().contains(&f)
         || description.is_some_and(|text| text.to_lowercase().contains(&f))
+        || model_class.is_some_and(|text| text.to_lowercase().contains(&f))
+        || model_variable.is_some_and(|text| text.to_lowercase().contains(&f))
+        || source_asset.is_some_and(|text| text.to_lowercase().contains(&f))
 }
 
 /// Convert a signal identity into structural display nodes. Generated USD
@@ -575,7 +594,35 @@ fn row_visible(
 ) -> bool {
     (show_model_variables || row.exposure == SignalExposure::Public)
         && (!scoped || row.in_focus)
-        && filter_match(filter, label, &row.sig.path, row.description.as_deref())
+        && filter_match(
+            filter,
+            label,
+            &row.sig.path,
+            row.description.as_deref(),
+            row.model_class.as_deref(),
+            row.model_variable.as_deref(),
+            row.source_asset.as_deref(),
+        )
+}
+
+/// Display the canonical channel name together with the authored Modelica
+/// class that produces it. The class suffix is presentation-only; signal
+/// identity and plot bindings remain the registry's `(entity, path)`.
+fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
+    let base = display_channel_label(
+        &row.sig.path,
+        row.group_path.as_deref(),
+        show_generated_names,
+    );
+    if show_generated_names {
+        return base;
+    }
+    row.model_class
+        .as_deref()
+        .and_then(|class| class.rsplit('.').next())
+        .filter(|class| !class.is_empty())
+        .map(|class| format!("{base} · {class}"))
+        .unwrap_or(base)
 }
 
 fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> bool {
@@ -661,11 +708,8 @@ fn render_tree_node(
                         .scalar_history(&row.sig)
                         .and_then(|h| h.samples.back())
                         .map(|s| s.value);
-                    let channel_label = display_channel_label(
-                        &row.sig.path,
-                        row.group_path.as_deref(),
-                        display_settings.show_generated_names,
-                    );
+                    let channel_label =
+                        telemetry_row_label(row, display_settings.show_generated_names);
                     let payload = ChannelDragPayload::from_signal(&row.sig);
                     let inner = ui.dnd_drag_source(
                         ui.id().with(("tb_row", &row.sig)),
@@ -759,6 +803,24 @@ fn attach_row_tooltip(response: egui::Response, row: &Row) {
         if let Some(provenance) = &row.provenance {
             ui.label(
                 egui::RichText::new(format!("Declared by: {provenance}"))
+                    .small()
+                    .weak(),
+            );
+        }
+        if let Some(model_class) = &row.model_class {
+            ui.label(format!("Modelica class: {model_class}"));
+        }
+        if let Some(model_variable) = &row.model_variable {
+            ui.label(format!("Modelica variable: {model_variable}"));
+        }
+        if let Some(canonical_name) = &row.canonical_name {
+            if canonical_name != &row.sig.path {
+                ui.label(format!("Canonical USD channel: {canonical_name}"));
+            }
+        }
+        if let Some(source_asset) = &row.source_asset {
+            ui.label(
+                egui::RichText::new(format!("Source: {source_asset}"))
                     .small()
                     .weak(),
             );
@@ -1216,6 +1278,16 @@ impl Panel for TelemetryBrowserPanel {
         if let Some(description) = description {
             ui.label(egui::RichText::new(description).small().color(subdued));
         }
+        if let Some(metadata) = metadata {
+            if let Some(model_class) = metadata.model_class.as_deref() {
+                let variable = metadata.model_variable.as_deref().unwrap_or("unknown");
+                ui.label(
+                    egui::RichText::new(format!("Modelica: {model_class}.{variable}"))
+                        .small()
+                        .color(subdued),
+                );
+            }
+        }
 
         // Preview points: re-copied + re-decimated only when the
         // history fingerprint moved (idle sim = fingerprint compare).
@@ -1352,10 +1424,51 @@ mod tests {
 
     #[test]
     fn filter_matches_path_and_group_case_insensitively() {
-        assert!(filter_match("", "Rover", "wheel.speed", None));
-        assert!(filter_match("SPEED", "Rover", "wheel.speed", None));
-        assert!(filter_match("rov", "Rover", "wheel.speed", None));
-        assert!(!filter_match("thrust", "Rover", "wheel.speed", None));
+        assert!(filter_match(
+            "",
+            "Rover",
+            "wheel.speed",
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(filter_match(
+            "SPEED",
+            "Rover",
+            "wheel.speed",
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(filter_match(
+            "rov",
+            "Rover",
+            "wheel.speed",
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!filter_match(
+            "thrust",
+            "Rover",
+            "wheel.speed",
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(filter_match(
+            "camerapayload",
+            "power draw",
+            "science_power",
+            None,
+            Some("LunCo.Electrical.CameraPayload"),
+            Some("power_draw_w"),
+            Some("lunco://models/LunCo/Electrical/CameraPayload.mo"),
+        ));
     }
 
     #[test]

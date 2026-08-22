@@ -128,6 +128,10 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
                     "description": meta.and_then(|m| m.description.clone()),
                     "provenance": meta.and_then(|m| m.provenance.clone()),
                     "group_path": meta.and_then(|m| m.group_path.clone()),
+                    "model_class": meta.and_then(|m| m.model_class.clone()),
+                    "model_variable": meta.and_then(|m| m.model_variable.clone()),
+                    "source_asset": meta.and_then(|m| m.source_asset.clone()),
+                    "canonical_name": meta.and_then(|m| m.canonical_name.clone()),
                     "exposure": meta.map(|m| match m.exposure {
                         lunco_signal::SignalExposure::Public => "public",
                         lunco_signal::SignalExposure::Internal => "internal",
@@ -441,6 +445,42 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert_ne!(keys[0], keys[1]);
         assert!(keys.iter().all(|key| key.starts_with("session/")));
+    }
+
+    #[test]
+    fn list_provider_exposes_modelica_component_identity() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let signal = SignalRef::new(entity, "science_power");
+        let mut registry = SignalRegistry::default();
+        registry.push_scalar(signal.clone(), 0.0, 120.0);
+        registry.update_meta(
+            signal,
+            lunco_signal::SignalMeta {
+                model_class: Some("LunCo.Electrical.CameraPayload".into()),
+                model_variable: Some("power_draw_w".into()),
+                source_asset: Some("lunco://models/LunCo/Electrical/CameraPayload.mo".into()),
+                canonical_name: Some("science_power".into()),
+                ..Default::default()
+            },
+        );
+        world.insert_resource(registry);
+
+        let response = ListTelemetryChannelsProvider.execute(&mut world, &serde_json::Value::Null);
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
+            panic!("list provider must return a catalog");
+        };
+        let channel = &data["channels"][0];
+        assert_eq!(channel["model_class"], "LunCo.Electrical.CameraPayload");
+        assert_eq!(channel["model_variable"], "power_draw_w");
+        assert_eq!(
+            channel["source_asset"],
+            "lunco://models/LunCo/Electrical/CameraPayload.mo"
+        );
+        assert_eq!(channel["canonical_name"], "science_power");
     }
 
     #[test]

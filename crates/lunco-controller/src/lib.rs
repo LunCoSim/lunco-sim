@@ -998,6 +998,40 @@ mod tests {
     }
 
     #[test]
+    fn bundled_right_button_look_binding_reaches_the_semantic_axis() {
+        use bevy::input::mouse::MouseButton;
+        use bevy::input::InputPlugin;
+        use leafwing_input_manager::prelude::{
+            Buttonlike, DualAxislike, InputManagerPlugin, MouseMove,
+        };
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((ActionState::<UserIntent>::default(), get_avatar_input_map()))
+            .id();
+
+        MouseButton::Right.press(app.world_mut());
+        MouseMove::default().set_axis_pair(app.world_mut(), Vec2::new(3.0, -2.0));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .entity(entity)
+                .get::<ActionState<UserIntent>>()
+                .expect("action state")
+                .axis_pair(&UserIntent::Look),
+            Vec2::new(3.0, -2.0),
+            "the shipped right-button binding must produce the Look intent"
+        );
+    }
+
+    #[test]
     fn invalid_pointer_binding_does_not_rebind_look() {
         assert!(look_button(r#"{"look_button":"sideways"}"#).is_none());
         assert!(build_avatar_input_map(r#"{"look_button":"sideways"}"#)

@@ -262,6 +262,21 @@ pub struct SignalMeta {
     pub group_path: Option<String>,
     /// Runtime-derived operator/implementation classification.
     pub exposure: SignalExposure,
+    /// Authored Modelica class that produces this value, when the signal is a
+    /// projection of a generated component network.
+    ///
+    /// This is deliberately separate from [`provenance`].  `provenance` says
+    /// which runtime producer owns the channel; this says which authored
+    /// Modelica declaration the operator is looking at.
+    pub model_class: Option<String>,
+    /// Variable name in the authored Modelica class (for example
+    /// `power_draw_w`), rather than the generated wrapper spelling.
+    pub model_variable: Option<String>,
+    /// Source asset that declared [`model_class`].
+    pub source_asset: Option<String>,
+    /// Canonical USD-facing name for this value, when the generated solver
+    /// also exposes an implementation alias.
+    pub canonical_name: Option<String>,
 }
 
 /// One (time, value) pair for a [`SignalType::Scalar`] signal.

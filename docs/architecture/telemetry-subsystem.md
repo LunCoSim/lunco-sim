@@ -21,9 +21,13 @@ from the composed USD ownership graph, so a generated solver variable can be sho
 authored prim that owns it without copying or renaming the model's state. `SignalExposure` then
 controls the normal operator catalog: canonical network values and authored member outputs are
 public, while complete runtime/model state remains available through the explicit model-variable
-inspection view. When a member output is also promoted to a network boundary, the boundary
-channel is the single public representation; its generated member alias stays internal so one
-physical value cannot appear twice.
+inspection view. Generated Modelica channels also carry the source asset, fully qualified class,
+member variable, and canonical USD-facing name in `SignalMeta`; the browser and
+`ListTelemetryChannels` expose those fields rather than asking a consumer to infer a component
+from a generated solver spelling. When a member output is also promoted to a network boundary,
+the boundary channel is the single public representation; its generated member alias stays
+internal so one physical value cannot appear twice. The alias remains retained and queryable for
+diagnostics, with the canonical relationship shown in its metadata.
 
 All operator-facing channel labels go through `lunco_viz::signal::display_channel_label`, which
 uses the same identifier humanizer and ownership-relative shortening in the telemetry browser,

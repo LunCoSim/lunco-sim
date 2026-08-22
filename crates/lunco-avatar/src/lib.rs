@@ -2910,26 +2910,43 @@ fn avatar_behavior_input_system(
     } else {
         // Normal mode: apply to the active behavior component.
         if let Some(mut arm) = q_spring.iter_mut().next() {
-            arm.yaw += delta_yaw;
-            arm.pitch = (arm.pitch + delta_pitch).clamp(-1.5, 1.5);
+            (arm.yaw, arm.pitch) = look_angles(arm.yaw, arm.pitch, look_delta, &settings, 1.0);
         }
         if let Some(mut orbit) = q_orbit.iter_mut().next() {
             let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
             let scale = q_bodies.get(physical_target).map_or(1.0, |(_, body)| {
                 body_orbit_look_scale(orbit.distance, body.radius_m, &settings)
             }) as f32;
-            orbit.yaw += delta_yaw * scale;
-            orbit.pitch = (orbit.pitch + delta_pitch * scale).clamp(-1.5, 1.5);
+            (orbit.yaw, orbit.pitch) =
+                look_angles(orbit.yaw, orbit.pitch, look_delta, &settings, scale as f32);
         }
         if let Some(mut ff) = q_freeflight.iter_mut().next() {
-            ff.yaw += delta_yaw;
-            ff.pitch = (ff.pitch + delta_pitch).clamp(-1.5, 1.5);
+            (ff.yaw, ff.pitch) = look_angles(ff.yaw, ff.pitch, look_delta, &settings, 1.0);
         }
         if let Some(mut sc) = q_surface.iter_mut().next() {
-            sc.heading += delta_yaw;
-            sc.pitch = (sc.pitch + delta_pitch).clamp(-1.5, 1.5);
+            (sc.heading, sc.pitch) = look_angles(sc.heading, sc.pitch, look_delta, &settings, 1.0);
         }
     }
+}
+
+/// Apply one semantic Look intent to a camera's yaw/pitch state.
+///
+/// All pointer buttons are resolved by the controller into this intent before
+/// reaching here. Keeping the angle conversion in one function makes the
+/// right-button path identical for free-flight, orbit, spring-arm, and surface
+/// cameras; no camera mode is allowed to reinterpret a raw mouse button.
+fn look_angles(
+    yaw: f32,
+    pitch: f32,
+    look_delta: Vec2,
+    settings: &CameraInputSettings,
+    scale: f32,
+) -> (f32, f32) {
+    let scale = scale.max(0.0);
+    let yaw = yaw + -look_delta.x * settings.look_radians_per_pointer_unit * scale;
+    let pitch =
+        (pitch - look_delta.y * settings.look_radians_per_pointer_unit * scale).clamp(-1.5, 1.5);
+    (yaw, pitch)
 }
 
 fn avatar_global_hotkeys(
@@ -4837,6 +4854,24 @@ mod tests {
         let mut delta = 10_000.0;
         apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
         assert_eq!(distance, 75.0);
+    }
+
+    #[test]
+    fn semantic_look_intent_rotates_camera_angles() {
+        let settings = CameraInputSettings {
+            look_radians_per_pointer_unit: 0.01,
+            ..default()
+        };
+        let mut yaw = 0.0;
+        let mut pitch = 0.0;
+
+        // This is the delta produced by the configured pointer-button chord.
+        // Positive horizontal motion turns the camera left, and upward motion
+        // raises the view, matching the live camera convention.
+        (yaw, pitch) = look_angles(yaw, pitch, Vec2::new(10.0, -5.0), &settings, 1.0);
+
+        assert!((yaw + 0.1).abs() < 1.0e-6);
+        assert!((pitch - 0.05).abs() < 1.0e-6);
     }
 
     #[test]

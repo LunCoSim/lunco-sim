@@ -160,6 +160,7 @@ pub fn retain_physics_telemetry(
                     provenance: Some("avian".to_string()),
                     group_path: Some(prim.path.clone()),
                     exposure: Default::default(),
+                    ..Default::default()
                 },
             );
             if signals.record_scalar_at_rate(

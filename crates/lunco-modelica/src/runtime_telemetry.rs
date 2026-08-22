@@ -29,6 +29,24 @@ pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
 }
 
+/// Authored identity of a generated Modelica value.
+///
+/// The generated wrapper is a compiler artifact and may rename every member
+/// to make the combined model legal.  Keeping this identity beside the solver
+/// namespace means telemetry consumers never have to reverse-engineer those
+/// names (or guess a component from a string prefix).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelicaSignalProvenance {
+    /// Asset that declared the member class.
+    pub source_asset: Option<String>,
+    /// Fully-qualified class declared by that asset.
+    pub model_class: Option<String>,
+    /// Variable name in the member class.
+    pub model_variable: Option<String>,
+    /// Boundary name, when this value also has a canonical USD-facing output.
+    pub canonical_name: Option<String>,
+}
+
 /// Authored-structure address map for a generated Modelica participant.
 ///
 /// A generated network has one solver entity, but its variables still describe
@@ -45,6 +63,11 @@ pub struct ModelicaSignalLayout {
     /// unit/member instance variables use this form so newly exposed internal
     /// variables do not require another explicit telemetry declaration.
     pub prefixes: Vec<(String, String)>,
+    /// Exact solver variable → authored Modelica identity mappings.
+    pub exact_provenance: BTreeMap<String, ModelicaSignalProvenance>,
+    /// Solver namespace prefix → authored Modelica identity mappings. The
+    /// variable name is completed from the suffix at lookup time.
+    pub provenance_prefixes: Vec<(String, ModelicaSignalProvenance)>,
     /// Generated wrapper variables that correspond to authored outputs of the
     /// composed USD network. A member alias is public when it is the only
     /// runtime representation of that authored output; aliases already
@@ -86,6 +109,25 @@ impl ModelicaSignalLayout {
             .contains(variable)
             .then_some(SignalExposure::Public)
             .unwrap_or(SignalExposure::Internal)
+    }
+
+    /// Resolve authored Modelica identity for a solver variable.
+    pub fn provenance(&self, variable: &str) -> Option<ModelicaSignalProvenance> {
+        if let Some(identity) = self.exact_provenance.get(variable) {
+            return Some(identity.clone());
+        }
+        self.provenance_prefixes
+            .iter()
+            .filter(|(prefix, _)| variable.starts_with(prefix))
+            .max_by_key(|(prefix, _)| prefix.len())
+            .map(|(prefix, identity)| {
+                let mut resolved = identity.clone();
+                let suffix = variable.strip_prefix(prefix).unwrap_or_default();
+                if !suffix.is_empty() {
+                    resolved.model_variable = Some(suffix.to_string());
+                }
+                resolved
+            })
     }
 }
 
@@ -192,6 +234,7 @@ fn model_signal_meta(
     name: &str,
 ) -> SignalMeta {
     let projected = layout.and_then(|layout| layout.metadata.get(name));
+    let modelica_provenance = layout.and_then(|layout| layout.provenance(name));
     let entry = documents
         .and_then(|registry| registry.host(model.document))
         .and_then(|host| host.document().index().find_component_by_leaf(name));
@@ -219,6 +262,16 @@ fn model_signal_meta(
         exposure: layout
             .map(|layout| layout.exposure(name))
             .unwrap_or_default(),
+        model_class: modelica_provenance
+            .as_ref()
+            .and_then(|identity| identity.model_class.clone()),
+        model_variable: modelica_provenance
+            .as_ref()
+            .and_then(|identity| identity.model_variable.clone()),
+        source_asset: modelica_provenance
+            .as_ref()
+            .and_then(|identity| identity.source_asset.clone()),
+        canonical_name: modelica_provenance.and_then(|identity| identity.canonical_name),
     }
 }
 
@@ -287,6 +340,34 @@ mod tests {
         assert_eq!(
             meta.description.as_deref(),
             Some("Current delivered by the member")
+        );
+    }
+
+    #[test]
+    fn projected_modelica_identity_is_retained_for_solver_names() {
+        let mut model = ModelicaModel::default();
+        model
+            .variables
+            .insert("unit.Camera.power_draw_w".to_string(), 3.0);
+        let mut layout = ModelicaSignalLayout::default();
+        layout.provenance_prefixes.push((
+            "unit.Camera.".to_string(),
+            ModelicaSignalProvenance {
+                source_asset: Some("lunco://models/LunCo/Electrical/CameraPayload.mo".into()),
+                model_class: Some("LunCo.Electrical.CameraPayload".into()),
+                ..default()
+            },
+        ));
+
+        let meta = model_signal_meta(None, &model, Some(&layout), "unit.Camera.power_draw_w");
+        assert_eq!(
+            meta.model_class.as_deref(),
+            Some("LunCo.Electrical.CameraPayload")
+        );
+        assert_eq!(meta.model_variable.as_deref(), Some("power_draw_w"));
+        assert_eq!(
+            meta.source_asset.as_deref(),
+            Some("lunco://models/LunCo/Electrical/CameraPayload.mo")
         );
     }
 
