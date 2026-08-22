@@ -85,6 +85,13 @@ pub use lunco_storage;
 
 use lunco_storage::StorageHandle;
 
+fn is_safe_child_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinMode — what did the user open?
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +207,7 @@ impl TwinMode {
         // Record this twin's canonical identity so any descendant that
         // points back at it (directly or transitively) is recognised.
         let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        visited.insert(canonical_self);
+        visited.insert(canonical_self.clone());
 
         let manifest_path = path.join(MANIFEST_FILENAME);
         let mut twin = Twin::index(path.to_path_buf())?;
@@ -215,6 +222,12 @@ impl TwinMode {
             let mut children = Vec::new();
             for child_ref in &manifest.children {
                 let Some(rel) = &child_ref.path else { continue };
+                if !is_safe_child_path(rel) {
+                    return Err(TwinError::PathOutsideRoot {
+                        path: twin.root.join(rel),
+                        root: twin.root.clone(),
+                    });
+                }
                 let child_root = twin.root.join(rel);
                 // Skip silently if the child folder is missing — a Twin
                 // opening with a broken reference should still load the
@@ -230,6 +243,12 @@ impl TwinMode {
                 let canonical_child = child_root
                     .canonicalize()
                     .unwrap_or_else(|_| child_root.clone());
+                if !canonical_child.starts_with(&canonical_self) {
+                    return Err(TwinError::PathOutsideRoot {
+                        path: child_root,
+                        root: twin.root.clone(),
+                    });
+                }
                 if visited.contains(&canonical_child) {
                     continue;
                 }
@@ -744,6 +763,53 @@ path = "does_not_exist"
         // Manifest entry is still visible to the UI so it can surface
         // a "missing child" warning.
         assert_eq!(t.manifest.unwrap().children.len(), 1);
+    }
+
+    #[test]
+    fn child_path_cannot_escape_the_parent_twin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        write_manifest(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "parent"
+version = "0.1.0"
+
+[[children]]
+name = "outside"
+path = "../outside"
+"#,
+        );
+
+        assert!(matches!(
+            TwinMode::open(tmp.path()),
+            Err(TwinError::PathOutsideRoot { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_child_cannot_escape_the_parent_twin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("linked")).unwrap();
+        write_manifest(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "parent"
+version = "0.1.0"
+
+[[children]]
+name = "outside"
+path = "linked"
+"#,
+        );
+
+        assert!(matches!(
+            TwinMode::open(tmp.path()),
+            Err(TwinError::PathOutsideRoot { .. })
+        ));
     }
 
     #[test]
