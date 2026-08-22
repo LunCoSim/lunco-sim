@@ -3230,32 +3230,60 @@ fn read_material_network_layer_maps(
 fn start_camera_paths_when_recording_starts(
     recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
     resolved: Res<lunco_time::ResolvedDomains>,
+    q_paths: Query<&lunco_usd_bevy::camera_path::CameraPath>,
+    q_driven: Query<&lunco_usd_bevy::camera_path::CameraPathDriven>,
     mut gates: Query<(
         &lunco_usd_bevy::camera_path::CameraPathGate,
         &mut lunco_time::TimeDomain,
     )>,
-    // Edge, not level: release exactly on the false→true transition so the gate's
-    // origin is a single well-defined instant rather than "every frame we happen to
-    // be recording".
+    // Level-trigger until every authored camera path has produced a valid frame.
+    // Recording and USD composition are independent lifecycles; consuming the
+    // recording edge before a path has a live grid/target would permanently leave
+    // that path held or capture its spawn pose.
     mut was_active: Local<bool>,
 ) {
-    let started = recording.active && !*was_active;
-    *was_active = recording.active;
-    if !started || gates.is_empty() {
+    if !recording.active {
+        *was_active = false;
+        return;
+    }
+    if *was_active || gates.is_empty() {
+        return;
+    }
+
+    if q_paths.iter().any(|path| {
+        q_driven
+            .get(path.camera)
+            .map_or(true, |driven| !driven.primed)
+    }) {
+        return;
+    }
+
+    // Resolve every parent before releasing any gate. A partial release would
+    // give paths different time origins in the same take.
+    let parent_times: Vec<(Entity, f64)> = gates
+        .iter()
+        .map(|(gate, _)| (gate.parent, resolved.get(gate.parent)))
+        .filter_map(|(parent, time)| time.map(|time| (parent, time)))
+        .collect();
+    if parent_times.len() != gates.iter().count() {
         return;
     }
     for (gate, mut domain) in &mut gates {
-        let Some(parent_t) = resolved.get(gate.parent) else {
-            continue; // parent clock not resolved yet — try next frame
+        let Some((_, parent_t)) = parent_times
+            .iter()
+            .find(|(parent, _)| *parent == gate.parent)
+        else {
+            return;
         };
         // Change-detection: `Query::iter_mut` hands out `Mut`, so touching an
         // already-running gate would mark it changed every frame. The release is
         // idempotent, but do not pay for it on a running shot.
         if domain.scale == 0.0 {
-            lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, parent_t);
+            lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, *parent_t);
             info!("[camera-path] recording started — rolling shot from its first frame");
         }
     }
+    *was_active = true;
 }
 
 /// Mirror the recorder's `active` bit onto

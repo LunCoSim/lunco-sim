@@ -300,7 +300,6 @@ impl Plugin for UsdBevyPlugin {
                     camera_path::resolve_camera_paths,
                     // After resolve, so an aim target that spawns on the very frame
                     // its path resolves binds immediately rather than one frame late.
-                    camera_path::bind_aim_targets,
                 )
                     .chain(),
             )

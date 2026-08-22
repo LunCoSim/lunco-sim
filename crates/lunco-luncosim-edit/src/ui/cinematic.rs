@@ -33,6 +33,7 @@ use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::camera_path::{eval_curve, AimMode, CameraPath};
+use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// How many points to sample along a camera path when drawing it. The authored
@@ -108,7 +109,7 @@ pub fn draw_camera_paths(
     resolved: Res<lunco_time::ResolvedDomains>,
     q_paths: Query<(&CameraPath, &GlobalTransform)>,
     q_playback: Query<&Playback>,
-    q_gt: Query<&GlobalTransform>,
+    q_targets: Query<(Entity, &UsdPrimPath, &GlobalTransform), (With<CellCoord>, With<Transform>)>,
     q_active: Query<(Entity, &Camera), (With<Camera3d>, With<SceneCamera>)>,
     mut gizmos: Gizmos,
 ) {
@@ -153,10 +154,14 @@ pub fn draw_camera_paths(
             let u_i = i as f32 / n as f32;
             let t_i = span_of(&q_playback, path).map(|(s, e)| s + (e - s) * u_i as f64);
             let dir = match (t_i.map(|t| path.aim_at(t)), path.aim_at(0.0)) {
-                (Some(AimMode::Target(e)), _) | (None, AimMode::Target(e)) => q_gt
-                    .get(e)
-                    .ok()
-                    .map(|tgt| (tgt.translation() - at_pt).normalize_or_zero()),
+                (Some(AimMode::Target(path)), _) | (None, AimMode::Target(path)) => {
+                    let mut matches = q_targets
+                        .iter()
+                        .filter(|(_, prim, _)| prim.path.as_str() == path.as_str())
+                        .map(|(_, _, tgt)| tgt);
+                    let target = matches.next().filter(|_| matches.next().is_none());
+                    target.map(|tgt| (tgt.translation() - at_pt).normalize_or_zero())
+                }
                 (Some(AimMode::Manual), _) => None, // user steers here — nothing to draw
                 _ => {
                     let ahead = gt.transform_point(eval_curve(

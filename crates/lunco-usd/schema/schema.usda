@@ -1856,8 +1856,12 @@ class "LunCoCameraPathAPI" (
         doc = "Aim key times, seconds along the shot. Parallel to `aim:modes`."
     )
     token[] lunco:path:aim:modes = [] (
-        doc = """Aim mode per key — `tangent` (look along the track) or `target`
-        (consume the next `aim:targets` entry)."""
+        doc = """Aim mode per key — `tangent` (look along the track), `target`
+        (consume the next `aim:targets` entry), or `manual` (position only)."""
+    )
+    double lunco:path:aim:blendDuration = 0.0 (
+        doc = """Seconds before each aim key over which the previous and current
+        look directions are slerped. Zero preserves authored cuts."""
     )
     rel lunco:path:aim:targets (
         doc = """Aim-target prims, in order, one per `target` entry in

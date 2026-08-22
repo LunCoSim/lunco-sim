@@ -94,11 +94,11 @@ pub enum CurveBasis {
 /// locks onto A, then swings to B, then hands control back. Modelling it as a
 /// single `lookAt` rel cannot express that, and baking per-point rotations makes
 /// every re-frame a twelve-point hand edit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AimMode {
     /// Lock onto a prim. Move the prim, the whole stretch re-aims — one drag
     /// instead of re-orienting every control point (Blender's Track-To).
-    Target(Entity),
+    Target(String),
     /// Face along the direction of travel.
     Tangent,
     /// Hands off — the driver writes position only, leaving rotation alone, so
@@ -109,7 +109,7 @@ pub enum AimMode {
 /// One entry in the aim track: `mode` applies from `t` until the next entry.
 /// The mode is held; an authored path-level blend may make the pose transition
 /// into this key continuously.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AimKey {
     /// Start time, seconds on the path's own clock.
     pub t: f64,
@@ -131,27 +131,6 @@ pub struct CameraPath {
     /// current one. `None` preserves an authored cut; `Some(0)` is equivalent
     /// and is accepted so USD authoring can disable blending explicitly.
     pub aim_blend_duration: Option<f64>,
-    /// The USD path behind every `Target` aim key, kept for the path's life.
-    ///
-    /// The aim target is bound BY PATH, continuously, not by entity once at
-    /// resolve. Two measured failure modes force this:
-    ///
-    /// 1. **Not spawned yet.** The path must resolve the moment its camera
-    ///    exists — the recording gate releases on the recorder's start EDGE, so
-    ///    a path that waited for its aim target could miss the release and hold
-    ///    at frame 0 forever. A target that spawns later (async reference) must
-    ///    still bind. Until then the key holds its `Tangent` placeholder.
-    /// 2. **Stale entity.** A prim path can be carried by more than one entity
-    ///    (spatial twin + data-side twin), and the entity first matched can
-    ///    lack a `Transform` or be despawned/replaced by a later load phase.
-    ///    Either way `world_pose` fails every frame and the camera silently
-    ///    holds one rotation for the whole episode — the recorded symptom was
-    ///    58 s of starfield with the vehicle never in frame.
-    ///
-    /// [`bind_aim_targets`] walks these every frame and patches
-    /// [`Self::aim`] whenever the live, `Transform`-carrying entity for the
-    /// path differs from what the key currently holds.
-    pub aim_sources: Vec<AimTargetSource>,
     /// Control points, in the curve prim's local space.
     pub points: Vec<Vec3>,
     pub basis: CurveBasis,
@@ -178,15 +157,6 @@ pub struct CameraPath {
 #[derive(Component)]
 pub struct NotACameraPath;
 
-/// The authored USD path behind one `Target` aim key — see [`CameraPath::aim_sources`].
-#[derive(Debug, Clone)]
-pub struct AimTargetSource {
-    /// Index into [`CameraPath::aim`] (stable: the track is sorted once, at resolve).
-    pub key: usize,
-    /// The target prim's USD path, looked up against spawned prims each frame.
-    pub path: String,
-}
-
 impl CameraPath {
     /// The aim mode in force at `t` — the last key at or before it (held).
     pub fn aim_at(&self, t: f64) -> AimMode {
@@ -195,8 +165,8 @@ impl CameraPath {
             .rev()
             .find(|k| k.t <= t)
             .or_else(|| self.aim.first())
-            .map(|k| k.mode)
-            .unwrap_or(AimMode::Tangent)
+            .map(|k| k.mode.clone())
+            .expect("resolved camera paths always contain an aim key")
     }
 
     /// Return the preceding and current aim modes while an authored blend is
@@ -211,13 +181,13 @@ impl CameraPath {
         if next == 0 {
             return None;
         }
-        let key = self.aim[next];
+        let key = self.aim[next].clone();
         let start = key.t - duration;
         if t < start {
             return None;
         }
         let alpha = ((t - start) / duration).clamp(0.0, 1.0) as f32;
-        Some((self.aim[next - 1].mode, key.mode, alpha))
+        Some((self.aim[next - 1].mode.clone(), key.mode, alpha))
     }
 }
 
@@ -271,6 +241,22 @@ pub struct CameraPathDriven {
 fn path_u(t: f64, start: f64, end: f64) -> f32 {
     let span = (end - start).max(f64::EPSILON);
     (((t - start) / span) as f32).clamp(0.0, 1.0)
+}
+
+/// Resolve an authored target path to the live spatial twin. Prim paths are the
+/// stable USD identity; ECS entities are deliberately not retained by a camera
+/// path because composition may replace them. Prefer the grid-anchored twin when
+/// a data-side twin with the same path is also present.
+fn live_target(
+    target_path: &str,
+    q_targets: &Query<'_, '_, (Entity, &UsdPrimPath), (With<Transform>, With<CellCoord>)>,
+) -> Option<Entity> {
+    let mut matches = q_targets
+        .iter()
+        .filter(|(_, prim)| prim.path.as_str() == target_path)
+        .map(|(entity, _)| entity);
+    let entity = matches.next()?;
+    matches.next().is_none().then_some(entity)
 }
 
 /// The frozen link between a camera path's clock and the clock it really hangs on.
@@ -450,7 +436,7 @@ pub fn resolve_camera_paths(
     q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
-    q_is_grid: Query<(), With<Grid>>,
+    q_grids: Query<&Grid>,
     mut commands: Commands,
 ) {
     let Some(clocks) = clocks else { return };
@@ -488,16 +474,15 @@ pub fn resolve_camera_paths(
         //   token[]  lunco:path:aim:modes = ["target", "target", "manual"]
         //   rel      lunco:path:aim:targets = [</Hab>, </Lander>]
         //
-        // Absent ⇒ fall back to the whole-path `lunco:path:lookAt` rel, else
-        // tangent. So the simple case stays a one-liner and the track is opt-in.
+        // With no key arrays, use the whole-path `lunco:path:lookAt` relation or
+        // the explicit tangent semantic default. The simple case stays a one-liner
+        // and the track is opt-in.
         // `aim:blendDuration` is explicit: absent means the authored track keeps
         // its cut semantics, while a positive value makes every target-to-target
         // transition continuous.
-        // Tolerant reads: `modes` is naturally authored `token[]` (it is an enum) but
-        // reads fine as `string[]`, and `times` is naturally `double[]` but authors
-        // reach for `float[]`. A strict read of either degrades to an EMPTY array,
-        // which silently turns every aim key into the tangent fallback rather than
-        // reporting anything — see `UsdRead::texts`/`reals`.
+        // `UsdRead::texts`/`reals` accept the two USD precisions, while cardinality
+        // and enum values below remain strict so malformed authoring cannot select
+        // an invisible tangent pose.
         let times = reader.reals(&path, "lunco:path:aim:times");
         let modes = reader.texts(&path, "lunco:path:aim:modes");
         let aim_blend_duration = reader.real(&path, "lunco:path:aim:blendDuration");
@@ -508,63 +493,83 @@ pub fn resolve_camera_paths(
             );
             continue;
         }
-        // The RAW rel paths, not entity lookups. A "target" key is authored
-        // against a PRIM PATH, and the entity for that path is a moving target:
-        // it may not have spawned yet (async reference), may be shadowed by a
-        // non-spatial twin carrying the same path, or may be replaced by a later
-        // load phase. Every one of those, bound once here, produced a camera
-        // silently holding one rotation for a whole take. So resolve authors
-        // only the KEYS (with a tangent placeholder) plus the path each target
-        // key came from; `bind_aim_targets` owns entity binding, every frame.
+        if times.len() != modes.len() {
+            warn!(
+                "[camera-path] {} has {} aim times but {} aim modes; refusing the path",
+                prim.path,
+                times.len(),
+                modes.len()
+            );
+            continue;
+        }
+
+        // Keep the authored USD prim path in each target key. Entity identity is
+        // runtime state and may change during composition; resolving it once was
+        // the source of stale aim bindings and silently held rotations.
         let target_paths = reader.rel_targets(&path, "lunco:path:aim:targets");
 
-        // (key, target path) — folded into indices after the sort.
-        let mut keys: Vec<(AimKey, Option<String>)> = Vec::new();
+        let mut keys: Vec<AimKey> = Vec::new();
         let mut next_target = 0usize;
         for (i, t) in times.iter().enumerate() {
-            let (mode, source) = match modes.get(i).map(String::as_str) {
+            if !t.is_finite() || *t < 0.0 {
+                warn!(
+                    "[camera-path] {} has invalid aim time {t}; refusing the path",
+                    prim.path
+                );
+                continue;
+            }
+            let mode = match modes.get(i).map(String::as_str) {
                 Some("target") => {
                     let tp = target_paths.get(next_target);
                     next_target += 1;
                     match tp {
-                        Some(tp) => (AimMode::Tangent, Some(tp.to_string())),
+                        Some(tp) => AimMode::Target(tp.to_string()),
                         None => {
                             warn!(
                                 "[camera-path] {}: aim key {i} is \"target\" but \
                                  `lunco:path:aim:targets` has no {next_target}th entry — \
-                                 falling back to tangent",
+                                 refusing the path",
                                 prim.path
                             );
-                            (AimMode::Tangent, None)
+                            continue;
                         }
                     }
                 }
-                Some("manual") => (AimMode::Manual, None),
-                _ => (AimMode::Tangent, None),
+                Some("manual") => AimMode::Manual,
+                Some("tangent") => AimMode::Tangent,
+                Some(mode) => {
+                    warn!(
+                        "[camera-path] {} has unknown aim mode `{mode}` at key {i}; refusing the path",
+                        prim.path
+                    );
+                    continue;
+                }
+                None => unreachable!("aim array lengths were checked above"),
             };
-            keys.push((AimKey { t: *t, mode }, source));
+            keys.push(AimKey { t: *t, mode });
         }
-        keys.sort_by(|a, b| a.0.t.total_cmp(&b.0.t));
+        if keys.len() != times.len() {
+            continue;
+        }
+        if next_target != target_paths.len() {
+            warn!(
+                "[camera-path] {} has {} target relations for {next_target} target keys; refusing the path",
+                prim.path,
+                target_paths.len()
+            );
+            continue;
+        }
+        keys.sort_by(|a, b| a.t.total_cmp(&b.t));
         if keys.is_empty() {
-            // No track: the whole-path rel, else tangent. One key, so `aim_at`
-            // needs no empty case.
-            let source = reader.rel_target(&path, "lunco:path:lookAt");
-            keys.push((
-                AimKey {
-                    t: 0.0,
-                    mode: AimMode::Tangent,
-                },
-                source,
-            ));
+            // No track: the whole-path relation, otherwise the explicit tangent
+            // semantic default. One key, so `aim_at` needs no empty case.
+            let mode = match reader.rel_target(&path, "lunco:path:lookAt") {
+                Some(target) => AimMode::Target(target),
+                None => AimMode::Tangent,
+            };
+            keys.push(AimKey { t: 0.0, mode });
         }
-        let mut aim: Vec<AimKey> = Vec::with_capacity(keys.len());
-        let mut aim_sources: Vec<AimTargetSource> = Vec::new();
-        for (i, (key, source)) in keys.into_iter().enumerate() {
-            aim.push(key);
-            if let Some(p) = source {
-                aim_sources.push(AimTargetSource { key: i, path: p });
-            }
-        }
+        let aim = keys;
 
         // `points3` accepts both `point3f[]` and `point3d[]` — a curve authored in
         // double precision is still a curve, and a strict `point3f[]` read reported
@@ -577,20 +582,40 @@ pub fn resolve_camera_paths(
         // `curveVertexCounts` partitions `points` into separate curves on one prim.
         // A camera rides ONE curve — the first — so slice it out rather than
         // interpolating across curve boundaries as if the batch were one polyline.
-        if let Some(counts) = crate::read_int_array(reader, &path, "curveVertexCounts") {
-            if let Some(&first) = counts.first() {
-                let n = first.max(0) as usize;
-                if n >= 2 && n < points.len() {
-                    if counts.len() > 1 {
-                        warn!(
-                            "[camera-path] {} carries {} curves — driving the first ({n} pts)",
-                            prim.path,
-                            counts.len()
-                        );
-                    }
-                    points.truncate(n);
-                }
+        if reader.attr_value(&path, "curveVertexCounts").is_some() {
+            let Some(counts) = crate::read_int_array(reader, &path, "curveVertexCounts") else {
+                warn!(
+                    "[camera-path] {} has a non-integer `curveVertexCounts`; refusing the path",
+                    prim.path
+                );
+                continue;
+            };
+            let total: usize = counts.iter().map(|count| (*count).max(0) as usize).sum();
+            let Some(&first) = counts.first() else {
+                warn!(
+                    "[camera-path] {} has an empty `curveVertexCounts`; refusing the path",
+                    prim.path
+                );
+                continue;
+            };
+            if counts.iter().any(|count| *count < 2) || total != points.len() {
+                warn!(
+                    "[camera-path] {} has invalid `curveVertexCounts` {:?} for {} points; refusing the path",
+                    prim.path,
+                    counts,
+                    points.len()
+                );
+                continue;
             }
+            let n = first as usize;
+            if counts.len() > 1 {
+                warn!(
+                    "[camera-path] {} carries {} curves — driving the first ({n} pts)",
+                    prim.path,
+                    counts.len()
+                );
+            }
+            points.truncate(n);
         }
         if points.is_empty() {
             warn!("[camera-path] {} has no `points`", prim.path);
@@ -607,27 +632,107 @@ pub fn resolve_camera_paths(
         // is diagnosing is worse than no diagnostic.
         let n_points = points.len();
 
-        let cubic = reader.text(&path, "type").as_deref() != Some("linear");
+        let curve_type = reader.text(&path, "type");
+        let cubic = match curve_type.as_deref() {
+            Some("linear") => false,
+            Some("cubic") => true,
+            Some(other) => {
+                warn!(
+                    "[camera-path] {} has unsupported BasisCurves type `{other}`; refusing the path",
+                    prim.path
+                );
+                continue;
+            }
+            None => true,
+        };
         let basis = match reader.text(&path, "basis").as_deref() {
             _ if !cubic => CurveBasis::Linear,
             // No bspline evaluator here — catmullRom is the closest interpolating
             // stand-in (the same approximation the tube mesher takes).
             Some("catmullRom") | Some("bspline") => CurveBasis::CatmullRom,
             // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
-            _ => CurveBasis::Bezier,
+            Some("bezier") | None => CurveBasis::Bezier,
+            Some(other) => {
+                warn!(
+                    "[camera-path] {} has unsupported BasisCurves basis `{other}`; refusing the path",
+                    prim.path
+                );
+                continue;
+            }
         };
-        let periodic = reader.text(&path, "wrap").as_deref() == Some("periodic");
+        let periodic = match reader.text(&path, "wrap").as_deref() {
+            Some("periodic") => true,
+            Some("nonperiodic") | Some("pinned") | None => false,
+            Some(other) => {
+                warn!(
+                    "[camera-path] {} has unsupported BasisCurves wrap `{other}`; refusing the path",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        let valid_topology = match basis {
+            CurveBasis::Linear => points.len() >= 2,
+            CurveBasis::CatmullRom => {
+                (periodic && points.len() >= 3) || (!periodic && points.len() >= 4)
+            }
+            CurveBasis::Bezier => {
+                (periodic && points.len() >= 3 && points.len() % 3 == 0)
+                    || (!periodic && points.len() >= 4 && (points.len() - 1) % 3 == 0)
+            }
+        };
+        if !valid_topology {
+            warn!(
+                "[camera-path] {} has an invalid {:?} control-point topology for {} curve; refusing the path",
+                prim.path,
+                basis,
+                if periodic { "periodic" } else { "nonperiodic" }
+            );
+            continue;
+        }
         // `real`, not `scalar::<f64>`: a `float lunco:path:duration = 8` would
         // otherwise read as unauthored and silently run the shot for 60 s.
-        let duration = reader.real(&path, "lunco:path:duration").unwrap_or(60.0);
+        let Some(duration) = reader.real(&path, "lunco:path:duration") else {
+            warn!(
+                "[camera-path] {} has no composed `lunco:path:duration`; refusing the path",
+                prim.path
+            );
+            continue;
+        };
+        if !duration.is_finite() || duration <= 0.0 {
+            warn!(
+                "[camera-path] {} has invalid `lunco:path:duration` {duration}; refusing the path",
+                prim.path
+            );
+            continue;
+        }
         // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).
-        let on_wall = reader.text(&path, "lunco:path:clock").as_deref() == Some("real");
+        let on_wall = match reader.text(&path, "lunco:path:clock").as_deref() {
+            Some("real") => true,
+            Some("sim") | None => false,
+            Some(other) => {
+                warn!(
+                    "[camera-path] {} has unsupported clock `{other}`; refusing the path",
+                    prim.path
+                );
+                continue;
+            }
+        };
         let parent = if on_wall {
             clocks.interaction
         } else {
             clocks.sim
+        };
+
+        // Resolve the authored frame before allocating any path state. Commands
+        // are deferred; inserting `CameraPath` first would remove this prim from
+        // `q_new`, and a missing grid would then orphan the newly created clocks
+        // forever instead of allowing the next load frame to retry.
+        let Some((grid, _)) = lunco_core::coords::ancestor_grid(entity, &q_parents, &q_grids)
+        else {
+            continue;
         };
 
         // The shot hangs off its real clock through a GATE domain, frozen at birth
@@ -656,7 +761,7 @@ pub fn resolve_camera_paths(
                 TimeDomain::derived(Some(gate), 0.0, 1.0),
                 Playback {
                     start: 0.0,
-                    end: duration.max(f64::EPSILON),
+                    end: duration,
                     looping: periodic,
                     ..default()
                 },
@@ -668,7 +773,6 @@ pub fn resolve_camera_paths(
             domain,
             aim,
             aim_blend_duration,
-            aim_sources,
             points,
             basis,
             periodic,
@@ -693,9 +797,6 @@ pub fn resolve_camera_paths(
         // camera's pre-handoff hierarchy. A site scene is initially mounted on
         // WorldGrid and is later atomically attached to its body-fixed ENU grid;
         // looking up from the camera here would permanently capture WorldGrid.
-        let Some(grid) = find_grid(entity, &q_parents, &q_is_grid) else {
-            continue; // grid not spawned yet — retry next frame
-        };
         commands
             .entity(camera)
             .remove::<crate::camera_mount::MountedCamera>()
@@ -741,63 +842,6 @@ pub fn resolve_camera_paths(
     }
 }
 
-/// Keep every `Target` aim key bound to the live, spatial entity for its prim path.
-///
-/// Runs every frame; paths with no target keys filter out immediately. For each
-/// [`AimTargetSource`] the current best entity is the one that carries BOTH the
-/// prim path and a `Transform` — `drive_camera_paths` aims via `world_pose`,
-/// which starts from the entity's own `Transform`, so a data-side twin without
-/// one is not a usable target no matter how well its path matches. When the best
-/// entity differs from what the key holds (first spawn, respawn, or an earlier
-/// bind to a non-spatial twin) the key is patched in place; when no usable
-/// entity exists the key keeps its `Tangent` placeholder (fresh path) or its
-/// stale `Target` (drive holds the last good rotation) until one appears.
-pub fn bind_aim_targets(
-    q_targets: Query<(Entity, &UsdPrimPath, Has<CellCoord>), With<Transform>>,
-    mut q_paths: Query<(&UsdPrimPath, &mut CameraPath)>,
-) {
-    for (prim, mut path) in q_paths.iter_mut() {
-        if path.aim_sources.is_empty() {
-            continue;
-        }
-        // Bypass change detection until something actually rebinds: `iter_mut`
-        // hands out `Mut`, and marking every path changed every frame would be
-        // noise for any downstream `Changed<CameraPath>` reader.
-        let path = path.bypass_change_detection();
-        for i in 0..path.aim_sources.len() {
-            let source = &path.aim_sources[i];
-            // Best candidate for the path: prefer a grid-anchored entity
-            // (`CellCoord`) over a bare-`Transform` one. A physics vehicle is
-            // grid-direct; a bare-`Transform` match may be a data-side twin
-            // whose pose never tracks the vehicle.
-            let found = q_targets
-                .iter()
-                .filter(|(_, p, _)| p.path.as_str() == source.path.as_str())
-                .max_by_key(|(_, _, has_cell)| *has_cell)
-                .map(|(e, _, _)| e);
-            let Some(e) = found else {
-                if let AimMode::Target(stale) = path.aim[source.key].mode {
-                    warn_once!(
-                        "[camera-path] {}: aim target {} ({stale:?}) no longer has a \
-                         Transform-carrying entity — holding stale bind",
-                        prim.path,
-                        source.path
-                    );
-                }
-                continue;
-            };
-            let key = source.key;
-            if path.aim[key].mode != AimMode::Target(e) {
-                info!(
-                    "[camera-path] {}: aim key {key} bound to {} ({e:?})",
-                    prim.path, source.path
-                );
-                path.aim[key].mode = AimMode::Target(e);
-            }
-        }
-    }
-}
-
 /// Evaluate each path at its clock's time and record the camera's pose for this
 /// frame. [`apply_camera_paths`] writes it.
 ///
@@ -819,6 +863,7 @@ pub fn drive_camera_paths(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_targets: Query<(Entity, &UsdPrimPath), (With<Transform>, With<CellCoord>)>,
     mut q_cams: Query<&mut CameraPathDriven>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut tick: Local<u32>,
@@ -833,6 +878,12 @@ pub fn drive_camera_paths(
     *tick = tick.wrapping_add(1);
     let chatty = (*tick).is_multiple_of(100);
     for (curve_entity, path) in q_paths.iter() {
+        // A sample is valid only for the current frame. Clearing this before
+        // any prerequisite lookup prevents `apply_camera_paths` from replaying
+        // a stale pose when a target or frame temporarily disappears.
+        if let Ok(mut driven) = q_cams.get_mut(path.camera) {
+            driven.primed = false;
+        }
         let Ok(pb) = q_playback.get(path.domain) else {
             continue;
         };
@@ -894,8 +945,15 @@ pub fn drive_camera_paths(
         // small even when the site is millions of metres from the inertial root.
         let aim_mode = path.aim_at(t);
         let mut invalid_target = false;
-        let look_dir = match aim_mode {
-            AimMode::Target(e) => {
+        let look_dir = match &aim_mode {
+            AimMode::Target(target_path) => {
+                let Some(e) = live_target(target_path, &q_targets) else {
+                    warn_once!(
+                        "[camera-path] {curve_entity:?}: aim target {target_path} has no \
+                         live Transform-bearing entity; sample withheld"
+                    );
+                    continue;
+                };
                 match lunco_core::coords::pose_in_grid(
                     e,
                     target_grid,
@@ -928,15 +986,11 @@ pub fn drive_camera_paths(
                         Some(dir)
                     }
                     None => {
-                        // Target despawned (or its Transform is gone) — hold the
-                        // last rotation. Loud, because a whole take can record
-                        // with the camera frozen on one heading if this
-                        // persists; `bind_aim_targets` is responsible for
-                        // rebinding a live entity.
                         warn_once!(
                             "[camera-path] aim target {e:?} has no resolvable pose — \
-                             holding last rotation"
+                             sample withheld"
                         );
+                        invalid_target = true;
                         None
                     }
                 }
@@ -975,7 +1029,11 @@ pub fn drive_camera_paths(
             path.aim_transition_at(t)
                 .and_then(|(previous_mode, current_mode, alpha)| {
                     let previous_dir = match previous_mode {
-                        AimMode::Target(entity) => {
+                        AimMode::Target(target_path) => {
+                            let Some(entity) = live_target(&target_path, &q_targets) else {
+                                invalid_target = true;
+                                return None;
+                            };
                             let Some((target, _)) = lunco_core::coords::pose_in_grid(
                                 entity,
                                 target_grid,
@@ -999,7 +1057,11 @@ pub fn drive_camera_paths(
                     // upcoming mode explicitly; using `look_dir` here would slerp
                     // the old pose to itself and leave the key as a cut.
                     let current_dir = match current_mode {
-                        AimMode::Target(entity) => {
+                        AimMode::Target(target_path) => {
+                            let Some(entity) = live_target(&target_path, &q_targets) else {
+                                invalid_target = true;
+                                return None;
+                            };
                             let Some((target, _)) = lunco_core::coords::pose_in_grid(
                                 entity,
                                 target_grid,
@@ -1051,7 +1113,7 @@ pub fn drive_camera_paths(
             // happened to land. That is what makes a recorded frame index reproduce
             // the identical transform across runs.
             driven.target_local = world;
-            driven.aim_owned = !matches!(aim_mode, AimMode::Manual);
+            driven.aim_owned = !matches!(&aim_mode, AimMode::Manual);
             if let Some(rotation) = blended_rotation {
                 driven.target_rot = rotation;
             } else if let Some(dir) = look_dir {
@@ -1062,22 +1124,6 @@ pub fn drive_camera_paths(
             driven.primed = true;
         }
     }
-}
-
-/// Walk up a `ChildOf` chain to the enclosing `Grid`.
-fn find_grid(
-    from: Entity,
-    q_parents: &Query<&ChildOf>,
-    q_is_grid: &Query<(), With<Grid>>,
-) -> Option<Entity> {
-    let mut node = q_parents.get(from).ok()?.parent();
-    for _ in 0..16 {
-        if q_is_grid.contains(node) {
-            return Some(node);
-        }
-        node = q_parents.get(node).ok()?.parent();
-    }
-    None
 }
 
 /// Write each path-driven camera's sampled pose into its `(CellCoord, Transform)`.
@@ -1176,14 +1222,14 @@ pub fn apply_camera_paths(
 /// make the camera speed up through sparse stretches. Fine for an even orbit;
 /// a shot with clustered points wants arc-length reparameterisation (doc 50 §9.7).
 pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Vec3 {
-    match points.len() {
-        0 => Vec3::ZERO,
-        1 => points[0],
-        _ => match basis {
-            CurveBasis::Linear => eval_linear(points, periodic, u),
-            CurveBasis::Bezier => eval_bezier(points, periodic, u),
-            CurveBasis::CatmullRom => eval_catmull_rom(points, periodic, u),
-        },
+    assert!(
+        points.len() >= 2,
+        "camera curves require at least two control points"
+    );
+    match basis {
+        CurveBasis::Linear => eval_linear(points, periodic, u),
+        CurveBasis::Bezier => eval_bezier(points, periodic, u),
+        CurveBasis::CatmullRom => eval_catmull_rom(points, periodic, u),
     }
 }
 
@@ -1203,7 +1249,7 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// points you place. Periodic curves wrap. Non-periodic ones follow USD's end
 /// conditions: the first and last CVs are TANGENT PHANTOMS, so the curve spans
 /// p₁…pₙ₋₂ with `n − 3` segments (UsdGeomBasisCurves segment counting). Fewer
-/// than 4 CVs cannot form a cubic segment — degrade to the polygon.
+/// than 4 CVs cannot form an open cubic segment and are rejected.
 ///
 /// The numeric core is `bevy_math`'s [`CubicCardinalSpline`] at tension 0.5 —
 /// the same generator `lunco-celestial/src/trajectories.rs` uses, and the same
@@ -1217,9 +1263,10 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 ///   are never touched.
 fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
-    if !periodic && n < 4 {
-        return eval_linear(points, false, u);
-    }
+    assert!(
+        (periodic && n >= 3) || (!periodic && n >= 4),
+        "invalid Catmull-Rom control-point topology"
+    );
     let u = u.clamp(0.0, 1.0);
     let spline = CubicCardinalSpline::new_catmull_rom(points.iter().copied());
     let sampled = if periodic {
@@ -1229,9 +1276,7 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
             .to_curve()
             .map(|c| c.position(1.0 + u * (n - 3) as f32))
     };
-    // `n ≥ 2` is guaranteed by the callers above, so this is unreachable — but
-    // the polygon is a saner fallback than a panic in a render-path system.
-    sampled.unwrap_or_else(|_| eval_linear(points, periodic, u))
+    sampled.expect("validated camera-path control points must produce a Catmull-Rom curve")
 }
 
 /// Cubic Bezier: 4 CVs per segment, consecutive segments sharing an endpoint.
@@ -1240,16 +1285,17 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// carries `4 + 3(segs − 1)` CVs, a `periodic` one exactly `3·segs`. The
 /// periodic form authors no closing CV — the final segment borrows the first CV
 /// back as its endpoint, which is what makes the loop close rather than stop.
-/// Too few CVs to form even one cubic segment degrades to the control polygon.
+/// A control-point count that cannot form a complete segment is rejected.
 ///
 /// Segment windows are gathered here (that indexing IS the USD wrapping rule);
 /// the Bernstein evaluation itself is `bevy_math`'s [`CubicBezier`].
 fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
     let segs = if periodic { n / 3 } else { (n - 1) / 3 };
-    if segs == 0 {
-        return eval_linear(points, periodic, u);
-    }
+    assert!(
+        (periodic && n >= 3 && n % 3 == 0) || (!periodic && n >= 4 && (n - 1) % 3 == 0),
+        "invalid Bezier control-point topology"
+    );
     // Wrapping the index is the whole of periodicity here: only the closing
     // segment's `b + 3` ever reaches `n`, and there it lands back on CV 0.
     let windows = (0..segs).map(|i| {
@@ -1263,8 +1309,9 @@ fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     });
     match CubicBezier::new(windows).to_curve() {
         Ok(curve) => curve.position(u.clamp(0.0, 1.0) * segs as f32),
-        // Unreachable (`segs ≥ 1` above), but degrade rather than panic.
-        Err(_) => eval_linear(points, periodic, u),
+        Err(error) => {
+            panic!("validated camera-path control points must produce a Bezier curve: {error:?}")
+        }
     }
 }
 
@@ -1346,20 +1393,17 @@ mod tests {
         assert!((mid - p[2]).length() < 1e-5, "interior knot interpolated");
     }
 
-    /// Fewer than 4 CVs cannot form an open cubic segment — the documented
-    /// degradation is the control polygon.
+    /// Fewer than 4 CVs cannot form an open cubic segment and must fail loudly
+    /// instead of being silently reinterpreted as a linear path.
     #[test]
-    fn open_catmull_rom_under_four_cvs_degrades_to_the_polygon() {
+    #[should_panic(expected = "invalid Catmull-Rom control-point topology")]
+    fn open_catmull_rom_under_four_cvs_is_rejected() {
         let p = vec![
             Vec3::ZERO,
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(2.0, 2.0, 0.0),
         ];
-        let got = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
-        assert!(
-            (got - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5,
-            "3 CVs = polygon midpoint of the first edge: {got:?}"
-        );
+        let _ = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
     }
 
     #[test]
@@ -1422,7 +1466,7 @@ mod tests {
 
     #[test]
     fn aim_blend_is_entered_before_the_upcoming_key() {
-        let target = Entity::PLACEHOLDER;
+        let target = "/World/Target".to_string();
         let path = CameraPath {
             camera: Entity::PLACEHOLDER,
             domain: Entity::PLACEHOLDER,
@@ -1433,11 +1477,10 @@ mod tests {
                 },
                 AimKey {
                     t: 8.0,
-                    mode: AimMode::Target(target),
+                    mode: AimMode::Target(target.clone()),
                 },
             ],
             aim_blend_duration: Some(1.5),
-            aim_sources: Vec::new(),
             points: Vec::new(),
             basis: CurveBasis::Linear,
             periodic: false,
@@ -1446,7 +1489,7 @@ mod tests {
         assert_eq!(path.aim_transition_at(6.4), None);
         assert_eq!(
             path.aim_transition_at(6.5),
-            Some((AimMode::Tangent, AimMode::Target(target), 0.0))
+            Some((AimMode::Tangent, AimMode::Target(target.clone()), 0.0))
         );
         let (_, _, alpha) = path.aim_transition_at(7.25).unwrap();
         assert!((alpha - 0.5).abs() < 1e-6);
@@ -1485,9 +1528,9 @@ mod tests {
             (end - start).length() < 1e-5,
             "periodic end wraps back onto the start"
         );
-        // The same CVs read nonperiodically span only one segment (4 + 3(segs−1)
-        // ⇒ segs = 1) and stop on CV 3 — the wrap is what adds the return leg.
-        let open_end = eval_curve(&p, CurveBasis::Bezier, false, 1.0);
+        // An open path needs its own complete 4-CV topology; the periodic
+        // six-CV topology is not silently truncated or reinterpreted.
+        let open_end = eval_curve(&p[..4], CurveBasis::Bezier, false, 1.0);
         assert!(
             (open_end - p[3]).length() < 1e-5,
             "nonperiodic stops at its last endpoint"
