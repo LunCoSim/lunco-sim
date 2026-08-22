@@ -316,10 +316,10 @@ fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
-    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer` /
-    // `Assets<UsdSourceText>`. The doc-backed mount path (`drain_pending_twin_docs`)
-    // is gated on BOTH, so defer to it only when both exist — otherwise E1b is
-    // skipped and `LoadScene` mounts the scene directly.
+    // Optional because headless hosts may not install the asset pipeline. The
+    // authoritative doc-backed mount below is the only production path; the
+    // test-only branch preserves this observer's decision coverage in
+    // MinimalPlugins apps without pretending to mount a scene there.
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<lunco_usd_bevy::UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
@@ -363,6 +363,7 @@ fn open_usd_docs_on_twin_added(
     let twin_name = twin_roots.register(&twin_name, &twin.root);
     match default_scene {
         Some(scene) => {
+            let scene_uri = lunco_assets::twin_uri(&twin_name, scene);
             // Load the scene THROUGH the `twin://` source registered above —
             // never a bare absolute path. Works identically on native (fs) and
             // web (http), and keeps the scene's co-located relative refs
@@ -377,8 +378,6 @@ fn open_usd_docs_on_twin_added(
             // `restore_runtime` forced a whole-scene rebuild ~70 ms later —
             // every prim (rovers included) spawned twice. Read the base text
             // THROUGH the twin source (web-ready) rather than `std::fs`.
-            // Headless/test apps without the asset pipeline mount directly —
-            // they have no doc projection to wait for.
             if let (Some(asset_server), Some(_)) = (&asset_server, &usd_sources) {
                 info!(
                     "[twin] doc-backing starting scene `twin://{}/{}` (twin `{}`) — mount follows",
@@ -386,27 +385,37 @@ fn open_usd_docs_on_twin_added(
                     scene,
                     twin.root.display()
                 );
-                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(
-                    lunco_assets::twin_uri(&twin_name, scene),
-                );
+                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(scene_uri.clone());
                 pending_twin.push(
                     handle,
-                    twin_name,
+                    twin_name.clone(),
                     scene.to_string(),
                     twin.root.join(scene),
                     twin.root.clone(),
                 );
-            } else {
+            }
+            #[cfg(test)]
+            if asset_server.is_none() || usd_sources.is_none() {
                 info!(
-                    "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
+                    "[twin:test] recording starting scene `twin://{}/{}` (twin `{}`)",
                     twin_name,
                     scene,
                     twin.root.display()
                 );
                 commands.trigger(LoadScene {
-                    path: lunco_assets::twin_uri(&twin_name, scene),
+                    path: scene_uri,
                     root_prim: String::new(),
                 });
+            }
+            #[cfg(not(test))]
+            if asset_server.is_none() || usd_sources.is_none() {
+                let detail = format!(
+                    "cannot load `{}`: the USD asset pipeline is not installed",
+                    scene_uri
+                );
+                warn!("[twin] {detail}");
+                empty_reason.set(detail.clone());
+                lunco_core::trigger_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
             }
         }
         None => {
