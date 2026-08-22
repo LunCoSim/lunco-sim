@@ -2049,8 +2049,9 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Attach a persistent rhai scenario to an entity — the scenario-loading entry
  point for the API / MCP / UI / ROS2. Registers the source as a
- `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`, so the
- per-entity runtime starts calling its `on_start`/`on_tick`/`on_event` hooks.
+ `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`. A
+ production mission normally returns a `task(me)` tree; optional lifecycle and
+ event hooks handle setup, telemetry, and teardown.
 
  Idempotent + HOT-RELOAD: re-running on an entity that already has a scenario
  reuses its document id and bumps the generation, so `tick_rhai_models`
@@ -2081,12 +2082,11 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `RunTimeline`
 
  Run a declarative **mission timeline** on an entity — Layer 2 of the
- sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
- `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
- authorable/storable/shippable without writing rhai. The handler lowers it to
- the generic executor (a `const TIMELINE` + the three hooks that call the
- prelude's `compile_timeline`/`run_steps`/`seq_note_event`) and attaches it via
- the same path as `RunScenario` — so hot-reload, per-entity state, and
+ task-tree authoring surface. The timeline is pure DATA (`timeline` is a JSON
+ string: either a `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`),
+ so a mission is authorable/storable/shippable without writing rhai. The
+ handler lowers it to the generic task executor and attaches it via the same
+ path as `RunScenario` — so hot-reload, per-entity state, and
  `STEP_COMPLETE`/`SEQUENCE_COMPLETE` telemetry all come for free.
 
  Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
@@ -2115,9 +2115,9 @@ type and literal, journals the edit, and re-composes the live stage.
 #### `SetScenarioPaused`
 
  Pause or resume the scenario attached to `target` (sets `ScriptedModel.paused`).
- Paused scenarios skip `on_tick` (rhai) / execution (python) but keep their
- state — resume continues where they left off. The clean API form of toggling
- the `paused` field; language-agnostic.
+ Paused Rhai scenarios stop native task progression (and event-driven policy)
+ while retaining their state; resume continues where they left off. The clean
+ API form of toggling the `paused` field; language-agnostic.
 
 - *defined in:* `crates/lunco-scripting/src/commands.rs`
 

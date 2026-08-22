@@ -8,19 +8,17 @@
 // is initialized; the native task kernel owns fixed-tick progression and event
 // delivery.
 
-const TIMELINE = #{
-    name: "survey",
-    steps: [
+fn task(me) {
+    // Keep the data in the directly-called task function. Rhai does not
+    // resolve top-level constants from an indirect task invocation.
+    let timeline = [
         #{ move_to: [12.0, 0.0,  0.0], speed: 1.0, radius: 2.0 }, // drive to A
         #{ wait: 5.0 },                                           // dwell / sample
         #{ emit: "SAMPLE_DONE", value: true },                    // mark progress
         #{ wait_event: "GO" },                                    // hold for a hail
         #{ move_to: [12.0, 0.0, 25.0], speed: 1.0, radius: 2.0 }, // drive to B
         #{ cmd: "SetPorts", params: #{ writes: [["brake", 1.0]] } }, // stop
-    ],
-};
-
-fn task(me) {
-    print("timeline '" + TIMELINE.name + "': " + TIMELINE.steps.len() + " steps queued");
-    seq(compile_timeline(TIMELINE.steps))
+    ];
+    print("timeline 'survey': " + timeline.len() + " steps queued");
+    seq(compile_timeline(timeline))
 }

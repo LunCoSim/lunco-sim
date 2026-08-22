@@ -111,8 +111,8 @@ fn __mission_status(m) {
     #{ all_done: all_done, any_failed: any_failed }
 }
 
-/// Engine driver — evaluate `this.mission` one tick. Called by the runtime after
-/// on_tick; no-op when no mission was declared. Emits MISSION_COMPLETE /
+/// Engine driver — evaluate `this.mission` once per fixed step alongside the
+/// native task tree; no-op when no mission was declared. Emits MISSION_COMPLETE /
 /// MISSION_FAILED once when the mission resolves.
 fn __run_mission(me) {
     if this.mission == () { this.__mevents = []; return; }
@@ -176,7 +176,7 @@ fn __init_mission(me) {
 // fields), so a whole mission is serialisable — authorable as a `const`, stored
 // in the Twin, or driven over the API by `RunTimeline` (which generates the
 // generic executor below). `compile_timeline` lowers data steps to Layer-1
-// steps ONCE (in on_start); on_tick then runs them with the same `run_steps`.
+// steps ONCE in the task declaration; the native task kernel owns progression.
 //
 // Data step vocabulary (first matching field wins):
 //   #{ move_to: [x,y,z], speed: 1.0, radius: 2.0 }  drive until arrived (speed/radius optional)
@@ -253,5 +253,5 @@ fn timeline_step(s) {
 }
 
 /// Lower a whole data timeline (array of data steps) to Layer-1 steps. Call ONCE
-/// in on_start and hold the result on `this`; feed it to run_steps each tick.
+/// in `task(me)` and return it to the native task kernel.
 fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }

@@ -1,4 +1,4 @@
-// ── Sequencer (Layer 1: time/sequence primitives — PURE rhai policy) ─────────
+// ── Low-level sequence data — PURE rhai policy ──────────────────────────────
 //
 // A general step sequencer over the same "thread state through `this`" rule as
 // run_plan (the engine binds `this` ONLY inside the hook, not in called fns), so
@@ -14,8 +14,10 @@
 //   #{ event: "NAME" }                 wait until a matching event arrives
 // (`act`/`done`/`secs`/`event` avoid rhai's reserved `do`/`until`.)
 //
-// Prefer behaviour-tree sequencing or `RunTimeline`. Scenario rhai reacts to
-// events; continuous progression and numerical predicates belong outside rhai.
+// New mission scripts should use the task-tree constructors below or
+// `RunTimeline`. These cursor functions remain a low-level data adapter for
+// generated timelines and focused tests; they are not the authoring path for a
+// hand-written fixed-tick loop.
 //
 // Progress is observable on the telemetry bus: STEP_COMPLETE(idx) per step and
 // SEQUENCE_COMPLETE(len) at the end (mirrors run_plan's OBJECTIVE/PLAN emits).
@@ -44,7 +46,8 @@ fn step_done(me, s, cur, now) {
 /// Advance a step sequence by one tick. Runs the current step's `act` (if any),
 /// then advances when the step is done. Returns the next cursor; when
 /// `cur.step >= steps.len()` the sequence is complete (subsequent calls no-op).
-/// Typical use in on_tick: `self.cur = run_steps(me, STEPS, self.cur);`
+/// Low-level cursor adapter. New scripts should return a task tree from
+/// `fn task(me)` instead of calling this from a fixed-tick hook.
 fn run_steps(me, steps, cur) {
     if cur.step >= steps.len() { return cur; }
     let now = elapsed_seconds();
@@ -68,17 +71,15 @@ fn seq_note_event(cur, evt) {
     cur
 }
 
-// ── Tasks: a BUILT-IN auto-advanced sequence (no on_tick/on_event needed) ─────
+// ── Tasks: the canonical auto-advanced mission policy ───────────────────────
 //
-// The sequencer above needs three hooks wired by hand (on_start seeds the cursor,
-// on_tick calls run_steps, on_event calls seq_note_event). A *task* removes all
-// of that: declare it ONCE by assigning `this.task` in on_start, and the NATIVE
-// kernel driver advances it every tick and feeds it events automatically. This
-// is the built-in "do X, wait until Y, then Z" capability available to every
-// script:
+// A task removes the manual cursor plumbing: return it from `task(me)` or
+// assign it once in `on_start`; the NATIVE kernel advances it every tick and
+// feeds it events automatically. This is the built-in "do X, wait until Y,
+// then Z" capability available to every script:
 //
-//   fn on_start(me) {
-//       this.task = seq([
+//   fn task(me) {
+//       seq([
 //           once(|m| drive_to(m, CP1)),         // run an action, advance
 //           wait_until(|m| arrived(m, CP1)),    // suspend until true
 //           wait(3.0),                          // suspend 3 sim-seconds
@@ -86,7 +87,7 @@ fn seq_note_event(cur, evt) {
 //           once(|m| drive_to(m, CP2)),
 //       ]);
 //   }
-//   // no on_tick, no on_event — the task drives itself. Step closures take the
+//   // no fixed-tick hook or event plumbing — the task drives itself. Step closures take the
 //   // host gid `m` (the cursor calls them as `act.call(me)`).
 //
 // rhai has no real coroutines (and wasm can't stack-switch), so a task is a

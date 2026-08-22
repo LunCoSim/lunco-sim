@@ -24,14 +24,20 @@ the world verbs are shared (see [`scenario.rs`](src/scenario.rs) and
 
 A scenario is a program attached to an entity via a `ScriptedModel` component +
 a `ScriptDocument` (managed like a `lunco-doc` document: versioned, hot-reloadable).
-It runs every `FixedUpdate` tick with lifecycle hooks:
+Production mission progression is returned from `task(me)` and advanced by the
+native behavior kernel. Event and lifecycle hooks remain available for setup,
+telemetry, and teardown:
 
 ```rhai
-fn on_start(me)      { this.idx = 0; }                       // once, after (re)compile
-fn on_tick(me)       { this.idx = run_plan(me, PLAN, this.idx, 1.0, 2.0); }  // every tick
+fn task(me)          { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
+fn on_start(me)      { /* setup */ }                         // once, after (re)compile
 fn on_event(me, evt) { /* a TelemetryEvent arrived */ }
 fn on_stop(me)       { brake(me); }                          // teardown
 ```
+
+New mission scripts should not hand-write a fixed-tick `on_tick` loop. The
+task tree supplies deterministic fixed-tick progression without putting the
+cursor, event delivery, or dwell timing in user policy.
 
 The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
 `world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /

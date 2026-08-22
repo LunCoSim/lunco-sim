@@ -20,8 +20,8 @@ This guide has two parts:
 
 The language is **rhai** — a small, sandboxed, pure-Rust language that runs
 everywhere the sim does, including the browser (wasm). A **scenario** is a rhai
-program attached to an entity that runs every fixed simulation tick. It is *not*
-a one-shot snippet.
+program attached to an entity. Its `task(me)` tree is advanced on every fixed
+simulation tick by the native behavior kernel; it is not a one-shot snippet.
 
 > **The host (Rust) is mechanism; the script is policy.** Navigation, objectives,
 > behaviour trees, sequencing — all live in hot-reloadable `.rhai`, never compiled
@@ -42,14 +42,16 @@ target/debug/luncosim --api 4101
 
 | You write | The engine does |
 |---|---|
-| `fn on_start(me)` | runs once after (re)compile |
-| `fn on_tick(me)`  | runs every `FixedUpdate` step |
-| `fn on_event(me, evt)` | runs when a `TelemetryEvent` arrives |
-| `fn on_stop(me)`  | runs on hot-reload / detach / despawn |
+| `fn task(me)` | builds one native task tree; the kernel advances it each fixed step |
+| `fn mission(me)` | declares objective state and completion conditions |
+| `fn on_start(me)` | optional setup after (re)compile |
+| `fn on_event(me, evt)` | optional reaction to a `TelemetryEvent` |
+| `fn on_stop(me)` | optional teardown on hot-reload / detach / despawn |
 
-`me` is the host entity's id. Per-tick mutable state lives on the implicit `this`
-object map (rhai functions are otherwise pure — they can't see top-level `let`s,
-so thread state through `this`). You sense with queries/`get` and act with
+`me` is the host entity's id. Task progress, dwell timing, and event waits are
+owned by the native task kernel. A Rhai function called indirectly by the task
+driver must receive its configuration as arguments; do not rely on top-level
+variables being visible there. You sense with queries/`get` and act with
 `cmd`/`set`.
 
 ## 2. Your first script
@@ -57,28 +59,25 @@ so thread state through `this`). You sense with queries/`get` and act with
 Create `assets/scenarios/my_rover_mission.rhai`:
 
 ```rhai
-fn on_start(me) {
-    notify("Rover mission initiated!");
-    this.wp_index = 0;
-    this.waypoints = [
+fn task(me) {
+    let waypoints = [
         [10.0, 0.0, 0.0],
         [20.0, 0.0, 10.0],
         [0.0, 0.0, 20.0],
     ];
-}
-
-fn on_tick(me) {
-    if this.wp_index >= this.waypoints.len() {
+    let steps = [];
+    for i in 0..waypoints.len() {
+        let target = waypoints[i];
+        steps.push(step(
+            |m| nav_to(m, target, 0.8, 2.0),
+            |m| arrived(m, target, 2.0),
+        ));
+    }
+    steps.push(once(|m| {
         notify("Mission complete! Parking.");
-        brake(me);
-        return;
-    }
-
-    let target = this.waypoints[this.wp_index];
-    if nav_to(me, target, 0.8, 2.0) {
-        notify("Reached waypoint " + this.wp_index);
-        this.wp_index += 1;
-    }
+        brake(m);
+    }));
+    seq(steps)
 }
 ```
 
@@ -115,8 +114,8 @@ and posting the tagged request directly.
 
 The rover drives the waypoints. Re-issue `RunScenario` on the same entity to
 **hot-reload** after you edit the file by sending the updated contents again —
-no rebuild, no restart (state resets, the outgoing program's `on_stop` runs
-first). For a scene-authored file-backed program, use
+no rebuild, no restart (the outgoing program's `on_stop` runs first). For a
+scene-authored file-backed program, use
 `uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@` instead;
 the asset pipeline owns loading and hot replacement.
 
@@ -150,17 +149,19 @@ def Xform "Rover_01" {
 That's the whole loop: **write → run → inspect → persist.** The rest of Part I
 fills in the everyday verbs; Part II is the complete reference.
 
-## 3. Lifecycle hooks (the full set)
+## 3. Lifecycle hooks
 
 ```rhai
-fn on_start(me)      { this.count = 0; }                 // once, after (re)compile
-fn on_tick(me)       { this.count += 1; }                // every FixedUpdate tick
+fn task(me)          { seq([wait(1.0)]); }               // canonical progression
+fn mission(me)       { [objective("landing", #{})]; }   // optional objectives
+fn on_start(me)      { /* setup */ }                     // once, after (re)compile
 fn on_event(me, evt) { if evt.name == "GO" { /* … */ } } // a TelemetryEvent arrived
 fn on_stop(me)       { brake(me); }                      // teardown: hot-reload / detach / despawn
 ```
 
 - Define any subset. `on_stop` is where you stop actuators / release claims.
-- `this` persists across ticks for one entity.
+- Use `task` for fixed-tick behavior and `on_event` for external events. A
+  hand-written `on_tick` loop is not the production mission authoring path.
 
 ## 4. The everyday verbs
 
@@ -187,7 +188,7 @@ You'll use these constantly (the complete table is in
 The prelude turns raw verbs into rover behaviour (read the topic files for the
 authoritative list; highlights in [Part II §B](#b-prelude-helpers)):
 
-- **Drive:** `drive(rover, fwd, steer)`, `brake(rover)`, `nav_to(entity, target, speed, radius)`, `run_plan`.
+- **Drive:** `drive(rover, fwd, steer)`, `brake(rover)`, `nav_to(entity, target, speed, radius)`.
 - **Sense:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Math:** `distance`, `arrived`, `vsub`/`vlen`/`vnorm`/`vcross`, `clamp`.
 - **Collisions:** `collision_pair`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
@@ -260,23 +261,23 @@ The [`prelude/`](../assets/scripting/prelude) directory (one `.rhai` per topic �
 verbs — read the topic files for the full, authoritative list. Highlights:
 
 - **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`.
-- **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`, `run_plan`.
+- **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`.
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
-- **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`/`wait_for_from(event, source_id)`; `seq([steps])` shorthand to build and run immediately.
-- **Task trees (`this.task`):** composites `seq`/`par_all`/`par_race`/`repeat`/`forever` plus the failure-aware kernel vocabulary `check(pred)`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and TICKED NATIVELY on the `lunco-behavior` kernel (the same engine the rover autopilot uses) — a `seq` advances through instantly-done steps within one tick, so use `wait`/`wait_until`/`wait_for` as the suspension points. Emits `TASK_COMPLETE` on root success, `TASK_FAILED` on root failure.
+- **Task trees (`task(me)`):** step leaves `step`/`once`/`wait`/`wait_until`/`wait_for`, composites `seq`/`par_all`/`par_race`/`repeat`/`forever`, and failure-aware nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and ticked natively on the `lunco-behavior` kernel. Use `wait`/`wait_until`/`wait_for` as suspension points. The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
-- **Script-first authoring:** `usd_document` / `usd_apply_ops` / `usd_add_prim`,
-  `attach_fixed` / `attach_revolute`, `modelica_apply` and typed Modelica op
-  constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
+- **Script-first authoring:** explicit-document `usd_apply` / `usd_apply_ops` /
+  `usd_add_prim`, `attach_fixed` / `attach_revolute`, `modelica_apply`, and
+  typed Modelica op constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
   These are policy wrappers over the existing journaled command surfaces; USD
   remains the scene/topology authority and Modelica remains the equation/graph
-  authority.
+  authority. Obtain document ids from `ListOpenDocuments` before authoring.
 - **Mission durability:** `mission_checkpoint` and
-  `mission_checkpoint_read` author phase state on the program prim as USD string
-  attributes. Use them at objective/phase boundaries so a task can resume after
-  a hot reload or restart without a second persistence mechanism.
+  `mission_checkpoint_read` author phase state on the host prim as USD string
+  attributes through the active-document USD command. Use them at
+  objective/phase boundaries so a task can resume after a hot reload or
+  restart without a second persistence mechanism.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
@@ -299,18 +300,21 @@ script reads it as the read-only `params` constant:
 RunScenario { target: <gid>, source: "...", params: "{\"speed\":1.5}" }
 ```
 ```rhai
-fn on_tick(me) { drive(me, params.speed, 0.0); }
+fn task(me) {
+    forever(once(|m| drive(m, params.speed, 0.0)))
+}
 ```
 
 ## D. Sequencing (missions)
 
-Two layers, both pure rhai (no engine rebuild):
+Two script-first layers, both pure rhai (no engine rebuild):
 
-- **Layer 1 — imperative steps** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step array with `step`/`once`/`wait`/`wait_until`/`wait_for` and run it with `run_steps`; feed events via `seq_note_event` in `on_event`.
-- **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data** (an array of `{move_to|cmd|emit|wait|wait_event}` steps), lowered onto Layer 1 by `compile_timeline`. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (see [§I](#i-persistence)).
+- **Layer 1 — task tree** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step tree with `step`/`once`/`wait`/`wait_until`/`wait_for`; return it from `task(me)`. The native kernel feeds events and owns the cursor.
+- **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data** (an array of `{move_to|cmd|emit|wait|wait_event}` steps), lowered onto a task tree by `compile_timeline`. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (see [§I](#i-persistence)).
 
 Progress is observable on the telemetry bus: `STEP_COMPLETE(idx)` per step,
-`SEQUENCE_COMPLETE(len)` at the end (and `OBJECTIVE_COMPLETE`/`PLAN_COMPLETE` for `run_plan`).
+`SEQUENCE_COMPLETE(len)` at the end, plus the mission/objective events emitted by
+your task leaves and `mission(me)` declaration.
 
 ## E. Tools (shared libraries)
 
@@ -433,8 +437,8 @@ Developing scenarios requires quick feedback on compilation and runtime health. 
 ### Standard Output & Logging
 You can print variables and state information directly to standard output/console using the standard print statement:
 ```rhai
-fn on_tick(me) {
-    print("Rover " + name(me) + " position: " + world_pos(me));
+fn task(me) {
+    seq([once(|m| print("Rover " + name(m) + " position: " + world_pos(m)))])
 }
 ```
 
@@ -495,7 +499,7 @@ produces the same sequence — no explicit seeding needed.
 |---|---|
 | [`patrol.rhai`](../assets/scripting/examples/patrol.rhai) | a looping waypoint patrol |
 | [`mission.rhai`](../assets/scripting/examples/mission.rhai) | event-channel coordination between scripts |
-| [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via `run_plan` |
+| [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via the task kernel |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | the Layer-1 step sequencer |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
 | [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and no `on_tick` loop |

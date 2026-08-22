@@ -4,17 +4,10 @@
 // The native task kernel owns the fixed-tick cursor; this policy has no
 // hand-written on_tick function and no mutable `this.idx` state.
 
-const WAYPOINTS = [
-    [10.0, 0.0,  0.0],
-    [10.0, 0.0, 20.0],
-    [-5.0, 0.0, 20.0],
-];
-const ARRIVE_RADIUS = 2.0;   // metres
-
-fn patrol_leg(wp, index) {
+fn patrol_leg(wp, index, radius) {
     seq([
-        step(|m| nav_to(m, wp, 1.0, ARRIVE_RADIUS),
-             |m| arrived(m, wp, ARRIVE_RADIUS)),
+        step(|m| nav_to(m, wp, 1.0, radius),
+             |m| arrived(m, wp, radius)),
         once(|m| {
             emit("WAYPOINT_REACHED", index);
             print("patrol: reached waypoint " + index);
@@ -23,9 +16,17 @@ fn patrol_leg(wp, index) {
 }
 
 fn task(me) {
+    // Configuration is local to the directly-called task function. Rhai does
+    // not resolve top-level constants from an indirect task invocation.
+    let waypoints = [
+        [10.0, 0.0,  0.0],
+        [10.0, 0.0, 20.0],
+        [-5.0, 0.0, 20.0],
+    ];
+    let radius = 2.0;
     let legs = [];
-    for i in 0..WAYPOINTS.len() {
-        legs.push(patrol_leg(WAYPOINTS[i], i));
+    for i in 0..waypoints.len() {
+        legs.push(patrol_leg(waypoints[i], i, radius));
     }
     forever(seq(legs))
 }

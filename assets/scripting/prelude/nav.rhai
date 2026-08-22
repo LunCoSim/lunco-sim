@@ -61,18 +61,15 @@ fn nav_to(entity, target, speed, radius) {
 
 // ── Declarative plan / objectives (PURE rhai — objectives live here, not core) ─
 //
-// A "plan" is just data: an array of world waypoints `[[x,y,z], ...]`. run_plan
-// advances one objective at a time, emitting OBJECTIVE_COMPLETE per waypoint and
-// PLAN_COMPLETE at the end. The step index IS the resumable state (no coroutines
-// needed). IMPORTANT rhai rule: `this` is bound ONLY in the hook that the engine
-// calls (on_tick), NOT in functions the hook calls. So run_plan is STATELESS —
-// it takes the current index and returns the next; the hook holds the index on
-// `this`. Richer objectives (sample, dwell, wait-for-event) compose the same way.
+// A "plan" is just data: an array of world waypoints `[[x,y,z], ...]`. New
+// missions should lower that data into a native task tree; `run_plan` remains a
+// low-level stateless adapter for focused tests and data consumers. Richer
+// objectives (sample, dwell, wait-for-event) compose directly as task nodes.
 
 /// Advance a waypoint plan by one tick. `idx` is the current objective index;
 /// returns the next index (incremented when the current waypoint is reached).
-/// When `idx >= plan.len()` the plan is complete. Typical use in on_tick:
-///   `this.idx = run_plan(me, PLAN, this.idx, SPEED, RADIUS);`
+/// When `idx >= plan.len()` the plan is complete. Prefer `task(me)` with
+/// `seq`/`step` for new mission authoring.
 fn run_plan(entity, plan, idx, speed, radius) {
     if idx >= plan.len() { return idx; }
     let wp = plan[idx];

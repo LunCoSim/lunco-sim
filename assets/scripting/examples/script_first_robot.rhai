@@ -8,20 +8,20 @@
 const ROBOT = "/World/ScriptRover";
 const MODEL  = "RoverControl";
 
-fn build_robot_in(usd_doc, modelica_doc) {
-    usd_add_prim_in(usd_doc, "/World", "ScriptRover", "Xform", ());
-    usd_set_translate_in(usd_doc, ROBOT, [0.0, 0.0, 0.0]);
+fn build_robot(usd_doc, modelica_doc) {
+    usd_add_prim(usd_doc, "/World", "ScriptRover", "Xform", ());
+    usd_set_translate(usd_doc, ROBOT, [0.0, 0.0, 0.0]);
 
     // A fixed sensor mount and a revolute wheel are both authored through the
     // same AttachComponent contract used by the editor and HTTP API.
-    attach_fixed_in(
+    attach_fixed(
         usd_doc,
         ROBOT,
         "NavSensor",
         "components/sensors/nav_sensor.usda",
         [0.0, 1.0, 0.0],
     );
-    attach_revolute_in(
+    attach_revolute(
         usd_doc,
         ROBOT,
         "Wheel_FL",
@@ -33,7 +33,7 @@ fn build_robot_in(usd_doc, modelica_doc) {
 
     // One batch is one Modelica command and each ApiOp is the canonical
     // structural edit; no raw .mo text parser is embedded in this script.
-    modelica_apply_in(modelica_doc, [
+    modelica_apply(modelica_doc, [
         modelica_add_component(
             MODEL,
             "Modelica.Blocks.Sources.Constant",
@@ -52,9 +52,6 @@ fn build_robot_in(usd_doc, modelica_doc) {
     ]);
 }
 
-// Convenience form for a normal editor session with active USD and Modelica
-// tabs. For headless/API use, call build_robot_in(doc_id, modelica_doc_id)
-// with ids returned by ListOpenDocuments.
-fn build_robot() {
-    build_robot_in(usd_document(), modelica_document())
-}
+// Call build_robot with the USD and Modelica document ids returned by the
+// workspace API. Explicit ids keep the scene and equation graph authoritative
+// when more than one document is open.
