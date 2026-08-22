@@ -871,10 +871,7 @@ fn default_plugins_with_profile(
             .disable::<bevy::pbr::PbrPlugin>()
             .disable::<bevy::gizmos_render::GizmoRenderPlugin>()
     } else {
-        group.set(bevy::render::RenderPlugin {
-            render_creation: lunco_workbench::preferred_wgpu_settings().into(),
-            ..default()
-        })
+        group
     };
 
     #[cfg(feature = "ui")]
@@ -882,9 +879,8 @@ fn default_plugins_with_profile(
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled) —
-    // and so does `offscreen`, which is windowless WITH a GPU; the windowed
-    // branch above supplies `preferred_wgpu_settings`, and wgpu renders
-    // surfaceless into the offscreen target image.
+    // and so does `offscreen`, which is windowless WITH a GPU; the default
+    // Bevy render plugin renders surfaceless into the offscreen target image.
     // Without `ui` there's no winit crate to disable, so just declare a
     // windowless `WindowPlugin`.
     #[cfg(feature = "ui")]
