@@ -233,8 +233,7 @@ pub fn setup_big_space_hierarchy(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
-    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
-    shadow_budget: Option<Res<lunco_render::GpuShadowBudget>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     grid_config: Option<Res<lunco_core::WorldGridConfig>>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
@@ -244,6 +243,15 @@ pub fn setup_big_space_hierarchy(
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
+    let sun_profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            error!(
+                "[celestial] invalid Graphics quality; refusing to build celestial lighting hierarchy: {reason}"
+            );
+            return;
+        }
+    };
     // Every grid in the live hierarchy uses the same precision contract as the
     // persistent world shell.  A child with a different cell edge has a
     // different rebranch boundary and therefore can move relative to its
@@ -432,23 +440,16 @@ pub fn setup_big_space_hierarchy(
     // sun frozen at its authored rotation.
     //
     // Physical/render lighting STATE is established here; the LIGHT is not.
-    let requested_quality = quality
-        .as_deref()
-        .map_or(lunco_render::RenderingQuality::Auto, |settings| {
-            settings.quality
-        });
-    let budget_bytes = shadow_budget.as_deref().map_or_else(
-        || lunco_render::GpuShadowBudget::default().limit_bytes,
-        |budget| budget.limit_bytes,
-    );
-    let sun_quality = requested_quality.effective_for_shadow_budget(budget_bytes, 1);
-    let sun = lunco_render::LunarSunShadow::for_quality(sun_quality);
+    let sun = lunco_render::LunarSunShadow::for_profile(sun_profile);
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.
     // Per-scene display exposure belongs to a composed `UsdGeomCamera`, which
     // is recreated with the scene; carrying the prior `LunarSun` resource here
     // would leak one scenario's grade into the next.
-    let ls = lunco_environment::LunarSun::default();
+    let ls = lunco_environment::LunarSun {
+        exposure_ev100: sun_profile.camera_exposure_ev100,
+        ..Default::default()
+    };
     // Physical sun identity is environmental state. Camera exposure remains
     // authored by each `UsdGeomCamera`: changing every live `Exposure` here
     // used to overwrite a scene's standard ISO/shutter/f-stop immediately
@@ -579,7 +580,7 @@ pub fn setup_big_space_hierarchy(
     // `adopt_authored_body_look`.
     let earth_blueprint =
         blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5);
-    commands.entity(earth_body).insert((
+    commands.entity(earth_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: earth.radius_m,
             surface_grid: earth_surface_grid,
@@ -672,7 +673,7 @@ pub fn setup_big_space_hierarchy(
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
     let moon_blueprint =
         blueprint_tile_look_untextured(MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9);
-    commands.entity(moon_body).insert((
+    commands.entity(moon_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: moon.radius_m,
             surface_grid: moon_surface_grid,
@@ -711,24 +712,17 @@ pub fn setup_big_space_hierarchy(
             // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
             // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
             //
-            // BLOOM IS DELIBERATELY OFF. This spawn used to carry a tuned `Bloom`, but
-            // `hdr` is set true NOWHERE in this repo (review finding `R4`), so that bloom
-            // rendered NOTHING while still paying for its downsample/upsample chain.
-            // Keeping it off is therefore what preserves today's actual output; turning it
-            // on would be a visual change smuggled in by a decoupling pass. If someone
-            // wants real bloom, that is a separate, deliberate decision:
-            // `SceneCamera::default().with_bloom(..)` — which turns HDR on for you, because
-            // bloom without HDR is exactly the bug `SceneCamera` exists to make
-            // unrepresentable.
-            //
-            // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
+            // Tone mapping, MSAA, and the unauthored bloom look come from the
+            // persisted Graphics profile. An authored LunCoEnvironment bloom value
+            // is applied later as the scene-owned override. SMAA was already
             // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
             // fix on main).
             // Grade + physical exposure from the ONE constructor every scene
-            // camera uses (`lunco_render::scene_camera_look`), paired with the
+            // camera uses (`lunco_render::scene_camera_look_with_profile`), paired with the
             // canonical sun illuminance (single source of truth —
             // lunco_environment::LunarSun).
-            lunco_render::scene_camera_look(Some(ls.exposure_ev100)),
+            lunco_render::scene_camera_look_with_profile(Some(ls.exposure_ev100), sun_profile),
+            lunco_render::GraphicsCameraDefaults,
             Projection::Perspective(PerspectiveProjection {
                 near: 1.0,
                 far: 1.0e15,

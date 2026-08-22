@@ -59,7 +59,7 @@ def Xform "AllocationSpec" (
     # un-actuated rover ROLLS, and "the fail-safe coasted" would be
     # indistinguishable from "gravity moved it".
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

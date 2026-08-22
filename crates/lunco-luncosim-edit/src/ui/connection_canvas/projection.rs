@@ -154,8 +154,8 @@ pub(crate) fn collect_graph(
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty());
         let is_body = view.has_api_schema(&p, "PhysicsRigidBodyAPI");
-        let schema_root = view.scalar::<bool>(&p, "lunco:ui:schemaRoot") == Some(true);
-        let schema_node = view.scalar::<bool>(&p, "lunco:ui:schemaNode") == Some(true);
+        let schema_root = view.boolean(&p, "lunco:ui:schemaRoot") == Some(true);
+        let schema_node = view.boolean(&p, "lunco:ui:schemaNode") == Some(true);
         let schema_column = view.scalar::<i32>(&p, "lunco:ui:schemaColumn");
         let schema_row = view.scalar::<i32>(&p, "lunco:ui:schemaRow");
         let mut inputs: Vec<String> = Vec::new();

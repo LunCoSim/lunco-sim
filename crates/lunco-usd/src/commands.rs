@@ -1386,9 +1386,6 @@ pub struct SetDomeLight {
     /// `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves
     /// the sky black. The lunar case: real bounce light, no visible sky.
     pub skybox: Option<bool>,
-    /// `lunco:dome:faceSize` — cubemap face resolution. Rounded up to a power
-    /// of two.
-    pub face_size: Option<u32>,
 }
 
 #[on_command(SetDomeLight)]
@@ -1502,9 +1499,6 @@ fn on_set_dome_light(
         }
         if let Some(s) = cmd.skybox {
             attr("lunco:dome:skybox", "bool", s.to_string());
-        }
-        if let Some(f) = cmd.face_size {
-            attr("lunco:dome:faceSize", "int", f.to_string());
         }
         // Rotation is an xformOp, not a plain attribute: `SetRotate` also
         // authors `xformOpOrder` when the prim has none, which a bare

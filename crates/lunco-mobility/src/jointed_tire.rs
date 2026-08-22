@@ -13,7 +13,9 @@ use lunco_core::architecture::Port;
 use lunco_core::InputPorts;
 use lunco_hardware::{commanded_motor_torque, MotorActuator};
 
-use crate::{contact_plane_basis, longitudinal_tire_step, tire_patch_force};
+use crate::{
+    contact_plane_basis, longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph,
+};
 
 /// Authored tire parameters and topology for one Avian-backed wheel body.
 ///
@@ -32,8 +34,8 @@ pub struct JointedWheelTire {
     pub axle_inertia: f64,
     /// Longitudinal slip stiffness, N/m.
     pub slip_stiffness: f64,
-    /// Normalized cornering stiffness, N/(N rad).
-    pub cornering_stiffness: f64,
+    /// Standard PhysX lateral stiffness graph evaluated at contact load.
+    pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lower edge of the authored measured cornering-speed envelope, m/s.
     pub min_validated_speed: f64,
     /// Authored tire Coulomb coefficient.
@@ -261,7 +263,7 @@ pub fn apply_jointed_tire_forces(
                     contact.v_lat,
                     contact.normal_force,
                     tire.friction_mu,
-                    tire.cornering_stiffness,
+                    tire.lateral_stiffness_graph,
                 );
                 let force = contact.forward * f_long + contact.right * f_lat;
                 pending.push((wheel, force, contact.point));

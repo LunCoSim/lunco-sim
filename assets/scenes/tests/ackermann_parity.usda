@@ -70,7 +70,7 @@ def Xform "AckermannParity" (
     # feel — turning both the parity test and the zero-throttle pivot check into
     # gradeability tests.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

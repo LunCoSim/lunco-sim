@@ -104,6 +104,7 @@ impl Plugin for LunCoMobilityPlugin {
         app.register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             .register_type::<JointedWheelTire>()
+            .register_type::<TireLateralStiffnessGraph>()
             // `DriveMix` is the kernel-selected allocation spec. Registered
             // here with the kernels it selects between; it is a vehicle-domain
             // type and core carries no domain.
@@ -326,9 +327,12 @@ fn publish_raycast_support_footprints(
                     &parents,
                     &transforms,
                 )?;
-                (owner == root).then(|| lunco_physics::PhysicsSupportContact {
+                if owner != root || !wheel.wheel_radius.is_finite() || wheel.wheel_radius <= 0.0 {
+                    return None;
+                }
+                Some(lunco_physics::PhysicsSupportContact {
                     local_offset: local.translation.as_dvec3(),
-                    radius: wheel.wheel_radius.max(0.0),
+                    radius: wheel.wheel_radius,
                     probe_origin: local.translation.as_dvec3()
                         + local.rotation.as_dquat()
                             * DVec3::Y
@@ -562,11 +566,53 @@ pub fn contact_plane_basis(
     (forward, right)
 }
 
+/// The standard PhysX tire lateral-stiffness graph projected into the shared
+/// LunCo tire law.
+///
+/// USD authors `(minimum normalized load, maximum lateral stiffness)` through
+/// `physxVehicleTire:lateralStiffnessGraph` and the reference load through
+/// `physxVehicleTire:restLoad`. The graph is linear from zero load to its
+/// plateau, exactly as the PhysX schema defines it. `max_stiffness` is an
+/// absolute force-per-radian value; it is not a LunCo-specific normalized
+/// coefficient.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct TireLateralStiffnessGraph {
+    /// Normalized tire load at which the graph reaches its plateau.
+    pub minimum_normalized_load: f64,
+    /// Plateau lateral stiffness, N/rad.
+    pub max_stiffness: f64,
+    /// Authored rest load used to normalize the current contact load, N.
+    pub rest_load: f64,
+}
+
+impl TireLateralStiffnessGraph {
+    /// Evaluate the standard graph at one current normal load.
+    pub fn stiffness_at_load(self, normal_force: f64) -> f64 {
+        if !(normal_force.is_finite()
+            && normal_force > 0.0
+            && self.max_stiffness.is_finite()
+            && self.max_stiffness > 0.0
+            && self.rest_load.is_finite()
+            && self.rest_load > 0.0
+            && self.minimum_normalized_load.is_finite()
+            && self.minimum_normalized_load >= 0.0)
+        {
+            return 0.0;
+        }
+        let scale = if self.minimum_normalized_load > 0.0 {
+            (normal_force / self.rest_load / self.minimum_normalized_load).min(1.0)
+        } else {
+            1.0
+        };
+        self.max_stiffness * scale
+    }
+}
+
 /// Resolve a longitudinal tire demand and lateral slip into one Coulomb-limited
 /// contact-patch force.
 ///
-/// `cornering_stiffness` is the normalized PhysX value (side force per radian,
-/// per newton of normal load). `rolling_reference_speed` is derived by the wheel
+/// `lateral_stiffness_graph` is evaluated at this contact's normal load using
+/// the standard PhysX graph. `rolling_reference_speed` is derived by the wheel
 /// realization as `max(|v_hub,long|, |omega*r|)`: the actual longitudinal motion
 /// available to define a slip angle, including a counter-rotating pivot wheel.
 /// There is no fitted low-speed threshold. If translation and rotation are both
@@ -585,15 +631,15 @@ pub fn tire_patch_force(
     lateral_speed: f64,
     normal_force: f64,
     friction_mu: f64,
-    cornering_stiffness: f64,
+    lateral_stiffness_graph: TireLateralStiffnessGraph,
 ) -> (f64, f64) {
     if normal_force <= 0.0 {
         return (0.0, 0.0);
     }
 
-    let lateral_force = if cornering_stiffness > 0.0 {
+    let lateral_force = if lateral_stiffness_graph.max_stiffness > 0.0 {
         let slip_angle = (-lateral_speed).atan2(rolling_reference_speed.abs());
-        cornering_stiffness * normal_force * slip_angle
+        lateral_stiffness_graph.stiffness_at_load(normal_force) * slip_angle
     } else {
         0.0
     };
@@ -703,26 +749,61 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{parking_brake_force, tire_patch_force};
+    use super::{parking_brake_force, tire_patch_force, TireLateralStiffnessGraph};
     use bevy::math::DVec3;
 
     #[test]
     fn rolling_speed_defines_pivot_slip_angle_without_a_threshold() {
-        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, 2.9);
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 1.0,
+            max_stiffness: 2.9 * 400.0,
+            rest_load: 400.0,
+        };
+        let (_, lateral) = tire_patch_force(0.0, 2.0, 1.0, 400.0, 10.0, graph);
         let expected = 2.9 * 400.0 * (-0.5_f64).atan();
         assert!((lateral - expected).abs() < 1.0e-9);
     }
 
     #[test]
     fn combined_force_preserves_direction_at_coulomb_limit() {
-        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, 2.9);
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 1.0,
+            max_stiffness: 2.9 * 200.0,
+            rest_load: 200.0,
+        };
+        let (long, lateral) = tire_patch_force(600.0, 2.0, -1.0, 200.0, 1.5, graph);
         assert!((long.hypot(lateral) - 300.0).abs() < 1.0e-9);
         assert!(long > 0.0 && lateral > 0.0);
     }
 
     #[test]
     fn zero_load_has_no_patch_force() {
-        assert_eq!(tire_patch_force(10.0, 1.0, 1.0, 0.0, 1.0, 2.9), (0.0, 0.0));
+        assert_eq!(
+            tire_patch_force(
+                10.0,
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+                TireLateralStiffnessGraph {
+                    minimum_normalized_load: 1.0,
+                    max_stiffness: 1_160.0,
+                    rest_load: 400.0,
+                },
+            ),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn lateral_graph_scales_stiffness_below_its_plateau_load() {
+        let graph = TireLateralStiffnessGraph {
+            minimum_normalized_load: 2.0,
+            max_stiffness: 1_000.0,
+            rest_load: 400.0,
+        };
+        assert_eq!(graph.stiffness_at_load(200.0), 250.0);
+        assert_eq!(graph.stiffness_at_load(800.0), 1_000.0);
     }
 
     #[test]
@@ -798,15 +879,10 @@ pub struct WheelRaycast {
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
     /// like ice.
-    /// Tire CORNERING stiffness: side force per radian of slip angle (N/rad).
-    ///
-    /// NOT force per m/s of lateral velocity — that was the old model, and the
-    /// rename is deliberate: the units changed, so a value carried across without
-    /// thought fails to compile instead of being silently wrong by ~100×.
-    ///
-    /// The force is clamped with the load-dependent Coulomb cone after the
-    /// cornering law is evaluated.
-    pub cornering_stiffness: f64,
+    /// Standard PhysX tire lateral stiffness graph evaluated at the contact
+    /// load. The force is clamped with the load-dependent Coulomb cone after
+    /// the graph law is evaluated.
+    pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lowest speed at which the authored steady-state cornering curve was
     /// validated. This is an evidence boundary, not a fitted transition.
     pub min_validated_speed: f64,
@@ -852,7 +928,7 @@ impl Default for WheelRaycast {
             max_rotation_speed: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
-            cornering_stiffness: 0.0,
+            lateral_stiffness_graph: TireLateralStiffnessGraph::default(),
             min_validated_speed: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
@@ -893,16 +969,25 @@ impl WheelRaycast {
     /// Rotational inertia about the axle in kg·m²: the tire's own inertia
     /// (USD-authored `physxVehicleWheel:moi` when set, else the solid-disk
     /// estimate `½·m·r²` from mass and radius) plus the drivetrain's
-    /// [`reflected rotor inertia`](Self::reflected_inertia).
+    /// [`reflected rotor inertia`](Self::reflected_inertia). Returns `None`
+    /// when the runtime projection does not contain a finite, positive
+    /// physical input or when the combined inertia is not usable.
     #[inline]
-    pub fn axle_inertia(&self) -> f64 {
-        let tire = if self.moment_of_inertia > 0.0 {
+    pub fn axle_inertia(&self) -> Option<f64> {
+        let tire = if self.moment_of_inertia.is_finite() && self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
         } else {
-            let r = self.wheel_radius.max(1e-3);
-            0.5 * self.mass * r * r
+            if !(self.wheel_radius.is_finite()
+                && self.wheel_radius > 0.0
+                && self.mass.is_finite()
+                && self.mass > 0.0)
+            {
+                return None;
+            }
+            0.5 * self.mass * self.wheel_radius * self.wheel_radius
         };
-        (tire + self.reflected_inertia).max(1e-4)
+        let inertia = tire + self.reflected_inertia;
+        (inertia.is_finite() && inertia > 0.0).then_some(inertia)
     }
 }
 
@@ -1358,9 +1443,18 @@ fn apply_wheel_steering(
 // allocators). `apply_drive_mix` resolves and runs the selected kernel without
 // a per-architecture component taxonomy.
 
-/// Authored `PhysicsDriveAPI` engagement and target position. `lunco-usd-sim`
-/// reads those fields into a `PendingDifferential` and
-/// `resolve_differential_coupling` attaches this component; inert until present.
+/// Drive interpretation for an authored `PhysicsDriveAPI` relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+pub enum DifferentialDriveType {
+    /// Coefficients describe a generalized force/torque.
+    Force,
+    /// Coefficients describe a generalized acceleration.
+    Acceleration,
+}
+
+/// Authored `PhysicsDriveAPI` parameters for a gear relation. `lunco-usd-sim`
+/// reads these fields into a `PendingDifferential` and
+/// `resolve_differential_coupling` attaches this component.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct DifferentialCoupling {
@@ -1371,27 +1465,19 @@ pub struct DifferentialCoupling {
     /// Right rocker body.
     pub rocker_b: Entity,
     /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
-    /// `-1` (the default) is the mirror/rocker-bogie case.
     pub ratio: f64,
-    /// Target for `θ_a − r·θ_b` (rad). Zero ⇒ symmetric (mirror) rockers at `r = -1`.
+    /// Target for `θ_a − r·θ_b` (rad).
     pub rest_offset: f64,
-    /// Coupling stiffness (N·m per rad of constraint error).
+    /// Target relation velocity (rad/s).
+    pub target_velocity: f64,
+    /// Coupling stiffness (N·m per rad of relation error in force mode).
     pub stiffness: f64,
-}
-
-impl Default for DifferentialCoupling {
-    fn default() -> Self {
-        Self {
-            chassis: Entity::PLACEHOLDER,
-            rocker_a: Entity::PLACEHOLDER,
-            rocker_b: Entity::PLACEHOLDER,
-            // Mirror rockers — the rocker-bogie case, and what the coupling
-            // hardcoded before the authored ratio was threaded through.
-            ratio: -1.0,
-            rest_offset: 0.0,
-            stiffness: 200_000.0,
-        }
-    }
+    /// Coupling damping (N·m·s per rad/s of relation velocity in force mode).
+    pub damping: f64,
+    /// Maximum generalized force/torque. Infinity is the standard USD fallback.
+    pub max_force: f64,
+    /// Whether the authored coefficients are acceleration-based.
+    pub drive_type: DifferentialDriveType,
 }
 
 /// Signed rotation angle (rad) of a relative quaternion about `axis` — the twist
@@ -1461,31 +1547,52 @@ fn native_revolute_state(
     Some((angle, corrected_axis))
 }
 
-/// XPBD's zero-compliance Lagrange update for the gear relation.
-fn gear_delta_lagrange(error: f64, inverse_mass: f64) -> f64 {
-    if inverse_mass <= f64::EPSILON {
-        0.0
-    } else {
-        -error / inverse_mass
-    }
-}
-
-/// The gear's constraint function `c = θ_a − r·θ_b − rest_offset`, on rocker
-/// pitches measured in the CHASSIS frame. Zero ⇒ the gear is satisfied.
+/// The gear's relation `c = θ_a − r·θ_b − rest_offset`, on rocker pitches
+/// measured in the CHASSIS frame. Zero ⇒ the drive is at its target.
 fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
     angle_a - ratio * angle_b - rest_offset
 }
 
-/// The rocker-bogie differential is a zero-compliance gear relation inside
-/// Avian's substep solver:
-/// `c = θ_a − r·θ_b − rest_offset = 0`.
-/// A positive authored angular stiffness enables the gear, while zero is the
-/// explicit disengaged state used by `rocker_bogie_nodiff.usda`.
+/// Generalized impulse for one authored USD drive update.
+fn gear_drive_impulse(
+    position_error: f64,
+    relation_velocity: f64,
+    target_velocity: f64,
+    stiffness: f64,
+    damping: f64,
+    max_force: f64,
+    inverse_mass: f64,
+    dt: f64,
+    drive_type: DifferentialDriveType,
+) -> f64 {
+    if inverse_mass <= f64::EPSILON || !dt.is_finite() || dt <= 0.0 {
+        return 0.0;
+    }
+    let raw = -stiffness * position_error + damping * (target_velocity - relation_velocity);
+    if !raw.is_finite() {
+        return 0.0;
+    }
+    let limited = if max_force.is_finite() {
+        raw.clamp(-max_force, max_force)
+    } else {
+        raw
+    };
+    if !limited.is_finite() {
+        return 0.0;
+    }
+    match drive_type {
+        DifferentialDriveType::Force => limited * dt,
+        DifferentialDriveType::Acceleration => limited / inverse_mass * dt,
+    }
+}
+
+/// The rocker-bogie differential is an authored `PhysicsDriveAPI:angular`
+/// relation inside Avian's substep solver. Its stiffness, damping, target
+/// velocity, drive type, and max-force limit are all projected from USD.
 ///
-/// Runs per substep before the native revolute constraints. The current world rotation of each body is
-/// `delta_rotation · Rotation` (avian only writes `Rotation` back at the end of the
-/// step) — the same composition Avian's own joints use. Native alignment and
-/// authored-stop enforcement close the same solver iteration.
+/// Runs per substep before the native revolute pass. The current world rotation
+/// of each body is `delta_rotation · Rotation` (Avian only writes `Rotation` back
+/// at the end of the step), matching Avian's own joint solver.
 fn solve_differential_gear(
     q_coupling: Query<&DifferentialCoupling>,
     q_revolute: Query<&RevoluteJoint>,
@@ -1493,11 +1600,10 @@ fn solve_differential_gear(
         (&mut SolverBody, &SolverBodyInertia, &Rotation),
         Without<RigidBodyDisabled>,
     >,
+    time: Res<Time>,
 ) {
+    let dt = time.delta_secs_f64();
     for coupling in q_coupling.iter() {
-        if coupling.stiffness <= 0.0 {
-            continue; // disengaged — the authored control case
-        }
         let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) =
             q_solver.get_many_mut([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
         else {
@@ -1563,24 +1669,28 @@ fn solve_differential_gear(
             .zip(inv_inertias.iter())
             .map(|(gradient, inverse_inertia)| gradient.dot(*inverse_inertia * *gradient))
             .sum();
-        // The authored drive stiffness is the engagement control for this
-        // standard gear joint. Once engaged, it is a holonomic relation; a
-        // penalty compliance here makes the coupling resolution depend on the
-        // fixed-step size and creates a discontinuous soft/locked bifurcation.
-        let delta_lagrange = gear_delta_lagrange(error, inverse_mass);
-        if delta_lagrange == 0.0 || !delta_lagrange.is_finite() {
+        let relation_velocity = gradients[0].dot(sa.angular_velocity)
+            + gradients[1].dot(sb.angular_velocity)
+            + gradients[2].dot(sc.angular_velocity);
+        let impulse = gear_drive_impulse(
+            error,
+            relation_velocity,
+            coupling.target_velocity,
+            coupling.stiffness,
+            coupling.damping,
+            coupling.max_force,
+            inverse_mass,
+            dt,
+            coupling.drive_type,
+        );
+        if impulse == 0.0 || !impulse.is_finite() {
             continue;
         }
-        // This is the same zero-compliance XPBD projection used by Avian's
-        // native equality constraints. Velocity projection converts the
-        // accumulated orientation correction into the corresponding impulse.
         for (body, (gradient, inv)) in [&mut sa, &mut sb, &mut sc]
             .into_iter()
             .zip(gradients.iter().zip(inv_inertias.iter()))
         {
-            let correction = *gradient * delta_lagrange;
-            let delta = DQuat::from_scaled_axis(*inv * correction);
-            body.delta_rotation.0 = (delta * body.delta_rotation.0).normalize();
+            body.angular_velocity += *inv * (*gradient * impulse);
         }
     }
 }
@@ -2390,15 +2500,40 @@ mod differential_tests {
     use super::*;
 
     #[test]
-    fn zero_compliance_projection_is_finite() {
+    fn force_drive_impulse_is_finite_and_limited() {
         for error in [0.4, -0.15, 0.6, 0.2] {
-            assert!(gear_delta_lagrange(error, 0.11).is_finite());
+            let impulse = gear_drive_impulse(
+                error,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                100.0,
+                0.11,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            );
+            assert!(impulse.is_finite());
+            assert!(impulse.abs() <= 100.0 / 64.0);
         }
     }
 
     #[test]
-    fn satisfied_gear_needs_no_correction() {
-        assert_eq!(gear_delta_lagrange(0.0, 0.11), 0.0);
+    fn satisfied_drive_at_target_needs_no_impulse() {
+        assert_eq!(
+            gear_drive_impulse(
+                0.0,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                f64::INFINITY,
+                0.11,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            ),
+            0.0
+        );
     }
 
     #[test]
@@ -2418,7 +2553,20 @@ mod differential_tests {
 
     #[test]
     fn an_immovable_rig_is_left_alone() {
-        assert_eq!(gear_delta_lagrange(0.5, 0.0), 0.0);
+        assert_eq!(
+            gear_drive_impulse(
+                0.5,
+                0.0,
+                0.0,
+                8_000.0,
+                1_200.0,
+                f64::INFINITY,
+                0.0,
+                1.0 / 64.0,
+                DifferentialDriveType::Force,
+            ),
+            0.0
+        );
     }
 }
 

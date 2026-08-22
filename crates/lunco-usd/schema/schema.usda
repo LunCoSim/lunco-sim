@@ -74,14 +74,13 @@ class LunCoEnvironment "LunCoEnvironment" (
     the stage's default prim instead of being smuggled onto a UsdLux light."""
 )
 {
-    float lunco:env:exposureEv100 = 16 (
-        doc = """Camera exposure in EV100. The lunar default (16) is full
-        daylight; grazing polar light needs a much lower value (~12.5), and the
-        difference between them is the difference between a lit scene and a black
-        one."""
+    float lunco:env:exposureEv100 (
+        doc = """Optional authored camera exposure in EV100. When omitted, the
+        camera's authored exposure or the renderer's calibrated scene default
+        remains authoritative."""
     )
-    float lunco:env:bloomIntensity = 0 (
-        doc = "Bloom intensity, 0 = off."
+    float lunco:env:bloomIntensity (
+        doc = "Optional authored bloom intensity; 0 = off. When omitted, Graphics settings supply the renderer default."
     )
     # `lunco:env:ambientBrightness` was REMOVED, not deprecated. UsdLux already
     # standardises uniform environment illumination as an untextured
@@ -92,6 +91,19 @@ class LunCoEnvironment "LunCoEnvironment" (
     # Earthshine is likewise absent: it is a `DistantLight` nested under the body
     # it reflects from (`lunco://lighting/earthshine.usda`), so its brightness
     # and tint are `inputs:intensity` / `inputs:color` on that prim.
+}
+
+class "LunCoDomeAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Scene-owned visibility intent for a standard UsdLux DomeLight. Renderer quality, including cubemap resolution, belongs to Graphics settings."
+)
+{
+    bool lunco:dome:skybox = true (
+        doc = "Whether a textured dome is visible as the camera sky; false keeps its image-based lighting but leaves the sky black."
+    )
 }
 
 class LunCoPolicy "LunCoPolicy" (
@@ -158,7 +170,7 @@ class "LunCoTerrainAPI" (
         doc = "Bake a horizon map so distant terrain self-shadows."
     )
     int lunco:terrain:horizonMapResolution = 0 (
-        doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = default)."
+        doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = the runtime default of 512; positive values must be in [2, 4096])."
     )
     bool lunco:terrain:lodFrozen = false (
         doc = """Freeze CDLOD selection after first load — the cinematic-LOD hold:
@@ -199,10 +211,10 @@ class "LunCoTerrainLayerAPI" (
         reasoning that moved `lunco:material:shader` to `asset` applies here."""
     )
     float lunco:layer:windowM = 0 (
-        doc = "Half-window of the DEM patch, in metres."
+        doc = "Side length of the DEM patch, in metres; zero means the whole map."
     )
     int lunco:layer:targetRes = 0 (
-        doc = "Target heightfield resolution."
+        doc = "Target visual heightfield resolution per side; zero keeps native resolution."
     )
     bool lunco:layer:lodViz = true (
         doc = "Whether to build the visual CDLOD mesh."
@@ -281,13 +293,13 @@ class "LunCoShadowAPI" (
     namespace the way `ri:` / `karma:` / `arnold:` do.
 
     Cascade COUNT and the depth/normal biases are deliberately absent: they are
-    engine policy in `lunco_render::LunarSunShadow`, not scene content. An
-    authored value for them would be tunable but not persistable, and a scene
-    that set them would be describing this renderer rather than the light."""
+    persisted renderer settings in the Graphics section, not scene content. An
+    authored value for them would describe this renderer rather than the light;
+    the Graphics settings provide the renderer-wide defaults."""
 )
 {
-    float lunco:shadow:firstCascadeFarBound = 40 (
-        doc = "Far bound of the first (highest-resolution) cascade, metres."
+    float lunco:shadow:firstCascadeFarBound (
+        doc = "Far bound of the first (highest-resolution) cascade, metres. Omitted values use the persisted Graphics setting."
     )
 }
 
@@ -832,7 +844,7 @@ class "LunCoSuspensionAPI" (
 {
     float lunco:suspension:restLength (
         customData = {
-            double min = 0.05
+            double min = 0
             double max = 2
             string unit = "m"
         }
@@ -1244,23 +1256,21 @@ class "LunCoControlBindingAPI" (
     }
     doc = """ONE intent→port binding — a child prim of a vessel's `Controls`
     scope, named for the [`UserIntent`] it binds (`forward`, `steer`, …). While
-    that intent is active it contributes `scale` per unit intent to the named
+    that intent is active it contributes `factor` per unit intent to the named
     input port. Read by the control-binding loader (lunco-usd-bevy); shared
     profiles live in `assets/components/control_profiles.usda` and arrive on
     vessels by `subLayers` + `inherits`."""
 )
 {
-    uniform token lunco:port = "" (
+    uniform string lunco:port = "" (
         doc = """The vessel input port this intent drives (`"throttle"`,
         `"pitch"`). Uniform: a binding does not retarget over time.
 
-        `token`, not `string`: this is an IDENTIFIER — it is matched against the
-        runtime port registry's names, never displayed, concatenated or
-        localized. USD interns tokens for exactly this use, and the type is what
-        tells a reader it must compare, not read. Open vocabulary (a vessel names
-        its own ports), so no `allowedTokens`."""
+        This is a string because vessel port names are an open authoring
+        vocabulary, not a closed USD token set. The runtime compares the
+        composed value with the vessel's declared port registry."""
     )
-    uniform double lunco:scale = 1 (
+    uniform double lunco:factor = 1 (
         doc = """Port contribution per unit intent — sign flips an axis, magnitude
         is sensitivity."""
     )
@@ -1321,14 +1331,12 @@ class "LunCoAssetAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """How a prim backed by an external binary asset (glTF/OBJ/STL payload)
-    or a built terrain projects into the engine.
+    doc = """How a prim backed by an external binary asset (glTF payload) or a
+    built terrain projects into the engine.
 
-    `lunco:resolvedAsset` is a SIDE-CHANNEL, declared so it stops serializing as
-    untyped `custom`, not endorsed: openusd-rs has no `SdfFileFormat` plugin
-    system, so binary arcs are stubbed out of composition and the resolved URI is
-    surfaced here for Bevy's loaders. The in-code migration plan (a glTF dynamic
-    file format) deletes it — see `lunco-usd-bevy/src/resolver.rs`."""
+    The standard USD payload/reference remains the asset identity. The runtime
+    render projection reads that authored arc from the composed prim stack and
+    passes its canonical URI to the native glTF loader."""
 )
 {
     string lunco:assetMode = "scene" (
@@ -1339,11 +1347,6 @@ class "LunCoAssetAPI" (
     string lunco:assetLabel = "" (
         doc = """Sub-asset label inside the binary asset (`"Mesh0/Primitive0"`),
         for `lunco:assetMode = "mesh"`. Empty = the loader's default label."""
-    )
-    string lunco:resolvedAsset = "" (
-        doc = """Resolved URI of the binary asset this prim's payload named —
-        normally SYNTHESIZED from the stubbed arc at compose time; an authored
-        value wins. Deleted when the glTF file-format plugin lands."""
     )
     bool lunco:placeholder = false (
         doc = """This prim's primitive mesh is a stand-in that hides once the real
@@ -1440,6 +1443,9 @@ class "LunCoTelemetryAPI" (
     string lunco:telemetry:unit = "" (
         doc = "Display unit string; empty = unitless."
     )
+    string lunco:telemetry:description = "" (
+        doc = "Human-facing explanation shown with the retained signal."
+    )
     double lunco:telemetry:rateHz = 0 (
         doc = "Sampling rate, Hz. 0/unauthored = the engine's default cadence."
     )
@@ -1452,9 +1458,6 @@ class "LunCoTelemetryAPI" (
     )
     int64 lunco:telemetry:retention = 0 (
         doc = "Ring-buffer sample count to retain. 0/unauthored = engine default."
-    )
-    rel lunco:telemetry:owner (
-        doc = "Composed USD part that presents this component's generated telemetry. Absent means this prim itself."
     )
 }
 
@@ -1845,7 +1848,9 @@ class "LunCoCameraPathAPI" (
     )
     token[] lunco:path:aim:modes = [] (
         doc = """Aim mode per key — `tangent` (look along the track), `target`
-        (consume the next `aim:targets` entry), or `manual` (position only)."""
+        (consume the next `aim:targets` entry), or `manual` (position only; the
+        camera's existing orientation remains authoritative)."""
+        allowedTokens = ["tangent", "target", "manual"]
     )
     double lunco:path:aim:blendDuration = 0.0 (
         doc = """Seconds before each aim key over which the previous and current

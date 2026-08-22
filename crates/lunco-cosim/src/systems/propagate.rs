@@ -119,6 +119,17 @@ struct CompiledTarget {
     resolved: Option<ResolvedPort>,
 }
 
+/// Identify a warning by the endpoint that owns the failed port, not by the
+/// port spelling alone. Global ids remain stable across network peers; the
+/// entity bits are the only available identity for purely local scaffolding.
+fn target_report_key(world: &World, target: &CompiledTarget) -> String {
+    let identity = world
+        .get::<lunco_core::GlobalEntityId>(target.entity)
+        .map(|id| format!("gid:{}", id.get()))
+        .unwrap_or_else(|| format!("entity:{}", target.entity.to_bits()));
+    format!("target:{identity}:{}", target.name)
+}
+
 /// One algebraic loop found at compile time, spanning at least two participants.
 #[derive(Clone)]
 struct DetectedLoop {
@@ -445,14 +456,6 @@ pub fn propagate_connections(
     world: &mut World,
     mut wiring: Local<RebuildOnChange<BoundConnection, CompiledWiring>>,
     mut acc: Local<Vec<f64>>,
-    // Dangling-wire names already reported. Dedup is per PORT NAME, not per
-    // call site: a `warn_once!` here reported only the FIRST dangling wire in
-    // the whole process and silently dropped every other one, which is exactly
-    // how a model that lost ALL of its inputs could look like it had lost one.
-    mut reported: Local<std::collections::HashSet<String>>,
-    // The target NAME SET the `reported` dedup was last cleared for. See the reset
-    // below: `rewired` fires far more often than "a new scene".
-    mut last_targets: Local<std::collections::HashSet<String>>,
 ) {
     // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
     // write phase can take `&mut World` without holding a resource borrow.
@@ -466,35 +469,13 @@ pub fn propagate_connections(
         rewired = true;
         compiled.rebuild(world)
     });
-    // A rewire (new scene, edited connection) makes every prior dangling-wire
-    // report stale: the names below belong to THIS fabric. Without the reset the
-    // dedup set — keyed by port name for the process lifetime — would silence a
-    // genuine dangling `angle` in the scene you just loaded because some earlier
-    // scene already had one.
-    //
-    // But clear on a CHANGED fabric, not on every rebuild. `rewire_usd_connections`
-    // despawns and respawns EVERY `SimConnection` on any structural change — any
-    // prim spawn or despawn anywhere, or any live USD edit — so `rewired` is true
-    // on a large fraction of frames while a scene is streaming in. Resetting the
-    // dedup set there turned a once-per-name report into hundreds of identical
-    // lines per second. Key the reset on the target names actually changing.
     if rewired {
-        let names: std::collections::HashSet<String> =
-            compiled.targets.iter().map(|t| t.name.clone()).collect();
-        if *last_targets != names {
-            reported.clear();
-            *last_targets = names;
-        }
-
         // Both ledgers are keyed by `(Entity, port)` and both RATCHET — `faults`
         // so a gate can ask "did anything never land", `landed` so a wire that
         // once worked is never re-reported. Topology loops are kept in their
-        // own current-fabric collection. Neither is scoped to a scene, and
-        // nothing clears them on teardown: after `LoadScene` the entries of the
-        // PREVIOUS scene remain, keyed to entities that no longer exist. A
-        // verdict read after a reload (`scene_test`'s gate, `GET /api/diagnostics`)
-        // then answers for a scene that is not loaded — and in a long session the
-        // ledger only grows.
+        // own current-fabric collection. The diagnostics resource is reset at
+        // `SceneTeardown`, while the liveness pass below retires endpoints that
+        // are removed by an ordinary edit without a scene replacement.
         //
         // Despawn is the exact retirement condition, and a rewire is when it is
         // cheap to notice: prim despawn is one of the two things that rebuild the
@@ -542,7 +523,10 @@ pub fn propagate_connections(
                 && loop_info.requires_realtime_safe
                 && loop_info.realtime_safe
             {
-                if reported.insert(loop_info.detail.clone()) {
+                if world
+                    .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                    .report_once(format!("loop:{detail}", detail = loop_info.detail))
+                {
                     info!(
                         "[cosim] force loop accepted under the declared realtime lockstep contract: {}",
                         loop_info.detail
@@ -550,7 +534,10 @@ pub fn propagate_connections(
                 }
                 continue;
             }
-            if reported.insert(loop_info.detail.clone()) {
+            if world
+                .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                .report_once(format!("loop:{detail}", detail = loop_info.detail))
+            {
                 if loop_info.force_producing
                     && loop_info.requires_realtime_safe
                     && !loop_info.realtime_safe
@@ -744,7 +731,12 @@ pub fn propagate_connections(
                     std::collections::hash_map::Entry::Occupied(_) => false,
                 }
             };
-            if inserted && reported.insert(t.name.clone()) {
+            let report_key = target_report_key(world, t);
+            let should_report = inserted
+                && world
+                    .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                    .report_once(report_key);
+            if should_report {
                 let label = world
                     .get::<Name>(t.entity)
                     .map(|n| n.to_string())

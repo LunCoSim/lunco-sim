@@ -295,6 +295,10 @@ pub fn spawn_declared_missions(
         let panel_width = radius_m * 4.0;
         let panel_height = radius_m * 0.8;
         let panel_thickness = radius_m * 0.1;
+        let marker_color = sc
+            .marker_color
+            .map(|rgba| LinearRgba::new(rgba[0], rgba[1], rgba[2], rgba[3]))
+            .unwrap_or(LinearRgba::WHITE);
 
         let bus_mesh = shared_mesh(
             &mut mesh_cache,
@@ -347,11 +351,14 @@ pub fn spawn_declared_missions(
             // Appearance is stated as INTENT (`PbrLook`); `lunco-render-bevy`
             // binds the `StandardMaterial`. Identical looks share one material,
             // so the two solar panels below cost one, not two.
-            // Main Body (Service Module) - Darker metallic grey
+            // The authored marker colour is the appearance intent for the
+            // complete schematic marker.  Keep the geometry's material
+            // differences (metal/roughness/emission) while using one scene
+            // colour instead of silently discarding `markerColor`.
             parent.spawn((
                 Mesh3d(bus_mesh),
                 PbrLook {
-                    base_color: LinearRgba::from(Color::srgb(0.2, 0.2, 0.2)),
+                    base_color: marker_color,
                     metallic: 0.8,
                     perceptual_roughness: 0.2,
                     ..default()
@@ -359,11 +366,10 @@ pub fn spawn_declared_missions(
                 Name::new("Service Module"),
             ));
 
-            // Capsule (Command Module) - Silver metallic
             parent.spawn((
                 Mesh3d(capsule_mesh),
                 PbrLook {
-                    base_color: LinearRgba::from(Color::srgb(0.8, 0.8, 0.8)),
+                    base_color: marker_color,
                     metallic: 1.0,
                     perceptual_roughness: 0.1,
                     ..default()
@@ -372,15 +378,14 @@ pub fn spawn_declared_missions(
                 Name::new("Command Module"),
             ));
 
-            // Solar Panels (Left and Right) - Blue solar look. ONE mesh handle,
-            // cloned: the two panels are the same box mirrored by their
-            // `Transform`, so a second asset buys nothing and costs a batch.
+            // The two panels share one mesh and one authored colour, mirrored
+            // by their transforms.
             for side in [-1.0, 1.0] {
                 parent.spawn((
                     Mesh3d(panel_mesh.clone()),
                     PbrLook {
-                        base_color: LinearRgba::from(Color::srgb(0.0, 0.1, 0.4)), // Dark blue solar cells
-                        emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
+                        base_color: marker_color,
+                        emissive: marker_color * 2.0,
                         metallic: 0.5,
                         perceptual_roughness: 0.3,
                         ..default()

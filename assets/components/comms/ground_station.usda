@@ -124,7 +124,7 @@ def Xform "GroundStation" (
     # the aperture's geometry, and a 3 km marker sphere in the sight-line would
     # sever the very link it is drawn to advertise.
     def Sphere "Marker" (
-        prepend apiSchemas = ["LunCoMarkerAPI"]
+        prepend apiSchemas = ["LunCoMarkerAPI", "MaterialBindingAPI"]
     )
     {
         double radius = 1

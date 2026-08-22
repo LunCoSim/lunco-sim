@@ -36,7 +36,7 @@ What remains is a different shape of problem. Nothing crashes now, so every defe
 |---|---|
 | 1. Renderer wedges after shadow-map invalidation | **Fixed** — ladder fired, recovered, no further errors |
 | 2. Failed load leaks readiness ticket | Not exercised — the scene loaded |
-| 3. GPU device lost on DX12 | Not exercised — Vulkan is now the Windows default (`preferred_wgpu_settings`) |
+| 3. GPU device lost on DX12 | Not exercised — this captured run used Vulkan; the current renderer does not force a backend |
 | 4. `lunco://` resolves to empty AppData cache | **Fixed / not reproduced** — 243 assets resolved from the install dir |
 | 5. `BigSpace` second floating origin | Not reproduced — 4 cameras mounted cleanly as grid-direct followers |
 | 6. Sim setup deadlock on unresolvable prim | Not reproduced |
@@ -126,7 +126,14 @@ The consequence for the tester is not cosmetic. Shadows are off *for the rest of
 **Fix:**
 
 - **Log the requested allocation.** `describe()` in `crates/lunco-workbench/src/render_robustness.rs` walks the wgpu source chain, which gives `Not enough memory left` but not *how much* was asked for. Query `RenderDevice` limits and the atlas descriptor at the point of failure and print requested bytes vs. adapter budget. Without that number this stays unfixable-by-inspection.
-- **Budget before allocating, don't allocate and catch.** On `device_type == IntegratedGpu`, cap the shadow-caster count and cascade resolution up front — nearest-N casters to the active camera, reduced cascade count, half-resolution atlas. Degrading deliberately at startup beats a hard OOM plus a session-wide feature kill.
+- **The render settings now own the admission budget.** The earlier proposal to
+  impose hardcoded per-device byte ceilings was rejected: it silently rewrote
+  the user's requested quality and made adapter class a hidden preset selector.
+  `shadow_budget_bytes` is now the sole configured ceiling. The preflight uses
+  it only to admit the explicitly configured caster set; it does not rewrite
+  map sizes, cascade count, or select a lower quality preset. The reactive
+  recovery ladder remains a separate presentation-safety response after a
+  real GPU fault.
 - **Make the degradation visible in the UI, not only in the log.** A workbench status chip ("shadows disabled — GPU memory") costs one line and saves a bug report.
 - **Re-arm on scene unload.** The warning already promises "reload after closing some scene content to get them back", but `Ladder` has no transition back to `Rung::Healthy`. Either implement it or fix the message.
 
@@ -354,7 +361,7 @@ render evidence.
 | issue | current disposition |
 |---|---|
 | 1 | **Fixed in source.** The lunar balloon uses the authored ambient/gravity contract and the escape diagnostics no longer treat upward motion as an unconditional escape. Production scene execution remains part of the verification pass. |
-| 2 | **Fixed in source.** Integrated adapters receive a pre-extraction shadow budget: bounded map sizes, cascade count, and nearest-light caster limits. The workbench exposes the degradation, scene teardown re-arms it, and device loss remains terminal. Actual AMD/Vulkan Windows evidence is still unverified locally. |
+| 2 | **Fixed in source.** The explicit `shadow_budget_bytes` setting is the sole pre-extraction admission ceiling; no adapter-class cap or automatic lower preset rewrites the requested map sizes/cascade count. Casters beyond the explicit class limits or byte ceiling are reported as intentionally disabled, and the workbench now logs the admitted estimate versus the ceiling on GPU OOM. Scene teardown re-arms budget suppression; device loss remains terminal. Actual AMD/Vulkan Windows evidence is still unverified locally. |
 | 3 | **Fixed in source.** Python programs check the authoritative interpreter status before binding, publish their declared interface as a terminal error, and emit one scene-level aggregate diagnostic. Terminal participants now retire their derived edges at the binding boundary, so unavailable Python cannot create secondary missing-port or algebraic-loop faults. The interactive sandbox intentionally has no verdict channel; `assets/scenes/tests/sandbox_smoke.usda` is the explicit composed smoke contract and the production thermal scene remains a separate gate. |
 | 4 | **Closed.** Runtime overlays and history are ignored by source control and excluded by the native packaging copier; no sandbox `.lunco` files are tracked. |
 | 5 | **Fixed in source.** Avatar/control resolution uses the authored control endpoint and skips camera descendants; warnings include the authored identity rather than only an entity id. |

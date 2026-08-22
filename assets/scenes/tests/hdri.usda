@@ -31,7 +31,9 @@ def Xform "HdriTest" (
 
 
 
-    def DomeLight "Sky"
+    def DomeLight "Sky" (
+        prepend apiSchemas = ["LunCoDomeAPI"]
+    )
     {
         # Equirectangular ("latlong") — the format every HDRI library ships and
         # the only one USD's `automatic` will resolve to for a 2:1 image.
@@ -57,10 +59,9 @@ def Xform "HdriTest" (
         double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
 
-        # lunco extensions: draw the sky (vs. light-only), and the cubemap face
-        # resolution the equirect is projected into.
-        custom bool lunco:dome:skybox = true
-        custom int lunco:dome:faceSize = 1024
+        # lunco extension: draw the sky (vs. light-only). Cubemap resolution is
+        # renderer quality and comes from Graphics settings.
+        bool lunco:dome:skybox = true
     }
 
     # The sun still exists as a real DistantLight: an HDRI gives soft ambient +
@@ -152,7 +153,9 @@ def Xform "HdriTest" (
         }
     }
 
-    def Sphere "Chrome"
+    def Sphere "Chrome" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/Chrome>
@@ -160,7 +163,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "BrushedMetal"
+    def Sphere "BrushedMetal" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/BrushedMetal>
@@ -168,7 +173,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "Diffuse"
+    def Sphere "Diffuse" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double radius = 1.0
         rel material:binding = </HdriTest/Looks/Diffuse>
@@ -176,7 +183,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Cube "Ground"
+    def Cube "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double size = 1.0
         rel material:binding = </HdriTest/Looks/Regolith>

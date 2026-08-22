@@ -84,7 +84,7 @@ def Xform "SixIndependentParity" (
     # simply slide downhill and fail a check about allocation with a fact about
     # gravity.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

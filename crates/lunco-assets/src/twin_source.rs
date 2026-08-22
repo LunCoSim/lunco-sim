@@ -75,8 +75,8 @@ pub fn split_twin_rel(rest: &str) -> Option<(&str, &str)> {
 /// The key an overlay is stored under — the reader-facing relative path
 /// `<name>/<rel>`, matching what [`AssetReader::read`] receives once the
 /// `twin://` scheme is stripped.
-fn overlay_key(name: &str, rel: &str) -> Option<PathBuf> {
-    Some(Path::new(name).join(crate::asset_path::relative_path(rel)?))
+fn overlay_key(name: &str, rel: &str) -> PathBuf {
+    Path::new(name).join(rel)
 }
 
 /// Registry of open Twin roots, keyed by Twin name. Cloneable handle over two
@@ -162,16 +162,21 @@ impl TwinRoots {
     /// world; pass the same `(name, rel)` to [`clear_overlay`](Self::clear_overlay)
     /// to fall back to disk.
     pub fn set_overlay(&self, name: &str, rel: &str, bytes: Arc<Vec<u8>>) {
-        if let (Some(key), Ok(mut m)) = (overlay_key(name, rel), self.overlays.write()) {
-            m.insert(key, bytes);
+        if !crate::asset_path::is_safe_relative_path(name)
+            || !crate::asset_path::is_safe_relative_path(rel)
+        {
+            return;
+        }
+        if let Ok(mut m) = self.overlays.write() {
+            m.insert(overlay_key(name, rel), bytes);
         }
     }
 
     /// Drop the in-memory overlay for `twin://<name>/<rel>` so reads fall back
     /// to the on-disk file again.
     pub fn clear_overlay(&self, name: &str, rel: &str) {
-        if let (Some(key), Ok(mut m)) = (overlay_key(name, rel), self.overlays.write()) {
-            m.remove(&key);
+        if let Ok(mut m) = self.overlays.write() {
+            m.remove(&overlay_key(name, rel));
         }
     }
 
@@ -279,17 +284,45 @@ impl TwinReader {
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
-        let path = crate::asset_path::slashed(path);
-        let (name, rel) = path.split_once('/')?;
-        let root = self.roots.root_for(name)?;
-        let rel = crate::asset_path::relative_path(rel)?;
-        let authored = root.join(&rel);
-        if authored.exists() {
-            return Some(authored);
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return None;
         }
-        let cached = crate::twin_cache_dir(&root).join(&rel);
+        let mut comps = path.components();
+        let name = comps.next()?.as_os_str().to_str()?;
+        let root = self.roots.root_for(name)?;
+        let mut rel = PathBuf::new();
+        for comp in comps {
+            rel.push(comp.as_os_str());
+        }
+        let authored = root.join(&rel);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::existing_path_within_root(&root, &rel) {
+            return Some(path);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if authored.exists() {
+            return Some(authored.clone());
+        }
+        if authored.exists() {
+            // A present entry that failed canonical containment is either an
+            // escaping symlink or an entry the native filesystem refused to
+            // canonicalize. Do not hand it to the storage backend.
+            return None;
+        }
+        let cache_root = crate::twin_cache_dir(&root);
+        let cached = cache_root.join(&rel);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::existing_path_within_root(&cache_root, &rel) {
+            return Some(path);
+        }
+        #[cfg(target_arch = "wasm32")]
         if cached.exists() {
-            return Some(cached);
+            return Some(cached.clone());
+        }
+        if cached.exists() {
+            // See the authored-tree guard above; a cache entry is not allowed
+            // to turn a remote Twin reference into a host filesystem read.
+            return None;
         }
         // Neither exists — return the authored path so the error names where
         // the file was expected, not where it was cached.
@@ -299,6 +332,9 @@ impl TwinReader {
 
 impl AssetReader for TwinReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         // In-memory overlay wins over the on-disk file (E1b: a scene document's
         // composed source projected into the live world). Keyed by the exact
         // reader-facing `<name>/<rel>` path.
@@ -399,6 +435,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn unsafe_overlay_paths_are_not_stored_or_read() {
+        let roots = TwinRoots::default();
+        roots.set_overlay("moonbase", "../outside.usda", Arc::new(b"secret".to_vec()));
+        roots.set_overlay("../outside", "scene.usda", Arc::new(b"secret".to_vec()));
+
+        assert!(roots
+            .overlay_for(Path::new("moonbase/../outside.usda"))
+            .is_none());
+        assert!(roots
+            .overlay_for(Path::new("../outside/scene.usda"))
+            .is_none());
+    }
+
     /// Two unrelated folders can carry the same name (`twin.toml` name, or a
     /// basename like `scenes`). Registering the second must NOT repoint the
     /// first — that silently broke every `twin://first/…` read already in
@@ -436,5 +486,22 @@ mod tests {
         assert_eq!(first, "moonbase");
         assert_eq!(again, first, "reopen must reuse the existing name");
         assert_eq!(roots.names().len(), 1, "no duplicate registration");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reader_resolution_rejects_symlinks_that_leave_a_twin_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.usda");
+        std::fs::write(&secret, "#usda 1.0").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.usda")).expect("symlink");
+
+        let roots = TwinRoots::default();
+        let name = roots.register("example", root.path());
+        let reader = TwinReader { roots };
+        assert!(reader
+            .resolve(Path::new(&format!("{name}/linked.usda")))
+            .is_none());
     }
 }

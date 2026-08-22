@@ -60,7 +60,7 @@ def Xform "CommsWallTest" (
 
     # Flat plot, ±100 m — enough to drive around the wall.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

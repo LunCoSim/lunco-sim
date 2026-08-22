@@ -870,10 +870,7 @@ fn default_plugins_with_profile(
             .disable::<bevy::pbr::PbrPlugin>()
             .disable::<bevy::gizmos_render::GizmoRenderPlugin>()
     } else {
-        group.set(bevy::render::RenderPlugin {
-            render_creation: lunco_workbench::preferred_wgpu_settings().into(),
-            ..default()
-        })
+        group
     };
 
     #[cfg(feature = "ui")]
@@ -881,9 +878,8 @@ fn default_plugins_with_profile(
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled) —
-    // and so does `offscreen`, which is windowless WITH a GPU; the windowed
-    // branch above supplies `preferred_wgpu_settings`, and wgpu renders
-    // surfaceless into the offscreen target image.
+    // and so does `offscreen`, which is windowless WITH a GPU; the default
+    // Bevy render plugin renders surfaceless into the offscreen target image.
     // Without `ui` there's no winit crate to disable, so just declare a
     // windowless `WindowPlugin`.
     #[cfg(feature = "ui")]
@@ -1846,8 +1842,7 @@ fn project_usd_policies(
 /// and syncs to peers (the prim rides the USD journal → each peer recomposes →
 /// each peer's projector applies) with no bespoke broadcast. Change-gated on
 /// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
-/// knobs are render/camera state (`Bloom` lives in `bevy_post_process`, under
-/// `ui`); the headless server has no cameras to apply to.
+/// knobs are render/camera state; the headless server has no cameras to apply to.
 /// What the scene AUTHORED, held independently of what currently exists to
 /// apply it to.
 ///
@@ -1862,10 +1857,21 @@ fn project_usd_policies(
 #[derive(Resource, Default, Clone, Copy)]
 pub struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
-    pub bloom_intensity: Option<f32>,
 }
 
-/// Apply [`AuthoredEnv`] to every camera/bloom that exists RIGHT NOW.
+/// Clear scene-owned environment opinions before the next composition epoch.
+///
+/// `AuthoredEnv` deliberately outlives individual camera entities so cameras
+/// spawned after stage composition inherit a value authored by that scene. It
+/// must therefore be reset at the same lifecycle boundary as the scene, rather
+/// than relying on camera despawn or on the next scene happening to author a
+/// replacement value.
+#[cfg(feature = "ui")]
+fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
+    *authored = AuthoredEnv::default();
+}
+
+/// Apply the authored environment exposure to every camera that exists RIGHT NOW.
 ///
 /// Runs every frame and is a no-op when the values already match, so a camera
 /// spawned (or respawned, or reparented on possession) long after the scene
@@ -1874,20 +1880,12 @@ pub struct AuthoredEnv {
 fn apply_authored_env(
     authored: Option<Res<AuthoredEnv>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
 ) {
     let Some(authored) = authored else { return };
     if let Some(ev) = authored.exposure_ev100 {
         for mut e in &mut q_exposure {
             if e.ev100 != ev {
                 e.ev100 = ev;
-            }
-        }
-    }
-    if let Some(bi) = authored.bloom_intensity {
-        for mut b in &mut q_bloom {
-            if b.intensity != bi {
-                b.intensity = bi;
             }
         }
     }
@@ -1898,7 +1896,7 @@ fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut authored: ResMut<AuthoredEnv>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
+    bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
@@ -1917,6 +1915,7 @@ fn project_env_settings(
     }
     *last = Some(signal);
 
+    let mut scene_bloom = None;
     for (_, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
@@ -1925,25 +1924,36 @@ fn project_env_settings(
             {
                 continue;
             }
-            if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
-                // RECORD it — `apply_authored_env` owns getting it onto cameras,
-                // including cameras that do not exist yet. Also seed `LunarSun`,
-                // the documented single source the sun spawn and the celestial
-                // auto-exposure both read, so a scene that later gains a
-                // celestial hierarchy ramps toward the authored value instead of
-                // the studio default.
-                authored.exposure_ev100 = Some(ev);
-                if let Some(sun) = lunar_sun.as_mut() {
-                    sun.exposure_ev100 = ev;
-                }
-                for mut e in &mut q_exposure {
-                    e.ev100 = ev;
+            if view.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
+                if let Some(ev) = view
+                    .value::<f32>(&prim, "lunco:env:exposureEv100")
+                    .filter(|ev| ev.is_finite())
+                {
+                    // RECORD it — `apply_authored_env` owns getting it onto cameras,
+                    // including cameras that do not exist yet. Also seed `LunarSun`,
+                    // the documented single source the sun spawn and the celestial
+                    // auto-exposure both read, so a scene that later gains a
+                    // celestial hierarchy ramps toward the authored value instead of
+                    // the studio default.
+                    authored.exposure_ev100 = Some(ev);
+                    if let Some(sun) = lunar_sun.as_mut() {
+                        sun.exposure_ev100 = ev;
+                    }
+                    for mut e in &mut q_exposure {
+                        e.ev100 = ev;
+                    }
+                } else {
+                    warn!("ignoring invalid authored lunco:env:exposureEv100 on {prim}");
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
-                authored.bloom_intensity = Some(bi);
-                for mut b in &mut q_bloom {
-                    b.intensity = bi;
+                if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity")
+                    && bi.is_finite()
+                    && bi >= 0.0
+                {
+                    scene_bloom = Some(bi);
+                } else if view.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
+                    warn!("ignoring invalid authored lunco:env:bloomIntensity on {prim}");
                 }
             }
             // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
@@ -1966,6 +1976,11 @@ fn project_env_settings(
             // `DistantLight` under the body it reflects from, so its brightness
             // and tint are `inputs:intensity` / `inputs:color` on that prim,
             // read by the standard light loader.
+        }
+    }
+    if let Some(mut override_value) = bloom_override {
+        if override_value.intensity != scene_bloom {
+            override_value.intensity = scene_bloom;
         }
     }
 }
@@ -2529,16 +2544,13 @@ impl Plugin for SandboxCorePlugin {
                 commands.insert_resource(SANDBOX_GRAVITY)
             })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
-            // calibrated lunar surface (the canonical 128 klx / EV16 `LunarSun`
-            // crushes the dark blueprint ground to black). Inserted BEFORE
-            // `EnvironmentPlugin` so its `init_resource` keeps these. The sun
-            // spawn AND every camera's exposure read this one resource, so lux
-            // and EV stay matched. Tunable live via `SetEnvironmentLight`.
-            .insert_resource(lunco_environment::LunarSun {
-                illuminance_lux: 128_000.0,
-                exposure_ev100: 16.0,
-                ..Default::default()
-            })
+            // calibrated lunar surface (the canonical `LunarSun` defaults
+            // crush the dark blueprint ground to black). Inserted BEFORE
+            // `EnvironmentPlugin` so its `init_resource` keeps this one
+            // authoritative resource. The sun spawn AND every camera's
+            // exposure read it, so lux and EV stay matched. Tunable live via
+            // `SetEnvironmentLight`.
+            .insert_resource(lunco_environment::LunarSun::default())
             // Persistent world shell: one BigSpace root + `WorldGrid` + one
             // `FloatingOrigin`. The validation plugin (debug builds only, logs
             // errors, never panics) is ENABLED: WorldRoot is Transform-free —
@@ -2993,6 +3005,8 @@ impl Plugin for SandboxCorePlugin {
         // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
         app.init_resource::<AuthoredEnv>();
+        #[cfg(feature = "ui")]
+        app.add_systems(lunco_core::SceneTeardown, reset_authored_env);
         // Read-on-stage-change, then apply-every-frame. The application is a
         // separate system because cameras outlive neither the stage change nor
         // each other: possession reparents them, the recorder spawns its own.

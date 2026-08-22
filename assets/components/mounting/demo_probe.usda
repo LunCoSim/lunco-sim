@@ -20,7 +20,7 @@
 def Xform "Probe" (
     doc = "Minimal mountable probe part used to demonstrate authored plug-and-socket attachment."
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoMountPlugAPI"]
 )
 {
     uniform bool lunco:spawnable = true

@@ -27,7 +27,7 @@
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
-//! | cornering stiffness, N/rad | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
+//! | lateral stiffness graph | `physxVehicleTire:lateralStiffnessGraph` + `restLoad` | yes |
 //! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
 //! | motor damping | `lunco:wheel:driveDamping` | yes |
@@ -51,17 +51,18 @@
 //! set is what makes "same defaults for both variants" true.
 
 use avian3d::prelude::{
-    AngularMotor, Collider, ColliderDensity, MotorModel, Position, RevoluteJoint, Rotation,
+    AngularMotor, Collider, ColliderDensity, Friction, MotorModel, Position, RevoluteJoint,
+    Rotation,
 };
 use bevy::asset::AssetId;
-use bevy::log::{info, warn};
+use bevy::log::{error, info, warn};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
 use lunco_hardware::{MotorActuator, SteeringActuator};
-use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Authored suspension compliance, shared by both wheel implementations. The
 /// raycast wheel emulates this spring analytically; a joint wheel is a rigid
@@ -80,6 +81,209 @@ pub struct SuspensionParams {
     pub spring_k: f64,
     /// Spring damping, N·s/m.
     pub damping_c: f64,
+}
+
+/// One standard PhysX wheel-attachment binding resolved from a composed stage.
+/// The attachment owns the index; the wheel, suspension, and tire may be the
+/// attachment itself (the direct API form) or separate relationship targets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WheelAttachmentBinding {
+    pub suspension: String,
+    pub tire: String,
+    pub index: i32,
+}
+
+/// Canonical wheel-attachment topology shared by the live projector and
+/// `ValidateAsset`. Keeping resolution here prevents the validator from
+/// inventing a second relationship or direct-API interpretation.
+#[derive(Clone, Debug, Default)]
+pub struct WheelAttachmentTopology {
+    bindings: HashMap<String, WheelAttachmentBinding>,
+    invalid_wheels: HashSet<String>,
+}
+
+impl WheelAttachmentTopology {
+    /// Return the one resolved binding for a composed wheel, if valid.
+    pub fn binding_for(&self, wheel_path: &str) -> Option<&WheelAttachmentBinding> {
+        if self.is_invalid(wheel_path) {
+            None
+        } else {
+            self.bindings.get(wheel_path)
+        }
+    }
+
+    /// Return whether the stage authored an invalid or ambiguous attachment
+    /// for this wheel.
+    pub fn is_invalid(&self, wheel_path: &str) -> bool {
+        self.invalid_wheels.contains(wheel_path)
+    }
+
+    pub(crate) fn bindings(&self) -> impl Iterator<Item = (&String, &WheelAttachmentBinding)> {
+        self.bindings.iter()
+    }
+
+    pub(crate) fn invalid_wheels(&self) -> impl Iterator<Item = &String> {
+        self.invalid_wheels.iter()
+    }
+}
+
+/// Resolve every standard wheel attachment in a composed stage.
+///
+/// A relationship is singular in the vehicle schema. Multi-target authoring,
+/// duplicate attachments, malformed endpoint types, and missing required
+/// endpoints are rejected; the first or last list target is never selected.
+pub fn collect_wheel_attachment_topology(
+    reader: &lunco_usd_bevy::StageView<'_>,
+) -> WheelAttachmentTopology {
+    let mut topology = WheelAttachmentTopology::default();
+    for attachment in reader.prim_paths() {
+        if !reader.has_api_schema(&attachment, "PhysxVehicleWheelAttachmentAPI") {
+            continue;
+        }
+
+        let endpoint = |relationship: &str, api: &str| {
+            attachment_endpoint(reader, &attachment, relationship, api)
+        };
+        let wheel = match endpoint("physxVehicleWheelAttachment:wheel", "PhysxVehicleWheelAPI") {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                error!(
+                    "USD wheel attachment {} has neither a wheel relationship nor a direct PhysxVehicleWheelAPI",
+                    attachment
+                );
+                topology
+                    .invalid_wheels
+                    .insert(attachment.as_str().to_owned());
+                continue;
+            }
+            Err(reason) => {
+                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                topology
+                    .invalid_wheels
+                    .insert(attachment.as_str().to_owned());
+                continue;
+            }
+        };
+
+        let suspension = match endpoint(
+            "physxVehicleWheelAttachment:suspension",
+            "PhysxVehicleSuspensionAPI",
+        ) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                error!(
+                    "USD wheel attachment {} for {} has neither a suspension relationship nor a direct PhysxVehicleSuspensionAPI",
+                    attachment, wheel
+                );
+                topology.invalid_wheels.insert(wheel.clone());
+                continue;
+            }
+            Err(reason) => {
+                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                topology.invalid_wheels.insert(wheel.clone());
+                continue;
+            }
+        };
+
+        let tire = match endpoint("physxVehicleWheelAttachment:tire", "PhysxVehicleTireAPI") {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                error!(
+                    "USD wheel attachment {} for {} has neither a tire relationship nor a direct PhysxVehicleTireAPI",
+                    attachment, wheel
+                );
+                topology.invalid_wheels.insert(wheel.clone());
+                continue;
+            }
+            Err(reason) => {
+                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+                topology.invalid_wheels.insert(wheel.clone());
+                continue;
+            }
+        };
+
+        let Some(index) = reader.scalar::<i32>(&attachment, "physxVehicleWheelAttachment:index")
+        else {
+            error!(
+                "USD wheel attachment {} has no valid physxVehicleWheelAttachment:index",
+                attachment
+            );
+            topology.invalid_wheels.insert(wheel.clone());
+            continue;
+        };
+
+        if topology.bindings.contains_key(&wheel) {
+            error!(
+                "USD wheel {} is targeted by more than one PhysxVehicleWheelAttachmentAPI; one attachment is required",
+                wheel
+            );
+            topology.bindings.remove(&wheel);
+            topology.invalid_wheels.insert(wheel);
+            continue;
+        }
+
+        topology.bindings.insert(
+            wheel,
+            WheelAttachmentBinding {
+                suspension,
+                tire,
+                index,
+            },
+        );
+    }
+    topology
+}
+
+/// Resolve a composed relationship only when it has exactly one target. The
+/// standard wheel attachment relationships are singular links; accepting the
+/// first element of a multi-target list would make topology depend on list-op
+/// ordering rather than authored intent.
+fn one_attachment_target(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+) -> Result<Option<String>, usize> {
+    let targets = reader.rel_targets(prim, name);
+    match targets.as_slice() {
+        [] => Ok(None),
+        [target] => Ok(Some(target.as_str().to_owned())),
+        _ => Err(targets.len()),
+    }
+}
+
+/// Resolve one standard attachment endpoint. A relationship target is
+/// authoritative when present; the standard schema's direct-API form uses the
+/// attachment prim itself when the relationship is omitted. In both cases the
+/// resolved prim must carry the API that defines the endpoint.
+fn attachment_endpoint(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    attachment: &SdfPath,
+    relationship: &str,
+    api_schema: &str,
+) -> Result<Option<String>, String> {
+    let target = one_attachment_target(reader, attachment, relationship).map_err(|count| {
+        format!(
+            "{} has {} relationship targets; exactly one is required",
+            relationship, count
+        )
+    })?;
+    let target = target.or_else(|| {
+        reader
+            .has_api_schema(attachment, api_schema)
+            .then(|| attachment.as_str().to_owned())
+    });
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let target_path = SdfPath::new(&target)
+        .map_err(|_| format!("{} resolves to invalid target {}", relationship, target))?;
+    if !reader.has_api_schema(&target_path, api_schema) {
+        return Err(format!(
+            "{} targets {} without {}",
+            relationship, target, api_schema
+        ));
+    }
+    Ok(Some(target))
 }
 
 /// The complete authored dynamics of one wheel — the single source both
@@ -124,22 +328,8 @@ pub struct WheelParams {
     pub brake_torque_max: f64,
     /// Tire longitudinal stiffness (`physxVehicleTire:longitudinalStiffness`).
     pub slip_stiffness: f64,
-    /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
-    /// force per RADIAN of slip angle, before the Coulomb cone. This is
-    /// consumed by the shared tire model for both raycast and jointed wheels.
-    /// Avian supplies only a jointed wheel's normal contact solve.
-    ///
-    /// Read on the schema's own terms: "cornering stiffness" means N/rad in PhysX
-    /// and in vehicle-dynamics texts. The parity scene checks that both
-    /// realizations turn with the same authored contact law and vehicle/motor
-    /// contract.
-    ///
-    /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
-    /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire
-    /// resolves to zero here rather than raising a missing-attribute error. Zero
-    /// is a legal (if unhelpful) tire — no cornering grip at all — and the place
-    /// to state a real value is the tire asset, which every shipped tire does.
-    pub cornering_stiffness: f64,
+    /// Standard PhysX load-dependent lateral stiffness graph and reference load.
+    pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lower edge of the tire's measured steady-state cornering-speed envelope.
     pub min_validated_speed: f64,
     /// Coulomb μ from the wheel's standard `UsdPhysicsMaterialAPI`, composed
@@ -157,11 +347,12 @@ pub struct WheelParams {
 }
 
 impl WheelParams {
-    /// Read every wheel attribute off the composed prim, collecting ALL missing
-    /// required names into the error. `attachment_suspension` is the suspension
-    /// prim selected by the standard `PhysxVehicleWheelAttachmentAPI`; direct
-    /// wheel/suspension API composition passes the wheel itself. A wheel without
-    /// an attachment is under-authored and is rejected.
+    /// Read wheel, tire, and suspension attributes from their standard composed
+    /// prims, collecting ALL missing required names into the error.
+    /// `attachment_suspension` and `attachment_tire` are selected by the
+    /// standard `PhysxVehicleWheelAttachmentAPI`; direct API composition passes
+    /// the wheel itself for each. A wheel without an attachment is
+    /// under-authored and is rejected.
     ///
     /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
     /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
@@ -171,31 +362,28 @@ impl WheelParams {
         reader: &lunco_usd_bevy::StageView<'_>,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
+        attachment_tire: Option<&SdfPath>,
         powertrain: Option<&crate::powertrain::PowertrainParams>,
-    ) -> Result<WheelParams, Vec<&'static str>> {
-        let mut missing: Vec<&'static str> = Vec::new();
+    ) -> Result<WheelParams, Vec<String>> {
+        let mut missing = Vec::new();
+        let tire = attachment_tire.unwrap_or(wheel);
+        if attachment_tire.is_none() {
+            missing.push("PhysxVehicleTireAPI".to_owned());
+        } else if !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
+            missing.push("PhysxVehicleTireAPI".to_owned());
+        }
         let axle_axis = match reader.text(wheel, "axis").as_deref() {
             Some("X") => DVec3::X,
             Some("Y") => DVec3::Y,
             Some("Z") => DVec3::Z,
             _ => {
-                missing.push("axis");
+                missing.push("axis".to_owned());
                 DVec3::X
             }
         };
-        let mut req = |name: &'static str| -> f64 {
-            match reader.real(wheel, name) {
-                Some(v) => v,
-                None => {
-                    missing.push(name);
-                    0.0
-                }
-            }
-        };
-
-        let radius = req("physxVehicleWheel:radius");
-        let width = req("physxVehicleWheel:width");
-        let mass = req("physxVehicleWheel:mass");
+        let radius = read_required_real(reader, wheel, "physxVehicleWheel:radius", &mut missing);
+        let width = read_required_real(reader, wheel, "physxVehicleWheel:width", &mut missing);
+        let mass = read_required_real(reader, wheel, "physxVehicleWheel:mass", &mut missing);
         // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
         // therefore no torque — that is a castor, not a wheel with a default torque.
         let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
@@ -205,36 +393,97 @@ impl WheelParams {
         // substitute for a malformed powertrain.
         let max_rotation_speed = powertrain.map_or(0.0, |p| p.axle_no_load_speed());
         let reflected_inertia = powertrain.map_or(0.0, |p| p.reflected_inertia());
-        let bearing_damping = req("physxVehicleWheel:dampingRate");
-        let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
-        let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
-        // NOT `req`: the PhysX schema declares this one with a `0.0` fallback, so
-        // it always composes to a value and there is nothing to report missing.
-        // Reading it any other way would invent a required-ness the schema does
-        // not state — see the field doc.
-        let cornering_stiffness = reader
-            .real(wheel, "physxVehicleTire:lateralStiffness")
-            .unwrap_or(0.0);
-        let min_validated_speed = reader
-            .real(wheel, "lunco:tire:minValidatedSpeed")
-            .unwrap_or(0.0);
-        let friction_mu = req("physics:dynamicFriction");
-        let drive_damping = req("lunco:wheel:driveDamping");
+        let bearing_damping =
+            read_required_real(reader, wheel, "physxVehicleWheel:dampingRate", &mut missing);
+        let brake_torque_max = read_required_real(
+            reader,
+            wheel,
+            "physxVehicleWheel:maxBrakeTorque",
+            &mut missing,
+        );
+        let slip_stiffness = read_required_real(
+            reader,
+            tire,
+            "physxVehicleTire:longitudinalStiffness",
+            &mut missing,
+        );
+        let mut lateral_stiffness_graph =
+            match reader.scalar::<[f32; 2]>(tire, "physxVehicleTire:lateralStiffnessGraph") {
+                Some([minimum_normalized_load, max_stiffness]) => TireLateralStiffnessGraph {
+                    minimum_normalized_load: minimum_normalized_load as f64,
+                    max_stiffness: max_stiffness as f64,
+                    rest_load: 0.0,
+                },
+                None => {
+                    missing.push("physxVehicleTire:lateralStiffnessGraph".to_owned());
+                    TireLateralStiffnessGraph::default()
+                }
+            };
+        let rest_load = read_required_real(reader, tire, "physxVehicleTire:restLoad", &mut missing);
+        lateral_stiffness_graph.rest_load = rest_load;
+        let min_validated_speed =
+            read_optional_real(reader, tire, "lunco:tire:minValidatedSpeed", &mut missing);
+        let friction_mu = read_required_real(reader, tire, "physics:dynamicFriction", &mut missing);
+        let drive_damping =
+            read_required_real(reader, wheel, "lunco:wheel:driveDamping", &mut missing);
 
         // A zero is an authored, documented solid-cylinder derivation. The
         // standard PhysX wheel attribute itself remains required, so an
         // omitted value is reported with the other missing contract fields.
-        let moment_of_inertia = req("physxVehicleWheel:moi");
+        let moment_of_inertia =
+            read_required_real(reader, wheel, "physxVehicleWheel:moi", &mut missing);
 
         let steer_axis = match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:steerAxis")
         {
             Some(v) => DVec3::new(v[0], v[1], v[2]),
             None => {
-                missing.push("lunco:wheel:steerAxis");
+                missing.push("lunco:wheel:steerAxis".to_owned());
                 DVec3::Y
             }
         };
 
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+
+        validate_wheel_values(
+            &mut missing,
+            radius,
+            width,
+            mass,
+            moment_of_inertia,
+            bearing_damping,
+            brake_torque_max,
+            slip_stiffness,
+            lateral_stiffness_graph,
+            rest_load,
+            min_validated_speed,
+            friction_mu,
+            steer_axis,
+            drive_damping,
+        );
+        validate_wheel_schema_hints(
+            reader,
+            wheel,
+            &mut missing,
+            [
+                ("physxVehicleWheel:radius", radius),
+                ("physxVehicleWheel:moi", moment_of_inertia),
+                ("physxVehicleWheel:dampingRate", bearing_damping),
+                ("physxVehicleWheel:maxBrakeTorque", brake_torque_max),
+                ("lunco:wheel:driveDamping", drive_damping),
+            ],
+        );
+        validate_wheel_schema_hints(
+            reader,
+            tire,
+            &mut missing,
+            [
+                ("physxVehicleTire:longitudinalStiffness", slip_stiffness),
+                ("physxVehicleTire:restLoad", rest_load),
+                ("lunco:tire:minValidatedSpeed", min_validated_speed),
+            ],
+        );
         if !missing.is_empty() {
             return Err(missing);
         }
@@ -249,9 +498,15 @@ impl WheelParams {
         .then_some(wheel);
         let suspension_prim = attachment_suspension.or(direct_suspension);
         let suspension = match suspension_prim {
-            Some(susp) => read_suspension_attrs(reader, susp),
+            Some(susp) => match read_suspension_attrs(reader, susp) {
+                Ok(params) => Some(params),
+                Err(errors) => {
+                    missing.extend(errors);
+                    None
+                }
+            },
             None => {
-                missing.push("PhysxVehicleWheelAttachmentAPI");
+                missing.push("PhysxVehicleWheelAttachmentAPI".to_owned());
                 None
             }
         };
@@ -272,7 +527,7 @@ impl WheelParams {
             bearing_damping,
             brake_torque_max,
             slip_stiffness,
-            cornering_stiffness,
+            lateral_stiffness_graph,
             min_validated_speed,
             friction_mu,
             steer_axis,
@@ -312,7 +567,7 @@ impl WheelParams {
         wheel.bearing_damping = self.bearing_damping;
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
-        wheel.cornering_stiffness = self.cornering_stiffness;
+        wheel.lateral_stiffness_graph = self.lateral_stiffness_graph;
         wheel.min_validated_speed = self.min_validated_speed;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.steer_axis = self.steer_axis;
@@ -398,7 +653,7 @@ impl WheelParams {
     /// rover sinks through the one-sided terrain heightfield.
     pub fn wheel_density(&self) -> f32 {
         let volume = std::f64::consts::PI * self.radius.powi(2) * self.width;
-        (self.mass / volume.max(1e-6)) as f32
+        (self.mass / volume) as f32
     }
 }
 
@@ -414,17 +669,213 @@ pub(crate) fn attachment_suspension_path(
         .and_then(|s| SdfPath::new(s).ok())
 }
 
+/// Resolve a wheel's attachment tire prim via the standard attachment
+/// topology. The map belongs to one composed stage, so its keys are stage-local
+/// paths; independent instances retain independent topology maps.
+pub(crate) fn attachment_tire_path(
+    wheel_path: &str,
+    wheel_attachment_tires: &HashMap<String, String>,
+) -> Option<SdfPath> {
+    wheel_attachment_tires
+        .get(wheel_path)
+        .and_then(|s| SdfPath::new(s).ok())
+}
+
 /// Read the three suspension attrs off one prim. `None` unless all three are
 /// authored — partial authoring is treated as missing (no per-field defaults).
 fn read_suspension_attrs(
     reader: &lunco_usd_bevy::StageView<'_>,
     prim: &SdfPath,
-) -> Option<SuspensionParams> {
-    Some(SuspensionParams {
-        rest_length: reader.real(prim, "lunco:suspension:restLength")?,
-        spring_k: reader.real(prim, "physxVehicleSuspension:springStrength")?,
-        damping_c: reader.real(prim, "physxVehicleSuspension:springDamperRate")?,
+) -> Result<SuspensionParams, Vec<String>> {
+    let mut missing = Vec::new();
+    let read = |name: &str, missing: &mut Vec<String>| {
+        reader.real(prim, name).or_else(|| {
+            missing.push(name.to_owned());
+            None
+        })
+    };
+    let rest_length = read("lunco:suspension:restLength", &mut missing);
+    let spring_k = read("physxVehicleSuspension:springStrength", &mut missing);
+    let damping_c = read("physxVehicleSuspension:springDamperRate", &mut missing);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+
+    let (Some(rest_length), Some(spring_k), Some(damping_c)) = (rest_length, spring_k, damping_c)
+    else {
+        unreachable!("missing suspension values were rejected above")
+    };
+    let mut invalid = Vec::new();
+    validate_suspension_values(&mut invalid, rest_length, spring_k, damping_c);
+    validate_suspension_schema_hints(
+        reader,
+        prim,
+        &mut invalid,
+        [
+            ("lunco:suspension:restLength", rest_length),
+            ("physxVehicleSuspension:springStrength", spring_k),
+            ("physxVehicleSuspension:springDamperRate", damping_c),
+        ],
+    );
+    if !invalid.is_empty() {
+        return Err(invalid);
+    }
+
+    Ok(SuspensionParams {
+        rest_length,
+        spring_k,
+        damping_c,
     })
+}
+
+fn read_optional_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    missing: &mut Vec<String>,
+) -> f64 {
+    match reader.real(prim, name) {
+        Some(value) => value,
+        None if reader.has_authored_attribute(prim, name) => {
+            missing.push(name.to_owned());
+            0.0
+        }
+        None => 0.0,
+    }
+}
+
+fn read_required_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    missing: &mut Vec<String>,
+) -> f64 {
+    match reader.real(prim, name) {
+        Some(value) => value,
+        None => {
+            missing.push(name.to_owned());
+            0.0
+        }
+    }
+}
+
+fn validate_suspension_values(
+    errors: &mut Vec<String>,
+    rest_length: f64,
+    spring_k: f64,
+    damping_c: f64,
+) {
+    validate_nonnegative(errors, "lunco:suspension:restLength", rest_length);
+    validate_nonnegative(errors, "physxVehicleSuspension:springStrength", spring_k);
+    validate_nonnegative(errors, "physxVehicleSuspension:springDamperRate", damping_c);
+}
+
+fn validate_wheel_values(
+    errors: &mut Vec<String>,
+    radius: f64,
+    width: f64,
+    mass: f64,
+    moment_of_inertia: f64,
+    bearing_damping: f64,
+    brake_torque_max: f64,
+    slip_stiffness: f64,
+    lateral_stiffness_graph: TireLateralStiffnessGraph,
+    rest_load: f64,
+    min_validated_speed: f64,
+    friction_mu: f64,
+    steer_axis: DVec3,
+    drive_damping: f64,
+) {
+    validate_positive(errors, "physxVehicleWheel:radius", radius);
+    validate_positive(errors, "physxVehicleWheel:width", width);
+    validate_positive(errors, "physxVehicleWheel:mass", mass);
+    validate_nonnegative(errors, "physxVehicleWheel:moi", moment_of_inertia);
+    validate_nonnegative(errors, "physxVehicleWheel:dampingRate", bearing_damping);
+    validate_nonnegative(errors, "physxVehicleWheel:maxBrakeTorque", brake_torque_max);
+    validate_nonnegative(
+        errors,
+        "physxVehicleTire:longitudinalStiffness",
+        slip_stiffness,
+    );
+    validate_nonnegative(
+        errors,
+        "physxVehicleTire:lateralStiffnessGraph:minNormalizedLoad",
+        lateral_stiffness_graph.minimum_normalized_load,
+    );
+    validate_positive(
+        errors,
+        "physxVehicleTire:lateralStiffnessGraph:maxStiffness",
+        lateral_stiffness_graph.max_stiffness,
+    );
+    validate_positive(errors, "physxVehicleTire:restLoad", rest_load);
+    validate_nonnegative(errors, "lunco:tire:minValidatedSpeed", min_validated_speed);
+    validate_nonnegative(errors, "physics:dynamicFriction", friction_mu);
+    validate_nonnegative(errors, "lunco:wheel:driveDamping", drive_damping);
+    if !(steer_axis.is_finite() && steer_axis.length_squared() > 0.0) {
+        errors.push(format!(
+            "lunco:wheel:steerAxis must be finite and non-zero, got {steer_axis:?}"
+        ));
+    }
+}
+
+fn validate_wheel_schema_hints(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    errors: &mut Vec<String>,
+    values: impl IntoIterator<Item = (&'static str, f64)>,
+) {
+    for (name, value) in values {
+        validate_schema_hint(reader, prim, name, value, errors);
+    }
+}
+
+fn validate_suspension_schema_hints(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    errors: &mut Vec<String>,
+    values: [(&str, f64); 3],
+) {
+    for (name, value) in values {
+        validate_schema_hint(reader, prim, name, value, errors);
+    }
+}
+
+fn validate_schema_hint(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    value: f64,
+    errors: &mut Vec<String>,
+) {
+    let Some(hint) = reader.attr_ui_hint(prim, name) else {
+        return;
+    };
+    if let Some(min) = hint.min {
+        if value < min {
+            errors.push(format!(
+                "{name} must be >= schema minimum {min}, got {value}"
+            ));
+        }
+    }
+    if let Some(max) = hint.max {
+        if value > max {
+            errors.push(format!(
+                "{name} must be <= schema maximum {max}, got {value}"
+            ));
+        }
+    }
+}
+
+fn validate_positive(errors: &mut Vec<String>, name: &str, value: f64) {
+    if !(value.is_finite() && value > 0.0) {
+        errors.push(format!("{name} must be finite and > 0, got {value}"));
+    }
+}
+
+fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
+    if !(value.is_finite() && value >= 0.0) {
+        errors.push(format!("{name} must be finite and >= 0, got {value}"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -453,15 +904,26 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
-    const WHEEL_ONLY_PREFIXES: [&str; 5] = [
-        "lunco:wheel:",
-        "lunco:suspension:",
-        "lunco:tire:",
-        "physxVehicleTire:",
-        "physxVehicleSuspension:",
-    ];
-    if WHEEL_ONLY_PREFIXES.iter().any(|p| attr.starts_with(p)) {
-        return true;
+    if attr.starts_with("lunco:wheel:") {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
+    }
+    if attr.starts_with("lunco:suspension:") || attr.starts_with("physxVehicleSuspension:") {
+        return reader.has_api_schema(prim, "PhysxVehicleSuspensionAPI");
+    }
+    if attr.starts_with("lunco:tire:") || attr.starts_with("physxVehicleTire:") {
+        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
+    }
+    if matches!(attr, "physics:dynamicFriction" | "physics:staticFriction") {
+        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
+    }
+    if matches!(
+        attr,
+        "physxVehicleWheelAttachment:wheel"
+            | "physxVehicleWheelAttachment:tire"
+            | "physxVehicleWheelAttachment:suspension"
+            | "physxVehicleWheelAttachment:index"
+    ) {
+        return reader.has_api_schema(prim, "PhysxVehicleWheelAttachmentAPI");
     }
     // Torque and speed belong to the composed motor/gearbox parts.  A live edit
     // on either part must re-read every wheel that consumes that powertrain, but
@@ -474,7 +936,10 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
     // place; a subtree refresh of the whole rover root would tear down live
     // physics bodies.
-    if attr == "physxVehicleAckermannSteering:maxSteerAngle" || attr == "lunco:driveKernel" {
+    if attr == "physxVehicleAckermannSteering:maxSteerAngle"
+        || attr == "physxVehicleAckermannSteering:strength"
+        || attr == "lunco:driveKernel"
+    {
         return true;
     }
     // A connection transform on a `DriveMix` term prim (`lunco:factor:throttle`
@@ -502,6 +967,8 @@ struct WheelUpdate {
     params: WheelParams,
     /// Steering lock from the wheel's vehicle, when it has a steering system.
     max_steer_angle: Option<f64>,
+    /// Ackermann correction strength from the owning vehicle.
+    ackermann_strength: f64,
 }
 
 /// Re-derive every spawned wheel (and vehicle-root drive mix) of `stage` from
@@ -567,8 +1034,19 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         crate::collect_joint_scan_read(&view, &mut topology);
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
+            if topology.invalid_wheel_attachments.contains(path) {
+                warn!(
+                    "[wheel resync] {} has malformed or ambiguous wheel attachment topology — keeping the spawned values",
+                    path
+                );
+                continue;
+            }
             let susp = topology
                 .wheel_attachment_targets
+                .get(path)
+                .and_then(|s| SdfPath::new(s).ok());
+            let tire = topology
+                .wheel_attachment_tires
                 .get(path)
                 .and_then(|s| SdfPath::new(s).ok());
             let powertrain = match crate::powertrain::find_for_wheel(&view, &sp) {
@@ -582,15 +1060,35 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                     continue;
                 }
             };
-            match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
+            match WheelParams::read(
+                &view,
+                &sp,
+                susp.as_ref(),
+                tire.as_ref(),
+                powertrain.as_ref(),
+            ) {
                 Ok(params) => {
-                    let max_steer_angle = crate::steering_vehicle_of(&view, path)
-                        .and_then(|v| view.real(&v, "physxVehicleAckermannSteering:maxSteerAngle"));
+                    let (max_steer_angle, ackermann_strength) = match crate::steering_vehicle_of(
+                        &view, path,
+                    ) {
+                        Some(vehicle) => match crate::steering_vehicle_params(&view, &vehicle) {
+                            Ok((max, strength)) => (Some(max), strength),
+                            Err(reason) => {
+                                warn!(
+                                    "[wheel resync] {} has invalid Ackermann steering: {} — keeping the spawned values",
+                                    path, reason
+                                );
+                                continue;
+                            }
+                        },
+                        None => (None, 0.0),
+                    };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
                         params,
                         max_steer_angle,
+                        ackermann_strength,
                     });
                 }
                 Err(missing) => warn!(
@@ -617,11 +1115,23 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);
             }
+            if let (Some(susp), Some(mut ray)) = (
+                u.params.suspension,
+                world.get_mut::<avian3d::prelude::RayCaster>(u.entity),
+            ) {
+                ray.origin = DVec3::new(
+                    0.0,
+                    lunco_mobility::strut_offset(susp.rest_length, u.params.radius),
+                    0.0,
+                );
+                ray.max_distance = susp.rest_length;
+            }
             if let (Some(lock), Some(mut steer)) = (
                 u.max_steer_angle,
                 world.get_mut::<SteeringActuator>(u.entity),
             ) {
                 steer.max_steer_angle = lock;
+                steer.ackermann_strength = u.ackermann_strength;
             }
             continue;
         }
@@ -637,6 +1147,20 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
         if let Some(mut density) = world.get_mut::<ColliderDensity>(u.entity) {
             density.0 = u.params.wheel_density();
+        }
+        if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
+            friction.dynamic_coefficient = u.params.friction_mu;
+            friction.static_coefficient = u.params.friction_mu;
+        }
+        if let Some(mut tire) = world.get_mut::<JointedWheelTire>(u.entity) {
+            tire.radius = u.params.radius;
+            tire.axle_inertia = u.params.axle_inertia();
+            tire.slip_stiffness = u.params.slip_stiffness;
+            tire.lateral_stiffness_graph = u.params.lateral_stiffness_graph;
+            tire.min_validated_speed = u.params.min_validated_speed;
+            tire.friction_mu = u.params.friction_mu;
+            tire.bearing_damping = u.params.bearing_damping;
+            tire.axle_axis_local = u.params.axle_axis;
         }
         // Keep the physical wheel's tensor in lock-step with the composed
         // standard MOI and motor reflected inertia.  Updating only density
@@ -695,6 +1219,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))
         {
             steer.max_steer_angle = lock;
+            steer.ackermann_strength = u.ackermann_strength;
         }
     }
     for (e, mix) in mixes {
@@ -712,4 +1237,106 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         wheel_count,
         vehicles.len()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_suspension_values, validate_wheel_values};
+    use bevy::math::DVec3;
+    use lunco_mobility::TireLateralStiffnessGraph;
+
+    #[test]
+    fn authored_wheel_values_accept_the_documented_contract() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            0.3,
+            0.2,
+            12.0,
+            0.54,
+            0.5,
+            120.0,
+            14_000.0,
+            TireLateralStiffnessGraph {
+                minimum_normalized_load: 1.0,
+                max_stiffness: 1_000.0,
+                rest_load: 400.0,
+            },
+            400.0,
+            0.0,
+            1.5,
+            DVec3::Y,
+            30.0,
+        );
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn authored_wheel_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_wheel_values(
+            &mut errors,
+            f64::NAN,
+            0.0,
+            f64::INFINITY,
+            -1.0,
+            -1.0,
+            -1.0,
+            -1.0,
+            TireLateralStiffnessGraph {
+                minimum_normalized_load: -1.0,
+                max_stiffness: -1.0,
+                rest_load: -1.0,
+            },
+            -1.0,
+            -0.1,
+            -1.0,
+            DVec3::ZERO,
+            -1.0,
+        );
+        for name in [
+            "physxVehicleWheel:radius",
+            "physxVehicleWheel:width",
+            "physxVehicleWheel:mass",
+            "physxVehicleWheel:moi",
+            "physxVehicleWheel:dampingRate",
+            "physxVehicleWheel:maxBrakeTorque",
+            "physxVehicleTire:longitudinalStiffness",
+            "physxVehicleTire:lateralStiffnessGraph:minNormalizedLoad",
+            "physxVehicleTire:lateralStiffnessGraph:maxStiffness",
+            "physxVehicleTire:restLoad",
+            "lunco:tire:minValidatedSpeed",
+            "physics:dynamicFriction",
+            "lunco:wheel:driveDamping",
+            "lunco:wheel:steerAxis",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.starts_with(name)),
+                "missing validation error for {name}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_suspension_values_reject_nonfinite_and_out_of_contract_numbers() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, -0.01, f64::NAN, -1.0);
+        assert_eq!(errors.len(), 3, "unexpected validation errors: {errors:?}");
+        assert!(errors[0].starts_with("lunco:suspension:restLength"));
+        assert!(errors[1].starts_with("physxVehicleSuspension:springStrength"));
+        assert!(errors[2].starts_with("physxVehicleSuspension:springDamperRate"));
+    }
+
+    #[test]
+    fn zero_suspension_rest_length_is_valid_only_as_an_authored_rigid_mount() {
+        let mut errors = Vec::new();
+        validate_suspension_values(&mut errors, 0.0, 15_000.0, 5_000.0);
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
 }

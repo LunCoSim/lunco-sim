@@ -1078,15 +1078,15 @@ impl ModelicaCompiler {
         // model loses its runtime input slots and every wire is dropped),
         // so read the tree here and seat it through the in-memory path.
         let mut files = Vec::new();
+        let mut read_diagnostics = Vec::new();
         let mut stack = vec![root_dir.to_path_buf()];
         while let Some(dir) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(e) => {
-                    log::warn!(
-                        "[ModelicaCompiler] source root `{id}`: cannot read {}: {e}",
-                        dir.display()
-                    );
+                    let message = format!("source root `{id}`: cannot read {}: {e}", dir.display());
+                    log::warn!("[ModelicaCompiler] {message}");
+                    read_diagnostics.push(message);
                     continue;
                 }
             };
@@ -1097,16 +1097,21 @@ impl ModelicaCompiler {
                 } else if path.extension().is_some_and(|ext| ext == "mo") {
                     match std::fs::read_to_string(&path) {
                         Ok(text) => files.push((path.display().to_string(), text)),
-                        Err(e) => log::warn!(
-                            "[ModelicaCompiler] source root `{id}`: cannot read {}: {e}",
-                            path.display()
-                        ),
+                        Err(e) => {
+                            let message =
+                                format!("source root `{id}`: cannot read {}: {e}", path.display());
+                            log::warn!("[ModelicaCompiler] {message}");
+                            read_diagnostics.push(message);
+                        }
                     }
                 }
             }
         }
         files.sort_by(|a, b| a.0.cmp(&b.0));
-        self.load_source_root_in_memory(id, &root_dir.display().to_string(), files)
+        let mut report =
+            self.load_source_root_in_memory(id, &root_dir.display().to_string(), files);
+        report.diagnostics.extend(read_diagnostics);
+        report
     }
 
     /// Merge an in-memory source root (e.g. a bundled `.mo` file or
@@ -1140,6 +1145,7 @@ impl ModelicaCompiler {
     ) -> rumoca_compile::compile::SourceRootLoadReport {
         let file_count = files.len();
         let mut inserted = 0;
+        let mut diagnostics = Vec::new();
         for (uri, text) in &files {
             let (stripped, defaults, issues) =
                 crate::ast_extract::strip_input_defaults_with_report(text);
@@ -1149,11 +1155,15 @@ impl ModelicaCompiler {
             // bound input in it will be folded to a constant.
             for issue in &issues {
                 match issue {
-                    crate::ast_extract::InputDefaultIssue::ParseFailed => log::warn!(
-                        "[ModelicaCompiler] source root `{id}`: the bound-`input` strip could not \
-                         parse {uri} — it is seated UNSTRIPPED, so every `input x = <default>` in \
-                         it is demoted to a constant and wires into it will be discarded"
-                    ),
+                    crate::ast_extract::InputDefaultIssue::ParseFailed => {
+                        let message = format!(
+                            "source root `{id}`: the bound-`input` strip could not parse {uri} — \
+                             the file is seated unstripped, so bound inputs would be demoted and \
+                             their wires discarded"
+                        );
+                        log::warn!("[ModelicaCompiler] {message}");
+                        diagnostics.push(message);
+                    }
                     crate::ast_extract::InputDefaultIssue::Unresolvable {
                         name, binding, ..
                     } => {
@@ -1199,9 +1209,11 @@ impl ModelicaCompiler {
             }
             match self.session.add_document(uri, &stripped) {
                 Ok(()) => inserted += 1,
-                Err(error) => log::warn!(
-                    "[ModelicaCompiler] source root `{id}`: could not seat {uri}: {error}"
-                ),
+                Err(error) => {
+                    let message = format!("source root `{id}`: could not seat {uri}: {error}");
+                    log::warn!("[ModelicaCompiler] {message}");
+                    diagnostics.push(message);
+                }
             }
         }
         rumoca_compile::compile::SourceRootLoadReport {
@@ -1212,7 +1224,7 @@ impl ModelicaCompiler {
             cache_status: None,
             cache_key: None,
             cache_file: None,
-            diagnostics: Vec::new(),
+            diagnostics,
         }
     }
 
@@ -1382,9 +1394,9 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
 pub use worker::{
-    handle_modelica_responses, spawn_modelica_requests, validate_communication_period_secs,
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaResult,
-    DEFAULT_COMMUNICATION_PERIOD_SECS,
+    handle_modelica_responses, resolve_communication_period_secs, spawn_modelica_requests,
+    validate_communication_period_secs, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    ModelicaResult, DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 
 #[cfg(feature = "lunco-api")]
@@ -2018,6 +2030,28 @@ pub struct ModelicaOutput {
 mod observables_smoke {
     use super::*;
     use lunco_experiments::RunBounds;
+
+    #[test]
+    fn source_root_reports_unstrippable_bound_input_files() {
+        let mut compiler = ModelicaCompiler::new();
+        let report = compiler.load_source_root_in_memory(
+            "Broken",
+            "test-root",
+            vec![(
+                "Broken.mo".into(),
+                "model Broken\n  input Real x = 1.0;\n".into(),
+            )],
+        );
+        assert_eq!(report.parsed_file_count, 1);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|message| message.contains("could not parse Broken.mo")),
+            "a source root must not report Ready when its bound-input strip failed: {:?}",
+            report.diagnostics
+        );
+    }
 
     /// End-to-end smoke test for the observables pipeline: compile the
     /// bundled RocketEngine, run one step at full throttle, and assert

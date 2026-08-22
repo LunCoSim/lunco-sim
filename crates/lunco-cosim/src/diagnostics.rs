@@ -126,4 +126,16 @@ pub struct CosimDiagnostics {
     /// "Has this wire ever carried a value" does, and it only ever ratchets one
     /// way, which is what makes the gate order-independent.
     pub landed: std::collections::HashSet<(Entity, String)>,
+    /// Runtime warning keys for the current scene. This is deliberately owned
+    /// by the scene diagnostics resource, rather than a process-lifetime
+    /// system-local cache, so a replacement scene can report the same port
+    /// name again.
+    pub(crate) reported: std::collections::HashSet<String>,
+}
+
+impl CosimDiagnostics {
+    /// Record a diagnostic key and return whether it was new in this scene.
+    pub(crate) fn report_once(&mut self, key: impl Into<String>) -> bool {
+        self.reported.insert(key.into())
+    }
 }

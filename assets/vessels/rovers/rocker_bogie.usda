@@ -1266,7 +1266,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/RockerL/Motor_FL>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FL>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -1274,7 +1273,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieL/Motor_ML>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_ML>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -1282,7 +1280,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieL/Motor_RL>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RL>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -1303,7 +1300,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/RockerR/Motor_FR>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FR>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
                 }
@@ -1311,7 +1307,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieR/Motor_MR>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_MR>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
                 }
@@ -1319,7 +1314,6 @@ def Xform "RockerBogie" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </RockerBogie/BogieR/Motor_RR>
                     float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RR>
                     custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
                 }

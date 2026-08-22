@@ -349,27 +349,36 @@ fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
     }
 }
 
-/// Whether two tiles overlap on the sphere: same body face and one is the
-/// other's quadtree ancestor (or the same node).
-fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
-    if a.body != b.body || a.face != b.face {
-        return false;
-    }
-    let (deep, shallow) = if a.level >= b.level { (a, b) } else { (b, a) };
-    let d = deep.level - shallow.level;
-    (deep.i >> d) == shallow.i && (deep.j >> d) == shallow.j
-}
-
 fn branch_has_gap(
     desired: &HashSet<TileCoord>,
     resident: &HashMap<TileCoord, Entity>,
+    resident_coverage: &HashSet<TileCoord>,
     face: u8,
 ) -> bool {
     desired.iter().filter(|tile| tile.face == face).any(|leaf| {
-        !resident
-            .keys()
-            .any(|resident| tiles_overlap(leaf, resident))
+        let mut ancestor = Some(*leaf);
+        let covered_by_ancestor = std::iter::from_fn(|| {
+            let current = ancestor?;
+            ancestor = tile_parent(current);
+            Some(current)
+        })
+        .any(|ancestor| resident.contains_key(&ancestor));
+        !covered_by_ancestor && !resident_coverage.contains(leaf)
     })
+}
+
+/// Index every resident tile and its ancestors once, so coverage checks do not
+/// scan every resident tile for every desired leaf.
+fn resident_coverage(resident: &HashMap<TileCoord, Entity>) -> HashSet<TileCoord> {
+    let mut coverage = HashSet::new();
+    for coord in resident.keys().copied() {
+        let mut current = Some(coord);
+        while let Some(tile) = current {
+            coverage.insert(tile);
+            current = tile_parent(tile);
+        }
+    }
+    coverage
 }
 
 fn tile_parent(coord: TileCoord) -> Option<TileCoord> {
@@ -625,6 +634,7 @@ pub(crate) fn update_globe_lod(
         // camera parks exactly on a threshold — e.g. the 3.0-radii focus snap).
         let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
         let mut desired: HashSet<TileCoord> = HashSet::new();
+        let resident_coverage = resident_coverage(&tiles.resident);
         for face in 0..6u8 {
             subdivide_face(
                 &mut desired,
@@ -675,26 +685,31 @@ pub(crate) fn update_globe_lod(
             if desired.contains(&root) || tiles.resident.contains_key(&root) {
                 continue;
             }
-            if branch_has_gap(&desired, &tiles.resident, face) {
+            if branch_has_gap(&desired, &tiles.resident, &resident_coverage, face) {
                 missing.insert(root);
             }
         }
-        let mut missing: Vec<TileCoord> = missing.into_iter().collect();
-        missing.sort_by(|a, b| {
-            a.level.cmp(&b.level).then_with(|| {
-                tile_dist2(a, lod.radius_m, camera_body_local).total_cmp(&tile_dist2(
-                    b,
-                    lod.radius_m,
-                    camera_body_local,
-                ))
+        let mut prioritized: Vec<(TileCoord, f64)> = missing
+            .into_iter()
+            .map(|coord| {
+                let distance = tile_dist2(&coord, lod.radius_m, camera_body_local);
+                (coord, distance)
             })
+            .collect();
+        prioritized.sort_unstable_by(|(a, a_distance), (b, b_distance)| {
+            a.level
+                .cmp(&b.level)
+                .then_with(|| a_distance.total_cmp(b_distance))
+                .then_with(|| a.face.cmp(&b.face))
+                .then_with(|| a.i.cmp(&b.i))
+                .then_with(|| a.j.cmp(&b.j))
         });
         // Initial fill is budgeted too. A scene load must not synchronously
         // allocate the whole finest visible shell before the render thread can
         // upload anything; the same backpressure applies at every camera range.
         let tile_bytes = tile_mesh_bytes(lod.res);
         let mut fresh_bytes = 0usize;
-        for coord in missing.into_iter().take(budget.spawn_tiles_per_frame) {
+        for (coord, _) in prioritized.into_iter().take(budget.spawn_tiles_per_frame) {
             let needs_fresh_mesh = !tiles.mesh_cache.contains_key(&coord);
             if needs_fresh_mesh
                 && (fresh_bytes.saturating_add(tile_bytes) > budget.max_fresh_mesh_bytes_per_frame
@@ -1067,9 +1082,25 @@ mod tests {
         };
         let desired = HashSet::from([leaf]);
         let mut resident = HashMap::new();
-        assert!(branch_has_gap(&desired, &resident, 3));
+        let coverage = resident_coverage(&resident);
+        assert!(branch_has_gap(&desired, &resident, &coverage, 3));
         resident.insert(root, Entity::PLACEHOLDER);
-        assert!(!branch_has_gap(&desired, &resident, 3));
+        let coverage = resident_coverage(&resident);
+        assert!(!branch_has_gap(&desired, &resident, &coverage, 3));
+
+        resident.clear();
+        resident.insert(
+            TileCoord {
+                body,
+                face: 3,
+                level: 3,
+                i: 2,
+                j: 4,
+            },
+            Entity::PLACEHOLDER,
+        );
+        let coverage = resident_coverage(&resident);
+        assert!(!branch_has_gap(&desired, &resident, &coverage, 3));
     }
 
     fn face_root(body: Entity) -> TileCoord {

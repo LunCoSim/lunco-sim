@@ -174,6 +174,13 @@ impl EngineParams {
                     doc: "1 when the pre-baked horizon shadow cache texture is bound, \
                           so the shader samples it instead of marching.",
                 },
+                EngineParam {
+                    name: "horizon_march_steps",
+                    ty: ParamType::F32,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Configured live horizon-shadow ray-march iteration count.",
+                },
             ],
         }
     }

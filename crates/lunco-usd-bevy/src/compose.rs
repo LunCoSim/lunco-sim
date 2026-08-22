@@ -15,28 +15,24 @@
 //!     source of truth; downstream reads it via `StageView`.
 //!
 //! Binary assets (`.glb`/`.gltf`/…) are not USD layers: the resolver routes them
-//! to an empty stub during composition, and [`discover_binary_sites`] records
-//! their URI so `StageView::resolved_asset` can surface a synthesized
-//! `lunco:resolvedAsset` on the composed prim (openusd has no `SdfFileFormat`
-//! plugin system). Binary arcs authored in the root layer (our only case — the
-//! Perseverance glTF) keep their composed prim path; binary arcs authored
-//! *inside* a referenced sub-asset are not remapped and would be skipped (none
-//! exist today).
+//! to an empty composition stub, while the render projection reads the
+//! authored binary arc directly from the live prim stack. That keeps the USD
+//! payload/reference as the only asset identity and means live authoring and
+//! referenced wrappers use the same path (openusd has no `SdfFileFormat` plugin
+//! system).
 
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
-use openusd::ar::ResolvedPath;
-use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{PrimPredicate, Stage};
+#[cfg(test)]
+use openusd::sdf::Path as SdfPath;
+use openusd::usd::Stage;
 
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use lunco_usd_compose::{
-    canonicalize_at, child_layer_ids, is_binary_asset, LuncoUsdResolver, SharedLayerBytes,
-};
+use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
@@ -77,27 +73,11 @@ pub(crate) async fn fetch_layer_closure(
                 .await
             {
                 Ok(fetched) => fetched,
-                // A sublayer that cannot be fetched is NOT fatal to the stage.
-                //
-                // USD semantics: an unresolvable arc posts an error and
-                // composition continues with what did resolve. Aborting the
-                // whole closure instead meant one missing environment layer
-                // cost a tester the entire session — no scene and no authored
-                // camera, with the viewport correctly remaining inactive.
-                // A rover with no ground under it is a far more useful bug
-                // report than a blank window.
-                //
-                // Skipping is all that is needed to get there: the id never
-                // enters `bytes`, so `LuncoUsdResolver::resolve` answers `None`
-                // for it — the same "unresolvable" signal openusd handles by
-                // composing the rest.
                 Err(e) => {
-                    bevy::log::error!(
-                        "[usd] sublayer `{child_id}` of `{id}` could not be fetched ({e}). \
-                         The stage will compose WITHOUT it — expect missing content \
-                         rather than a missing scene."
-                    );
-                    continue;
+                    return Err(anyhow!(
+                        "USD composition dependency `{child_id}` referenced by `{id}` could not \
+                         be fetched: {e}"
+                    ));
                 }
             };
             bytes.insert(child_id.clone(), fetched);
@@ -133,67 +113,6 @@ pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, 
         .open(&recipe.root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))?;
     Ok((stage, shared))
-}
-
-/// Discover every binary-asset arc (glTF/OBJ/STL, per [`is_binary_asset`])
-/// authored across the composed stage's loaded layers, keyed by its authoring
-/// site `(layer identifier, spec path)` — the coordinates
-/// [`openusd::usd::Prim::prim_stack`] reports.
-/// [`StageView::resolved_asset`](crate::view::StageView::resolved_asset) matches
-/// these against a composed prim's stack to synthesize `lunco:resolvedAsset` on
-/// the COMPOSED prim, so a glTF `payload`/`reference` authored inside a
-/// referenced `.usda` wrapper surfaces on the composed prim — not only arcs
-/// authored directly in the root layer.
-pub(crate) type BinarySites = HashMap<(String, SdfPath), String>;
-
-pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
-    let mut sites: HashMap<(String, SdfPath), String> = HashMap::new();
-    // Force every reachable reference/payload layer to load so `layer_identifiers()`
-    // sees the whole stack. A caller that already traversed gets this for free;
-    // called standalone (canonical build) a binary arc authored in a referenced /
-    // payload wrapper would otherwise be missed (its layer isn't loaded yet).
-    let _ = stage.traverse(PrimPredicate::DEFAULT, |_| {});
-    for layer_id in stage.layer_identifiers() {
-        let Some(layer) = stage.layer(&layer_id) else {
-            continue;
-        };
-        let data = layer.data();
-        let anchor = ResolvedPath::new(&layer_id);
-        for path in data.spec_paths() {
-            let mut arcs: Vec<String> = Vec::new();
-            if let Ok(Some(v)) = data.try_field(&path, "references") {
-                if let Value::ReferenceListOp(op) = v.as_ref() {
-                    arcs.extend(
-                        op.iter()
-                            .filter(|r| !r.asset_path.is_empty())
-                            .map(|r| r.asset_path.clone()),
-                    );
-                }
-            }
-            if let Ok(Some(v)) = data.try_field(&path, "payload") {
-                match v.as_ref() {
-                    Value::Payload(p) if !p.asset_path.is_empty() => {
-                        arcs.push(p.asset_path.clone())
-                    }
-                    Value::PayloadListOp(op) => arcs.extend(
-                        op.iter()
-                            .filter(|p| !p.asset_path.is_empty())
-                            .map(|p| p.asset_path.clone()),
-                    ),
-                    _ => {}
-                }
-            }
-            for ap in arcs {
-                if is_binary_asset(&ap) {
-                    sites.insert(
-                        (layer_id.clone(), path.clone()),
-                        canonicalize_at(&ap, Some(&anchor)),
-                    );
-                }
-            }
-        }
-    }
-    sites
 }
 
 /// Compose a USD layer from disk into a **live** [`Stage`] (read through
@@ -331,11 +250,10 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         );
     }
 
-    /// A glTF `payload` authored inside a REFERENCED `.usda` wrapper must surface
-    /// `lunco:resolvedAsset` on the COMPOSED prim (`/Scene/Bldg/Visual`), not the
-    /// wrapper-local path it was written to. This is what lets a scene keep USD as
-    /// the source of truth — `scene → .usda → .glb` — and still render the glTF
-    /// (and fire the failure placeholder) exactly like a glb referenced directly.
+    /// A binary `payload` authored inside a REFERENCED `.usda` wrapper must be
+    /// found on the COMPOSED prim (`/Scene/Bldg/Visual`), with its URI anchored
+    /// at the wrapper layer. This keeps USD as the source of truth —
+    /// `scene → .usda → .glb` — while the render projection reads the live arc.
     #[test]
     fn glb_payload_in_referenced_wrapper_anchors_on_composed_prim() {
         // Wrapper: a `Structure` defaultPrim whose `Visual` child carries the glb
@@ -355,18 +273,65 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         ]);
         let stage = build_stage_from_closure(&crate::StageRecipe { root_id, bytes })
             .expect("compose scene→wrapper→glb");
-        // A `CanonicalStage` precomputes the binary-arc sites the live
-        // `resolved_asset` synth reads (a bare `StageView::new` carries none).
         let cs = CanonicalStage::from_stage(stage, "scene.usda");
 
         let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
         let resolved = cs
             .view()
-            .resolved_asset(&visual)
-            .expect("resolvedAsset must be synthesized on the composed Visual prim");
+            .binary_asset_uri(&visual)
+            .expect("binary payload must be read from the composed Visual prim");
         assert!(
             resolved.ends_with("model.glb"),
-            "resolvedAsset should point at the wrapper-co-located glb, got {resolved}"
+            "binary asset URI should point at the wrapper-co-located glb, got {resolved}"
+        );
+    }
+
+    #[test]
+    fn binary_asset_uri_rejects_multiple_authored_binary_arcs() {
+        let source = "#usda 1.0\n\
+def Xform \"Visual\" (\n\
+    prepend payload = @model.glb@\n\
+    prepend references = @alternate.glb@\n\
+)\n\
+{\n\
+}\n";
+        let stage =
+            build_stage_from_closure(&crate::StageRecipe::from_source("scene.usda", source))
+                .expect("compose binary arcs");
+        let view = StageView::new(&stage);
+        let visual = SdfPath::new("/Visual").unwrap();
+
+        assert!(
+            view.binary_asset_uri(&visual).is_none(),
+            "ambiguous binary arcs must not choose an arbitrary asset"
+        );
+    }
+
+    #[test]
+    fn binary_asset_uri_tracks_live_reference_authoring() {
+        let source = "#usda 1.0\ndef Xform \"Visual\" {}\n";
+        let recipe = crate::StageRecipe::from_source("scene.usda", source);
+        let stage = CanonicalStage::from_recipe(&recipe).expect("compose live binary-arc fixture");
+        let visual = SdfPath::new("/Visual").unwrap();
+
+        assert!(stage.view().binary_asset_uri(&visual).is_none());
+        stage
+            .projector()
+            .author_reference(&visual, "first.glb")
+            .expect("author first live binary reference");
+        let first = stage
+            .view()
+            .binary_asset_uri(&visual)
+            .expect("live binary reference must be visible immediately");
+        assert!(first.ends_with("first.glb"), "got {first}");
+
+        stage
+            .projector()
+            .author_reference(&visual, "second.glb")
+            .expect("author second live binary reference");
+        assert!(
+            stage.view().binary_asset_uri(&visual).is_none(),
+            "adding a second live binary reference must become an explicit ambiguity"
         );
     }
 }

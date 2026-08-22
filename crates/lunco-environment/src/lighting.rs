@@ -62,9 +62,10 @@ pub struct LunarSun {
     /// Camera exposure (**EV100**) matched to [`illuminance_lux`](Self::illuminance_lux).
     /// Bevy renders physically (final pixel ≈ luminance ÷ 2^ev100), so exposure
     /// and key-light lux **must move together** — that is why the matched value
-    /// is stored alongside the lux rather than hard-coded at each camera. ev100
-    /// 16 lands 0.13-albedo regolith at mid-gray under
-    /// the ~128 k lx Sun; raise it to darken the image, lower it to brighten.
+    /// is stored alongside the lux rather than hard-coded at each camera. The
+    /// balanced Graphics profile's default lands 0.13-albedo regolith at
+    /// mid-gray under the ~128 k lx Sun; raise it to darken the image, lower it
+    /// to brighten.
     pub exposure_ev100: f32,
 }
 
@@ -72,16 +73,16 @@ impl Default for LunarSun {
     fn default() -> Self {
         Self {
             illuminance_lux: 128_000.0,
-            // Same one-constant rule as `exposure_ev100` below: the USD
-            // `DistantLight` loader sits under this crate and needs the same
-            // number as the fallback for an unauthored `inputs:angle`.
-            angular_diameter_deg: lunco_render::SOLAR_ANGULAR_DIAMETER_DEG,
-            // Shared with `lunco-usd-bevy`'s USD camera spawn via the one
-            // constant both crates can reach (`lunco_render::
-            // LUNAR_SUN_EXPOSURE_EV100`). Inlining a literal here would let it
-            // drift from the camera spawn and re-open the load-time blowout
-            // window where the 131 klx sun renders against an EV-9.7 camera.
-            exposure_ev100: lunco_render::LUNAR_SUN_EXPOSURE_EV100,
+            // This is the render-free semantic default. Runtime scene setup
+            // replaces it with the active Graphics profile before spawning
+            // cameras and the corresponding sun.
+            angular_diameter_deg: lunco_core::SOLAR_ANGULAR_DIAMETER_DEG,
+            // The balanced Graphics profile owns the unauthored camera
+            // exposure. A live scene may replace it with an authored
+            // environment/camera opinion through the normal command path.
+            exposure_ev100: lunco_render::RenderingQuality::Balanced
+                .profile()
+                .camera_exposure_ev100,
         }
     }
 }

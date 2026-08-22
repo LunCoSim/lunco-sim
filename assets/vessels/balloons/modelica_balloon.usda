@@ -93,7 +93,7 @@ def Xform "ModelicaBalloon" (
 
     # ── The envelope: renders and collides ───────────────────────────────────
     def Sphere "Envelope" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double radius = 1.0

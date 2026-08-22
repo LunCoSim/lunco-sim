@@ -873,8 +873,7 @@ pub fn import_model_to_diagram_from_ast(
         // in a sibling package the indexer's resolver doesn't reach
         // (SpeedSensor extends PartialAbsoluteSensor extends
         // Icons.RoundSensor — only the last hop survives the index
-        // in some cases). The engine's
-        // `class_inherited_annotations_query` walks the chain
+        // in some cases). The workspace engine walks the chain
         // through rumoca's session, including MSL bases, so both
         // views render the same primitives without per-base
         // resolver-lambda plumbing.
@@ -1199,8 +1198,8 @@ fn register_local_class(
     //
     // Off-thread context: this runs inside the projection task on
     // `AsyncComputeTaskPool`. The engine mutex is taken briefly —
-    // the merge logic is in-memory after `inherited_annotations`
-    // returns. If the engine handle isn't installed yet (very early
+    // the merge logic is in-memory after the engine icon query returns. If the
+    // engine handle isn't installed yet (very early
     // boot before `ModelicaEnginePlugin::build`) or the class isn't
     // yet in the session, the icon resolves to None and the caller
     // skips registration; the next projection (after the sync system

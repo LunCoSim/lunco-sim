@@ -19,14 +19,15 @@ pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{
-    scene_camera_look, usd_default_perspective_projection, BloomLook, MsaaLevel, SceneCamera,
-    ToneMap, WorldLabel,
+    scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook,
+    GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
 };
 pub use quality::{
-    estimate_directional_shadow_bytes, GpuShadowBudget, RenderQualityProfile, RenderingQuality,
-    RenderingQualitySettings, ShadowMapSuppressed,
+    estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, LightGraphicsDefaults,
+    RenderQualityProfile, RenderingQuality, RenderingQualitySettings, ShadowMapSuppressed,
+    ShadowMapSuppressionReason, ShadowRangeAuthorship,
 };
-pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_DEG};
+pub use sun::LunarSunShadow;
 
 /// Persisted presentation preference for runtime communication-link beams.
 ///
@@ -35,7 +36,15 @@ pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100, SOLAR_ANGULAR_DIAMETER_D
 /// viewer. The default is deliberately off so a scenario never gains extra
 /// visual clutter merely by declaring a communication graph.
 #[derive(
-    bevy::prelude::Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug,
+    bevy::prelude::Resource,
+    serde::Serialize,
+    serde::Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    Default,
 )]
 pub struct CommunicationLineSettings {
     /// Show runtime-generated communication lines.
@@ -43,10 +52,12 @@ pub struct CommunicationLineSettings {
     pub show: bool,
 }
 
-impl Default for CommunicationLineSettings {
-    fn default() -> Self {
-        Self { show: false }
-    }
+/// Scene-authored bloom override, if the composed USD environment provides one.
+/// `None` means the Graphics bloom setting remains authoritative; `Some(0.0)`
+/// is an explicit authored request to disable bloom.
+#[derive(bevy::prelude::Resource, Clone, Copy, PartialEq, Debug, Default)]
+pub struct SceneBloomOverride {
+    pub intensity: Option<f32>,
 }
 
 impl lunco_settings::SettingsSection for CommunicationLineSettings {

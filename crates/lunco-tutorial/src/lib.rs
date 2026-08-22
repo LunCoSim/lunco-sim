@@ -44,6 +44,8 @@ use lunco_workbench::tutorial_overlay::{TutorialHud, TutorialStopRequested};
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 
 /// One tutorial's catalog entry — a lesson prim, flattened for the menu/panel.
 ///
@@ -213,9 +215,15 @@ impl CurriculumRoot {
             "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
             "twin" => {
                 let (_twin, rel) = rest.split_once('/')?;
+                if !lunco_assets::asset_path::is_safe_relative_path(rel) {
+                    warn!("[tutorial] rejecting unsafe twin lesson source path: {asset:?}");
+                    return None;
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    lunco_assets::read_asset_file_string(&self.base.as_ref()?.join(rel)).ok()
+                    let root = self.base.as_ref()?;
+                    let path = lunco_assets::existing_path_within_root(root, Path::new(rel))?;
+                    lunco_assets::read_asset_file_string(&path).ok()
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -466,9 +474,10 @@ struct PendingTutorial {
     elapsed_secs: f32,
 }
 
-/// The active lesson's ownership claim. A declared world is cleared when the
-/// lesson is explicitly stopped; a UI-only lesson leaves the current world
-/// alone.
+/// The visible lesson world's ownership claim. A declared world remains owned
+/// after mission completion while it stays mounted, so replay and replacement
+/// can clear it through the normal scene lifecycle. A UI-only lesson leaves
+/// the current world alone.
 #[derive(Resource, Default)]
 struct TutorialSession {
     world: Option<String>,
@@ -789,14 +798,34 @@ fn on_tutorial_stop_requested(_trigger: On<TutorialStopRequested>, mut commands:
 fn on_mission_complete(
     trigger: On<TelemetryEvent>,
     registry: Res<TutorialRegistry>,
+    api_entities: Option<Res<lunco_api::ApiEntityRegistry>>,
+    host: Res<TutorialHost>,
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingAdvance>,
     mut commands: Commands,
 ) {
-    if trigger.event().name != "MISSION_COMPLETE" {
+    let event = trigger.event();
+    if event.name != "MISSION_COMPLETE" {
         return;
     }
-    // Attribute the completion to whatever tutorial is running.
+    let Some(host) = host.0 else {
+        warn!("[tutorial] ignored MISSION_COMPLETE without an active tutorial host");
+        return;
+    };
+    let Some(api_entities) = api_entities else {
+        warn!("[tutorial] ignored MISSION_COMPLETE without entity identity registry");
+        return;
+    };
+    let Some(host_source) = api_entities.api_id_for(host).map(|id| id.get()) else {
+        warn!("[tutorial] ignored MISSION_COMPLETE from an unidentified tutorial host");
+        return;
+    };
+    if event.source != host_source {
+        return;
+    }
+    // Attribute the completion only to the scenario host that emitted it. The
+    // telemetry bus is intentionally broadcast, so a matching name from any
+    // other scenario is not a tutorial verdict.
     let Some(id) = progress.current.take() else {
         return;
     };
@@ -805,7 +834,6 @@ fn on_mission_complete(
     // lesson or leak its interpreter state into the next one.
     commands.queue(|world: &mut World| {
         stop_tutorial_host(world);
-        world.resource_mut::<TutorialSession>().world = None;
     });
     if !progress.is_completed(&id) {
         info!("[tutorial] completed '{id}'");
@@ -1895,6 +1923,166 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completed_world_lesson_replay_clears_before_loading_same_stage() {
+        #[derive(Resource, Default)]
+        struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.insert_resource(lunco_api::ApiEntityRegistry::default());
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/Replay".into(),
+            title: "Replay".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: Some("lunco://tutorials/sandbox/first_drive.usda".into()),
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+        app.insert_resource(TransitionsSeen::default());
+        app.add_observer(
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().request.clone());
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Replay".into(),
+        });
+        app.update();
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+
+        let host = app
+            .world()
+            .resource::<TutorialHost>()
+            .0
+            .expect("mounted lesson has a tutorial host");
+        app.world_mut()
+            .resource_mut::<lunco_api::ApiEntityRegistry>()
+            .assign(host, lunco_core::GlobalEntityId::from_raw(700));
+        app.world_mut().trigger(TelemetryEvent {
+            name: "MISSION_COMPLETE".into(),
+            source: 700,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(0.0),
+            timestamp: 0.0,
+        });
+        app.update();
+
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<TutorialSession>().world.as_deref(),
+            Some("lunco://tutorials/sandbox/first_drive.usda")
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Replay".into(),
+        });
+        app.update();
+        assert!(matches!(
+            app.world().resource::<TransitionsSeen>().0.as_slice(),
+            [
+                lunco_core::SceneTransitionRequest::Load { .. },
+                lunco_core::SceneTransitionRequest::Clear,
+            ]
+        ));
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::Clear,
+            });
+        app.update();
+        assert!(matches!(
+            app.world().resource::<TransitionsSeen>().0.as_slice(),
+            [
+                lunco_core::SceneTransitionRequest::Load { .. },
+                lunco_core::SceneTransitionRequest::Clear,
+                lunco_core::SceneTransitionRequest::Load { .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn mission_complete_requires_the_active_tutorial_host_source() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.insert_resource(lunco_api::ApiEntityRegistry::default());
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/Source".into(),
+            title: "Source".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Source".into(),
+        });
+        app.update();
+
+        let host = app
+            .world()
+            .resource::<TutorialHost>()
+            .0
+            .expect("started lesson has a tutorial host");
+        app.world_mut()
+            .resource_mut::<lunco_api::ApiEntityRegistry>()
+            .assign(host, lunco_core::GlobalEntityId::from_raw(701));
+
+        app.world_mut().trigger(TelemetryEvent {
+            name: "MISSION_COMPLETE".into(),
+            source: 702,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(0.0),
+            timestamp: 0.0,
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/Source")
+        );
+
+        app.world_mut().trigger(TelemetryEvent {
+            name: "MISSION_COMPLETE".into(),
+            source: 701,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(0.0),
+            timestamp: 0.0,
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<TutorialProgress>().completed,
+            vec!["/Test/Source"]
+        );
+    }
+
     /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the
     /// status bar surfaces every `Severity::Error` telemetry event, so this is
     /// exactly the contract that puts the failure in front of the user instead
@@ -1930,5 +2118,17 @@ mod tests {
             seen.iter().any(|s| s.contains("/No/Such/Lesson")),
             "TUTORIAL_FAILED naming the unknown id was not published; saw {seen:?}"
         );
+    }
+
+    #[test]
+    fn twin_lesson_source_cannot_escape_its_root() {
+        let root = CurriculumRoot::twin(
+            lunco_workspace::TwinId::new(1),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf(),
+        );
+        // Without the shared asset-boundary guard this would read the
+        // workspace manifest through the tutorial root.
+        assert!(root.read("twin://untrusted/../../Cargo.toml").is_none());
+        assert!(root.read(r"twin://untrusted\..\Cargo.toml").is_none());
     }
 }

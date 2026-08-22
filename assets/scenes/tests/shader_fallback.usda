@@ -53,7 +53,9 @@ def Xform "ShaderFallbackTest" (
         }
     }
 
-    def Cube "BadShaderCube"
+    def Cube "BadShaderCube" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double size = 2.0
         color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]

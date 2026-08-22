@@ -41,8 +41,6 @@ use rumoca_compile::Session;
 use std::collections::{HashMap, HashSet};
 
 /// Inherited member info with variability + causality.
-/// Note: `class_component_members_typed_query` was removed from rumoca main.
-/// This stub struct preserves the public API until the upstream feature returns.
 #[derive(Debug, Clone)]
 pub struct InheritedMember {
     pub name: String,
@@ -102,7 +100,7 @@ pub struct ModelicaEngine {
     /// `DocumentId` → URI used inside the session. Stable for the
     /// document's lifetime; freed on `Self::close_document`.
     uri_for_doc: HashMap<DocumentId, String>,
-    /// Qualified class name → file URI. Populated whenever an AST is
+    /// Qualified class name → candidate file URIs. Populated whenever an AST is
     /// installed into the session (via `upsert_document_with_ast`,
     /// `install_parsed_ast`, `install_lenient`, or `load_library_files`).
     ///
@@ -111,7 +109,10 @@ pub struct ModelicaEngine {
     /// be called directly with its result. This map bridges the two:
     /// `class_def` resolves the file URI here before calling
     /// `parsed_file_query`.
-    class_to_uri: HashMap<String, String>,
+    /// Multiple candidates are retained while documents are being edited. A
+    /// single first-writer mapping can otherwise leave a closed document as
+    /// the only route after another open document declares the same class.
+    class_to_uris: HashMap<String, Vec<String>>,
     /// Qualified class names we've already failed to bridge to a file
     /// URI. The empty-diagram overlay calls `class_def` (via `icon_for`)
     /// EVERY FRAME for the active class; without this negative cache an
@@ -161,7 +162,7 @@ impl ModelicaEngine {
         Self {
             session: Session::default(),
             uri_for_doc: HashMap::new(),
-            class_to_uri: HashMap::new(),
+            class_to_uris: HashMap::new(),
             class_uri_misses: HashSet::new(),
             icon_cache: crate::icon_memo::SourceMemo::default(),
             pending: HashSet::new(),
@@ -179,6 +180,7 @@ impl ModelicaEngine {
         file_uri: &str,
         ast: &rumoca_compile::parsing::ast::StoredDefinition,
     ) {
+        self.remove_class_uri_mappings(file_uri);
         // A newly-installed AST can make a previously-unresolvable class
         // resolvable — drop the negative cache so `class_def` retries.
         self.class_uri_misses.clear();
@@ -197,10 +199,22 @@ impl ModelicaEngine {
             } else {
                 format!("{}.{}", prefix, class_key)
             };
-            self.class_to_uri
-                .entry(qualified)
-                .or_insert_with(|| file_uri.to_string());
+            let uris = self.class_to_uris.entry(qualified).or_default();
+            if !uris.iter().any(|uri| uri == file_uri) {
+                uris.push(file_uri.to_string());
+            }
         }
+    }
+
+    /// Remove every class mapping owned by one parsed document.
+    ///
+    /// Rumoca owns the actual document lifetime, but this engine-side index is
+    /// an acceleration structure and must follow the same removal boundary.
+    fn remove_class_uri_mappings(&mut self, file_uri: &str) {
+        self.class_to_uris.retain(|_, uris| {
+            uris.retain(|uri| uri != file_uri);
+            !uris.is_empty()
+        });
     }
 
     /// Stash the located parse diagnostics for `doc_id` produced by an
@@ -285,9 +299,15 @@ impl ModelicaEngine {
         self.uri_for_doc
             .entry(doc_id)
             .or_insert_with(|| uri.clone());
+        self.remove_class_uri_mappings(&uri);
         self.class_uri_misses.clear();
         crate::icon_memo::invalidate_source_memos();
-        let _ = self.session.add_document(&uri, source);
+        if self.session.add_document(&uri, source).is_ok() {
+            if let Some(ast) = self.session.parsed_file_query(&uri) {
+                let ast = ast.clone();
+                self.index_ast_classes(&uri, &ast);
+            }
+        }
     }
 
     /// URI we use for `doc_id` inside the session. Untitled / on-disk
@@ -337,7 +357,10 @@ impl ModelicaEngine {
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.parse_diags.remove(&doc_id);
         if let Some(uri) = self.uri_for_doc.remove(&doc_id) {
+            self.remove_class_uri_mappings(&uri);
             self.session.remove_document(&uri);
+            self.class_uri_misses.clear();
+            crate::icon_memo::invalidate_source_memos();
         }
     }
 
@@ -404,23 +427,8 @@ impl ModelicaEngine {
             if self.session.add_document(uri, text).is_ok() {
                 // Index any classes for the fast qualified→URI lookup.
                 if let Some(ast) = self.session.parsed_file_query(uri) {
-                    let uri_clone = uri.clone();
-                    let prefix = ast
-                        .within
-                        .as_ref()
-                        .map(|w| w.to_string())
-                        .unwrap_or_default();
-                    let keys: Vec<String> = ast.classes.keys().cloned().collect();
-                    for k in keys {
-                        let q = if prefix.is_empty() {
-                            k
-                        } else {
-                            format!("{}.{}", prefix, k)
-                        };
-                        self.class_to_uri
-                            .entry(q)
-                            .or_insert_with(|| uri_clone.clone());
-                    }
+                    let ast = ast.clone();
+                    self.index_ast_classes(uri, &ast);
                 }
                 count += 1;
             }
@@ -449,8 +457,8 @@ impl ModelicaEngine {
     /// `Self::inherited_components` but consumers don't have to
     /// re-walk the AST to bucket parameters / inputs / outputs.
     ///
-    /// rumoca main dropped the typed `class_component_members_typed_query`,
-    /// so we take the authoritative (scope-resolved) membership list from
+    /// The typed query is not part of the maintained rumoca API, so we take
+    /// the authoritative (scope-resolved) membership list from
     /// `class_component_members_query` and enrich each member with the
     /// variability / causality / binding we read directly off the
     /// `ClassDef` of the class (and its `extends` bases). Extraction
@@ -534,17 +542,6 @@ impl ModelicaEngine {
             .collect()
     }
 
-    /// Inheritance chain of annotation lists for a class.
-    ///
-    /// Note: `class_inherited_annotations_query` was removed from rumoca main.
-    /// Returns empty until the upstream feature returns.
-    pub fn inherited_annotations(
-        &mut self,
-        _qualified: &str,
-    ) -> Vec<Vec<rumoca_compile::parsing::ast::Expression>> {
-        Vec::new()
-    }
-
     /// Read-only access to the underlying session for advanced queries
     /// not yet wrapped here. Use sparingly — prefer growing this
     /// crate's API over leaking the session through panels.
@@ -568,7 +565,7 @@ impl ModelicaEngine {
     /// `"Modelica.Thermal.HeatTransfer.Sources.FixedTemperature"`),
     /// **not** a file URI. `parsed_file_query` is keyed by file path
     /// URI (e.g. `/…/FixedTemperature.mo`). We bridge these via the
-    /// `class_to_uri` map that is populated whenever an AST is
+    /// `class_to_uris` map that is populated whenever an AST is
     /// installed, and fall back to a linear search over the MSL bundle
     /// for classes that arrived via `replace_parsed_source_set` (which
     /// bypasses `add_document` and therefore skips `index_ast_classes`).
@@ -597,37 +594,51 @@ impl ModelicaEngine {
             return None;
         }
 
-        // Fast path: class_to_uri was populated when this AST was
+        // Fast path: class_to_uris was populated when this AST was
         // installed via upsert_document_with_ast / install_parsed_ast /
         // load_library_files.
-        let mapped_uri: Option<String> = self.class_to_uri.get(qualified).cloned();
+        let mapped_uris: Vec<String> = self
+            .class_to_uris
+            .get(qualified)
+            .cloned()
+            .unwrap_or_default();
 
         // Prefix path: `index_ast_classes` records only a file's TOP-LEVEL
         // class key (e.g. `SatelliteDatacenter` for a user file that also
         // holds the nested `SatelliteDatacenter.PowerSubsystem`). A nested
         // class misses the exact lookup, but its containing file is already
         // known under a dotted PREFIX. Match the LONGEST prefix already in
-        // `class_to_uri` (segment-boundary) so the most specific file wins.
+        // `class_to_uris` (segment-boundary) so the most specific file wins.
         // This resolves user-model nested classes in O(map) WITHOUT falling
         // through to the MSL-bundle scan — the path that caused the storm.
-        let mapped_uri = mapped_uri.or_else(|| {
-            let mut best: Option<(usize, &String)> = None;
-            for (q, uri) in self.class_to_uri.iter() {
+        let mapped_uris = if mapped_uris.is_empty() {
+            let mut best_len = 0usize;
+            let mut best = Vec::new();
+            for (q, uris) in self.class_to_uris.iter() {
                 let is_container =
                     qualified == q.as_str() || qualified.starts_with(&format!("{}.", q));
-                if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
-                    best = Some((q.len(), uri));
+                if !is_container {
+                    continue;
+                }
+                if q.len() > best_len {
+                    best_len = q.len();
+                    best.clear();
+                }
+                if q.len() == best_len {
+                    best.extend(uris.iter().cloned());
                 }
             }
-            best.map(|(_, uri)| uri.clone())
-        });
+            best
+        } else {
+            mapped_uris
+        };
 
         // A URI prefix is only a candidate. MSL packages commonly split
         // children into sibling files (`Blocks/package.mo` contains the
         // package and examples, while `Continuous.mo` contains Continuous),
         // so a package URI must not shadow the indexed file that actually
         // contains the requested nested class.
-        if let Some(uri) = mapped_uri.as_deref() {
+        for uri in &mapped_uris {
             if let Some(parsed) = self.session.parsed_file_query(uri) {
                 if let Some(found) =
                     crate::diagram::find_class_by_qualified_name(parsed, qualified).cloned()
@@ -649,9 +660,9 @@ impl ModelicaEngine {
         //
         // TODO(CQ-211): this is an O(files × classes) linear scan of the
         // process-wide MSL `Vec` bundle (~2700 classes). It's amortized —
-        // `class_to_uri` (above) + the `class_uri_misses` negative cache mean
+        // `class_to_uris` (above) + the `class_uri_misses` negative cache mean
         // each class scans the bundle at most once — but a `HashMap<qualified,
-        // uri>` (+ a longest-prefix index) built ONCE at MSL install would
+        // uri-list>` (+ a longest-prefix index) built ONCE at MSL install would
         // make the cold lookup O(1)/O(prefix) and let the startup count walk
         // (`msl_remote.rs`) drop its synchronous full tree traversal. Deferred:
         // multi-file (engine/class_cache/msl_remote) and MSL resolution is
@@ -701,7 +712,7 @@ impl ModelicaEngine {
             self.class_uri_misses.insert(qualified.to_string());
             bevy::log::debug!(
                 "[engine] class_def: no file URI found for class {} \
-                 (class_to_uri miss + MSL bundle miss)",
+                 (class_to_uris miss + MSL bundle miss)",
                 qualified
             );
             return None;
@@ -733,8 +744,10 @@ impl ModelicaEngine {
         };
 
         // Cache only a URI that was proven to contain the requested class.
-        self.class_to_uri
-            .insert(qualified.to_string(), file_uri.clone());
+        let uris = self.class_to_uris.entry(qualified.to_string()).or_default();
+        if !uris.iter().any(|uri| uri == &file_uri) {
+            uris.push(file_uri.clone());
+        }
         Some(found)
     }
 
@@ -809,6 +822,29 @@ mod tests {
         assert!(engine.uri_for_doc.contains_key(&DocumentId::new(1)));
         engine.close_document(DocumentId::new(1));
         assert!(!engine.uri_for_doc.contains_key(&DocumentId::new(1)));
+    }
+
+    #[test]
+    fn class_def_follows_class_after_document_close() {
+        let mut engine = ModelicaEngine::new();
+        upsert_test(
+            &mut engine,
+            DocumentId::new(1),
+            "model M\n  Real old;\nend M;\n",
+        );
+        assert!(engine.class_def("M").is_some());
+
+        engine.close_document(DocumentId::new(1));
+        upsert_test(
+            &mut engine,
+            DocumentId::new(2),
+            "model M\n  Real replacement;\nend M;\n",
+        );
+
+        let class = engine
+            .class_def("M")
+            .expect("class_def must not retain the closed document URI");
+        assert!(class.components.contains_key("replacement"));
     }
 
     #[test]
@@ -960,7 +996,7 @@ mod tests {
     /// This is the canonical regression test for the URI-vs-qualified-name
     /// mismatch bug: `class_lookup_query` returns a qualified name, not a
     /// file URI, so `parsed_file_query` cannot be called with its return
-    /// value directly. The `class_to_uri` map + MSL bundle fallback in
+    /// value directly. The `class_to_uris` map + MSL bundle fallback in
     /// `class_def` bridges the two.
     #[test]
     fn test_msl_fixed_temperature_class_def_and_icon() {

@@ -212,6 +212,10 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        // Celestial shell geometry uses the same authoritative graphics
+        // settings as USD projection. Initialise the documented default here
+        // so setup does not substitute a private Balanced profile.
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
         app.init_resource::<globe_lod::GlobeLodBudget>();
         // Celestial content always lives in the canonical persistent BigSpace
         // shell. Installing the shell here when a host has not already done so
@@ -610,7 +614,6 @@ mod scene_teardown_tests {
         );
     }
 }
-
 /// Standalone gravity plugin — registers gravity configuration types.
 ///
 /// Provides:
@@ -651,5 +654,42 @@ impl Plugin for GravityPlugin {
         // NOTE: `gravity_system` (force application to RigidBodies) lives in
         // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
         // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
+    }
+}
+
+#[cfg(test)]
+mod scene_teardown_tests {
+    use super::*;
+
+    #[test]
+    fn replacement_declarations_cannot_suppress_celestial_teardown() {
+        let mut app = App::new();
+        app.init_resource::<MissionRegistry>();
+        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
+
+        let world_root = app.world_mut().spawn(lunco_core::WorldRoot).id();
+        let outgoing_frame = app.world_mut().spawn_empty().id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(outgoing_frame));
+        let outgoing = app
+            .world_mut()
+            .spawn(big_space_setup::CelestialDerived)
+            .id();
+        // This is the restart shape that defeated the former Update/run_if:
+        // replacement declarations already exist before the next frame.
+        let replacement_decl = app
+            .world_mut()
+            .spawn(CelestialBodyDecl {
+                naif: ephemeris_id::MOON,
+            })
+            .id();
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert!(app.world().get_entity(outgoing).is_err());
+        assert!(app.world().get_entity(replacement_decl).is_ok());
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            world_root
+        );
     }
 }

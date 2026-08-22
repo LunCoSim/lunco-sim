@@ -76,9 +76,6 @@ pub struct CanonicalStage {
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
     #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
     sink_id: StageSinkId,
-    /// Precomputed binary (glTF) arc sites for `lunco:resolvedAsset` synthesis
-    /// off the live stage, so a read never has to re-walk the arcs.
-    binary_sites: crate::compose::BinarySites,
     /// The live resolver's shared byte-map handle, when this stage was built
     /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
     /// lets [`add_layer_bytes`](Self::add_layer_bytes) inject a spawned asset's
@@ -107,16 +104,12 @@ impl CanonicalStage {
                 });
             }
         });
-        // Precompute the binary-arc sites once (glTF/DEM resolution) so the live
-        // `resolved_asset` read doesn't rescan every layer per prim.
-        let binary_sites = crate::compose::discover_binary_sites(&stage);
         Self {
             stage,
             scene_layer: scene_layer.into(),
             runtime_layer: String::new(),
             inbox,
             sink_id,
-            binary_sites,
             resolver_bytes: None,
             generation: 0,
         }
@@ -133,10 +126,9 @@ impl CanonicalStage {
         Ok(cs)
     }
 
-    /// A [`StageView`] over the composed stage for typed reads — carrying the
-    /// precomputed binary-arc sites so `resolved_asset` synthesizes glTF URIs.
+    /// A [`StageView`] over the live composed stage for typed reads.
     pub fn view(&self) -> StageView<'_> {
-        StageView::with_binary_sites(&self.stage, &self.binary_sites)
+        StageView::new(&self.stage)
     }
 
     /// The underlying stage (escape hatch for authoring / reads not yet wrapped).
@@ -170,6 +162,10 @@ impl CanonicalStage {
     /// stays the durable/serialized truth).
     pub(crate) fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_point_d(bevy::math::DVec3::from_array(value))
+            .to_array();
         self.stage
             .create_attribute(format!("{}.xformOp:translate", path.as_str()), "double3")
             .map_err(|e| anyhow!("author translate at {path}: {e}"))?
@@ -186,6 +182,9 @@ impl CanonicalStage {
     /// already listed (extends a stack, never clobbers it).
     pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_euler_xyz_deg(value);
         self.stage
             .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
             .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
@@ -497,6 +496,9 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author attribute {prim}.{name} ({type_name}): {e}"))?
@@ -523,6 +525,9 @@ impl CanonicalStage {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
         self.stage
             .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
             .map_err(|e| anyhow!("author time sample {prim}.{name} ({type_name}): {e}"))?
@@ -951,7 +956,7 @@ mod authoring_tests {
     use super::*;
     use crate::UsdRead;
 
-    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
 
     fn touches(changes: &[RawStageChange], path: &str) -> bool {
         changes.iter().any(|c| {
@@ -1007,6 +1012,38 @@ mod authoring_tests {
         assert!(
             !cs.view().has_prim(&r2),
             "the removed prim is gone from the stage"
+        );
+    }
+
+    #[test]
+    fn live_authoring_converts_canonical_values_to_stage_metrics() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+        let recipe = StageRecipe::from_source("noncanonical.usda", scene);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build non-canonical stage");
+        let rover = SdfPath::new("/World/Rover").unwrap();
+
+        cs.author_translate(&rover, [0.0, 1.0, 0.0])
+            .expect("author canonical metre position");
+        let stage_translation =
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate").expect("stage translate");
+        assert!(
+            stage_translation
+                .iter()
+                .zip([0.0, 0.0, 100.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical +Y metre must be authored as +Z stage centimetres: {stage_translation:?}"
+        );
+
+        cs.author_rotate(&rover, [0.0, 90.0, 0.0])
+            .expect("author canonical local rotation");
+        let stage_rotation =
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:rotateXYZ").expect("stage rotateXYZ");
+        assert!(
+            stage_rotation
+                .iter()
+                .zip([0.0, 0.0, 90.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical rotation must be expressed in the Z-up stage basis: {stage_rotation:?}"
         );
     }
 

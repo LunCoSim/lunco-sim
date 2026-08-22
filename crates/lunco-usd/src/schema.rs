@@ -772,6 +772,15 @@ mod tests {
         );
     }
 
+    /// The generated artifact is what the runtime embeds. A syntactically invalid
+    /// artifact must fail the build/test gate instead of leaving the registry empty
+    /// and surfacing later as a subsystem panic.
+    #[test]
+    fn generated_schema_is_parseable() {
+        lunco_usd_bevy::author::usda_to_data(GENERATED_SCHEMA)
+            .expect("generated luncoSchema must be valid USDA");
+    }
+
     /// Schema-declared UI hints must survive regeneration: the hints are
     /// authored in `schema.usda` but the runtime loads GENERATED_SCHEMA, so a
     /// forgotten `python3 scripts/gen_schema.py` would silently strip every
@@ -1043,6 +1052,7 @@ class "SquatterAPI" (
             "float"
         );
         assert_eq!(reg.property("lunco:layer:seed").unwrap().type_name, "int64");
+        assert_eq!(reg.property("lunco:edit:kind").unwrap().type_name, "token");
         assert_eq!(
             reg.property("lunco:layer:colliderRing").unwrap().type_name,
             "bool"
@@ -1323,6 +1333,22 @@ class "RigUnitsAPI" (
                 .unwrap()
                 .type_name,
             "int",
+        );
+        assert_eq!(
+            reg.property("physxVehicleTire:lateralStiffnessGraph")
+                .expect("canonical PhysX lateral stiffness graph")
+                .type_name,
+            "float2",
+        );
+        assert_eq!(
+            reg.property("physxVehicleTire:restLoad")
+                .expect("canonical PhysX tire rest load")
+                .type_name,
+            "float",
+        );
+        assert!(
+            reg.property("physxVehicleTire:lateralStiffness").is_none(),
+            "lateralStiffness is not a PhysX property; use lateralStiffnessGraph"
         );
         // The frame attrs are the types assets get wrong most often (double3 vs
         // point3f, quatd vs quatf) — pin them.

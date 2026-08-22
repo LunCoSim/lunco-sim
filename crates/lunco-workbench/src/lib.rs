@@ -98,9 +98,7 @@ pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, LiveHelpSection, LiveHelpSections,
     PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use render_robustness::{
-    preferred_wgpu_settings, RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning,
-};
+pub use render_robustness::{RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning};
 
 /// Register the render-recovery reset at the host application's scene-teardown
 /// boundary. The workbench owns GPU state but deliberately does not depend on
@@ -703,20 +701,14 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
 /// panel-owned content cards. Keeping the decision here prevents one tab from
 /// accidentally becoming transparent while another still paints an opaque
 /// rectangle over the scene.
-#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(
+    Resource, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Debug, Default,
+)]
 pub struct WorkbenchAppearanceSettings {
     /// Let the scene show through every dock/tab content body and its standard
     /// panel surface. The default keeps the themed mantle surface everywhere.
     #[serde(default)]
     pub transparent_tab_content: bool,
-}
-
-impl Default for WorkbenchAppearanceSettings {
-    fn default() -> Self {
-        Self {
-            transparent_tab_content: false,
-        }
-    }
 }
 
 impl SettingsSection for WorkbenchAppearanceSettings {
@@ -766,9 +758,9 @@ impl Plugin for WorkbenchPlugin {
         // Survive transient GPU validation errors (e.g. the Windows
         // window-resize depth/color size mismatch) instead of panicking the
         // render thread. No-op when there's no RenderApp (headless/API-only).
-        // The companion backend preference lives in
-        // `preferred_wgpu_settings()`, which each binary feeds into its
-        // `RenderPlugin` at `DefaultPlugins` build time.
+        // The render-health systems install only after the host has selected
+        // its explicit adapter/backend settings at `DefaultPlugins` build
+        // time.
         render_robustness::install_wgpu_error_handler(app);
 
         // Screenshot backend. Its ABSENCE (a headless server, which links no workbench) is
@@ -5131,24 +5123,608 @@ fn register_graphics_settings_menu(world: &mut World) {
         ui.label(egui::RichText::new("Rendering").weak().small());
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
             let mut settings = *current;
+            let current_preset = settings.preset();
+            let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::Balanced);
+            let mut preset_changed = false;
             egui::ComboBox::from_id_salt("graphics.rendering_quality")
-                .selected_text(settings.quality.label())
+                .selected_text(current_preset.map_or("Custom", |preset| preset.label()))
                 .show_ui(ui, |ui| {
                     for quality in lunco_render::RenderingQuality::all() {
-                        ui.selectable_value(&mut settings.quality, quality, quality.label());
+                        preset_changed |= ui
+                            .selectable_value(&mut selected_preset, quality, quality.label())
+                            .changed();
                     }
                 });
-            if settings != *current {
-                ctx.set_resource(settings);
+            if preset_changed {
+                settings.apply_preset(selected_preset);
             }
             ui.label(
                 egui::RichText::new(
-                    "Auto caps shadow-map resolution/cascades to the detected GPU budget. \
-                     Changing this setting safely re-arms a previous shadow fallback.",
+                    "Presets only suggest values. The fields below are authoritative and are never silently downgraded to another preset.",
                 )
                 .weak()
                 .small(),
             );
+            ui.collapsing("Shadow allocation", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.directional_shadow_map_size)
+                        .speed(128.0)
+                        .prefix("Directional map: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.point_shadow_map_size)
+                        .speed(128.0)
+                        .prefix("Point map: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.directional_cascades)
+                        .speed(1.0)
+                        .range(1..=bevy::pbr::MAX_CASCADES_PER_LIGHT)
+                        .prefix("Directional cascades: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_directional_shadow_casters)
+                        .speed(1.0)
+                        .range(0..=bevy::pbr::MAX_DIRECTIONAL_LIGHTS)
+                        .prefix("Directional shadow casters: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_point_shadow_casters)
+                        .speed(1.0)
+                        .prefix("Point shadow casters: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.max_spot_shadow_casters)
+                        .speed(1.0)
+                        .prefix("Spot shadow casters: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_depth_bias)
+                        .speed(0.005)
+                        .prefix("Shadow depth bias: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_normal_bias)
+                        .speed(0.1)
+                        .prefix("Shadow normal bias: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_budget_bytes)
+                        .speed(1024.0 * 1024.0)
+                        .range(1..=u64::MAX)
+                        .prefix("Logical shadow byte ceiling: ")
+                        .suffix(" bytes"),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "This explicit Depth32 shadow-storage ceiling must cover the configured caster limits. It never changes map sizes, cascades, or caster limits automatically; adapter limits are reported separately.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_minimum_distance)
+                        .speed(0.1)
+                        .prefix("Shadow minimum distance: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_first_cascade_far_bound)
+                        .speed(1.0)
+                        .prefix("First cascade far bound: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_maximum_distance)
+                        .speed(10.0)
+                        .prefix("Maximum shadow distance: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.shadow_cascade_overlap)
+                        .speed(0.01)
+                        .prefix("Cascade overlap: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_light_default_range)
+                        .speed(1.0)
+                        .prefix("Local-light default range: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_shadow_map_near_z)
+                        .speed(0.01)
+                        .prefix("Local shadow near Z: ")
+                        .suffix(" m"),
+                );
+            });
+            ui.collapsing("Horizon terrain shadows", |ui| {
+                ui.checkbox(
+                    &mut settings.horizon_shadow_cache_enabled,
+                    "Use pre-baked horizon shadow cache",
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_shadow_cache_sun_threshold_deg)
+                        .speed(0.01)
+                        .range(0.001..=179.0)
+                        .prefix("Cache refresh angle: ")
+                        .suffix("°"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_march_steps)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Live march steps: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.horizon_cache_samples_per_axis)
+                        .speed(1.0)
+                        .range(1..=8)
+                        .prefix("Cache samples per axis: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These are explicit terrain-shadow quality controls. Cache use and bake sampling are never changed automatically by the platform or memory budget.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            ui.collapsing("Light defaults", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These values apply only when a USD light omits its intensity; authored USD intensity remains authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.distant_light_default_illuminance)
+                        .speed(1_000.0)
+                        .prefix("Distant-light default: ")
+                        .suffix(" lx"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.local_light_default_intensity)
+                        .speed(100.0)
+                        .prefix("Sphere-light default: ")
+                        .suffix(" lm"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.rect_light_default_intensity)
+                        .speed(100.0)
+                        .prefix("Rect-light default: ")
+                        .suffix(" lm"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.dome_default_intensity)
+                        .speed(100.0)
+                        .prefix("Textured-dome default: ")
+                        .suffix(" cd/m²"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.dome_cubemap_face_size)
+                        .speed(128.0)
+                        .range(1..=4096)
+                        .prefix("Dome cubemap face size: ")
+                        .suffix(" px (power of two)"),
+                );
+            });
+            ui.collapsing("Parametric surfaces", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "NURBS tessellation controls mesh detail only; USD control nets, orders, and authored trim data remain authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_samples_per_control_span)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("Samples per control span: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_minimum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Surface minimum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_surface_maximum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Surface maximum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_curve_samples)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim-curve samples: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_minimum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim minimum subdivisions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.nurbs_trim_maximum_subdivisions)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Trim maximum subdivisions: "),
+                );
+            });
+            ui.collapsing("Primitive meshes", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control viewer tessellation for USD spheres, cylinders, cones, and capsules; USD dimensions remain authoritative.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_sphere_longitudes)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Sphere longitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_sphere_latitudes)
+                        .speed(1.0)
+                        .range(2..=4096)
+                        .prefix("Sphere latitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_radial_segments)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Cylinder/cone radial segments: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_capsule_longitudes)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Capsule longitudes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.primitive_capsule_latitudes)
+                        .speed(1.0)
+                        .range(2..=4096)
+                        .prefix("Capsule latitudes: "),
+                );
+            });
+            ui.collapsing("Curve tubes", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control only the viewer tessellation of USD curve tubes; curve points, widths, and topology remain authored USD data.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.curve_samples_per_segment)
+                        .speed(1.0)
+                        .range(1..=4096)
+                        .prefix("Samples per curve segment: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.curve_radial_segments)
+                        .speed(1.0)
+                        .range(3..=4096)
+                        .prefix("Tube radial segments: "),
+                );
+            });
+            ui.collapsing("Camera look", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These settings apply to scene cameras when USD does not author an environment bloom override.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                egui::ComboBox::from_id_salt("graphics.camera_tone_map")
+                    .selected_text(match settings.camera_tone_map {
+                        lunco_render::ToneMap::None => "None",
+                        lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
+                        lunco_render::ToneMap::AgX => "AgX",
+                        lunco_render::ToneMap::AcesFitted => "ACES fitted",
+                        lunco_render::ToneMap::Reinhard => "Reinhard",
+                    })
+                    .show_ui(ui, |ui| {
+                        for tone_map in [
+                            lunco_render::ToneMap::None,
+                            lunco_render::ToneMap::TonyMcMapface,
+                            lunco_render::ToneMap::AgX,
+                            lunco_render::ToneMap::AcesFitted,
+                            lunco_render::ToneMap::Reinhard,
+                        ] {
+                            let label = match tone_map {
+                                lunco_render::ToneMap::None => "None",
+                                lunco_render::ToneMap::TonyMcMapface => "TonyMcMapface",
+                                lunco_render::ToneMap::AgX => "AgX",
+                                lunco_render::ToneMap::AcesFitted => "ACES fitted",
+                                lunco_render::ToneMap::Reinhard => "Reinhard",
+                            };
+                            ui.selectable_value(&mut settings.camera_tone_map, tone_map, label);
+                        }
+                    });
+                egui::ComboBox::from_id_salt("graphics.camera_msaa")
+                    .selected_text(match settings.camera_msaa {
+                        lunco_render::MsaaLevel::Off => "Off",
+                        lunco_render::MsaaLevel::X2 => "2x",
+                        lunco_render::MsaaLevel::X4 => "4x",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::Off,
+                            "Off",
+                        );
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::X2,
+                            "2x",
+                        );
+                        ui.selectable_value(
+                            &mut settings.camera_msaa,
+                            lunco_render::MsaaLevel::X4,
+                            "4x",
+                        );
+                    });
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_exposure_ev100)
+                        .speed(0.1)
+                        .prefix("Unauthored camera exposure (EV100): "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_bloom_intensity)
+                        .speed(0.01)
+                        .prefix("Bloom intensity: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.camera_bloom_low_frequency_boost)
+                        .speed(0.01)
+                        .prefix("Bloom low-frequency boost: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "A positive bloom intensity enables HDR. An authored USD environment value wins over this default; no automatic quality downgrade is applied.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            ui.collapsing("Presentation recovery", |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "These are safety timings for render failures, not quality fallbacks. The renderer never changes quality automatically.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.render_failure_quiet_period_secs)
+                        .speed(0.1)
+                        .range(0.01..=settings.render_failure_give_up_after_secs)
+                        .prefix("Failure quiet period: ")
+                        .suffix(" s"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.render_failure_give_up_after_secs)
+                        .speed(0.5)
+                        .range(settings.render_failure_quiet_period_secs..=3600.0)
+                        .prefix("Stop presentation after: ")
+                        .suffix(" s"),
+                );
+            });
+            ui.collapsing("Terrain mesh cache", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_mesh_cache_bytes)
+                        .speed(16.0 * 1024.0 * 1024.0)
+                        .range(1..=u64::MAX)
+                        .prefix("Mesh-cache byte ceiling: ")
+                        .suffix(" bytes"),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The cache evicts least-recently-used meshes at this explicit ceiling; terrain detail is not silently downgraded.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            ui.collapsing("Terrain derived maps", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_map_resolution)
+                        .speed(128.0)
+                        .range(1..=4096)
+                        .prefix("Map resolution: ")
+                        .suffix(" px/side (power of two)"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_directions)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("AO directions: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_steps)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("AO steps per direction: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_ao_radius_fraction)
+                        .speed(0.01)
+                        .range(0.01..=1.0)
+                        .prefix("AO radius fraction: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_roughness_base)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .prefix("Flat-ground roughness: "),
+                );
+                ui.add(
+                    egui::DragValue::new(
+                        &mut settings.terrain_derived_roughness_saturation_radians,
+                    )
+                    .speed(0.01)
+                    .range(0.01..=std::f32::consts::FRAC_PI_2)
+                    .prefix("Roughness saturation slope: ")
+                    .suffix(" rad"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_derived_texture_anisotropy)
+                        .speed(1.0)
+                        .range(1..=16)
+                        .prefix("Derived-texture anisotropy: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These settings control the baked terrain roughness, ambient-occlusion, normal textures, and filtering. Changes rebake off-thread and keep the previous maps visible until ready.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            ui.collapsing("Terrain rocks", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_max_instances)
+                        .speed(128.0)
+                        .range(1..=1_000_000)
+                        .prefix("Maximum rock instances: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_mesh_buckets)
+                        .speed(1.0)
+                        .range(2..=64)
+                        .prefix("Rock size buckets: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_mesh_cube_count)
+                        .speed(1.0)
+                        .range(1..=64)
+                        .prefix("Boxes per rock mesh: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_lod_start_distance)
+                        .speed(10.0)
+                        .range(0.0..=100_000.0)
+                        .prefix("Rock LOD start: ")
+                        .suffix(" m"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_rock_lod_fade_distance)
+                        .speed(10.0)
+                        .range(0.1..=100_000.0)
+                        .prefix("Rock LOD fade: ")
+                        .suffix(" m"),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The instance limit is explicit: authored density is never silently reduced by a hidden renderer cap. Mesh detail and native visibility distances are Graphics settings.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            ui.collapsing("Terrain LOD", |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_tile_resolution)
+                        .speed(2.0)
+                        .range(3..=4097)
+                        .prefix("Streamed tile resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_cinematic_resolution)
+                        .speed(2.0)
+                        .range(3..=4097)
+                        .prefix("Cinematic tile resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_pixel_error)
+                        .speed(0.1)
+                        .range(0.1..=32.0)
+                        .prefix("Screen error: ")
+                        .suffix(" px"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_max_depth)
+                        .speed(1.0)
+                        .range(1..=20)
+                        .prefix("Max depth: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_probe_resolution)
+                        .speed(2.0)
+                        .range(3..=257)
+                        .prefix("Error probe resolution: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_bakes_per_frame)
+                        .speed(1.0)
+                        .range(1..=256)
+                        .prefix("Bakes per frame: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_max_inflight_bakes)
+                        .speed(1.0)
+                        .range(1..=512)
+                        .prefix("In-flight bakes: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_tile_budget)
+                        .speed(16.0)
+                        .range(1..=8192)
+                        .prefix("Selected tile budget: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_cover_edits_per_frame)
+                        .speed(4.0)
+                        .range(1..=4096)
+                        .prefix("Cover edits per frame: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_hysteresis_ratio)
+                        .speed(0.01)
+                        .range(1.01..=4.0)
+                        .prefix("LOD hysteresis ratio: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_morph_start_ratio)
+                        .speed(0.01)
+                        .range(0.0..=0.99)
+                        .prefix("Geomorph start ratio: "),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "These are explicit terrain rendering controls. A custom value is applied as authored; the renderer does not silently choose a lower preset.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+            if let Err(reason) = settings.validate() {
+                let error_color = ctx
+                    .resource::<lunco_theme::Theme>()
+                    .map(|theme| theme.tokens.error)
+                    .unwrap_or(egui::Color32::LIGHT_RED);
+                ui.colored_label(
+                    error_color,
+                    format!("Graphics settings rejected: {reason}"),
+                );
+            }
+            // Keep invalid edits in memory so dependent fields can be corrected
+            // over multiple UI interactions. Runtime consumers validate at their
+            // own boundaries and preserve the last applied quality; the settings
+            // persister likewise refuses to replace the last valid disk value.
+            if settings != *current {
+                ctx.set_resource(settings);
+            }
         }
 
         ui.separator();

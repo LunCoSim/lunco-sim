@@ -43,6 +43,9 @@ pub fn learning_paths_json() -> &'static str {
 /// copy when the file is absent (a packaged binary run outside the repo).
 /// **wasm:** always returns the embedded copy. `None` if no such tutorial exists.
 pub fn tutorial_source(rel: &str) -> Option<String> {
+    if !crate::asset_path::is_safe_relative_path(rel) {
+        return None;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         let path = crate::assets_dir().join("tutorials").join(rel);
@@ -101,5 +104,12 @@ mod tests {
             .get("paths")
             .and_then(|p| p.as_array())
             .is_some_and(|a| !a.is_empty()));
+    }
+
+    #[test]
+    fn tutorial_source_rejects_root_escape() {
+        assert!(tutorial_source("../Cargo.toml").is_none());
+        assert!(tutorial_source("sandbox/../../Cargo.toml").is_none());
+        assert!(tutorial_source(r"sandbox\..\Cargo.toml").is_none());
     }
 }

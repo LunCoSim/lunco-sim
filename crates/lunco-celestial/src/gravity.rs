@@ -278,9 +278,8 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
-        app.world_mut()
-            .spawn(BigSpaceRootBundle::default())
-            .add_child(grid);
+        let root = app.world_mut().spawn(BigSpaceRootBundle::default()).id();
+        app.world_mut().entity_mut(grid).insert(ChildOf(root));
 
         let body = app
             .world_mut()

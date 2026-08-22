@@ -33,7 +33,7 @@ def Xform "BallDynamic" (
     float lunco:spawnLift = 1.0
 
     def Sphere "Body" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double radius = 0.5

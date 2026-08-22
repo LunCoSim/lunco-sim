@@ -35,10 +35,12 @@ fn sun_visibility(
     uv: vec2<f32>,
     sun_local: vec3<f32>,
     tan_sun_r: f32,
+    march_steps: f32,
     size: vec2<f32>,
     res: f32,
 ) -> f32 {
     if (res < 2.0) { return 1.0; } // no heightfield bound
+    if (march_steps < 1.0) { return 0.0; } // invalid quality input, never invent light
     let horiz = vec2(sun_local.x, sun_local.z);
     let hl = length(horiz);
     if (sun_local.y <= 0.0) { return 0.0; }     // sun below horizontal
@@ -54,7 +56,8 @@ fn sun_visibility(
     let max_t = length(size) * 1.42;
     var vis = 1.0;
     var t = texel;
-    for (var i = 0; i < 48; i++) {
+    let steps = u32(march_steps);
+    for (var i = 0u; i < steps; i++) {
         let p = p0 + dir * t;
         if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
         let h = hf_height(tex, p * to_grid, ri);
@@ -94,7 +97,7 @@ fn sun_visibility(
 // is baked on the CPU by `lunco-environment`'s horizon system using the SAME
 // `HeightField::sun_visibility` algorithm, refreshed only when the sun's
 // terrain-local direction moves past a small threshold — so the expensive
-// 48-step march loop runs ~once per minutes-long sun increment instead of
+// configured march loop runs ~once per minutes-long sun increment instead of
 // every pixel every frame.
 //
 // `textureSampleLevel` with an explicit LOD of 0 (the cache is single-mip) is
@@ -110,11 +113,13 @@ fn sun_visibility_resolved(
     uv: vec2<f32>,
     sun_local: vec3<f32>,
     tan_sun_r: f32,
+    march_steps: f32,
     size: vec2<f32>,
     res: f32,
 ) -> f32 {
     if (use_cache > 0.5) {
         return textureSampleLevel(cache, cache_samp, uv, 0.0).r;
     }
-    return sun_visibility(height_tex, uv, sun_local, tan_sun_r, size, res);
+    return sun_visibility(
+        height_tex, uv, sun_local, tan_sun_r, march_steps, size, res);
 }

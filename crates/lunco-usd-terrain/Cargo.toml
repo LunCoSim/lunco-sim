@@ -16,6 +16,7 @@ license.workspace = true
 [dependencies]
 bevy = { workspace = true }
 openusd = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }

@@ -42,7 +42,9 @@ def Xform "PredictedLandingMarker" (
 
     # Four corner brackets make the predicted point legible from an oblique
     # landing camera without covering the actual touchdown pad.
-    def Xform "Brackets"
+    def Xform "Brackets" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         def Cube "PX" {
             double size = 1
@@ -76,7 +78,9 @@ def Xform "PredictedLandingMarker" (
             rel material:binding = </PredictedLandingMarker/Looks/Marker_Mat>
             bool physics:collisionEnabled = false
         }
-        def Cylinder "Center"
+        def Cylinder "Center" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
         {
             uniform token axis = "Y"
             double radius = 0.12

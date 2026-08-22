@@ -152,9 +152,15 @@ fn resolve_scheme(
     twins: Option<&TwinRoots>,
 ) -> Option<PathBuf> {
     if let Some(rel) = lunco_assets::parse_lunco_uri(reference) {
+        if !lunco_assets::asset_path::is_safe_relative_path(rel) {
+            return None;
+        }
         return Some(assets_root?.join(rel));
     }
     if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
+        if !lunco_assets::asset_path::is_safe_relative_path(rel) {
+            return None;
+        }
         return Some(twins?.root_of(name)?.join(rel));
     }
     None
@@ -462,6 +468,25 @@ mod tests {
             resolve_scheme(&uri, None, Some(&twins)),
             Some(PathBuf::from("/twins/moonbase/scenes/base.usda"))
         );
+    }
+
+    #[test]
+    fn scheme_references_cannot_escape_their_root() {
+        let twins = TwinRoots::default();
+        let assets = PathBuf::from("/proj/assets");
+        let name = twins.register("moonbase", "/twins/moonbase");
+        for reference in [
+            "lunco://../outside.usda",
+            "lunco://vessels/../../outside.usda",
+            &format!("twin://{name}/../outside.usda"),
+            &format!("twin://{name}/scenes/../../outside.usda"),
+        ] {
+            assert_eq!(
+                resolve_scheme(reference, Some(&assets), Some(&twins)),
+                None,
+                "unsafe reference must be rejected: {reference}"
+            );
+        }
     }
 
     #[test]

@@ -121,24 +121,41 @@ impl ParamValue {
             ParamValue::Vec4(v) => write(flat, &v),
         }
     }
-    /// Best-effort parse from a comma-separated string for the given type
-    /// (the USD authoring + `SetObjectProperty` text vocabulary).
+    /// Parse a comma-separated string for the given type (the shader-parameter
+    /// authoring vocabulary). Every component must parse and the arity must
+    /// match exactly; malformed or extra values are rejected.
     pub fn parse(ty: ParamType, s: &str) -> Option<Self> {
-        let nums: Vec<f32> = s
-            .split(',')
-            .filter_map(|p| p.trim().parse::<f32>().ok())
-            .collect();
+        let nums: Option<Vec<f32>> = s.split(',').map(|p| p.trim().parse::<f32>().ok()).collect();
+        let nums = nums?;
         Some(match ty {
-            ParamType::F32 => ParamValue::F32(*nums.first()?),
-            ParamType::I32 => ParamValue::I32(*nums.first()? as i32),
-            ParamType::U32 => ParamValue::U32(*nums.first()? as u32),
-            ParamType::Vec2 if nums.len() >= 2 => ParamValue::Vec2([nums[0], nums[1]]),
-            ParamType::Vec3 if nums.len() >= 3 => ParamValue::Vec3([nums[0], nums[1], nums[2]]),
-            ParamType::Vec4 if nums.len() >= 4 => {
+            ParamType::F32 if nums.len() == 1 => ParamValue::F32(nums[0]),
+            ParamType::I32 if nums.len() == 1 => ParamValue::I32(nums[0] as i32),
+            ParamType::U32 if nums.len() == 1 => ParamValue::U32(nums[0] as u32),
+            ParamType::Vec2 if nums.len() == 2 => ParamValue::Vec2([nums[0], nums[1]]),
+            ParamType::Vec3 if nums.len() == 3 => ParamValue::Vec3([nums[0], nums[1], nums[2]]),
+            ParamType::Vec4 if nums.len() == 4 => {
                 ParamValue::Vec4([nums[0], nums[1], nums[2], nums[3]])
             }
             _ => return None,
         })
+    }
+
+    /// Parse the text form used by colour/property editing. RGB is accepted
+    /// for a `vec4` colour and receives the explicit opaque alpha expected by
+    /// the appearance vocabulary; all other types use exact [`Self::parse`]
+    /// arity and malformed components are rejected.
+    pub fn parse_authoring(ty: ParamType, s: &str) -> Option<Self> {
+        if ty == ParamType::Vec4 {
+            let nums: Option<Vec<f32>> =
+                s.split(',').map(|p| p.trim().parse::<f32>().ok()).collect();
+            let nums = nums?;
+            return match nums.as_slice() {
+                [r, g, b] => Some(Self::Vec4([*r, *g, *b, 1.0])),
+                [r, g, b, a] => Some(Self::Vec4([*r, *g, *b, *a])),
+                _ => None,
+            };
+        }
+        Self::parse(ty, s)
     }
     /// The value's scalar components as f32 (for UI display / colour swatches).
     pub fn as_floats(&self) -> Vec<f32> {
@@ -476,5 +493,24 @@ mod tests {
         assert_eq!(block[1].x, 1.0); // b @ byte 16 → vec4 lane 1
         assert_eq!(block[1].y, 2.0);
         assert_eq!(block[1].z, 3.0);
+    }
+
+    #[test]
+    fn parameter_text_rejects_malformed_and_extra_components() {
+        assert_eq!(
+            ParamValue::parse(ParamType::F32, "1.0"),
+            Some(ParamValue::F32(1.0))
+        );
+        assert!(ParamValue::parse(ParamType::F32, "1.0,2.0").is_none());
+        assert!(ParamValue::parse(ParamType::Vec3, "1.0,broken,3.0").is_none());
+        assert!(ParamValue::parse(ParamType::Vec3, "1.0,2.0,3.0,4.0").is_none());
+        assert_eq!(
+            ParamValue::parse_authoring(ParamType::Vec4, "0.1,0.2,0.3"),
+            Some(ParamValue::Vec4([0.1, 0.2, 0.3, 1.0]))
+        );
+        assert_eq!(
+            ParamValue::parse_authoring(ParamType::Vec4, "0.1,0.2,0.3,0.4"),
+            Some(ParamValue::Vec4([0.1, 0.2, 0.3, 0.4]))
+        );
     }
 }

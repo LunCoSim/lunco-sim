@@ -51,7 +51,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI", "LunCoUiSchemaAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI", "LunCoUiSchemaAPI", "MaterialBindingAPI"]
     # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
     # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
     # the set of commands this vessel accepts; there is no lander class in engine
@@ -1329,7 +1329,9 @@ def Xform "DescentLander" (
     # ── Visual-only structure ──
 
     # Upper deck (flat top with instruments)
-    def Cylinder "UpperDeck"
+    def Cylinder "UpperDeck" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 2.6
@@ -1405,7 +1407,7 @@ def Xform "DescentLander" (
     # walks the bell contour from throat to exit — (0.35, 0) → (0.52, -0.55) →
     # (0.86, -1.15) → (1.35, -1.90).
     def NurbsPatch "Nozzle" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         # Same thin-shell reasoning as the dish: a bell is a contoured skin, and
@@ -1431,6 +1433,8 @@ def Xform "DescentLander" (
         float lunco:lathe:exitRadius = 1.35
         float lunco:lathe:length = 1.90
         float lunco:lathe:contour = 0.55
+        int vVertexCount = 4
+        int vOrder = 3
         # SEATED IN the hull, not hanging under it. The hull cylinder (radius
         # 2.5, height 3.0, uncentred) spans y = -1.5 to +1.5, so a throat at
         # -1.65 left a 0.15 m gap of empty space between the bell and the body
@@ -1514,7 +1518,9 @@ def Xform "DescentLander" (
     # `translate` places the cone's centre so its base sits at the nozzle exit
     # (y = -2.7). The short bounding volumes keep low-altitude exhaust from
     # intersecting the regolith and reading as a detached translucent dome.
-    def Cone "Flame"
+    def Cone "Flame" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -1542,7 +1548,9 @@ def Xform "DescentLander" (
         # port graph a thruster force uses — no resolver, no per-frame script.
         float inputs:throttle.connect = </DescentLander/MainPropulsion.outputs:engine_activity>
     }
-    def Cone "FlameCore"
+    def Cone "FlameCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -1723,7 +1731,9 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.16, 0.16, 0.19)]
         bool physics:collisionEnabled = true
     }
-    def Cube "SolarCellsPX"
+    def Cube "SolarCellsPX" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double size = 1.0
         # Wing normal is Rz(-12°)·(0,1,0) = (0.2079, 0.978, 0); offset 0.045 m.
@@ -1745,7 +1755,9 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.16, 0.16, 0.19)]
         bool physics:collisionEnabled = true
     }
-    def Cube "SolarCellsNX"
+    def Cube "SolarCellsNX" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         double size = 1.0
         double3 xformOp:translate = (-5.409, 1.444, 0)
@@ -1856,7 +1868,7 @@ def Xform "DescentLander" (
     # shimmer from the live Modelica signal.  They are deliberately non-solid
     # and do not cast shadows.
     def Cone "RcsPitchPos" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -1889,7 +1901,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchPosModel.outputs:light_radius>
         }
     }
-    def Cone "RcsPitchPosCore"
+    def Cone "RcsPitchPosCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -1906,7 +1920,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_a_activity>
     }
     def Cone "RcsPitchNeg" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -1939,7 +1953,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchNegModel.outputs:light_radius>
         }
     }
-    def Cone "RcsPitchNegCore"
+    def Cone "RcsPitchNegCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -1956,7 +1972,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_a_activity>
     }
     def Cone "RcsRollPos" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -1991,7 +2007,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollPosModel.outputs:light_radius>
         }
     }
-    def Cone "RcsRollPosCore"
+    def Cone "RcsRollPosCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2008,7 +2026,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_activity>
     }
     def Cone "RcsRollNeg" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2043,7 +2061,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollNegModel.outputs:light_radius>
         }
     }
-    def Cone "RcsRollNegCore"
+    def Cone "RcsRollNegCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2060,7 +2080,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_activity>
     }
     def Cone "RcsYawPos" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2094,7 +2114,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawPosModel.outputs:light_radius>
         }
     }
-    def Cone "RcsYawPosCore"
+    def Cone "RcsYawPosCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2111,7 +2133,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_activity>
     }
     def Cone "RcsYawNeg" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2146,7 +2168,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawNegModel.outputs:light_radius>
         }
     }
-    def Cone "RcsYawNegCore"
+    def Cone "RcsYawNegCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2168,7 +2192,7 @@ def Xform "DescentLander" (
     # fires both members of a pair with the same pulse so translation cancels
     # and the two moment arms add.
     def Cone "RcsPitchPosB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2201,7 +2225,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchPosBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsPitchPosBCore"
+    def Cone "RcsPitchPosBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2218,7 +2244,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_pos_b_activity>
     }
     def Cone "RcsPitchNegB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2251,7 +2277,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsPitchNegBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsPitchNegBCore"
+    def Cone "RcsPitchNegBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2268,7 +2296,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:pitch_neg_b_activity>
     }
     def Cone "RcsRollPosB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2301,7 +2329,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollPosBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsRollPosBCore"
+    def Cone "RcsRollPosBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2318,7 +2348,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_b_activity>
     }
     def Cone "RcsRollNegB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2351,7 +2381,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsRollNegBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsRollNegBCore"
+    def Cone "RcsRollNegBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2368,7 +2400,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_b_activity>
     }
     def Cone "RcsYawPosB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2402,7 +2434,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawPosBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsYawPosBCore"
+    def Cone "RcsYawPosBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2419,7 +2453,7 @@ def Xform "DescentLander" (
         float inputs:throttle.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_activity>
     }
     def Cone "RcsYawNegB" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI"]
+        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"
@@ -2454,7 +2488,9 @@ def Xform "DescentLander" (
             float inputs:light_radius.connect = </DescentLander/AttitudePropulsion/RcsYawNegBModel.outputs:light_radius>
         }
     }
-    def Cone "RcsYawNegBCore"
+    def Cone "RcsYawNegBCore" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -2494,20 +2530,21 @@ def Xform "DescentLander" (
     # still has exactly one DOF: translation along its own axis. The joint frame
     # carries that rake; it is not a hidden revolute or a free visual rotation.
     # The primary strut itself has only the prismatic DOF. The footpad is a
-    # welded child collider of that same leg body: it cannot rotate freely and
-    # it cannot introduce a second contact body's unconstrained motion. Its
-    # authored inverse-rake keeps the landing face level while the prismatic
-    # joint supplies the only suspension travel.
+    # separate rigid body connected by an explicit spherical joint: it follows
+    # the leg while allowing the contact face to settle on terrain without
+    # introducing an unconstrained body. Its authored inverse-rake keeps the
+    # landing face level while the prismatic joint supplies the suspension
+    # travel.
     #
-    # The SHOCK ABSORBER is the standard USD `PhysicsDriveAPI:linear` on the
-    # prismatic joint. The USD loader derives a native Avian implicit
-    # spring-damper motor from its authored force coefficients; the joint still
-    # owns the geometric constraint, rotation lock, limits, and reaction force.
-    # There is no Modelica equation, Rhai command, transform write, external
-    # force pass, or lander-specific branch. Two layers remain:
+    # The SHOCK ABSORBER is the authored `LunCoPrismaticSuspensionAPI` on the
+    # prismatic joint. The USD projection derives a native Avian passive
+    # spring-damper constraint from its coefficients; the joint still owns the
+    # geometric constraint, rotation lock, limits, and reaction force. There is
+    # no Modelica equation, Rhai command, transform write, external force pass,
+    # or lander-specific branch. Two layers remain:
     #   the joint            — the geometric constraint and rotation lock; the
-    #                          standard drive receives k = 20000 N/m,
-    #                          c = 18000 N·s/m, capacity = 30000 N, and stroke
+    #                          passive suspension receives its authored
+    #                          stiffness, damping, yield/max force, and stroke
     #                          -0.8..0 m (negative IS compression).
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
@@ -2518,7 +2555,7 @@ def Xform "DescentLander" (
     # model that will drift from the wire it decorates.
     def Xform "LegPX"
     (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "MaterialBindingAPI"]
     )
     {
         rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
@@ -2562,7 +2599,7 @@ def Xform "DescentLander" (
         # file. `radius` and `height` are the dimensions themselves, in metres, and
         # nothing has to compose a scale to know what this part is.
         def Cylinder "Strut" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
             uniform token axis = "Y"
@@ -2594,15 +2631,17 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cube "PadPX" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        def Cylinder "PadPX" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            double size = 1.0
+            uniform token axis = "Y"
+            double radius = 0.455
+            double height = 0.10
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, -20)
-            double3 xformOp:scale = (0.91, 0.10, 0.91)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            float physics:mass = 10.0
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2674,7 +2713,7 @@ def Xform "DescentLander" (
 
     def Xform "LegNX"
     (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "MaterialBindingAPI"]
     )
     {
         # Frame and construction: see LegPX.
@@ -2700,7 +2739,7 @@ def Xform "DescentLander" (
         # file. `radius` and `height` are the dimensions themselves, in metres, and
         # nothing has to compose a scale to know what this part is.
         def Cylinder "Strut" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
             uniform token axis = "Y"
@@ -2717,15 +2756,17 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cube "PadNX" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        def Cylinder "PadNX" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            double size = 1.0
+            uniform token axis = "Y"
+            double radius = 0.455
+            double height = 0.10
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, 20)
-            double3 xformOp:scale = (0.91, 0.10, 0.91)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            float physics:mass = 10.0
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2735,7 +2776,7 @@ def Xform "DescentLander" (
 
     def Xform "LegPZ"
     (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "MaterialBindingAPI"]
     )
     {
         # Frame and construction: see LegPX.
@@ -2761,7 +2802,7 @@ def Xform "DescentLander" (
         # file. `radius` and `height` are the dimensions themselves, in metres, and
         # nothing has to compose a scale to know what this part is.
         def Cylinder "Strut" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
             uniform token axis = "Y"
@@ -2778,15 +2819,17 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cube "PadPZ" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        def Cylinder "PadPZ" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            double size = 1.0
+            uniform token axis = "Y"
+            double radius = 0.455
+            double height = 0.10
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (20, 0, 0)
-            double3 xformOp:scale = (0.91, 0.10, 0.91)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            float physics:mass = 10.0
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2796,7 +2839,7 @@ def Xform "DescentLander" (
 
     def Xform "LegNZ"
     (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "MaterialBindingAPI"]
     )
     {
         # Frame and construction: see LegPX.
@@ -2822,7 +2865,7 @@ def Xform "DescentLander" (
         # file. `radius` and `height` are the dimensions themselves, in metres, and
         # nothing has to compose a scale to know what this part is.
         def Cylinder "Strut" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
             uniform token axis = "Y"
@@ -2839,20 +2882,71 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cube "PadNZ" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        def Cylinder "PadNZ" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
         )
         {
-            double size = 1.0
+            uniform token axis = "Y"
+            double radius = 0.455
+            double height = 0.10
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (-20, 0, 0)
-            double3 xformOp:scale = (0.91, 0.10, 0.91)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            float physics:mass = 10.0
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 
+    }
+
+    # ── Footpad ball joints ────────────────────────────────────────────────
+    # Each footpad is an authored rigid body with an explicit spherical joint.
+    # The separate body preserves the pad's terrain-following freedom without
+    # turning an internal collider into an unconnected rigid body.
+    def PhysicsSphericalJoint "PadPX_BallJoint" (
+        prepend apiSchemas = ["LunCoJointDampingAPI"]
+    )
+    {
+        rel physics:body0 = </DescentLander/LegPX>
+        rel physics:body1 = </DescentLander/LegPX/PadPX>
+        uniform token physics:axis = "Y"
+        float3 physics:localPos0 = (0.017101, -7.153015, 0)
+        float3 physics:localPos1 = (0, 0.05, 0)
+        float lunco:jointDamping:angular = 2.5
+    }
+    def PhysicsSphericalJoint "PadNX_BallJoint" (
+        prepend apiSchemas = ["LunCoJointDampingAPI"]
+    )
+    {
+        rel physics:body0 = </DescentLander/LegNX>
+        rel physics:body1 = </DescentLander/LegNX/PadNX>
+        uniform token physics:axis = "Y"
+        float3 physics:localPos0 = (-0.017101, -7.153015, 0)
+        float3 physics:localPos1 = (0, 0.05, 0)
+        float lunco:jointDamping:angular = 2.5
+    }
+    def PhysicsSphericalJoint "PadPZ_BallJoint" (
+        prepend apiSchemas = ["LunCoJointDampingAPI"]
+    )
+    {
+        rel physics:body0 = </DescentLander/LegPZ>
+        rel physics:body1 = </DescentLander/LegPZ/PadPZ>
+        uniform token physics:axis = "Y"
+        float3 physics:localPos0 = (0, -7.153015, 0.017101)
+        float3 physics:localPos1 = (0, 0.05, 0)
+        float lunco:jointDamping:angular = 2.5
+    }
+    def PhysicsSphericalJoint "PadNZ_BallJoint" (
+        prepend apiSchemas = ["LunCoJointDampingAPI"]
+    )
+    {
+        rel physics:body0 = </DescentLander/LegNZ>
+        rel physics:body1 = </DescentLander/LegNZ/PadNZ>
+        uniform token physics:axis = "Y"
+        float3 physics:localPos0 = (0, -7.153015, -0.017101)
+        float3 physics:localPos1 = (0, 0.05, 0)
+        float lunco:jointDamping:angular = 2.5
     }
 
     # ── Landing-gear suspension ──
@@ -2906,7 +3000,7 @@ def Xform "DescentLander" (
     # feeds touchdown guidance from the collider that actually meets the terrain.
 
     def PhysicsPrismaticJoint "LegPX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -2924,14 +3018,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 20000.0
-        float drive:linear:physics:damping = 18000.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 30000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 1800000.0
+        float lunco:prismaticSuspension:damping = 90000.0
+        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float lunco:prismaticSuspension:maxForce = 42000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -2946,14 +3040,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 20000.0
-        float drive:linear:physics:damping = 18000.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 30000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 1800000.0
+        float lunco:prismaticSuspension:damping = 90000.0
+        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float lunco:prismaticSuspension:maxForce = 42000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -2964,14 +3058,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 20000.0
-        float drive:linear:physics:damping = 18000.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 30000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 1800000.0
+        float lunco:prismaticSuspension:damping = 90000.0
+        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float lunco:prismaticSuspension:maxForce = 42000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
-        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI", "MaterialBindingAPI"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -2982,11 +3076,11 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        uniform token drive:linear:physics:type = "force"
-        float drive:linear:physics:stiffness = 20000.0
-        float drive:linear:physics:damping = 18000.0
-        float drive:linear:physics:targetPosition = 0.0
-        float drive:linear:physics:maxForce = 30000.0
+        float lunco:prismaticSuspension:restPosition = 0.0
+        float lunco:prismaticSuspension:stiffness = 1800000.0
+        float lunco:prismaticSuspension:damping = 90000.0
+        float lunco:prismaticSuspension:yieldForce = 20000.0
+        float lunco:prismaticSuspension:maxForce = 42000.0
     }
 
 }

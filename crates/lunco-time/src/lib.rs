@@ -124,7 +124,7 @@ pub const J2000_JD: f64 = 2_451_545.0;
 /// keep up, so the world clock switches to [`TimeRegime::KinematicWarp`]: the
 /// tick freezes (physics pauses) and only **pure** consumers (ephemeris,
 /// lighting, sidereal) advance, as a pure function of `epoch`.
-
+///
 /// Transport play state. Replaces the scattered `paused` booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
 pub enum TransportMode {

@@ -125,11 +125,14 @@ the frame by which it attaches.
 ```usda
 def Xform "Mounts"
 {
-    def Xform "wheel_fl" (kind = "mount")
+    def Xform "wheel_fl" (
+        kind = "subcomponent"
+        prepend apiSchemas = ["LunCoMountSocketAPI"]
+    )
     {
         uniform token  lunco:mount:socket = "wheel"      # what may attach
         uniform token  lunco:mount:joint  = "revolute"   # the constraint it implies
-        vector3f       lunco:mount:axis   = (1, 0, 0)
+        token          lunco:mount:axis   = "X"
         double3 xformOp:translate = (1.2, -0.3, 0.9)     # the frame itself
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -139,8 +142,13 @@ def Xform "Mounts"
 and on the component's `defaultPrim`:
 
 ```usda
-uniform token lunco:mount:plug = "wheel"   # what socket this fits
-rel lunco:mount:frame = </Wheel/Mounts/hub>
+def Xform "Wheel" (
+    prepend apiSchemas = ["LunCoMountPlugAPI"]
+)
+{
+    uniform token lunco:mount:plug = "wheel"   # what socket this fits
+    rel lunco:mount:frame = </Wheel/Mounts/hub>
+}
 ```
 
 Then a new op — call it `AttachComponent { edit_target, socket_path, asset, prim, name }` —
@@ -397,10 +405,11 @@ inner value): `{ "doc": 1, "spec": { "edit_target": "@root@", "host_path": "/…
 back (a wrong frame conversion is a physics bug only the renderer shows) is now built for the **retrofit**
 case, where both frames are on the live composed stage — no asset-stage open needed:
 
-- **`lunco:mount:*` schema** authored on a demo assembly (`sandbox_scene.usda` → `Base`): a host advertises
-  sockets under a `Mounts` group (`lunco:mount:socket` / `:joint` / `:axis`, `rel :part`), an attached
-  child part advertises its plug (`lunco:mount:plug`, `rel :frame`).
-- **Reader** (`lunco-usd-bevy/src/mount.rs`): `read_sockets` / `read_plug_frame` compose each mount prim's
+- **`LunCoMountSocketAPI` / `LunCoMountPlugAPI`** are applied to the demo assembly (`sandbox_scene.usda` →
+  `Base`) and component (`demo_probe.usda`): a host advertises sockets under a `Mounts` group
+  (`lunco:mount:socket` / `:joint` / `:axis`, `rel :part`), and an attached child part advertises its plug
+  (`lunco:mount:plug`, `rel :frame`). The APIs are authoritative; loose attributes are ignored.
+- **Reader** (`lunco-usd-bevy/src/mount.rs`): `read_sockets` / `read_plug` compose each mount prim's
   frame **body-local** through the `Mounts` group via `local_transform_at` (`frame_in_body`). Tested against
   a real composed stage (`mount_reader_tests`, 3 tests): socket reads body-local `(0,2.5,0)` not world
   `(5,8.5,5)`; plug reads part-local; metadata + `part` rel compose.
@@ -421,14 +430,14 @@ case, where both frames are on the live composed stage — no asset-stage open n
 **New-attach snap — landed + tested (2026-07-11).** The other half: reference a component in and snap its
 plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not the composed scene.
 
-- **`read_asset_plug_frame(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
+- **`read_asset_plug(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
   (`compose_file_to_stage`, resolving its references) and reads the plug frame off its `defaultPrim` — the
   part every `AttachSpec` references in. Tested against the shipped demo component (`mounting/demo_probe.usda`,
   plug 0.4 m above the part origin). Native-only (composition does file I/O).
 - **Socket schema** gained `lunco:mount:asset` (the raw component path a socket is designed to hold), read
   into `MountSocket.asset`. An **empty** socket (no `rel :part`) that names an asset offers `⊕ Attach` in
   the Inspector; the handler resolves the asset path against the asset root (`<cwd>/assets`),
-  `read_asset_plug_frame`s it, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
+  `read_asset_plug`s it, validates the plug kind, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
   journaled `AttachComponent` (references + places + joints the part). Socket joint token → typed
   `AttachJoint` via `attach_joint_from`.
 - **Demo:** `components/mounting/demo_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on

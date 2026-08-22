@@ -19,22 +19,20 @@
 //! `requires_event: "cmd:SpawnEntity"` would tick on ANY spawn — dropping a
 //! second solar tower would satisfy "place the habitat". So each objective asks
 //! the question it actually means ("is a habitat present?") by scanning the live
-//! entity list for the part's name. The spawned root's Name is the catalog
-//! display name (`habitat_fsh` → "Habitat Fsh", `solar_tower` → "Solar Tower"),
-//! so a keyword match is stable however many parts the student places.
+//! entity list for the part's catalog ID. Display names are presentation text
+//! and may change without changing what was spawned, so the lesson never
+//! infers identity from them.
 
-/// True if any entity in the world has `keyword` in its Name. The spawned root
-/// of a catalog part carries its display name, so "Habitat" matches "Habitat
-/// Fsh", "Solar" matches "Solar Tower", etc. Robust to duplicate placements.
-fn has_structure(keyword) {
+/// True if any spawned catalog root carries the exact content identity.
+fn has_structure(entry_id) {
     for e in list_entities() {
-        if e.name.contains(keyword) { return true; }
+        if e.catalog_id == entry_id { return true; }
     }
     false
 }
 
 fn power_present(me) {
-    has_structure("Solar") || has_structure("Fsps")
+    has_structure("solar_tower") || has_structure("fsps")
 }
 
 fn power_placed(me) {
@@ -43,19 +41,19 @@ fn power_placed(me) {
 }
 
 fn habitat_present(me) {
-    has_structure("Habitat")
+    has_structure("habitat_fsh")
 }
 
 fn comms_present(me) {
-    has_structure("Comms")
+    has_structure("comms_mast")
 }
 
 fn isru_present(me) {
-    has_structure("Isru")
+    has_structure("isru_plant")
 }
 
 fn pad_present(me) {
-    has_structure("Landing")
+    has_structure("landing_pad")
 }
 
 fn habitat_placed(me) {

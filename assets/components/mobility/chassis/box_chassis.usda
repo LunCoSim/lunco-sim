@@ -27,7 +27,7 @@
 
 def Cube "Chassis" (
     kind = "subcomponent"
-    prepend apiSchemas = ["PhysicsCollisionAPI"]
+    prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
 )
 {
     double size = 1.0

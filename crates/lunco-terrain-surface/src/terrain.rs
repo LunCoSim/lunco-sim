@@ -60,11 +60,6 @@ fn dem_build_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
     }
 }
 
-/// Default realized region side length (metres) when `window_m` is 0… no — see
-/// below: 0 means the whole map. This is the fallback when a caller passes a
-/// negative value. A 4 km window at 5 m is 800² ≈ 640 k verts — full detail,
-/// light to render, and covers a rover working area.
-const DEFAULT_WINDOW_M: f32 = 4096.0;
 /// Above this native tile resolution we still build, but warn: a single mesh this
 /// large is heavy (e.g. the full 16 km map is 3200² ≈ 10 M verts ≈ 560 MB). Full
 /// detail at that scale belongs to tiled streaming (M7), not one mesh.
@@ -81,6 +76,38 @@ const MAX_WINDOW_M: f32 = 64_000.0;
 /// (4096² ≈ 16.8 M verts) — heavy, warned about, but survivable.
 const MIN_TARGET_RES: u32 = 16;
 const MAX_TARGET_RES: u32 = 4096;
+
+/// Resolve the command's explicit terrain-quality parameters without changing
+/// them into a different request. `0` is the documented semantic value for
+/// whole-map/native output; every other value must be valid as authored.
+/// Validate the shared DEM request parameters used by command and USD
+/// projections. The signed resolution input is intentional: USD's `int`
+/// attribute must be rejected when negative rather than cast into a large
+/// unsigned value or silently treated as native resolution.
+pub fn resolve_dem_request_parameters(
+    window_m: f32,
+    target_res: i64,
+) -> Result<(f64, usize), &'static str> {
+    let half_window = if window_m == 0.0 {
+        f64::INFINITY
+    } else if !window_m.is_finite() || window_m < 0.0 {
+        return Err("window_m must be finite and non-negative (0 means the whole map)");
+    } else if window_m > MAX_WINDOW_M {
+        return Err("window_m exceeds the maximum supported terrain window");
+    } else {
+        f64::from(window_m) * 0.5
+    };
+
+    let target_res = if target_res == 0 {
+        0
+    } else if !(i64::from(MIN_TARGET_RES)..=i64::from(MAX_TARGET_RES)).contains(&target_res) {
+        return Err("target_res must be 0 or between the supported visual-resolution bounds");
+    } else {
+        target_res as usize
+    };
+
+    Ok((half_window, target_res))
+}
 
 /// The driveable DEM surface: the bake fills **this** entity with a heightfield
 /// collider (+ visual mesh when rendering). Put on a command-spawned entity by
@@ -513,26 +540,17 @@ fn on_spawn_dem_terrain(
             crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE),
         );
     }
-    let half_window = match ev.window_m {
-        w if !w.is_finite() => (DEFAULT_WINDOW_M * 0.5) as f64, // NaN/inf → default
-        0.0 => f64::INFINITY,                                   // whole map
-        w if w < 0.0 => (DEFAULT_WINDOW_M * 0.5) as f64,
-        w => (w.min(MAX_WINDOW_M) * 0.5) as f64,
-    };
-    // Clamp the resample target the same way the crater count is clamped
-    // (`crater_placements`): `target_res` lands straight in a `res × res` vertex
-    // grid, so an unclamped `100000` from the API/rhai is an instant OOM. `0` =
-    // native (no decimation).
-    let target_res = match ev.target_res {
-        0 => 0,
-        r => (r.clamp(MIN_TARGET_RES, MAX_TARGET_RES)) as usize,
-    };
-    if ev.target_res != 0 && target_res != ev.target_res as usize {
-        warn!(
-            "[dem-terrain] target_res {} out of range — clamped to {}",
-            ev.target_res, target_res
-        );
-    }
+    let (half_window, target_res) =
+        match resolve_dem_request_parameters(ev.window_m, i64::from(ev.target_res)) {
+            Ok(parameters) => parameters,
+            Err(reason) => {
+                warn!(
+                    "[dem-terrain] rejected SpawnDemTerrain for '{}': {reason}",
+                    ev.uri
+                );
+                return;
+            }
+        };
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
@@ -1417,8 +1435,17 @@ fn finish_dem_builds(
     // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
     // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
     use bevy::tasks::futures_lite::future;
+
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[dem-terrain] invalid Graphics quality; retaining pending DEM builds: {reason}");
+            return;
+        }
+    };
 
     for (entity, mut task, req) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
@@ -1450,6 +1477,7 @@ fn finish_dem_builds(
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
+            profile,
         );
     }
 }
@@ -1467,6 +1495,7 @@ fn assemble_dem_build(
     with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
+    profile: lunco_render::RenderQualityProfile,
 ) {
     if built.res > HEAVY_TILE_RES {
         warn!(
@@ -1500,7 +1529,7 @@ fn assemble_dem_build(
             e.try_insert(crate::stream_viz::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
-                    crate::stream_viz::TerrainLodViz::default(),
+                    crate::stream_viz::TerrainLodViz,
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
                     crate::stream_viz::TerrainNodeErrors::default(),
@@ -1517,13 +1546,13 @@ fn assemble_dem_build(
                 // failure). Remove that competing collider before the ring tiles
                 // become live.
                 e.try_remove::<Collider>();
-                // Construct the ring's contact band from the SAME viz config the
-                // visual tiles use (`TerrainLodViz::default()`), so the collider's
+                // Construct the ring's contact band from the same authoritative
+                // Graphics profile the visual tiles use, so the collider's
                 // gate is floored at the visual leaf's gate — what the rover
                 // touches is what the eye sees. See `WHEEL_SINKING_ANALYSIS_v3`
                 // §4.1/§5(2) and `SurfaceBand::contact`.
-                let viz = crate::stream_viz::TerrainLodViz::default();
-                let ring = crate::collider_ring::TerrainColliderRing::for_viz(&viz, half_extent);
+                let ring =
+                    crate::collider_ring::TerrainColliderRing::for_profile(profile, half_extent);
                 e.try_insert((
                     ring,
                     crate::collider_ring::ColliderTiles::default(),
@@ -1629,7 +1658,17 @@ fn finish_dem_worker(
     // does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
     // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            bevy::log::error!(
+                "[dem-terrain] invalid Graphics quality; retaining pending worker builds: {reason}"
+            );
+            return;
+        }
+    };
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
@@ -1687,6 +1726,7 @@ fn finish_dem_worker(
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
+                    profile,
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
@@ -1768,6 +1808,7 @@ fn finish_dem_worker(
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
+                        profile,
                     );
                     any_full = true;
                     full_terrain_entities.push(entity);
@@ -2746,6 +2787,33 @@ pub(crate) fn register(app: &mut App) {
 mod visual_product_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn spawn_dem_parameters_preserve_documented_zero_semantics() {
+        assert_eq!(
+            resolve_dem_request_parameters(0.0, 0).expect("zero parameters are valid"),
+            (f64::INFINITY, 0)
+        );
+        assert_eq!(
+            resolve_dem_request_parameters(512.0, 128).expect("explicit parameters are valid"),
+            (256.0, 128)
+        );
+    }
+
+    #[test]
+    fn spawn_dem_parameters_reject_invalid_quality_instead_of_clamping() {
+        for window_m in [f32::NAN, f32::INFINITY, -1.0, MAX_WINDOW_M + 1.0] {
+            assert!(resolve_dem_request_parameters(window_m, 0).is_err());
+        }
+        for target_res in [
+            -1,
+            1,
+            i64::from(MIN_TARGET_RES - 1),
+            i64::from(MAX_TARGET_RES) + 1,
+        ] {
+            assert!(resolve_dem_request_parameters(0.0, target_res).is_err());
+        }
+    }
 
     #[test]
     fn target_resolution_changes_only_the_static_visual_product() {

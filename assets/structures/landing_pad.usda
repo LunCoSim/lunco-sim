@@ -33,7 +33,7 @@ def Xform "LandingPad" (
     }
 
     def Cylinder "Pad" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         uniform token axis = "Y"

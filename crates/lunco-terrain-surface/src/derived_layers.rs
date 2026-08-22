@@ -57,22 +57,6 @@ use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
-/// Texels per side of each baked data layer. 1024² over the moonbase ±4 km
-/// window ≈ 8 m/texel.
-///
-/// The renderer compares the physical texel size published with the maps to the
-/// fragment's screen-space footprint. The result is continuous across mesh LOD
-/// boundaries: mesh depth is deliberately not part of terrain appearance.
-const LAYER_RES: usize = 1024;
-/// AO ray budget per texel (directions × march steps).
-const AO_DIRS: usize = 8;
-const AO_STEPS: usize = 8;
-/// AO ray reach as a fraction of the tile half-extent.
-const AO_RADIUS_FRAC: f64 = 0.15;
-/// Slope (radians) at which roughness saturates.
-const ROUGH_BASE: f32 = 0.6;
-const ROUGH_STEEP_RAD: f32 = 0.6; // ~34°
-
 /// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
 /// square. This is the one definition used by both the baker's filters and the
 /// renderer metadata, so their frequency boundary cannot drift.
@@ -147,6 +131,52 @@ struct DerivedBakeTask(Task<DerivedMipped>, usize);
 #[derive(Component)]
 struct DerivedMapsStale {
     since: f64,
+}
+
+/// The subset of Graphics settings that changes the derived-map bake. Keeping
+/// this signature separate from the whole quality resource prevents a shadow or
+/// camera edit from needlessly rebaking every terrain's large textures.
+#[derive(Resource, Default)]
+struct DerivedQualitySignature(Option<(usize, usize, usize, u64, u32, u32)>);
+
+fn derived_quality_signature(
+    profile: lunco_render::RenderQualityProfile,
+) -> (usize, usize, usize, u64, u32, u32) {
+    (
+        profile.terrain_derived_map_resolution,
+        profile.terrain_derived_ao_directions,
+        profile.terrain_derived_ao_steps,
+        profile.terrain_derived_ao_radius_fraction.to_bits(),
+        profile.terrain_derived_roughness_base.to_bits(),
+        profile
+            .terrain_derived_roughness_saturation_radians
+            .to_bits(),
+    )
+}
+
+/// A derived-map quality edit invalidates the published textures without
+/// removing them. The old maps remain visible until the replacement finishes,
+/// while the changed signature makes the cache key and bake output authoritative.
+fn mark_derived_stale_on_quality_change(
+    mut commands: Commands,
+    time: Res<Time>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+    mut signature: ResMut<DerivedQualitySignature>,
+    terrains: Query<Entity, With<DemHeightField>>,
+) {
+    let Ok(profile) = quality.validated_profile() else {
+        return;
+    };
+    let next = derived_quality_signature(profile);
+    if signature.0 == Some(next) {
+        return;
+    }
+    signature.0 = Some(next);
+    for entity in &terrains {
+        commands.entity(entity).try_insert(DerivedMapsStale {
+            since: time.elapsed_secs_f64(),
+        });
+    }
 }
 
 /// Seconds of surface quiescence before a re-bake starts.
@@ -232,6 +262,7 @@ fn start_derived_bakes(
     mut commands: Commands,
     images: Option<Res<Assets<Image>>>,
     time: Res<Time>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     q: Query<
         (
             Entity,
@@ -245,6 +276,15 @@ fn start_derived_bakes(
     if images.is_none() {
         return; // headless: no render assets → no point baking visual layers.
     }
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!(
+                "[terrain] invalid Graphics derived-map quality; retaining current maps: {reason}"
+            );
+            return;
+        }
+    };
     let now = time.elapsed_secs_f64();
     for (entity, hf, stale, has_maps) in &q {
         if has_maps && stale.is_none() {
@@ -261,9 +301,9 @@ fn start_derived_bakes(
             // Off-thread body → own Tracy zone (per-system spans don't reach here).
             let _span = bevy::log::info_span!("terrain_derived_maps_bake").entered();
             #[cfg(not(target_arch = "wasm32"))]
-            let maps = bake_or_load(&oracle);
+            let maps = bake_or_load(&oracle, profile);
             #[cfg(target_arch = "wasm32")]
-            let maps = bake_or_load_web(&oracle).await;
+            let maps = bake_or_load_web(&oracle, profile).await;
             // Mip HERE, still off-thread — the chain build for two 1024² maps
             // is real work and used to run on the main thread at publish.
             mip_maps(maps)
@@ -284,7 +324,8 @@ fn start_derived_bakes(
 /// and the key folds the oracle's modifier `content_key`.
 /// v3: crater profile band-limited + continuous at reach (same crater
 /// `content_key`, different sampled surface).
-/// v4: albedo scalar packed into normal-map alpha; LAYER_RES 512 → 1024.
+/// v4: albedo scalar packed into normal-map alpha; the map resolution became a
+/// Graphics setting after this version.
 /// v5: tone (albedo) derived with a 3-texel stencil on a 6-texel-limited source
 /// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
 /// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
@@ -294,13 +335,16 @@ fn start_derived_bakes(
 /// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
 /// band-limited to 6 texels, so full-res sampling was resolving detail the
 /// source cannot contain, at ~10 oracle evaluations per texel.
-const CACHE_FORMAT_VERSION: u64 = 7;
+/// v8: derived-map resolution and AO sample counts became Graphics settings.
+/// v9: AO radius and roughness transfer parameters became Graphics settings.
+const CACHE_FORMAT_VERSION: u64 = 9;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
 /// declares *what* is baked, *how it keys*, and *how it serializes*.
 struct DerivedBake<'a> {
     oracle: &'a SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
 }
 
 impl lunco_precompute::Bake for DerivedBake<'_> {
@@ -317,12 +361,16 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         h.write_u64(self.oracle.content_key());
         h.write_u64(grid.res as u64);
         h.write_u64(grid.half_extent.to_bits() as u64);
-        h.write_u64(LAYER_RES as u64);
-        h.write_u64(AO_DIRS as u64);
-        h.write_u64(AO_STEPS as u64);
-        h.write_u64(AO_RADIUS_FRAC.to_bits());
-        h.write_u64(ROUGH_BASE.to_bits() as u64);
-        h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
+        h.write_u64(self.profile.terrain_derived_map_resolution as u64);
+        h.write_u64(self.profile.terrain_derived_ao_directions as u64);
+        h.write_u64(self.profile.terrain_derived_ao_steps as u64);
+        h.write_u64(self.profile.terrain_derived_ao_radius_fraction.to_bits());
+        h.write_u64(self.profile.terrain_derived_roughness_base.to_bits() as u64);
+        h.write_u64(
+            self.profile
+                .terrain_derived_roughness_saturation_radians
+                .to_bits() as u64,
+        );
         for &v in &grid.heights {
             h.write_u64(v.to_bits());
         }
@@ -330,7 +378,7 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
     }
 
     fn bake(&self) -> DerivedMaps {
-        bake_derived(self.oracle)
+        bake_derived(self.oracle, self.profile)
     }
 
     fn store(dir: &std::path::Path, maps: &DerivedMaps) -> lunco_precompute::StorageResult<()> {
@@ -362,8 +410,11 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 /// a second load (or a second peer) skips the expensive AO march. The `cache://`
 /// dir is shared with the rest of the asset stack.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn bake_or_load(oracle: &SurfaceOracle) -> DerivedMaps {
-    lunco_precompute::bake_or_load(&DerivedBake { oracle }, &lunco_assets::cache_dir())
+fn bake_or_load(
+    oracle: &SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
+) -> DerivedMaps {
+    lunco_precompute::bake_or_load(&DerivedBake { oracle, profile }, &lunco_assets::cache_dir())
 }
 
 /// Wasm counterpart of [`bake_or_load`]: `lunco_precompute`'s sync fs tier is
@@ -371,9 +422,12 @@ fn bake_or_load(oracle: &SurfaceOracle) -> DerivedMaps {
 /// OPFS blob store at this — already-async — bake seam instead. Same namespace
 /// and key as native; the two maps pack into ONE blob ([`encode_derived_blob`]).
 #[cfg(target_arch = "wasm32")]
-async fn bake_or_load_web(oracle: &SurfaceOracle) -> DerivedMaps {
+async fn bake_or_load_web(
+    oracle: &SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
+) -> DerivedMaps {
     use lunco_precompute::Bake;
-    let bake = DerivedBake { oracle };
+    let bake = DerivedBake { oracle, profile };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(DerivedBake::NAMESPACE, &key_hex).await {
         if let Some(maps) = decode_derived_blob(&blob) {
@@ -424,13 +478,16 @@ fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
 /// Pure bake (runs on the task pool): sample the derived layers off the composed
 /// surface (analytic craters included → their slopes/AO land in the maps) and
 /// pack them.
-fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
+fn bake_derived(
+    oracle: &SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
+) -> DerivedMaps {
     let half = oracle.half_extent() as f64;
     let region = Square {
         center: [0.0, 0.0],
         half,
     };
-    let res = LAYER_RES;
+    let res = profile.terrain_derived_map_resolution;
     let texel = raster_texel_size_m(half, res);
     // Gate over-zoom synthesis at the map's texel size via the shared filter
     // policy (the map is far coarser than the synthetic detail — skip it, don't
@@ -445,27 +502,28 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // so the fused kernel halves the oracle samples per texel.
     let bounded = BoundedHeightSource::new(&limited, half);
     let (normals, slope) = normal_slope_maps(&bounded, &region, res);
-    // AO is smooth by construction (a horizon integral over AO_RADIUS_FRAC of
+    // AO is smooth by construction (a horizon integral over the configured
+    // terrain-derived AO radius fraction of
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
     let ao_res = (res / 2).max(1);
     let ao_texel = raster_texel_size_m(half, ao_res);
-    // The AO march walks horizon rays out to `half·AO_RADIUS_FRAC` from each
+    // The AO march walks horizon rays out to the configured fraction of `half` from each
     // texel, so the scope must grow by that reach — a ray leaving the box would
     // otherwise sample a view the region prune never promised.
     let ao_limited = SurfaceBand::visual(ao_texel).limited_region(
         oracle,
         region,
-        half * AO_RADIUS_FRAC + 2.0 * ao_texel,
+        half * profile.terrain_derived_ao_radius_fraction + 2.0 * ao_texel,
     );
     let ao_bounded = BoundedHeightSource::new(&ao_limited, half);
     let ao_small = ao_map(
         &ao_bounded,
         &region,
         ao_res,
-        half * AO_RADIUS_FRAC,
-        AO_DIRS,
-        AO_STEPS,
+        half * profile.terrain_derived_ao_radius_fraction,
+        profile.terrain_derived_ao_directions,
+        profile.terrain_derived_ao_steps,
         half,
     );
     let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
@@ -501,7 +559,13 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
 
     let roughness: Vec<f32> = slope
         .iter()
-        .map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD))
+        .map(|&s| {
+            roughness_from_slope(
+                s,
+                profile.terrain_derived_roughness_base,
+                profile.terrain_derived_roughness_saturation_radians,
+            )
+        })
         .collect();
 
     DerivedMaps {
@@ -518,10 +582,14 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
 fn finish_derived_bakes(
     mut commands: Commands,
     time: Res<Time>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     mut tasks: Query<(Entity, &mut DerivedBakeTask, &DemHeightField)>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
     let Some(mut images) = images else { return };
+    let Ok(profile) = quality.validated_profile() else {
+        return;
+    };
     for (entity, mut task, hf) in &mut tasks {
         let Some(maps) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
@@ -543,8 +611,16 @@ fn finish_derived_bakes(
         // Derived rasters are texel-centred cells over the full terrain square:
         // adjacent centres are exactly `width / res` apart (derive::texel_world).
         let texel_size_m = raster_texel_size_m(hf.0.half_extent() as f64, res) as f32;
-        let surface = images.add(data_texture(maps.res, maps.surface));
-        let normal = images.add(data_texture(maps.res, maps.normal));
+        let surface = images.add(data_texture(
+            maps.res,
+            maps.surface,
+            profile.terrain_derived_texture_anisotropy,
+        ));
+        let normal = images.add(data_texture(
+            maps.res,
+            maps.normal,
+            profile.terrain_derived_texture_anisotropy,
+        ));
         // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
         // re-instantiate this terrain while its derived-layer bake is still in flight,
         // so the entity may be gone by the time these deferred commands apply. No-op
@@ -615,7 +691,7 @@ fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
 /// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
 /// Takes the PREBUILT chain (`(data, level_count)` from [`mip_chain_rgba8`],
 /// run in the bake task) — this only wraps it in an `Image`.
-fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
+fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp: u16) -> Image {
     use bevy::image::ImageSamplerDescriptor;
     // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
     // but ours carries the whole mip chain.
@@ -632,12 +708,8 @@ fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = mip_levels;
     // Anisotropy keeps grazing-angle terrain (most of the screen) sharp instead
-    // of mip-smeared. wgpu requires all-linear filters with anisotropy > 1.
-    // WebGL2's anisotropy support is extension-dependent → stay isotropic there.
-    #[cfg(not(target_arch = "wasm32"))]
-    let anisotropy_clamp = 8;
-    #[cfg(target_arch = "wasm32")]
-    let anisotropy_clamp = 1;
+    // of mip-smeared. The requested value is an explicit Graphics setting; it is
+    // never replaced with a platform-specific lower quality here.
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         min_filter: bevy::image::ImageFilterMode::Linear,
         mag_filter: bevy::image::ImageFilterMode::Linear,
@@ -651,12 +723,15 @@ fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32)) -> Image {
 /// Register the derived-layer bake/bind systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
+    app.init_resource::<DerivedQualitySignature>();
     app.add_systems(
         Update,
         // The static-mesh bind (`lunco-render-bevy`'s `apply_derived_layers`) is no
         // longer in this chain: it names a material, so it lives on the render side.
         // It retries until the async USD material exists, so it needs no ordering.
         (
+            mark_derived_stale_on_quality_change
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
             mark_derived_stale,
             start_derived_bakes,
             finish_derived_bakes,

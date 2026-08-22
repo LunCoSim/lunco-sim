@@ -389,12 +389,56 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn
     // through — `Err(missing)` here is exactly the refusal the spawner logs.
+    let attachment_topology = lunco_usd_sim::wheel_params::collect_wheel_attachment_topology(&view);
     let mut wheel_prims = Vec::new();
     for prim in view.prim_paths() {
         if !view.has_api_schema(&prim, "PhysxVehicleWheelAPI") {
             continue;
         }
-        match lunco_usd_sim::wheel_params::WheelParams::read(&view, &prim, None, None) {
+        let Some(attachment) = attachment_topology.binding_for(prim.as_str()) else {
+            let reason = if attachment_topology.is_invalid(prim.as_str()) {
+                "has malformed or ambiguous PhysxVehicleWheelAttachmentAPI topology"
+            } else {
+                "has no PhysxVehicleWheelAttachmentAPI binding"
+            };
+            report.errors.push(format!(
+                "wheel {} would refuse to spawn — {}",
+                prim.as_str(),
+                reason
+            ));
+            wheel_prims.push(json!({
+                "prim": prim.as_str(),
+                "ok": false,
+                "missing": [reason],
+            }));
+            continue;
+        };
+        let suspension = openusd::sdf::Path::new(&attachment.suspension).ok();
+        let tire = openusd::sdf::Path::new(&attachment.tire).ok();
+        let powertrain = match lunco_usd_sim::powertrain::find_binding_for_wheel(&view, &prim) {
+            Ok(binding) => binding,
+            Err(missing) => {
+                let detail = format!("{missing:?}");
+                report.errors.push(format!(
+                    "wheel {} has an invalid or incomplete motor topology: {}",
+                    prim.as_str(),
+                    detail
+                ));
+                wheel_prims.push(json!({
+                    "prim": prim.as_str(),
+                    "ok": false,
+                    "error": detail,
+                }));
+                continue;
+            }
+        };
+        match lunco_usd_sim::wheel_params::WheelParams::read(
+            &view,
+            &prim,
+            suspension.as_ref(),
+            tire.as_ref(),
+            powertrain.as_ref().map(|binding| &binding.params),
+        ) {
             Ok(_) => wheel_prims.push(json!({ "prim": prim.as_str(), "ok": true })),
             Err(missing) => {
                 report.errors.push(format!(

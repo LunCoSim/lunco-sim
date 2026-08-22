@@ -7703,6 +7703,7 @@ name = "lunco-readiness"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-hooks",
  "lunco-settings",
  "serde",
@@ -8170,6 +8171,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-assets",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-obstacle-field",

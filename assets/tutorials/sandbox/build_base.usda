@@ -47,7 +47,7 @@ def Xform "BuildBase" (
     # ── The build plot: a wide, flat regolith plane (±250 m) so the ≥150 m
     #    landing-pad standoff is a real distance to lay out. ─────────────────
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

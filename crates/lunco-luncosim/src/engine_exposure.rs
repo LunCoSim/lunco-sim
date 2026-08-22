@@ -843,8 +843,6 @@ pub(crate) fn publish_exposure(
     runtime.refresh.dirty = false;
     runtime.refresh.first_update = false;
 
-    let mut ui = runtime.exposures.writer("driven-vessel");
-
     let Some(vessel) = resolve_driven(
         &queries.avatar,
         &queries.name,
@@ -870,8 +868,10 @@ pub(crate) fn publish_exposure(
         seminar.tipped = false;
         seminar.max_slope_deg = None;
         seminar.last_soc_pct = None;
-        ui.visible(false);
-        drop(ui);
+        {
+            let mut ui = runtime.exposures.writer("driven-vessel");
+            ui.visible(false);
+        }
         publish_lunica_schema_exposure(
             &mut runtime.exposures,
             &runtime.selected,
@@ -985,9 +985,11 @@ pub(crate) fn publish_exposure(
         .autopilots
         .iter()
         .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
-    ui.visible(true);
-    publish_vessel_values(&mut ui, &vessel, autopilot);
-    drop(ui);
+    {
+        let mut ui = runtime.exposures.writer("driven-vessel");
+        ui.visible(true);
+        publish_vessel_values(&mut ui, &vessel, autopilot);
+    }
     publish_lunica_schema_exposure(
         &mut runtime.exposures,
         &runtime.selected,
@@ -1094,7 +1096,7 @@ fn publish_lunica_schema_exposure(
         return false;
     };
     let view = stage.view();
-    if view.scalar::<bool>(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
+    if view.boolean(&root_sdf, "lunco:ui:schemaRoot") != Some(true) {
         return false;
     }
 
@@ -1114,8 +1116,7 @@ fn publish_lunica_schema_exposure(
         if path_text != root_path.path && !path_text.starts_with(&root_prefix) {
             continue;
         }
-        if !view.is_active(&path) || view.scalar::<bool>(&path, "lunco:ui:schemaNode") != Some(true)
-        {
+        if !view.is_active(&path) || view.boolean(&path, "lunco:ui:schemaNode") != Some(true) {
             continue;
         }
         let title = view
@@ -1278,7 +1279,7 @@ fn authored_control_roots(
             continue;
         };
         let view = stage.view();
-        if view.scalar::<bool>(&path, "lunco:ui:controlHud") != Some(true) {
+        if view.boolean(&path, "lunco:ui:controlHud") != Some(true) {
             continue;
         }
         let column = view
@@ -1316,7 +1317,7 @@ fn authored_target_positions(
             let path_text = path.to_string();
             path_text.starts_with(&root_prefix)
                 && view.is_active(path)
-                && view.scalar::<bool>(path, "lunco:ui:schemaNode") == Some(true)
+                && view.boolean(path, "lunco:ui:schemaNode") == Some(true)
                 && view.scalar::<i32>(path, "lunco:ui:schemaColumn") == Some(0)
         })
         .collect();
@@ -1333,7 +1334,7 @@ fn authored_target_positions(
         }
     };
     let target_source = view
-        .connections(&guidance, "inputs:target_x")
+        .connections(guidance, "inputs:target_x")
         .into_iter()
         .next()?;
     let (target_path, _) = target_source.rsplit_once('.')?;
@@ -1771,36 +1772,37 @@ fn publish_runtime_overlay_exposures(
     exposures: &mut EngineExposures,
     overlays: &RuntimeOverlayInputs,
 ) {
-    let mut terrain = exposures.writer("terrain-progress");
-    let terrain_active = overlays
-        .terrain
-        .as_deref()
-        .is_some_and(|status| status.active && !status.user_dismissed);
-    terrain.visible(terrain_active);
-    if let Some(status) = overlays.terrain.as_deref() {
-        let title = if status.site.is_empty() {
-            status.phase.label().to_owned()
-        } else {
-            format!("{} — {}", status.phase.label(), status.site)
-        };
-        terrain.property("title", title);
-        terrain.property("caption", status.phase.caption());
-        terrain.property(
-            "progress_width",
-            status.fraction.map_or_else(
-                || "35%".to_owned(),
-                |fraction| format!("{:.1}%", fraction * 100.0),
-            ),
-        );
-        terrain.property(
-            "progress_text",
-            status.fraction.map_or_else(
-                || "working…".to_owned(),
-                |fraction| format!("{:.0}%", fraction * 100.0),
-            ),
-        );
+    {
+        let mut terrain = exposures.writer("terrain-progress");
+        let terrain_active = overlays
+            .terrain
+            .as_deref()
+            .is_some_and(|status| status.active && !status.user_dismissed);
+        terrain.visible(terrain_active);
+        if let Some(status) = overlays.terrain.as_deref() {
+            let title = if status.site.is_empty() {
+                status.phase.label().to_owned()
+            } else {
+                format!("{} — {}", status.phase.label(), status.site)
+            };
+            terrain.property("title", title);
+            terrain.property("caption", status.phase.caption());
+            terrain.property(
+                "progress_width",
+                status.fraction.map_or_else(
+                    || "35%".to_owned(),
+                    |fraction| format!("{:.1}%", fraction * 100.0),
+                ),
+            );
+            terrain.property(
+                "progress_text",
+                status.fraction.map_or_else(
+                    || "working…".to_owned(),
+                    |fraction| format!("{:.0}%", fraction * 100.0),
+                ),
+            );
+        }
     }
-    drop(terrain);
 
     #[cfg(feature = "networking")]
     {

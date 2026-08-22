@@ -9,7 +9,6 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
-#[cfg(not(target_arch = "wasm32"))]
 use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
@@ -28,48 +27,20 @@ pub struct TerrainRock;
 #[derive(Component)]
 pub(crate) struct ProceduralRock;
 
-/// Number of size buckets → shared rock meshes (so N rocks reuse a few meshes).
-#[cfg(not(target_arch = "wasm32"))]
-const ROCK_BUCKETS: usize = 6;
-/// Hard cap on scattered rock ENTITIES regardless of density × area. Scattering at a
-/// real per-hectare density across a 16 km DEM would be hundreds of thousands of
-/// bodies; cap the total and spread it over the whole map (LOD-culled near the
-/// camera). Camera-following rock streaming is the real fix for uniform full-map
-/// density at high counts; this gives full-map coverage cheaply meanwhile.
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_ROCKS: usize = 6000;
 /// Bound the in-memory placement cache while still covering normal inspector
 /// tuning. The cache stores only XZ/size/yaw data, never ECS entities or meshes.
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_CACHED_ROCK_FIELDS: usize = 32;
 /// Bump when the deterministic sampler or placement interpretation changes.
-#[cfg(not(target_arch = "wasm32"))]
 const ROCK_SCATTER_CACHE_VERSION: u64 = 1;
-/// Distance LOD: rocks fully visible to `LOD_FAR`, cross-fade out over `LOD_FADE`.
-/// Rocks are scattered only in a near-origin region (`region_half_extent`, ~±300 m),
-/// and unlike craters they have NO coarse always-on fallback — once culled they
-/// just vanish. So the cull distance must comfortably exceed the region (else
-/// backing away from origin drops every rock). The scatter is bounded + the meshes
-/// are size-bucketed/shared, so keeping all of them visible is cheap. Camera-following
-/// rock streaming (rocks around wherever you are) is the real fix for full-map coverage.
+// Distance-LOD cross-fade for rocks, via bevy's `VisibilityRange`. Native only:
+// WebGL2 does not provide the same visibility-range binding contract, so the
+// authored rock population remains visible there rather than being silently
+// deleted as a quality fallback.
 #[cfg(not(target_arch = "wasm32"))]
-const LOD_FAR: f32 = 2500.0;
-#[cfg(not(target_arch = "wasm32"))]
-const LOD_FADE: f32 = 500.0;
-
-// Distance-LOD cross-fade for rocks, via bevy's `VisibilityRange`. NATIVE ONLY:
-// `VisibilityRange` drives the `visibility_ranges` view binding (group 0,
-// binding 14). Its WebGL2 uniform-buffer fallback in bevy 0.18 declares a
-// `min_binding_size` (16) smaller than the shader's `array<vec4, N>` (1024),
-// so `create_render_pipeline` rejects EVERY `pbr_opaque_mesh_pipeline` → all
-// meshes drop each frame → black viewport. The rock count is hard-capped
-// (`MAX_ROCKS`) and meshes are size-bucketed/shared, so on web we skip the
-// distance cull and keep all rocks visible — cheap, and avoids the bad binding.
-#[cfg(not(target_arch = "wasm32"))]
-fn rock_visibility_range() -> VisibilityRange {
+fn rock_visibility_range(start_distance: f32, fade_distance: f32) -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
-        end_margin: LOD_FAR..(LOD_FAR + LOD_FADE),
+        end_margin: start_distance..(start_distance + fade_distance),
         use_aabb: false,
     }
 }
@@ -116,13 +87,18 @@ fn shared_rock_mesh(
     rocks: &mut SharedRockAssets,
     meshes: &mut Assets<Mesh>,
     bucket: u32,
+    cube_count: usize,
 ) -> Handle<Mesh> {
     rocks
         .meshes
         .entry(bucket)
         .or_insert_with(|| {
             let r = bucket_radius_of(bucket);
-            meshes.add(faceted_rock_mesh(0xB0 ^ bucket as u64, 4, r.max(0.05)))
+            meshes.add(faceted_rock_mesh(
+                0xB0 ^ bucket as u64,
+                cube_count,
+                r.max(0.05),
+            ))
         })
         .clone()
 }
@@ -181,163 +157,161 @@ impl TerrainLayer for RockScatterLayer {
         Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
-        // WEB: scatter no rocks at all. Each rock is a distinct ECS entity with a
-        // Static sphere Collider, and on WebGL the `VisibilityRange` distance cull
-        // is unavailable (it breaks the PBR pipeline binding — see
-        // `rock_visibility_range`), so all of them render + sit in the avian
-        // broadphase every frame on the single wasm thread. Dropping the whole
-        // field is the biggest steady-state win for the browser; native keeps rocks
-        // (it has the distance cull + worker threads).
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = cx;
+        let oracle = cx.oracle;
+        let half = self.region_half_extent.min(oracle.half_extent());
+        if half <= 0.0 {
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let oracle = cx.oracle;
-            let half = self.region_half_extent.min(oracle.half_extent());
-            if half <= 0.0 {
-                return;
-            }
-            let side = (2.0 * half) as f64;
-            let count = ((self.rocks.density as f64 * side * side) / 10_000.0)
-                .round()
-                .max(0.0) as usize;
-            let count = count.min(MAX_ROCKS);
-            if count == 0 {
-                return;
-            }
-            if count == MAX_ROCKS {
-                info!(
-                    "[terrain-layer/rocks] capping scatter at {MAX_ROCKS} rocks over ±{:.0} m \
-                 (requested density {}/ha would be more); LOD-culled, full-map coverage",
-                    half, self.rocks.density
-                );
-            }
-
-            let mut cache_key = lunco_precompute::Fnv1a::new();
-            cache_key.write_u64(ROCK_SCATTER_CACHE_VERSION);
-            cache_key.write_u64(self.scatter_fingerprint().unwrap_or_default());
-            cache_key.write_u64(half.to_bits() as u64);
-            cache_key.write_u64(count as u64);
-            let cache_key = cache_key.finish();
-            let placements: Arc<[Placement]> =
-                if let Some(cached) = cx.rock_assets.placements.get(&cache_key) {
-                    cached.clone()
-                } else {
-                    let generated: Arc<[Placement]> = Arc::from(
-                        sample_layer(
-                            self.seed,
-                            salt::ROCKS,
-                            self.pattern,
-                            half,
-                            count,
-                            self.rocks.size,
-                            self.rocks.dynamic_fraction,
-                        )
-                        .into_boxed_slice(),
-                    );
-                    if cx.rock_assets.placements.len() >= MAX_CACHED_ROCK_FIELDS {
-                        cx.rock_assets.placements.clear();
-                    }
-                    cx.rock_assets
-                        .placements
-                        .insert(cache_key, generated.clone());
-                    generated
-                };
-
-            let size = self.rocks.size;
-            let span = (size.max - size.min).max(1e-3);
-
-            // Build shared visual meshes per size bucket (client only). Done BEFORE the
-            // spawn loop so the `cx.meshes` borrow is released before `cx.commands` is.
-            let rock_assets = &mut *cx.rock_assets;
-            let bucket_handles: Option<Vec<Handle<Mesh>>> =
-                cx.meshes.as_deref_mut().map(|meshes| {
-                    (0..ROCK_BUCKETS)
-                        .map(|b| {
-                            let r = size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32);
-                            shared_rock_mesh(rock_assets, meshes, size_bucket(r))
-                        })
-                        .collect()
-                });
-            // ONE boulder look for every rock in the world (see `rock_look`); the binder's
-            // key cache turns it into ONE material + ONE bind group.
-            let look = rock_look();
-
-            let bucket_of = |sz: f32| -> usize {
-                let t = ((sz - size.min) / span).clamp(0.0, 1.0);
-                ((t * (ROCK_BUCKETS - 1) as f32).round() as usize).min(ROCK_BUCKETS - 1)
-            };
-            // The VISUAL a rock gets is its bucket's shared mesh — extent ~0.5–0.7 of
-            // the bucket radius (`faceted_rock_mesh` boxes: half-extents ≤ 0.48·r,
-            // offsets ≤ 0.4·r) — NOT `p.size`. Size collider + sink from the same
-            // bucket radius (derivable headless → identical colliders on the server)
-            // or the wheel stops on an invisible shell up to a metre before the
-            // visible rock: THE "rover hits an invisible wall" report. 0.6·r sunk
-            // 0.25·r keeps the collider inside the visual mass.
-            let bucket_radius = |b: usize| -> f32 {
-                let r = size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32);
-                bucket_radius_of(size_bucket(r))
-            };
-
-            let mut reused = 0usize;
-            let mut spawned = 0usize;
-            for p in placements.iter() {
-                let y = lunco_terrain_core::HeightSource::height_at(
-                    oracle,
-                    p.pos.x as f64,
-                    p.pos.y as f64,
-                ) as f32;
-                let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
-                let entity = if let Some(entity) = cx.rock_pool.pop() {
-                    reused += 1;
-                    entity
-                } else {
-                    spawned += 1;
-                    cx.commands.spawn_empty().id()
-                };
-                let mut rock = cx.commands.entity(entity);
-                // Reassert ownership on reuse as well as on first spawn. Presentation
-                // and selection are allowed to reparent entities; a pooled rock must
-                // always return to the terrain that owns its local X/Z coordinates.
-                rock.try_insert(ChildOf(cx.terrain));
-                rock.try_insert((
-                    TerrainRock,
-                    ProceduralRock,
-                    TerrainScatterEntity,
-                    TerrainScatterOwner(cx.terrain),
-                    Name::new("TerrainRock"),
-                    // Procedural scatter, re-spawned as the field restreams — runtime
-                    // detail, not authored content. (The *placed* rock below is
-                    // authored and stays visible.)
-                    lunco_core::SystemManaged,
-                    Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
-                        .with_rotation(Quat::from_rotation_y(p.yaw)),
-                    Visibility::Inherited,
-                    RigidBody::Static,
-                    Collider::sphere((r_vis * 0.6) as f64),
-                ));
-                if let Some(handles) = &bucket_handles {
-                    // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
-                    // `NotShadowCaster` for it. Cloning the look does NOT clone a
-                    // material: every clone keys to the same cached one.
-                    rock.try_insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
-                    // Distance LOD cull — native only (see `rock_visibility_range`).
-                    #[cfg(not(target_arch = "wasm32"))]
-                    rock.try_insert(rock_visibility_range());
-                }
-            }
-
-            debug!(
-                "[terrain-layer/rocks] scattered {} rock(s), reused {reused}, spawned {spawned} \
-                 (±{:.0} m region, density {}/ha)",
-                reused + spawned,
-                half,
-                self.rocks.density
+        let side = (2.0 * half) as f64;
+        let requested_count = ((self.rocks.density as f64 * side * side) / 10_000.0)
+            .round()
+            .max(0.0) as usize;
+        let count = requested_count.min(cx.quality.terrain_rock_max_instances);
+        if count == 0 {
+            return;
+        }
+        if count < requested_count {
+            info!(
+                "[terrain-layer/rocks] applying explicit Graphics cap of {} rocks over ±{:.0} m \
+                 (requested density {}/ha would produce {requested_count})",
+                cx.quality.terrain_rock_max_instances, half, self.rocks.density
             );
         }
+
+        let mut cache_key = lunco_precompute::Fnv1a::new();
+        cache_key.write_u64(ROCK_SCATTER_CACHE_VERSION);
+        cache_key.write_u64(self.scatter_fingerprint().unwrap_or_default());
+        cache_key.write_u64(half.to_bits() as u64);
+        cache_key.write_u64(count as u64);
+        let cache_key = cache_key.finish();
+        let placements: Arc<[Placement]> =
+            if let Some(cached) = cx.rock_assets.placements.get(&cache_key) {
+                cached.clone()
+            } else {
+                let generated: Arc<[Placement]> = Arc::from(
+                    sample_layer(
+                        self.seed,
+                        salt::ROCKS,
+                        self.pattern,
+                        half,
+                        count,
+                        self.rocks.size,
+                        self.rocks.dynamic_fraction,
+                    )
+                    .into_boxed_slice(),
+                );
+                if cx.rock_assets.placements.len() >= MAX_CACHED_ROCK_FIELDS {
+                    cx.rock_assets.placements.clear();
+                }
+                cx.rock_assets
+                    .placements
+                    .insert(cache_key, generated.clone());
+                generated
+            };
+
+        let size = self.rocks.size;
+        let span = (size.max - size.min).max(1e-3);
+        let bucket_count = cx.quality.terrain_rock_mesh_buckets;
+
+        // Build shared visual meshes per size bucket. Done BEFORE the spawn loop so the
+        // `cx.meshes` borrow is released before `cx.commands` is.
+        let rock_assets = &mut *cx.rock_assets;
+        let bucket_handles: Option<Vec<Handle<Mesh>>> = cx.meshes.as_deref_mut().map(|meshes| {
+            (0..bucket_count)
+                .map(|b| {
+                    let r = size.min + span * (b as f32 / (bucket_count - 1) as f32);
+                    shared_rock_mesh(
+                        rock_assets,
+                        meshes,
+                        size_bucket(r),
+                        cx.quality.terrain_rock_mesh_cube_count,
+                    )
+                })
+                .collect()
+        });
+        // ONE boulder look for every rock in the world (see `rock_look`); the binder's
+        // key cache turns it into ONE material + ONE bind group.
+        let look = rock_look();
+
+        let bucket_of = |sz: f32| -> usize {
+            let t = ((sz - size.min) / span).clamp(0.0, 1.0);
+            ((t * (bucket_count - 1) as f32).round() as usize).min(bucket_count - 1)
+        };
+        // The VISUAL a rock gets is its bucket's shared mesh — extent ~0.5–0.7 of
+        // the bucket radius (`faceted_rock_mesh` boxes: half-extents ≤ 0.48·r,
+        // offsets ≤ 0.4·r) — NOT `p.size`. Size collider + sink from the same
+        // bucket radius (derivable headless → identical colliders on the server)
+        // or the wheel stops on an invisible shell up to a metre before the
+        // visible rock: THE "rover hits an invisible wall" report. 0.6·r sunk
+        // 0.25·r keeps the collider inside the visual mass.
+        let bucket_radius = |b: usize| -> f32 {
+            let r = size.min + span * (b as f32 / (bucket_count - 1) as f32);
+            bucket_radius_of(size_bucket(r))
+        };
+
+        let mut reused = 0usize;
+        let mut spawned = 0usize;
+        for p in placements.iter() {
+            let y =
+                lunco_terrain_core::HeightSource::height_at(oracle, p.pos.x as f64, p.pos.y as f64)
+                    as f32;
+            let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
+            #[cfg(not(target_arch = "wasm32"))]
+            let entity = if let Some(entity) = cx.rock_pool.pop() {
+                reused += 1;
+                entity
+            } else {
+                spawned += 1;
+                cx.commands.spawn_empty().id()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let entity = {
+                spawned += 1;
+                cx.commands.spawn_empty().id()
+            };
+            let mut rock = cx.commands.entity(entity);
+            // Reassert ownership on reuse as well as on first spawn. Presentation
+            // and selection are allowed to reparent entities; a pooled rock must
+            // always return to the terrain that owns its local X/Z coordinates.
+            rock.try_insert(ChildOf(cx.terrain));
+            rock.try_insert((
+                TerrainRock,
+                ProceduralRock,
+                TerrainScatterEntity,
+                TerrainScatterOwner(cx.terrain),
+                Name::new("TerrainRock"),
+                // Procedural scatter, re-spawned as the field restreams — runtime
+                // detail, not authored content. (The *placed* rock below is
+                // authored and stays visible.)
+                lunco_core::SystemManaged,
+                Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
+                    .with_rotation(Quat::from_rotation_y(p.yaw)),
+                Visibility::Inherited,
+                RigidBody::Static,
+                Collider::sphere((r_vis * 0.6) as f64),
+            ));
+            if let Some(handles) = &bucket_handles {
+                // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
+                // `NotShadowCaster` for it. Cloning the look does NOT clone a
+                // material: every clone keys to the same cached one.
+                rock.try_insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
+                // Native visibility range is a culling optimization. Web keeps the
+                // authored population and uses the explicit instance cap instead.
+                #[cfg(not(target_arch = "wasm32"))]
+                rock.try_insert(rock_visibility_range(
+                    cx.quality.terrain_rock_lod_start_distance,
+                    cx.quality.terrain_rock_lod_fade_distance,
+                ));
+            }
+        }
+
+        debug!(
+            "[terrain-layer/rocks] scattered {} rock(s), reused {reused}, spawned {spawned} \
+             (±{:.0} m region, density {}/ha)",
+            reused + spawned,
+            half,
+            self.rocks.density
+        );
     }
 }
 
@@ -399,10 +373,14 @@ impl TerrainLayer for RockInstanceLayer {
         let bucket = size_bucket(self.size);
         let r = bucket_radius_of(bucket).max(0.05);
         let rock_assets = &mut *cx.rock_assets;
-        let mesh = cx
-            .meshes
-            .as_deref_mut()
-            .map(|meshes| shared_rock_mesh(rock_assets, meshes, bucket));
+        let mesh = cx.meshes.as_deref_mut().map(|meshes| {
+            shared_rock_mesh(
+                rock_assets,
+                meshes,
+                bucket,
+                cx.quality.terrain_rock_mesh_cube_count,
+            )
+        });
         let look = rock_look();
         // Deterministic yaw from the seed (golden-ratio hash → well spread). The
         // MESH is shared now, so the yaw is what keeps placed boulders from all

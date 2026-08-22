@@ -8,7 +8,7 @@
 //! Currently implements **gravity only**. Other domains follow the same
 //! pattern — see the README for templates.
 
-use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
+use avian3d::prelude::{ComputedMass, Forces, RigidBody, WriteRigidBodyForces};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -102,15 +102,6 @@ pub use earth::{
     compute_local_earth, inject_local_earth_into_cosim, EarthDirectionWorld, LocalEarth,
 };
 
-// Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
-// mirror `lunco_render::LunarSunShadow`'s defaults but are kept locally so this
-// crate need not depend on `lunco-render` (lighting → render would invert the
-// layering: render is presentation, below environment). Keep in sync by hand if
-// the render defaults change — they rarely do, and a drift only affects the
-// runtime tuner's fallback when no live cascade bounds exist.
-const FALLBACK_FIRST_CASCADE_FAR_BOUND: f32 = 40.0;
-const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
-
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). **Render-free**: the heightfield bakes and the
 /// sun-visibility cache run headless; the material wiring they feed lives in
@@ -177,6 +168,16 @@ impl LocalGravity {
     }
 }
 
+fn clear_unresolved_local_gravity(
+    commands: &mut Commands,
+    entity: Entity,
+    existing: Option<&LocalGravity>,
+) {
+    if existing.is_some() {
+        commands.entity(entity).remove::<LocalGravity>();
+    }
+}
+
 /// Computes [`LocalGravity`] for every entity that has a [`Transform`].
 ///
 /// Sources the gravity vector from:
@@ -187,14 +188,16 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
-    q_bodies: Query<&GravityProvider>,
+    q_bodies: Query<Ref<GravityProvider>>,
+    mut removed_providers: RemovedComponents<GravityProvider>,
+    mut removed_body_links: RemovedComponents<GravityBody>,
     q_entities: Query<(
         Entity,
         Ref<Transform>,
         Option<&CellCoord>,
         Option<&ChildOf>,
         Option<&Grid>,
-        Option<&GravityBody>,
+        Option<Ref<GravityBody>>,
         Option<&LocalGravity>,
     )>,
     q_parents: Query<&ChildOf>,
@@ -207,15 +210,23 @@ pub fn compute_local_gravity(
     // is not). Entities that don't yet have a `LocalGravity` always run once.
     // This stops both the per-frame provider lookups and the change-detection
     // storm caused by blindly re-inserting an identical value every frame.
-    let gravity_changed =
-        gravity.is_changed() || active_frame.as_ref().is_some_and(Res::is_changed);
+    let provider_changed = q_bodies.iter().any(|provider| provider.is_changed())
+        || removed_providers.read().next().is_some();
+    let body_link_removed = removed_body_links.read().next().is_some();
+    let gravity_changed = gravity.is_changed()
+        || active_frame.as_ref().is_some_and(Res::is_changed)
+        || provider_changed
+        || body_link_removed;
     let frame_rotation = active_frame.as_deref().and_then(|frame| {
         lunco_core::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
             .ok()
             .map(|(_, rotation)| rotation.0)
     });
     for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
-        if existing.is_some() && !gravity_changed && !tf.is_changed() {
+        let body_link_changed = gravity_body
+            .as_ref()
+            .is_some_and(|body_link| body_link.is_changed());
+        if existing.is_some() && !gravity_changed && !tf.is_changed() && !body_link_changed {
             continue;
         }
         let g = match gravity.as_ref() {
@@ -227,15 +238,18 @@ pub fn compute_local_gravity(
             // second time and create a spurious horizontal acceleration.
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
-                let Some(body_link) = gravity_body else {
+                let Some(body_link) = gravity_body.as_deref() else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Ok(provider) = q_bodies.get(body_link.body_entity) else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Some((entity_world, _)) =
                     lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
                 else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let Some((body_world, body_rotation)) = lunco_core::coords::world_pose(
@@ -245,6 +259,7 @@ pub fn compute_local_gravity(
                     &q_spatial,
                 )
                 .ok() else {
+                    clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
                 let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
@@ -272,14 +287,16 @@ pub fn compute_local_gravity(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Applies the cached [`LocalGravity`] vector as a force on every entity that
-/// has a [`RigidBody`] and a [`Mass`].
+/// has a [`RigidBody`] and Avian's computed total mass. `ComputedMass` includes
+/// collider-derived mass, authored `Mass`, density, and compound descendants;
+/// using it keeps gravity on the same mass authority as the solver.
 ///
 /// Replaces the recomputing-each-tick `gravity_system` that previously lived
 /// in `lunco-celestial`. Reading `LocalGravity` instead of recomputing means
 /// every consumer (this system, cosim injection, future systems) sees the same
 /// authoritative value with no duplicated work.
 pub fn apply_gravity_to_rigid_bodies(
-    q: Query<(Entity, &LocalGravity, &Mass), With<RigidBody>>,
+    q: Query<(Entity, &LocalGravity, &ComputedMass), With<RigidBody>>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
@@ -287,7 +304,7 @@ pub fn apply_gravity_to_rigid_bodies(
     mut forces: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (entity, gravity, mass) in &q {
-        let force = gravity.0 * mass.0 as f64;
+        let force = gravity.0 * mass.value();
         if let Ok(mut f) = forces.get_mut(entity) {
             f.apply_force(force);
         }
@@ -405,14 +422,13 @@ pub struct SetEnvironmentLight {
     /// [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).
     /// `None` keeps current.
     pub earthshine_color: Option<[f32; 3]>,
-    /// Bloom intensity on the scene cameras (airless ⇒ low, ~0.15). `None`
-    /// keeps current.
+    /// Bloom intensity on the scene cameras. `None` keeps current; zero disables
+    /// bloom and a non-zero value enables the HDR target required by the effect.
     ///
     /// **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is
     /// `bevy_post_process`, and this crate must not name it. That observer
-    /// writes `lunco_render::SceneCamera::bloom`, whose binder REFUSES bloom on
-    /// a non-HDR camera (review `R4`) — and `hdr` is deliberately still off
-    /// everywhere, so this knob renders nothing today, exactly as before.
+    /// writes the render intent, whose binder owns the concrete post-process
+    /// component.
     pub bloom_intensity: Option<f32>,
 }
 
@@ -433,6 +449,33 @@ pub struct SetEnvironmentLight {
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
 pub struct Earthshine;
+
+/// Validate a live shadow-range edit against the current cascade configuration.
+///
+/// A runtime command is an explicit request, not a quality preset. Invalid
+/// values are therefore rejected rather than clamped or replaced with a
+/// renderer default. Returning the current values for omitted fields also
+/// makes a partial command preserve the other authored/live range exactly.
+fn validated_shadow_ranges(
+    minimum_distance: f32,
+    current_first_cascade_bound: f32,
+    current_maximum_distance: f32,
+    requested_first_cascade_bound: Option<f32>,
+    requested_maximum_distance: Option<f32>,
+) -> Option<(f32, f32)> {
+    if requested_first_cascade_bound.is_none() && requested_maximum_distance.is_none() {
+        return None;
+    }
+
+    let first = requested_first_cascade_bound.unwrap_or(current_first_cascade_bound);
+    let maximum = requested_maximum_distance.unwrap_or(current_maximum_distance);
+    (minimum_distance.is_finite()
+        && first.is_finite()
+        && maximum.is_finite()
+        && minimum_distance < first
+        && first < maximum)
+        .then_some((first, maximum))
+}
 
 /// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
 /// its `CascadeShadowConfig`, `GlobalAmbientLight` and camera `Exposure` — all
@@ -459,6 +502,7 @@ fn on_set_environment_light(
             &mut Transform,
             &mut DirectionalLight,
             Option<&mut CascadeShadowConfig>,
+            Option<&mut lunco_render::ShadowMapSuppressed>,
         ),
         (
             With<DirectionalLight>,
@@ -473,7 +517,7 @@ fn on_set_environment_light(
     // The command has one authoritative scene-sun target. Refuse ambiguity
     // rather than applying a user command to an arbitrary set of lights.
     if q_sun.iter().count() == 1 {
-        let Ok((mut tf, mut light, cascades)) = q_sun.single_mut() else {
+        let Ok((mut tf, mut light, cascades, suppressed)) = q_sun.single_mut() else {
             unreachable!("a counted scene sun must remain queryable");
         };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
@@ -492,42 +536,53 @@ fn on_set_environment_light(
             light.color = Color::linear_rgb(r, g, b);
         }
         if let Some(s) = cmd.shadow_maps_enabled {
-            light.shadow_maps_enabled = s;
+            if let Some(mut suppressed) = suppressed {
+                // Keep the explicit command as the restore intent, while the
+                // configured caster policy continues to own the effective
+                // Bevy flag until admission changes.
+                suppressed.restore_enabled = s;
+                suppressed.last_applied_enabled = false;
+                light.shadow_maps_enabled = false;
+            } else {
+                light.shadow_maps_enabled = s;
+            }
         }
         if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
-            if let Some(mut cfg) = cascades {
-                // Rebuild from the live config, overriding only the two
-                // range knobs (cascade count / overlap / near are kept).
-                // The empty-bounds fallbacks are local consts mirroring the
-                // canonical lunar-sun cascade defaults (see their declaration).
-                let cur_first = cfg
-                    .bounds
-                    .first()
-                    .copied()
-                    .unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
-                let cur_max = cfg
-                    .bounds
-                    .last()
-                    .copied()
-                    .unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
-                // The first bound has to stay a metre inside the max, so the max is
-                // floored at 2 m first: clamping the other way round (bound, then
-                // max) lets a sub-2 m max pull the first bound to zero or negative,
-                // which produces a degenerate cascade and a black shadow pass.
-                let max = cmd.shadow_max_distance.unwrap_or(cur_max).max(2.0);
-                let first = cmd
-                    .shadow_first_cascade_bound
-                    .unwrap_or(cur_first)
-                    .clamp(1.0, max - 1.0);
-                *cfg = CascadeShadowConfigBuilder {
-                    num_cascades: cfg.bounds.len().max(1),
-                    minimum_distance: cfg.minimum_distance,
-                    first_cascade_far_bound: first,
-                    maximum_distance: max,
-                    overlap_proportion: cfg.overlap_proportion,
-                }
-                .build();
+            let Some(mut cfg) = cascades else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade configuration"
+                );
+                return;
+            };
+            let Some((&cur_first, &cur_max)) = cfg.bounds.first().zip(cfg.bounds.last()) else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade bounds"
+                );
+                return;
+            };
+            let Some((first, maximum)) = validated_shadow_ranges(
+                cfg.minimum_distance,
+                cur_first,
+                cur_max,
+                cmd.shadow_first_cascade_bound,
+                cmd.shadow_max_distance,
+            ) else {
+                warn!(
+                    "SetEnvironmentLight shadow-range request ignored: first cascade bound must be finite and greater than the minimum distance, and maximum distance must be finite and greater than the first bound"
+                );
+                return;
+            };
+            // Rebuild from the live config, overriding only the two requested
+            // range knobs. No renderer default or clamp is allowed to replace
+            // an invalid explicit request.
+            *cfg = CascadeShadowConfigBuilder {
+                num_cascades: cfg.bounds.len(),
+                minimum_distance: cfg.minimum_distance,
+                first_cascade_far_bound: first,
+                maximum_distance: maximum,
+                overlap_proportion: cfg.overlap_proportion,
             }
+            .build();
         }
     }
 
@@ -745,6 +800,34 @@ impl Plugin for EnvironmentPlugin {
 mod tests {
     use super::*;
     use big_space::prelude::Grid;
+
+    #[test]
+    fn shadow_range_validation_rejects_invalid_explicit_values_without_clamping() {
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(900.0), Some(50.0)),
+            None
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(f32::NAN), None),
+            None
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, None, Some(f32::INFINITY)),
+            None
+        );
+    }
+
+    #[test]
+    fn shadow_range_validation_preserves_omitted_live_value() {
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, Some(80.0), None),
+            Some((80.0, 1500.0))
+        );
+        assert_eq!(
+            validated_shadow_ranges(0.1, 40.0, 1500.0, None, Some(3000.0)),
+            Some((40.0, 3000.0))
+        );
+    }
 
     #[test]
     fn flat_gravity_stays_in_the_active_physics_frame() {

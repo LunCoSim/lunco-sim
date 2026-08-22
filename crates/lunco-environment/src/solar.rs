@@ -68,12 +68,22 @@ pub fn compute_local_solar(
         return;
     }
     let Some((sun_gt, _, _)) = crate::horizon::pick_sun(&q_sun) else {
+        for (entity, existing, _) in &q_targets {
+            if existing.is_some() {
+                commands.entity(entity).remove::<LocalSolar>();
+            }
+        }
         return;
     };
 
     // `back()` is the direction the light points *from* → toward the sun.
     let d: Vec3 = *sun_gt.back();
     if !d.is_finite() || d.length_squared() < 1e-12 {
+        for (entity, existing, _) in &q_targets {
+            if existing.is_some() {
+                commands.entity(entity).remove::<LocalSolar>();
+            }
+        }
         return;
     }
     for (entity, existing, mount) in &q_targets {
@@ -121,6 +131,26 @@ pub fn inject_local_solar_into_cosim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_sun_removes_cached_local_direction() {
+        let mut app = App::new();
+        app.add_systems(Update, compute_local_solar);
+        let probe = app
+            .world_mut()
+            .spawn((
+                crate::EnvironmentProbe,
+                LocalSolar {
+                    direction: Vec3::NEG_Z,
+                },
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<LocalSolar>(probe).is_none(),
+            "a scene without a sun must not retain a stale solar direction"
+        );
+    }
 
     #[test]
     fn missing_solar_direction_removes_only_solar_outputs() {

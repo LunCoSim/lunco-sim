@@ -263,10 +263,12 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
             let attachment_suspension = view
                 .has_api_schema(&p, "PhysxVehicleWheelAttachmentAPI")
                 .then_some(&p);
+            let attachment_tire = attachment_suspension;
             let params = lunco_usd_sim::wheel_params::WheelParams::read(
                 &view,
                 &p,
                 attachment_suspension,
+                attachment_tire,
                 powertrain.as_ref(),
             )
             .unwrap_or_else(|missing| {

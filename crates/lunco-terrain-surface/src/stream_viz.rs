@@ -48,51 +48,17 @@ use lunco_materials::{
     ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 use lunco_obstacle_field::grid_mesh;
-use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
+use lunco_terrain_core::{measure_node_error, HeightSource};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
-/// Vertices per tile side (so each tile is `TILE_RES²` verts). 49 → 48² quads.
-/// Higher = finer geometry per tile (smoother crater rims / slopes, fewer visible
-/// triangle "lines") at the same tile count — cheap on a modern GPU.
-const TILE_RES: usize = 49;
-
-/// Mesh resolution of the single tile a [`LodFrozen`] terrain draws — verts per side.
+/// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
+/// persisted in [`lunco_render::RenderingQualitySettings`]. Keeping them there
+/// makes the Graphics menu the sole owner of render-quality policy; this module
+/// only consumes the selected profile.
 ///
-/// 2049² ≈ 4.2M verts / 8.4M triangles in ONE draw call: over the moonbase's ~1 km
-/// window, ~0.5 m between vertices.
-///
-/// Sized to the CLOSEST the shot gets, not to the window. At 1025 (~1 m spacing) a
-/// wide establishing orbit was fine, but a 90 m pass at 35 m altitude reads that
-/// spacing as faceting — one tile has to carry, everywhere, the detail the quadtree
-/// used to spend only where the camera was.
-///
-/// Why not finer: 4097² is 16.8M verts (~1 GB with indices) and a ~20 s bake, for
-/// 0.25 m spacing the surface cannot fill — the DEM is ~2 m/px, and below that only
-/// the analytic crater/overzoom modifiers have anything to add. 0.5 m is about where
-/// sampling stops buying real detail.
-const CINEMATIC_TILE_RES: usize = 2049;
-/// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
-/// error-driven selection only feature tiles (rims, peaks) actually reach it, so
-/// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
-/// Going deeper cannot sharpen craterlets: [`Overzoom`]'s Nyquist gate is already
-/// at full amplitude by depth 8 for any authored `lunco:layer:maxFeature` — where
-/// detail dies is a property of the layer parameters, not of this cap.
-const MAX_DEPTH: u8 = 8;
-/// On-screen error (px) at which a node refines — the ONE detail-vs-cost knob of
-/// the error-driven metric. The camera's actual viewport and projection supply
-/// the other terms of the screen-space-error calculation. Smaller = finer, and
-/// refine ranges scale as its inverse, so it also sets how far out craters
-/// resolve before the camera reaches them. Cost is bounded by `tile_budget` +
-/// nearest-first splits.
-const TARGET_PIXEL_ERROR: f64 = 2.0;
-/// Probe mesh resolution for [`measure_node_error`] — coarse on purpose: the
-/// measurement senses "is there detail here worth refining toward," it does not
-/// need the tile's full 49² fidelity. ~657 oracle samples per (memoized) node.
-const NODE_ERROR_PROBE_RES: usize = 9;
-
 /// Marks a perspective camera as a visual terrain-detail authority.
 ///
 /// Every active marked camera contributes one stable, camera-centred detail cover.
@@ -229,10 +195,11 @@ pub(crate) fn collect_terrain_detail_demands(
                         let viewport = camera.physical_viewport_size()?;
                         let screen_height_px = viewport.y as f64;
                         let fov_y_rad = perspective.fov as f64;
-                        if screen_height_px <= 0.0
-                            || !screen_height_px.is_finite()
-                            || !(0.0 < fov_y_rad && fov_y_rad < std::f64::consts::PI)
-                            || !fov_y_rad.is_finite()
+                        if !(screen_height_px > 0.0
+                            && screen_height_px.is_finite()
+                            && 0.0 < fov_y_rad
+                            && fov_y_rad < std::f64::consts::PI
+                            && fov_y_rad.is_finite())
                         {
                             return None;
                         }
@@ -357,22 +324,13 @@ fn lod_rgb(depth: u32) -> [f32; 3] {
     P[(depth as usize).min(P.len() - 1)]
 }
 
-/// Marker + params: this terrain streams visual LOD tiles. Inserted by the build
-/// when the request set `lod_viz`. Physics stays on the static heightfield collider.
+/// Marker: this terrain streams visual LOD tiles. Inserted by the build when
+/// the request set `lod_viz`. The authoritative tile-resolution and refinement
+/// policy lives in [`lunco_render::RenderingQualitySettings`], so this marker
+/// intentionally carries no second copy that could go stale after a Graphics
+/// edit.
 #[derive(Component)]
-pub struct TerrainLodViz {
-    pub max_depth: u8,
-    pub tile_res: usize,
-}
-
-impl Default for TerrainLodViz {
-    fn default() -> Self {
-        TerrainLodViz {
-            max_depth: MAX_DEPTH,
-            tile_res: TILE_RES,
-        }
-    }
-}
+pub struct TerrainLodViz;
 
 /// One spawned LOD tile + the regen **generation** it was baked at. When a live
 /// re-bake (Inspector edit) changes the heights, the terrain's generation bumps; a
@@ -502,10 +460,10 @@ fn wanted_parent_fallbacks(wanted: &HashSet<QuadCoord>, parents: &mut HashSet<Qu
 /// stale deep tile and a fresh coarse one as re-bakes landed, and looked worse.
 /// Substituting a DIFFERENT node is the thing that fails; keeping the SAME node on
 /// screen until it is replaced is what works.
-/// Cover edits (splits + merges) applied per frame. Bounds churn: the cover is
-/// PERSISTENT state now, so a frame changes a handful of nodes instead of
-/// re-deriving hundreds. High enough that a fast camera converges in a few frames.
-const MAX_COVER_EDITS: usize = 64;
+#[cfg(test)]
+const TEST_MAX_COVER_EDITS: usize = 64;
+#[cfg(test)]
+const TEST_LOD_HYSTERESIS_RATIO: f64 = 1.30;
 
 /// The up-to-4 same-depth edge-neighbour coords of `c` (clipped at the root square).
 fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
@@ -588,7 +546,7 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 ///
 /// Split priority is `dist / refine_range`, so the budget is spent nearest-first.
 /// Merges run before splits (they free budget) and only past the same
-/// [`REFINE_HYSTERESIS`] band the recursive walk uses, so a camera parked on a
+/// configured hysteresis band the recursive walk uses, so a camera parked on a
 /// threshold cannot flip a quad every frame.
 ///
 /// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
@@ -636,6 +594,8 @@ fn evolve_cover_for_foci(
         foci,
         node_error,
         budget,
+        TEST_MAX_COVER_EDITS,
+        TEST_LOD_HYSTERESIS_RATIO,
         &|_, _| false,
         &mut CoverScratch::default(),
     )
@@ -644,7 +604,7 @@ fn evolve_cover_for_foci(
 
 /// Reused candidate collections for [`evolve_cover_for_foci_with_retention`] —
 /// previously three fresh heap collections per terrain per frame, allocated to
-/// apply at most [`MAX_COVER_EDITS`] edits.
+/// apply the configured cover-edit budget.
 #[derive(Default)]
 struct CoverScratch {
     parents: HashSet<QuadCoord>,
@@ -666,6 +626,8 @@ fn evolve_cover_for_foci_with_retention(
     foci: &[([f64; 2], f64)],
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
+    max_cover_edits: usize,
+    hysteresis_ratio: f64,
     retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
     scratch: &mut CoverScratch,
 ) -> (usize, usize) {
@@ -717,13 +679,13 @@ fn evolve_cover_for_foci_with_retention(
             .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
     };
     // Sorting the FULL merge list was one of the two per-frame O(n log n)
-    // passes run to apply ≤MAX_COVER_EDITS edits. Pass 1 only ever consumes
+    // passes run to apply the configured cover-edit budget. Pass 1 only ever consumes
     // the candidates past the hysteresis band, so partition those to the
     // front and order just that (usually empty) prefix; the full ordering is
     // materialised only on the rare over-budget frame (pass 2 below).
     let mut band = 0;
     for i in 0..merges.len() {
-        if merges[i].0 >= REFINE_HYSTERESIS {
+        if merges[i].0 >= hysteresis_ratio {
             merges.swap(band, i);
             band += 1;
         }
@@ -747,7 +709,7 @@ fn evolve_cover_for_foci_with_retention(
     // 1. Voluntary merges — the node is genuinely past the hysteresis band
     //    (the sorted prefix holds exactly those, farthest first).
     for &(_, p) in merges.iter().take(band) {
-        if edits >= MAX_COVER_EDITS {
+        if edits >= max_cover_edits {
             break;
         }
         // Restriction guard — also what makes cascade splits STABLE: a node
@@ -768,10 +730,10 @@ fn evolve_cover_for_foci_with_retention(
     //    old reverse sort put its zero-slack near-camera entries FIRST here, causing
     //    the precise fine → coarse → fine flicker it was meant to prevent. Only if
     //    no far merge can satisfy the hard budget may this pass touch retained tiles.
-    //    Not bounded by `MAX_COVER_EDITS`: being over budget is a frame-rate problem,
+    //    Not bounded by the configured cover-edit budget: being over budget is a frame-rate problem,
     //    and unlike a global metric change this only touches the quads it drops.
     // Forced merges count toward the RETURNED edit total (a pass that shrank
-    // the cover is not a fixed point) but not toward `MAX_COVER_EDITS` — being
+    // the cover is not a fixed point) but not toward the cover-edit setting — being
     // over budget is a frame-rate problem the pass must fully resolve.
     let mut forced = 0usize;
     if cover.len() > budget {
@@ -830,7 +792,7 @@ fn evolve_cover_for_foci_with_retention(
     // consumed cascades leave edit budget unspent — so the visit order, the
     // applied edits and the `budget_refused` count are all identical to the
     // full sort.
-    let prefix = MAX_COVER_EDITS.saturating_sub(edits).min(splits.len());
+    let prefix = max_cover_edits.saturating_sub(edits).min(splits.len());
     if prefix > 0 && prefix < splits.len() {
         splits.select_nth_unstable_by(prefix - 1, split_order);
     }
@@ -838,7 +800,7 @@ fn evolve_cover_for_foci_with_retention(
     let mut sorted_upto = prefix;
     let mut next = 0;
     while next < splits.len() {
-        if edits >= MAX_COVER_EDITS {
+        if edits >= max_cover_edits {
             break;
         }
         if next == sorted_upto {
@@ -883,7 +845,7 @@ fn evolve_cover_for_foci_with_retention(
         // The whole chain lands or none of it does — a partial cascade would leave
         // the violation it exists to prevent. `continue`, not `break`: a later,
         // cheaper split (no cascade) may still fit the remaining budget.
-        if edits + chain.len() > MAX_COVER_EDITS {
+        if edits + chain.len() > max_cover_edits {
             continue; // transient: retried next pass once the edit budget frees up
         }
         if cover.len() + 3 * chain.len() > budget {
@@ -1032,6 +994,7 @@ fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
 pub struct LodTiles {
     tiles: HashMap<QuadCoord, TileSlot>,
     mode: TerrainShaderMode,
+    morph_ratio: f32,
     gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
     /// focus + eye height + heading — heading drives bake PRIORITY via
@@ -1202,122 +1165,86 @@ fn band_bucket(morph_end: f32) -> u32 {
     (morph_end.max(1.0).ln() * 4.0).floor() as u32
 }
 
-/// The geomorph start/end ratio, read off the core quadtree type so the shader
-/// band cannot drift from the `Quadtree::morph_ratio` the CPU selection uses.
-fn morph_ratio() -> f32 {
-    Quadtree::new(1.0, 0, 1.0, 1.0).morph_ratio as f32
-}
-
 /// Snap a selected morph band to its bucket's representative values, so the tile
 /// and its cached material agree exactly. Snapping DOWN (floor bucket) means a
 /// tile always finishes morphing *before* the selection swaps in its parent — a
 /// slightly early morph, never a pop.
-fn snap_band(morph_end: f32) -> (f32, f32, u32) {
+fn snap_band(morph_end: f32, morph_ratio: f32) -> (f32, f32, u32) {
     let bucket = band_bucket(morph_end);
     if bucket == u32::MAX {
         return (1.0e20, 1.0e21, bucket);
     }
     let end = (bucket as f32 * 0.25).exp();
-    (morph_ratio() * end, end, bucket)
+    (morph_ratio * end, end, bucket)
 }
 
-/// Runtime-tunable LOD knobs (Inspector → "Terrain LOD"). Global across terrains.
-/// Changing these re-selects tiles live so you can dial detail-vs-distance and the
-/// load smoothness without a rebuild.
-#[derive(Resource, Clone, Copy, Reflect, PartialEq)]
-#[reflect(Resource)]
-pub struct TerrainLodConfig {
-    /// Screen-metric refinement threshold (px in the active camera viewport): a
-    /// node refines while its MEASURED surface error subtends more than this. Smaller
-    /// = finer everywhere; detail lands where the surface earns it (rims, peaks),
-    /// not uniformly by distance.
-    pub pixel_error: f64,
-    /// Deepest quadtree level the streamer refines to (caps closest-up detail).
-    pub max_depth: u8,
-    /// Tiles BAKED per frame across all terrains. 1 = smoothest frame-time but
-    /// slowest fill; raise for a faster initial load at the cost of bigger spikes.
-    pub bakes_per_frame: usize,
-    /// Cap on SELECTED tiles per terrain. The error-driven walk's tile count is
-    /// otherwise unbounded in the terrain: at realistic crater densities every
-    /// mid-distance node measures metres of error, and a 3 px target refined a
-    /// ~1 km disc to max depth (~6.8k live tiles ≈ 33M triangles on moonbase —
-    /// the 49 FPS). Enforced by COARSENING `pixel_error` until the selection
-    /// fits (so geomorph bands stay consistent with the actual transition
-    /// distances), not by capping the walk. ~500 tiles ≈ 2.3M terrain triangles.
-    pub tile_budget: usize,
-}
-
-impl Default for TerrainLodConfig {
-    fn default() -> Self {
-        // Off-thread baking → safe to start several tasks/frame for a fast,
-        // non-blocking fill. Raise/lower live in the Inspector.
-        //
-        // `tile_budget` caps SELECTED tiles per terrain — the dominant terrain GPU
-        // cost (~512 tiles ≈ 2.3M tris re-rendered every frame). On the wasm/WebGL
-        // target (single render thread, no CPU-side preprocessing) that throughput
-        // is the biggest steady-state cost, so the browser starts at a lighter
-        // budget — the terrain EXTENT is unchanged (coarsening `pixel_error` keeps
-        // the same footprint with fewer, larger far-field tiles); only distant
-        // detail softens. Native keeps the full budget. Tune live in the Inspector.
-        #[cfg(target_arch = "wasm32")]
-        let tile_budget = 64;
-        #[cfg(not(target_arch = "wasm32"))]
-        // Must roughly fit the metric's steady-state want at TARGET_PIXEL_ERROR:
-        // refused splits leave the far field on coarse parents indefinitely
-        // (surfaced as `TerrainStreamStatus::budget_refused`).
-        let tile_budget = 768;
-        // On wasm32 the `AsyncComputeTaskPool` has NO threads: the "off-thread"
-        // bake future runs to completion on the MAIN thread the instant it is
-        // polled. A tile bake is ~12k composed-oracle samples (2401 verts ×
-        // height_at + eps normals + the parent lattice), each walking the full
-        // modifier chain — so `bakes_per_frame` is a direct main-thread frame cost
-        // there. Cap it at 1, mirroring `collider_ring`'s wasm `bake_budget = 2`.
-        #[cfg(target_arch = "wasm32")]
-        let bakes_per_frame = 1;
-        #[cfg(not(target_arch = "wasm32"))]
-        // Native bakes stay off-thread. Issue enough work to fill the guaranteed
-        // camera near field as one burst instead of exposing a few sibling
-        // groups per rendered frame (the visible startup "clickering").
-        let bakes_per_frame = 24;
-        TerrainLodConfig {
-            pixel_error: TARGET_PIXEL_ERROR,
-            max_depth: MAX_DEPTH,
-            bakes_per_frame,
-            tile_budget,
-        }
-    }
-}
-
-/// Live-tune [`TerrainLodConfig`] from the API/scripts — the same fields the
-/// Inspector's "Terrain LOD" section edits. Omitted fields keep their current
-/// values. Written through raw: the selection pass clamps at its use sites, so
-/// command and Inspector edits go through the same guards.
+/// Edit the persisted terrain rendering-quality fields through the same typed
+/// command bus used by the Graphics settings menu. Omitted values remain
+/// unchanged; an invalid candidate is rejected as a whole instead of being
+/// clamped into an undocumented quality level.
 #[Command(default)]
-pub struct SetTerrainLod {
+pub struct SetTerrainRenderingQuality {
+    pub tile_resolution: Option<usize>,
+    pub cinematic_resolution: Option<usize>,
     pub pixel_error: Option<f64>,
     pub max_depth: Option<u8>,
+    pub probe_resolution: Option<usize>,
     pub bakes_per_frame: Option<usize>,
+    pub max_inflight_bakes: Option<usize>,
     pub tile_budget: Option<usize>,
+    pub cover_edits_per_frame: Option<usize>,
+    pub hysteresis_ratio: Option<f64>,
+    pub morph_start_ratio: Option<f64>,
 }
 
-#[on_command(SetTerrainLod)]
-fn on_set_terrain_lod(trigger: On<SetTerrainLod>, mut cfg: ResMut<TerrainLodConfig>) {
-    let ev = trigger.event();
-    if let Some(v) = ev.pixel_error {
-        cfg.pixel_error = v;
+#[on_command(SetTerrainRenderingQuality)]
+fn on_set_terrain_rendering_quality(
+    trigger: On<SetTerrainRenderingQuality>,
+    mut settings: ResMut<lunco_render::RenderingQualitySettings>,
+) {
+    let event = trigger.event();
+    let mut candidate = *settings;
+    if let Some(value) = event.tile_resolution {
+        candidate.terrain_lod_tile_resolution = value;
     }
-    if let Some(v) = ev.max_depth {
-        cfg.max_depth = v;
+    if let Some(value) = event.cinematic_resolution {
+        candidate.terrain_lod_cinematic_resolution = value;
     }
-    if let Some(v) = ev.bakes_per_frame {
-        cfg.bakes_per_frame = v;
+    if let Some(value) = event.pixel_error {
+        candidate.terrain_lod_pixel_error = value;
     }
-    if let Some(v) = ev.tile_budget {
-        cfg.tile_budget = v;
+    if let Some(value) = event.max_depth {
+        candidate.terrain_lod_max_depth = value;
     }
+    if let Some(value) = event.probe_resolution {
+        candidate.terrain_lod_probe_resolution = value;
+    }
+    if let Some(value) = event.bakes_per_frame {
+        candidate.terrain_lod_bakes_per_frame = value;
+    }
+    if let Some(value) = event.max_inflight_bakes {
+        candidate.terrain_lod_max_inflight_bakes = value;
+    }
+    if let Some(value) = event.tile_budget {
+        candidate.terrain_lod_tile_budget = value;
+    }
+    if let Some(value) = event.cover_edits_per_frame {
+        candidate.terrain_lod_cover_edits_per_frame = value;
+    }
+    if let Some(value) = event.hysteresis_ratio {
+        candidate.terrain_lod_hysteresis_ratio = value;
+    }
+    if let Some(value) = event.morph_start_ratio {
+        candidate.terrain_lod_morph_start_ratio = value;
+    }
+    if let Err(reason) = candidate.validate() {
+        bevy::log::error!(target: "terrain", "rejected terrain rendering quality: {reason}");
+        return;
+    }
+    *settings = candidate;
 }
 
-register_commands!(on_set_terrain_lod);
+register_commands!(on_set_terrain_rendering_quality);
 
 /// Memoized per-node measured geometric error for a terrain's current oracle —
 /// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
@@ -1346,8 +1273,9 @@ pub struct TerrainNodeErrors {
 /// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
-/// Bounded: LRU-trimmed against a resident-derived entry cap and a byte
-/// ceiling (see [`mesh_cache_entry_cap`] / [`MESH_CACHE_BYTE_CEILING`]);
+/// Bounded: LRU-trimmed against a resident-derived entry cap and the
+/// authoritative graphics-settings byte ceiling (see
+/// [`mesh_cache_entry_cap`] / `lunco_render::RenderingQualitySettings`);
 /// entries the current frame's cover needs are never evicted.
 /// Value: the cached mesh handle AND the `origin_y` its vertices were rebased by at
 /// bake time. `origin_y` MUST travel with the mesh — the tile is placed at it, so a
@@ -1449,18 +1377,13 @@ impl LodMeshCache {
         }
     }
 
-    /// LRU trim to `entry_cap` entries / [`MESH_CACHE_BYTE_CEILING`] bytes.
+    /// LRU trim to `entry_cap` entries / `byte_cap` bytes.
     /// `protected` entries — the current frame's cover and its fallback coords —
     /// are NEVER evicted: dropping what the cover still cycles through is exactly
     /// the old failure (cap below the resident bound ⇒ every trailing-edge tile
     /// re-baked on revisit). Victims go oldest-stamp-first, a total order.
-    fn trim(
-        &mut self,
-        entry_cap: usize,
-        byte_cap: usize,
-        protected: impl Fn(&MeshCacheKey) -> bool,
-    ) {
-        if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+    fn trim(&mut self, entry_cap: usize, byte_cap: u64, protected: impl Fn(&MeshCacheKey) -> bool) {
+        if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
             return;
         }
         let mut victims: Vec<(u64, MeshCacheKey)> = self
@@ -1471,7 +1394,7 @@ impl LodMeshCache {
             .collect();
         victims.sort_unstable_by_key(|&(stamp, _)| stamp);
         for (_, key) in victims {
-            if self.map.len() <= entry_cap && self.bytes <= byte_cap {
+            if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
                 break;
             }
             if let Some(entry) = self.map.remove(&key) {
@@ -1489,16 +1412,6 @@ fn tile_mesh_bytes(res: usize) -> usize {
     res * res * (4 * 12 + 8) + (res - 1) * (res - 1) * 6 * 4
 }
 
-/// Memory ceiling for the mesh cache, as the byte estimate of its entries.
-/// Rationale: one default terrain's resident bound is ~1.6 k tiles
-/// (`tile_budget` 768 wanted + up to as many hidden parent fallbacks) at
-/// ~190 KB each ≈ 300 MB; the ceiling admits that plus a comparable
-/// trailing-edge retention band, so a camera reversing over its own trail
-/// hits the cache instead of re-baking (the T2 failure). A cinematic 2049²
-/// tile (~330 MB) fits while wanted — protected entries are never evicted —
-/// and becomes the first LRU victim after the shot.
-const MESH_CACHE_BYTE_CEILING: usize = 640 * 1024 * 1024;
-
 /// Cache-entry cap derived from what streaming terrains can actually keep
 /// RESIDENT — the selected cover (≤ `tile_budget`), one hidden direct-parent
 /// fallback per selected leaf (worst case as many again), the coarse carpet and
@@ -1510,9 +1423,6 @@ fn mesh_cache_entry_cap(tile_budget: usize, terrain_count: usize) -> usize {
     let resident_bound = 2 * tile_budget + coarse_fallback_tile_count() + 64;
     2 * resident_bound * terrain_count
 }
-/// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
-/// thousands of tasks). New tasks wait for slots to free.
-const MAX_INFLIGHT_BAKES: usize = 64;
 // Tile insertion is immediate once the mesh and material are ready. The draw
 // partition selects the deepest ready ancestor, and edge stitching makes every
 // finer/coarser boundary conform to the same parent lattice. There is no
@@ -1705,6 +1615,7 @@ fn spawn_tile(
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
+    morph_ratio: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
     authored: Option<&TerrainAuthoredMaps>,
@@ -1728,7 +1639,7 @@ fn spawn_tile(
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
-    let (ms, me, _bucket) = snap_band(morph_end);
+    let (ms, me, _bucket) = snap_band(morph_end, morph_ratio);
     let mut tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(mode, depth, ms, me, maps, authored, shadow, overlay),
@@ -1885,8 +1796,8 @@ fn bootstrap_cover_is_ready(
 /// # Why this exists
 ///
 /// Ordinary streaming is real-time paced on purpose: a frame starts at most
-/// [`TerrainLodConfig::bakes_per_frame`] bakes, caps in-flight work at
-/// [`MAX_INFLIGHT_BAKES`], and *polls* those off-thread tasks with `poll_once` — so
+/// the configured `terrain_lod_bakes_per_frame` bakes, caps in-flight work at
+/// `terrain_lod_max_inflight_bakes`, and *polls* those off-thread tasks with `poll_once` — so
 /// a bake lands on whichever frame it happens to finish on. That is exactly right
 /// for interactive play (the frame never blocks on baking) and exactly wrong for
 /// offline capture, because "whichever frame it happens to finish on" is a function
@@ -1906,7 +1817,7 @@ fn bootstrap_cover_is_ready(
 ///
 /// Two changes in [`update_lod_tiles`], both only while set:
 ///
-/// 1. **No pacing budgets.** `bakes_per_frame` and [`MAX_INFLIGHT_BAKES`] are
+/// 1. **No pacing budgets.** `bakes_per_frame` and `max_inflight_bakes` are
 ///    lifted, so the set of bakes STARTED on a frame is a pure function of that
 ///    frame's selection rather than of a budget interacting with the previous
 ///    frame's carry-over.
@@ -2009,7 +1920,7 @@ pub fn update_lod_tiles(
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
-    cfg: Res<TerrainLodConfig>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     mut stream_status: ResMut<TerrainStreamStatus>,
     // Set while an offline recording captures — see [`TerrainStreamLockstep`].
     lockstep: Res<TerrainStreamLockstep>,
@@ -2022,6 +1933,13 @@ pub fn update_lod_tiles(
     mut looks: Query<&mut ShaderLook>,
     mut scratch: Local<StreamScratch>,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            bevy::log::error!(target: "terrain", "terrain rendering quality is invalid: {reason}");
+            return;
+        }
+    };
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = overlay_params.uniforms();
@@ -2055,12 +1973,12 @@ pub fn update_lod_tiles(
     let mut bake_budget = if lockstep {
         usize::MAX
     } else {
-        cfg.bakes_per_frame.max(1)
+        profile.terrain_lod_bakes_per_frame
     };
     let max_inflight = if lockstep {
         usize::MAX
     } else {
-        MAX_INFLIGHT_BAKES
+        profile.terrain_lod_max_inflight_bakes
     };
     // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
     // coord)`), so its cap must scale with them or two terrains would fight over
@@ -2070,7 +1988,7 @@ pub fn update_lod_tiles(
     for (
         terrain,
         hf,
-        viz,
+        _viz,
         mut tiles,
         mut pending,
         mut errs,
@@ -2130,12 +2048,12 @@ pub fn update_lod_tiles(
         }
         // The frozen cover is ONE tile for the whole terrain, so it carries the
         // detail the whole quadtree used to spread over thousands — mesh it far
-        // finer than a streamed tile. `viz.tile_res` (49) over the full window
+        // finer than a streamed tile. The configured streamed resolution over the full window
         // would be ~20 m between vertices: one tile, and no terrain.
         let tile_res = if frozen {
-            CINEMATIC_TILE_RES
+            profile.terrain_lod_cinematic_resolution
         } else {
-            viz.tile_res
+            profile.terrain_lod_tile_resolution
         };
         // A live max-depth reduction invalidates the persistent cover: it may
         // still contain leaves deeper than the new tree and those leaves would
@@ -2143,7 +2061,11 @@ pub fn update_lod_tiles(
         // so reset it to the root and let the normal selector rebuild it under
         // the new bound. Increasing the bound keeps the existing cover and
         // refines from that valid fixed point.
-        if tiles.cover.iter().any(|coord| coord.depth > cfg.max_depth) {
+        if tiles
+            .cover
+            .iter()
+            .any(|coord| coord.depth > profile.terrain_lod_max_depth)
+        {
             tiles.cover.clear();
             tiles.bootstrap_ready = false;
             tiles.settled_sig = None;
@@ -2158,7 +2080,8 @@ pub fn update_lod_tiles(
         // rebuilding, which left a one-frame black hole until the tiles re-baked.
         // The binder resolves each new look through its cache, so the swap costs one
         // material per (mode, band) — not one per tile.
-        if tiles.mode != mode {
+        let morph_ratio = profile.terrain_lod_morph_start_ratio as f32;
+        if tiles.mode != mode || tiles.morph_ratio.to_bits() != morph_ratio.to_bits() {
             swaps.clear();
             swaps.extend(
                 tiles
@@ -2168,11 +2091,12 @@ pub fn update_lod_tiles(
             );
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
-                let (ms, me, _) = snap_band(morph_end);
+                let (ms, me, _) = snap_band(morph_end, morph_ratio);
                 let look = tile_look(mode, depth, ms, me, maps, authored, shadow, overlay);
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
+            tiles.morph_ratio = morph_ratio;
         }
 
         // Project every active visual camera into this terrain's local DEM frame.
@@ -2229,10 +2153,17 @@ pub fn update_lod_tiles(
             continue;
         };
         let quadtree_for = |px: f64| {
-            Quadtree::from_screen_metric(h, cfg.max_depth, h, screen_height_px, fov_y_rad, px)
+            Quadtree::from_screen_metric(
+                h,
+                profile.terrain_lod_max_depth,
+                h,
+                screen_height_px,
+                fov_y_rad,
+                px,
+                profile.terrain_lod_morph_start_ratio,
+            )
         };
-        let base_px = cfg.pixel_error.clamp(0.5, 32.0);
-        let pixel_error = base_px;
+        let pixel_error = profile.terrain_lod_pixel_error;
         let qt = quadtree_for(pixel_error);
         // ── Idle-camera fast path ────────────────────────────────────────────
         // The selection below (quadtree walks + budget-coarsen loop + sort + queue
@@ -2276,9 +2207,15 @@ pub fn update_lod_tiles(
             // would pass the gate with a stale surface.
             sig.write_u64(hf.0.surface_key());
             // LOD knobs (Inspector) — a live tweak must re-select.
-            sig.write_u64(cfg.pixel_error.to_bits());
-            sig.write_u64(cfg.tile_budget as u64);
-            sig.write_u64(cfg.max_depth as u64);
+            sig.write_u64(profile.terrain_lod_pixel_error.to_bits());
+            sig.write_u64(profile.terrain_lod_tile_budget as u64);
+            sig.write_u64(profile.terrain_lod_max_depth as u64);
+            sig.write_u64(profile.terrain_lod_tile_resolution as u64);
+            sig.write_u64(profile.terrain_lod_cinematic_resolution as u64);
+            sig.write_u64(profile.terrain_lod_probe_resolution as u64);
+            sig.write_u64(profile.terrain_lod_cover_edits_per_frame as u64);
+            sig.write_u64(profile.terrain_lod_hysteresis_ratio.to_bits());
+            sig.write_u64(profile.terrain_lod_morph_start_ratio.to_bits());
             sig.finish()
         };
         {
@@ -2336,9 +2273,9 @@ pub fn update_lod_tiles(
                 // The probe estimates the resolved parent approximation error.
                 // Over-zoom remains Nyquist-gated here so the cached measurement
                 // stays camera-independent.
-                let probe_step = region.side() / (NODE_ERROR_PROBE_RES - 1) as f64;
+                let probe_step = region.side() / (profile.terrain_lod_probe_resolution - 1) as f64;
                 let limited = src.detail_limited(probe_step);
-                measure_node_error(&limited, region, NODE_ERROR_PROBE_RES)
+                measure_node_error(&limited, region, profile.terrain_lod_probe_resolution)
             });
             // A sparse coarse-node probe cannot discover a small crater that lies
             // between its samples. Without a conservative near-field floor, that
@@ -2360,13 +2297,13 @@ pub fn update_lod_tiles(
         // the range factor, so the transition distance and the morph band move
         // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
         // the re-walks are cheap; the loop is bounded by the 32 px clamp.
-        let budget = cfg.tile_budget.max(16);
+        let budget = profile.terrain_lod_tile_budget;
         // NOT a full `select_with_error` walk. The cover is persistent state now
         // (`evolve_cover` below); walking the whole tree here and discarding it would
         // reintroduce the per-frame cost this change exists to remove.
         sel.clear();
         if frozen {
-            // NO LOD — ONE tile, meshed at `CINEMATIC_TILE_RES`, covering the whole
+            // NO LOD — ONE tile, meshed at the configured cinematic resolution, covering the whole
             // terrain.
             //
             // There is no quadtree here at all, which is the point: `pixel_error`
@@ -2424,7 +2361,7 @@ pub fn update_lod_tiles(
                 // camera rig settles over its first few frames.
                 if tiles.cover.is_empty() {
                     tiles.budget_refused = 0;
-                    for _ in 0..cfg.max_depth.max(1) {
+                    for _ in 0..profile.terrain_lod_max_depth {
                         let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
                         let (_, refused) = evolve_cover_for_foci_with_retention(
                             &qt,
@@ -2432,12 +2369,14 @@ pub fn update_lod_tiles(
                             focus_metric,
                             &node_error,
                             budget,
+                            profile.terrain_lod_cover_edits_per_frame,
+                            profile.terrain_lod_hysteresis_ratio,
                             &|_, region| near_field_retains_refinement(region, visual_foci),
                             cover_scratch,
                         );
                         tiles.budget_refused += refused;
                         let after = required_focus_depth(&tiles.cover, visual_foci, &qt);
-                        if after == before || after == Some(cfg.max_depth) {
+                        if after == before || after == Some(profile.terrain_lod_max_depth) {
                             break;
                         }
                     }
@@ -2456,6 +2395,8 @@ pub fn update_lod_tiles(
                         focus_metric,
                         &node_error,
                         budget,
+                        profile.terrain_lod_cover_edits_per_frame,
+                        profile.terrain_lod_hysteresis_ratio,
                         &|_, region| near_field_retains_refinement(region, visual_foci),
                         cover_scratch,
                     );
@@ -2483,7 +2424,7 @@ pub fn update_lod_tiles(
         // re-probes (a full clear would re-measure ~1.6 k nodes in one frame).
         if errs.map.len() > NODE_ERROR_CACHE_CAP {
             let mut keep: HashSet<QuadCoord> =
-                HashSet::with_capacity(wanted.len() * (cfg.max_depth as usize + 1));
+                HashSet::with_capacity(wanted.len() * (profile.terrain_lod_max_depth as usize + 1));
             for &c in wanted.iter().chain(parent_fallbacks.iter()) {
                 let mut n = c;
                 while keep.insert(n) {
@@ -2649,6 +2590,7 @@ pub fn update_lod_tiles(
                 baked.center,
                 depth,
                 baked.morph_end,
+                morph_ratio,
                 mode,
                 maps,
                 authored,
@@ -2731,6 +2673,7 @@ pub fn update_lod_tiles(
                     s.region.center,
                     depth,
                     morph_end,
+                    morph_ratio,
                     mode,
                     maps,
                     authored,
@@ -2771,17 +2714,10 @@ pub fn update_lod_tiles(
                 // Tracy (`--features tracy`) its own zone.
                 let _span = bevy::log::info_span!("terrain_tile_bake").entered();
                 // Content-addressed bake: a warm reload of the same composed
-                // surface streams this tile from the `cache://` dir; a miss
+                // surface streams this tile from the platform cache; a miss
                 // samples the oracle (over-zoom Nyquist-gated at this tile's
                 // vertex spacing inside the bake) and persists for next time.
-                //
-                // TODO(R1): on wasm this cache ALWAYS misses — every tile, every
-                // session. `bake_tile_mesh_cached` → `lunco_precompute::bake_or_load`
-                // → `lunco_precompute::{load_blob, store_blob}`, both hard no-ops on
-                // `target_arch = "wasm32"` (lunco-precompute/src/lib.rs). The seam to
-                // wire is `lunco_storage::opfs_blob::{read, write}` (already used for
-                // the DEM grid blob in `terrain.rs`), which is async — so
-                // `bake_or_load` needs an async twin. Owner: lunco-precompute.
+                #[cfg(not(target_arch = "wasm32"))]
                 let tm = crate::tile_cache::bake_tile_mesh_cached(
                     oracle_arc.as_ref(),
                     coord,
@@ -2790,6 +2726,16 @@ pub fn update_lod_tiles(
                     half,
                     center,
                 );
+                #[cfg(target_arch = "wasm32")]
+                let tm = crate::tile_cache::bake_tile_mesh_cached_async(
+                    oracle_arc.clone(),
+                    coord,
+                    region,
+                    tile_res,
+                    half,
+                    center,
+                )
+                .await;
                 // RENDER_WORLD only: nothing reads a tile mesh's CPU vertex data back
                 // (physics rides the collider ring, picking rides the oracle), so the
                 // ~160 KB CPU copy per tile — ~164 MB across a full cache, doubled
@@ -2971,8 +2917,8 @@ pub fn update_lod_tiles(
         // tile entities themselves, so LRU-evicting its cache entries can only
         // cost a re-bake on a much later re-selection, never a visible hole.)
         mesh_cache.trim(
-            mesh_cache_entry_cap(cfg.tile_budget.max(16), terrain_count),
-            MESH_CACHE_BYTE_CEILING,
+            mesh_cache_entry_cap(profile.terrain_lod_tile_budget, terrain_count),
+            profile.terrain_mesh_cache_bytes,
             |(e, c, _)| {
                 *e == terrain
                     && (wanted.contains(c)
@@ -3098,6 +3044,10 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 #[cfg(test)]
 mod draw_partition_tests {
     use super::*;
+
+    fn terrain_quality() -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderingQualitySettings::default().profile()
+    }
 
     #[test]
     fn derived_map_appearance_is_identical_across_mesh_depths() {
@@ -3273,7 +3223,7 @@ mod draw_partition_tests {
         );
         let shadow_image = Handle::<Image>::default();
         app.world_mut().spawn((
-            TerrainLodViz::default(),
+            TerrainLodViz,
             tiles,
             TileShadowCache {
                 image: shadow_image.clone(),
@@ -3479,7 +3429,8 @@ mod draw_partition_tests {
             1000.0,
             1080.0,
             std::f64::consts::FRAC_PI_4,
-            TARGET_PIXEL_ERROR,
+            terrain_quality().terrain_lod_pixel_error,
+            terrain_quality().terrain_lod_morph_start_ratio,
         );
         let actual = TerrainVisualDemand {
             focus: [0.0, 0.0],
@@ -3496,8 +3447,13 @@ mod draw_partition_tests {
             .iter()
             .map(|demand| (demand.focus, demand.eye_height))
             .collect::<Vec<_>>();
-        let error =
-            |_coord: QuadCoord, region: Square| near_field_error_floor(region, TILE_RES, &demands);
+        let error = |_coord: QuadCoord, region: Square| {
+            near_field_error_floor(
+                region,
+                terrain_quality().terrain_lod_tile_resolution,
+                &demands,
+            )
+        };
         let mut cover = HashSet::new();
 
         for _ in 0..qt.max_depth {
@@ -3570,8 +3526,10 @@ mod draw_partition_tests {
             .children()
             .into_iter()
             .collect::<HashSet<_>>();
-        let mut tiles = LodTiles::default();
-        tiles.cover = cover.clone();
+        let mut tiles = LodTiles {
+            cover: cover.clone(),
+            ..Default::default()
+        };
         for coord in &cover {
             tiles.tiles.insert(
                 *coord,
@@ -4138,6 +4096,8 @@ mod draw_partition_tests {
                 &[([x, 0.0], 2.0)],
                 &err,
                 64,
+                TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut reused,
             );
@@ -4147,6 +4107,8 @@ mod draw_partition_tests {
                 &[([x, 0.0], 2.0)],
                 &err,
                 64,
+                TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut CoverScratch::default(),
             );
@@ -4175,6 +4137,8 @@ mod draw_partition_tests {
                 &[([0.0, 0.0], 5.0)],
                 &err,
                 16,
+                TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut scratch,
             )
@@ -4221,14 +4185,15 @@ mod draw_partition_tests {
     fn mesh_cache_trims_lru_first_and_never_evicts_protected() {
         let mut cache = LodMeshCache::default();
         let terrain = Entity::PLACEHOLDER;
-        let key = |x: u32| (terrain, c(3, x, 0), TILE_RES);
+        let tile_res = terrain_quality().terrain_lod_tile_resolution;
+        let key = |x: u32| (terrain, c(3, x, 0), tile_res);
         for x in 0..4 {
             cache.insert(key(x), Handle::default(), 0.0);
         }
         // Touch 0 so 1 becomes the oldest unprotected entry.
         assert!(cache.get(&key(0)).is_some());
         // Trim to 2 entries; 3 stands in for the current frame's cover.
-        cache.trim(2, usize::MAX, |k| *k == key(3));
+        cache.trim(2, u64::MAX, |k| *k == key(3));
         assert_eq!(cache.map.len(), 2);
         assert!(
             cache.map.contains_key(&key(3)),
@@ -4244,7 +4209,9 @@ mod draw_partition_tests {
             cache.map.values().map(|e| e.bytes).sum::<usize>()
         );
         // The byte ceiling alone also forces eviction.
-        cache.trim(usize::MAX, tile_mesh_bytes(TILE_RES), |k| *k == key(3));
+        cache.trim(usize::MAX, tile_mesh_bytes(tile_res) as u64, |k| {
+            *k == key(3)
+        });
         assert_eq!(cache.map.len(), 1);
         assert!(cache.map.contains_key(&key(3)));
     }
@@ -4267,6 +4234,8 @@ mod draw_partition_tests {
             &[([-700.0, -700.0], 5.0)],
             &err,
             13,
+            TEST_MAX_COVER_EDITS,
+            TEST_LOD_HYSTERESIS_RATIO,
             &|coord, _| coord == retained,
             &mut CoverScratch::default(),
         );

@@ -15,12 +15,12 @@
 //! `lunco_mobility::fold_proxy_wheel_mass` now folds the proxy wheels onto the
 //! chassis; these tests pin the AUTHORED side of the same contract.
 //!
-//! The headline test does not hand-list the properties to compare. It composes the
-//! rover twice and DIFFS every attribute of every prim the two compositions share,
-//! so a newly-introduced divergence fails here by existing — nobody has to have
-//! predicted it.
+//! The headline test does not hand-list shared vehicle properties. It composes the
+//! rover twice and diffs every shared attribute except the explicitly declared
+//! suspension-realization projection, so a newly-introduced divergence fails here
+//! without requiring somebody to predict its spelling.
 
-use lunco_usd_bevy::{compose_file_to_stage, CanonicalStage, UsdRead};
+use lunco_usd_bevy::{compose_file_to_stage, CanonicalStage, StageRecipe, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
 /// The two rover prims in `scenes/tests/drivetrain_parity.usda` — the SAME
@@ -58,6 +58,16 @@ fn vec3(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> Opt
 /// `…/RoverPhysical/Wheel_FL` both key as `/Wheel_FL`).
 fn under(prim: &str, root: &str) -> Option<String> {
     prim.strip_prefix(root).map(str::to_string)
+}
+
+/// The physical realization intentionally replaces the compliant raycast
+/// suspension arc with a rigid mount. These are the only composed attributes
+/// allowed to differ between the two realizations; each is asserted separately
+/// below so this list cannot become a silent escape hatch for vehicle changes.
+fn is_realization_specific_suspension_attribute(key: &str) -> bool {
+    key.ends_with(".lunco:suspension:restLength")
+        || key.ends_with(".physxVehicleSuspension:springDamperRate")
+        || key.ends_with("/SuspensionCasing.xformOp:translate")
 }
 
 /// Every `prim.attr = value` under one rover, keyed by the prim's path RELATIVE
@@ -115,8 +125,10 @@ fn the_two_realizations_compose_the_same_vehicle() {
     // Only attributes the two compositions SHARE. The physical variant legitimately
     // adds prims the raycast one has no use for (the articulation root, the per-wheel
     // revolute joints); a prim that exists on one side only is the variant doing its
-    // job. A prim on BOTH sides with a different value is the variant exceeding it.
+    // job. A prim on BOTH sides with a different value is the variant exceeding it,
+    // except for the explicitly tested suspension realization projection.
     let mut diffs: Vec<String> = Vec::new();
+    let mut realization_specific_diffs = Vec::new();
     for (key, va) in &ra {
         let Some(vb) = rb.get(key) else { continue };
         if va == vb {
@@ -132,10 +144,22 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if key.ends_with(".primvars:displayColor") {
             continue;
         }
+        if is_realization_specific_suspension_attribute(key) {
+            realization_specific_diffs.push(key.clone());
+            continue;
+        }
         diffs.push(format!(
             "  {key}\n      raycast : {va}\n      physical: {vb}"
         ));
     }
+
+    assert_eq!(
+        realization_specific_diffs.len(),
+        12,
+        "expected four wheels × three explicitly realization-specific suspension attributes, got {}: {:?}",
+        realization_specific_diffs.len(),
+        realization_specific_diffs
+    );
 
     assert!(
         diffs.is_empty(),
@@ -145,6 +169,42 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if diffs.len() == 1 { "y" } else { "ies" },
         diffs.join("\n")
     );
+}
+
+#[test]
+fn suspension_projection_matches_each_wheel_realization() {
+    let stage = parity_scene();
+    let view = stage.view();
+
+    for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+        let raycast = SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap();
+        let physical = SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap();
+        let raycast_rest = view.real(&raycast, "lunco:suspension:restLength");
+        let physical_rest = view.real(&physical, "lunco:suspension:restLength");
+        assert!(
+            raycast_rest.is_some_and(|value| value > 0.0),
+            "{wheel} raycast realization must compose positive suspension travel"
+        );
+        assert_eq!(
+            physical_rest,
+            Some(0.0),
+            "{wheel} physical realization must compose the authored rigid mount"
+        );
+
+        let raycast_casing = SdfPath::new(&format!("{RAYCAST}/{wheel}/SuspensionCasing")).unwrap();
+        let physical_casing =
+            SdfPath::new(&format!("{PHYSICAL}/{wheel}/SuspensionCasing")).unwrap();
+        let raycast_translate = vec3(&view, &raycast_casing, WHEEL_MOUNT_TRANSLATE);
+        let physical_translate = vec3(&view, &physical_casing, WHEEL_MOUNT_TRANSLATE);
+        assert!(
+            raycast_translate.is_some() && physical_translate.is_some(),
+            "{wheel} must compose the casing geometry in both realizations"
+        );
+        assert_ne!(
+            raycast_translate, physical_translate,
+            "{wheel} casing geometry must reflect compliant versus rigid suspension"
+        );
+    }
 }
 
 #[test]
@@ -247,11 +307,13 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
             &view,
             &raycast_path,
             Some(&raycast_path),
+            Some(&raycast_path),
             None,
         );
         let pb = lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
             &physical_path,
+            Some(&physical_path),
             Some(&physical_path),
             None,
         );
@@ -276,8 +338,8 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
                     "{wheel} slip stiffness"
                 );
                 assert_eq!(
-                    pa.cornering_stiffness, pb.cornering_stiffness,
-                    "{wheel} cornering stiffness"
+                    pa.lateral_stiffness_graph, pb.lateral_stiffness_graph,
+                    "{wheel} lateral stiffness graph"
                 );
                 assert_eq!(pa.brake_torque_max, pb.brake_torque_max, "{wheel} brake");
                 checked += 1;
@@ -286,4 +348,62 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
         }
     }
     assert_eq!(checked, 4, "expected four wheels, compared {checked}");
+}
+
+#[test]
+fn wheel_params_reads_tire_values_from_a_separate_attachment_target() {
+    let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+        "separate_tire.usda",
+        r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
+    token axis = "X"
+    float physxVehicleWheel:radius = 0.4
+    float physxVehicleWheel:width = 0.3
+    float physxVehicleWheel:mass = 25.0
+    float physxVehicleWheel:moi = 2.0
+    float physxVehicleWheel:dampingRate = 0.45
+    float physxVehicleWheel:maxBrakeTorque = 1500.0
+    double3 lunco:wheel:steerAxis = (0, 1, 0)
+    double lunco:wheel:driveDamping = 30.0
+}
+def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {
+    float physxVehicleTire:longitudinalStiffness = 9876.0
+    float2 physxVehicleTire:lateralStiffnessGraph = (2.0, 9876.0)
+    float physxVehicleTire:restLoad = 400.0
+    float lunco:tire:minValidatedSpeed = 1.25
+    float physics:dynamicFriction = 0.73
+}
+def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {
+    float lunco:suspension:restLength = 0.6
+    float physxVehicleSuspension:springStrength = 1000.0
+    float physxVehicleSuspension:springDamperRate = 30.0
+}
+def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
+    rel physxVehicleWheelAttachment:wheel = </Wheel>
+    rel physxVehicleWheelAttachment:tire = </Tire>
+    rel physxVehicleWheelAttachment:suspension = </Suspension>
+    int physxVehicleWheelAttachment:index = 0
+}
+"#,
+    ))
+    .expect("separate tire fixture composes");
+    let view = stage.view();
+    let wheel = SdfPath::new("/Wheel").unwrap();
+    let tire = SdfPath::new("/Tire").unwrap();
+    let suspension = SdfPath::new("/Suspension").unwrap();
+
+    let params = lunco_usd_sim::wheel_params::WheelParams::read(
+        &view,
+        &wheel,
+        Some(&suspension),
+        Some(&tire),
+        None,
+    )
+    .expect("separate tire target is a supported standard composition");
+    assert_eq!(params.slip_stiffness, 9876.0);
+    assert_eq!(params.lateral_stiffness_graph.minimum_normalized_load, 2.0);
+    assert_eq!(params.lateral_stiffness_graph.max_stiffness, 9876.0);
+    assert_eq!(params.lateral_stiffness_graph.rest_load, 400.0);
+    assert_eq!(params.min_validated_speed, 1.25);
+    assert!((params.friction_mu - 0.73).abs() < 1e-6);
 }

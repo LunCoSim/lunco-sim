@@ -97,6 +97,7 @@ impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderProfile>()
             .init_resource::<lunco_render::CommunicationLineSettings>()
+            .init_resource::<lunco_render::SceneBloomOverride>()
             .init_resource::<PbrLookCache>()
             // `PbrLook` derives `Reflect` but was never REGISTERED, which left it
             // invisible to every generic reflection surface in the codebase:

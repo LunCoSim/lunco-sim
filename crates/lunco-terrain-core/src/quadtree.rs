@@ -31,13 +31,6 @@
 //! Pure + `no-bevy` → unit-tested and wasm-safe. The Bevy streaming manager (S3) and
 //! the collider ring (S4) both consume this.
 
-/// LOD **hysteresis** factor: a node refines when the focus is inside its refine
-/// range `r`, and coarsens back only past `1.30 · r`. The bare `dist < r` test has no
-/// dead band, so a focus resting ON a boundary re-splits and re-merges that node
-/// every frame. Thirty percent comfortably absorbs rover/chase-camera motion and
-/// keeps an already-resident child available until the camera has clearly left it.
-pub const REFINE_HYSTERESIS: f64 = 1.30;
-
 /// Fraction of a child node's refine range used for the start of its CDLOD morph.
 /// A child finishes morphing to its parent at `r` and starts at `0.55 · r`, leaving
 /// a broad distance-driven transition rather than a narrow visual snap.
@@ -174,7 +167,8 @@ impl Quadtree {
     /// `screen_height_px` and `fov_y_rad` are supplied by that camera. Matches the
     /// 3D-Tiles SSE formula
     /// `sse = error · screenHeight / (distance · 2·tan(fov/2))` solved for the
-    /// distance where `sse = target_pixel_error`.
+    /// distance where `sse = target_pixel_error`. `morph_ratio` is the explicit
+    /// fraction of a node's refinement band at which geomorphing begins.
     pub fn from_screen_metric(
         root_half_extent: f64,
         max_depth: u8,
@@ -182,29 +176,38 @@ impl Quadtree {
         screen_height_px: f64,
         fov_y_rad: f64,
         target_pixel_error: f64,
+        morph_ratio: f64,
     ) -> Self {
-        // Guard BOTH divisors. A `target_pixel_error` of 0 (an Inspector knob set to
-        // zero) or a `fov_y_rad` of 0 (an uninitialised camera) makes `range_factor`
-        // infinite → every node refines to `max_depth` → a triangle/tile blow-up
-        // (and `inf · 0 = NaN` downstream). A sub-pixel epsilon floor would only
-        // dodge the inf: at 1e-3 px the range factor is still ~1000× sane and the
-        // tree STILL refines to max_depth. So clamp to a USABLE band — the same one
-        // the caller's own knob uses (`stream_viz` clamps 0.5..32 px).
-        let target_pixel_error = if target_pixel_error.is_nan() {
-            2.0
-        } else {
-            target_pixel_error.clamp(0.25, 64.0)
-        };
-        // `tan` of a 0 / non-finite fov → floor at a small positive denominator
-        // (`f64::max` also returns the finite side of a NaN).
-        let sse_denominator = (2.0 * (0.5 * fov_y_rad).tan()).max(1e-4);
+        assert!(
+            target_pixel_error.is_finite() && target_pixel_error > 0.0,
+            "target pixel error must be finite and greater than zero"
+        );
+        assert!(
+            screen_height_px.is_finite() && screen_height_px > 0.0,
+            "screen height must be finite and greater than zero"
+        );
+        assert!(
+            fov_y_rad.is_finite() && fov_y_rad > 0.0 && fov_y_rad < std::f64::consts::PI,
+            "vertical field of view must be finite and in (0, pi)"
+        );
+        let sse_denominator = 2.0 * (0.5 * fov_y_rad).tan();
+        assert!(
+            sse_denominator.is_finite() && sse_denominator > 0.0,
+            "vertical field of view must produce a finite positive screen metric"
+        );
+        assert!(
+            morph_ratio.is_finite() && (0.0..1.0).contains(&morph_ratio),
+            "morph ratio must be finite and in [0, 1)"
+        );
         let range_factor = screen_height_px / (sse_denominator * target_pixel_error);
-        Quadtree::new(
+        let mut quadtree = Quadtree::new(
             root_half_extent,
             max_depth,
             range_factor,
             root_geometric_error,
-        )
+        );
+        quadtree.morph_ratio = morph_ratio;
+        quadtree
     }
 
     /// Geometric error (m) of a node at `depth` (3D-Tiles-compatible: halves per level).
@@ -527,49 +530,31 @@ mod tests {
     #[test]
     fn screen_metric_factor_is_positive_and_scales() {
         use std::f64::consts::FRAC_PI_4;
-        let q = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 2.0);
+        let q = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 2.0, 0.55);
         assert!(q.range_factor > 0.0);
         // Tighter pixel error → larger range_factor (refine sooner / from farther).
-        let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 1.0);
+        let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 1.0, 0.55);
         assert!(tight.range_factor > q.range_factor);
     }
 
     #[test]
-    fn degenerate_screen_metric_stays_finite_and_clamped() {
-        use std::f64::consts::FRAC_PI_4;
-        let mk =
-            |fov: f64, px: f64| Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, fov, px);
-
-        // `target_pixel_error = 0` (an Inspector knob dragged to zero) must NOT give
-        // an infinite range factor — it clamps to the usable floor (0.25 px), i.e. the
-        // SAME tree a 0.25-px request builds, not a 1e-3-px one (≈1000× off).
-        let zero_px = mk(FRAC_PI_4, 0.0);
-        assert!(zero_px.range_factor.is_finite());
-        assert_eq!(zero_px.range_factor, mk(FRAC_PI_4, 0.25).range_factor);
-        // …and NOT the old 1e-3-px floor, which was ~250× tighter (every node to
-        // max_depth — the blow-up the guard claimed to prevent).
-        let old_floor_factor = 1080.0 / (2.0 * (0.5 * FRAC_PI_4).tan() * 1e-3);
-        assert!(zero_px.range_factor < old_floor_factor * 0.01);
-
-        // `fov_y_rad = 0` (uninitialised camera): `tan(0) = 0` used to zero the
-        // divisor ⇒ inf range factor ⇒ every node to max_depth + `inf·0 = NaN` morph
-        // bands. The floored denominator keeps everything finite.
-        let zero_fov = mk(0.0, 2.0);
-        assert!(zero_fov.range_factor.is_finite());
-        // The geomorph window is derived from the range factor, so an infinite factor
-        // used to surface here as `inf · 0 = NaN` bands. Both ends must stay a number.
-        let parent_range = zero_fov.error_refine_range(zero_fov.geometric_error(0));
-        let s = zero_fov.selected(QuadCoord::ROOT.children()[0], parent_range);
-        assert!(!s.morph_start.is_nan() && !s.morph_end.is_nan());
-
-        // NaN / inf knobs stay finite too (NaN → the 2 px default; inf → the ceiling).
-        assert!(mk(FRAC_PI_4, f64::NAN).range_factor.is_finite());
-        assert!(mk(FRAC_PI_4, f64::INFINITY).range_factor.is_finite());
-        assert_eq!(
-            mk(FRAC_PI_4, f64::INFINITY).range_factor,
-            mk(FRAC_PI_4, 64.0).range_factor
+    #[should_panic(expected = "target pixel error must be finite and greater than zero")]
+    fn invalid_target_pixel_error_is_rejected() {
+        Quadtree::from_screen_metric(
+            8000.0,
+            6,
+            8000.0,
+            1080.0,
+            std::f64::consts::FRAC_PI_4,
+            0.0,
+            0.55,
         );
-        assert!(mk(f64::NAN, 2.0).range_factor.is_finite());
+    }
+
+    #[test]
+    #[should_panic(expected = "vertical field of view must be finite and in (0, pi)")]
+    fn invalid_field_of_view_is_rejected() {
+        Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, 0.0, 2.0, 0.55);
     }
 
     #[test]
@@ -759,23 +744,6 @@ mod tests {
         assert!(
             re_under.morph_end.is_infinite(),
             "re-pinning an existing leaf freezes it too"
-        );
-    }
-
-    /// [`REFINE_HYSTERESIS`] is consumed by `lunco-terrain-surface`'s `evolve_cover`,
-    /// which owns the band's BEHAVIOUR and tests it against a live cover. What this
-    /// module still owes that walk is the constant's shape: a real dead band, so a
-    /// node coarsens strictly later than it refines and a focus resting on the
-    /// boundary cannot flip it every frame.
-    #[test]
-    fn hysteresis_is_a_real_dead_band() {
-        let q = qt();
-        let hysteresis = std::hint::black_box(REFINE_HYSTERESIS);
-        assert!(hysteresis > 1.0, "a band at or below 1.0 is no band at all");
-        let r = q.error_refine_range(q.geometric_error(1));
-        assert!(
-            r * REFINE_HYSTERESIS > r,
-            "coarsening must happen strictly later than refining"
         );
     }
 }

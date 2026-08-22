@@ -191,7 +191,6 @@ impl Plugin for SandboxUiPlugin {
             });
         }
         lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
-        lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
             // USD Twin browser. NOTE: the USD *viewport preview*

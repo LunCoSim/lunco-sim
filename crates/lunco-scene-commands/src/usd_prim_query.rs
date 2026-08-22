@@ -70,7 +70,7 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     if let Some(v) = view.real(prim, name) {
         return json!(v);
     }
-    if let Some(v) = view.scalar::<bool>(prim, name) {
+    if let Some(v) = view.boolean(prim, name) {
         return json!(v);
     }
     if let Some(v) = view.scalar::<i32>(prim, name) {

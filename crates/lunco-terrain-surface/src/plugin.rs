@@ -7,7 +7,7 @@
 //! ([`crate::stream_viz`]), the composable USD terrain-layer stack
 //! ([`crate::terrain_layers`]), and the per-body heightfield collider ring +
 //! physics-hold / tunnel / overturn rescues ([`crate::collider_ring`]). The
-//! runtime LOD knobs live in [`crate::stream_viz::TerrainLodConfig`].
+//! visual quality knobs live in [`lunco_render::RenderingQualitySettings`].
 
 use bevy::prelude::*;
 
@@ -34,10 +34,13 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
-        // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
-        app.init_resource::<crate::stream_viz::TerrainLodConfig>();
-        app.register_type::<crate::stream_viz::TerrainLodConfig>();
-        // `SetTerrainLod` — the same knobs, addressable from the API/scripts.
+        // The streamed mesh cache and LOD controls are rendering-quality resources even when
+        // this plugin runs headless: the CPU-side cache still needs the same
+        // authoritative limit as the graphical client. The workbench's
+        // settings registration may replace this default with persisted user
+        // values later in plugin construction.
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
+        // `SetTerrainRenderingQuality` — the same knobs, addressable from the API/scripts.
         crate::stream_viz::register_all_commands(app);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
@@ -126,6 +129,13 @@ impl Plugin for TerrainSurfacePlugin {
         // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
         // adding a draw call + a bind group.
         app.init_resource::<crate::terrain_layers::SharedRockAssets>();
+        app.init_resource::<crate::terrain_layers::TerrainScatterQualitySignature>();
+        app.add_systems(
+            Update,
+            crate::terrain_layers::mark_terrain_scatter_quality_changed
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
+                .before(crate::terrain_layers::scatter_terrain_layers),
+        );
         app.add_systems(
             Update,
             crate::terrain_layers::scatter_terrain_layers
@@ -156,10 +166,16 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp)
                     .after(crate::collider_ring::update_physics_support_cache),
-                // Live retune (Inspector / reflection / a scene authoring the
-                // fields): marks resident tiles stale so the new lattice reaches
-                // the ground already under the wheels. Change-driven — the query
-                // is empty on every frame nobody edits the ring.
+                // Graphics quality is read directly by visual LOD selection;
+                // retune existing collider rings from the same profile before
+                // the Changed<TerrainColliderRing> invalidation runs.
+                crate::collider_ring::sync_ring_quality
+                    .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
+                    .before(crate::collider_ring::invalidate_ring_on_retune),
+                // Quality projection and explicit ring edits both mark resident
+                // tiles stale so the active lattice reaches the ground already
+                // under the wheels. Change-driven — the query is empty on every
+                // frame nobody edits the ring.
                 crate::collider_ring::invalidate_ring_on_retune
                     .before(crate::collider_ring::update_collider_ring),
                 // Change-driven: early-outs unless a `TerrainColliderRing`

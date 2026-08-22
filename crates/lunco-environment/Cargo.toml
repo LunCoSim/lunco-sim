@@ -41,12 +41,9 @@ big_space = { workspace = true }
 # accumulator that only the physics step clears.
 lunco-physics = { path = "../lunco-physics" }
 # Render-free intent crate (only `bevy_light` component types — no wgpu), so
-# this stays consistent with the render-free gate above. Pulled in for the
-# single shared `LUNAR_SUN_EXPOSURE_EV100` constant: the calibrated lunar-sun
-# camera exposure must be the SAME number `lunco-usd-bevy` spawns USD cameras
-# at, or a freshly-spawned camera sits at Bevy's EV 9.7 default under the real
-# ~131 klx sun (a ~5-stop load-time blowout). Keeping it here means the value
-# lives at the lowest crate both can reach.
+# this stays consistent with the render-free gate above. The environment uses
+# the shared Graphics profile only for the default exposure on its authored
+# lunar-sun intent; the render binder applies the same profile to cameras.
 lunco-render = { path = "../lunco-render" }
 
 [lints]

@@ -19,8 +19,9 @@ cd "$(dirname "$0")/.."
 
 HOST_API=4101
 CLIENT_API=4102
-HOST_LOG=/tmp/sandbox_host.log
-CLIENT_LOG=/tmp/sandbox_client.log
+HOST_LOG=/tmp/luncosim-host.log
+CLIENT_LOG=/tmp/luncosim-client.log
+READY_ATTEMPTS=120
 
 if [[ "${1:-halves}" == "quarters" ]]; then
   HOST_POS=top-left
@@ -32,14 +33,42 @@ fi
 
 # Build once up front so the two launches don't race the build lock.
 echo "building luncosim (networking)…"
-cargo build --bin luncosim --features networking -j8
+RUSTC_WRAPPER="${RUSTC_WRAPPER:-}" cargo build --bin luncosim --features networking -j4
 
-# Politely ask any prior instances on these API ports to exit.
-for p in "$HOST_API" "$CLIENT_API"; do
-  curl -s -m 1 -X POST "http://127.0.0.1:$p/api/commands" \
-    -H 'Content-Type: application/json' -d '{"type":"Exit"}' >/dev/null 2>&1 || true
-done
-sleep 1
+# Politely ask any prior instances on these API ports to exit, then require the
+# API port to disappear. A blind sleep hides an overlapping process and makes
+# the next launch race the old session.
+stop_previous() {
+  local port="$1"
+  curl -s -m 1 -X POST "http://127.0.0.1:$port/api/commands" \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"ExecuteCommand","command":"Exit","params":{}}' \
+    >/dev/null 2>&1 || true
+  for _ in $(seq 1 "$READY_ATTEMPTS"); do
+    if ! curl -sf -m 1 "http://127.0.0.1:$port/api/ready" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "previous luncosim session on API port $port did not exit" >&2
+  exit 1
+}
+
+wait_ready() {
+  local port="$1"
+  for _ in $(seq 1 "$READY_ATTEMPTS"); do
+    if curl -sf -m 1 "http://127.0.0.1:$port/api/ready" \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("ready") and not d.get("world_hold") else 1)'; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "luncosim on API port $port did not become ready" >&2
+  exit 1
+}
+
+stop_previous "$HOST_API"
+stop_previous "$CLIENT_API"
 
 BIN=target/debug/luncosim
 RL='info,wgpu=error,naga=warn'
@@ -49,11 +78,12 @@ echo "launching HOST  ($HOST_POS, api $HOST_API)…"
 # install id otherwise, colliding on journal author ids (see journal_plane).
 setsid nohup env RUST_LOG="$RL" LUNCO_PEER_ID=local-host "$BIN" --host --window-pos "$HOST_POS" --api "$HOST_API" \
   >"$HOST_LOG" 2>&1 </dev/null & disown
-sleep 4   # let the host bind :5888 + write the cert digest before the client dials
+wait_ready "$HOST_API"
 
 echo "launching CLIENT ($CLIENT_POS, api $CLIENT_API)…"
 setsid nohup env RUST_LOG="$RL" LUNCO_PEER_ID=local-client "$BIN" --connect 127.0.0.1 --window-pos "$CLIENT_POS" --api "$CLIENT_API" \
   >"$CLIENT_LOG" 2>&1 </dev/null & disown
+wait_ready "$CLIENT_API"
 
 echo "host log:   $HOST_LOG"
 echo "client log: $CLIENT_LOG"

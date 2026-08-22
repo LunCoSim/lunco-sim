@@ -702,7 +702,7 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
         let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         state
             .get(world)
-            .expect("active-frame query always validates")
+            .ok()?
             .position(entity)
             .map(|position| position.0)
     })
@@ -728,8 +728,7 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
             Res<lunco_celestial::CelestialBodyRegistry>,
             Res<lunco_celestial::ReferenceFrameIndex>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) =
-            state.get(world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
         lunco_celestial::resolve_surface_pose(
             entity,
             &q_site,
@@ -749,10 +748,7 @@ pub fn world_forward(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
         let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let rotation = state
-            .get(world)
-            .expect("active-frame query always validates")
-            .rotation(entity)?;
+        let rotation = state.get(world).ok()?.rotation(entity)?;
         Some(rotation.0 * DVec3::NEG_Z)
     })
     .flatten()
@@ -769,11 +765,7 @@ pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
         let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let q = state
-            .get(world)
-            .expect("active-frame query always validates")
-            .rotation(entity)?
-            .0;
+        let q = state.get(world).ok()?.rotation(entity)?.0;
         Some([q.x, q.y, q.z, q.w])
     })
     .flatten()
@@ -1033,10 +1025,17 @@ pub fn despawn_entity(gid: u64) -> Result<(), String> {
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
-/// `list_entities()` — `[{ id, name, type, pos }]` for every registered entity.
+/// `list_entities()` — `[{ id, name, type, pos, catalog_id }]` for every
+/// registered entity. `catalog_id` is empty for entities that were not created
+/// from the spawn catalog; it is never inferred from the display name.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
-        let pairs = world.resource::<ApiEntityRegistry>().entities();
+        let Some(pairs) = world
+            .get_resource::<ApiEntityRegistry>()
+            .map(ApiEntityRegistry::entities)
+        else {
+            return b.array(Vec::new());
+        };
         // One SystemState carries every per-entity read so the loop never
         // re-borrows the World.
         let mut state: SystemState<(
@@ -1045,14 +1044,17 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                 Option<&Name>,
                 Has<lunco_core::ControlBinding>,
                 Option<&CelestialBody>,
+                Option<&lunco_core::CatalogEntryId>,
             )>,
         )> = SystemState::new(world);
-        let (poses, q_meta) = state.get(world).expect("read-only queries always validate");
+        let Some((poses, q_meta)) = state.get(world).ok() else {
+            return b.array(Vec::new());
+        };
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, body) =
-                    q_meta.get(entity).unwrap_or((None, false, None));
+                let (name, accepts_commands, body, catalog_id) =
+                    q_meta.get(entity).unwrap_or((None, false, None, None));
                 // NOTE: the reported kind string is deliberately unchanged — a lander
                 // accepts commands and has always reported as "rover" here.
                 let kind = if accepts_commands {
@@ -1073,6 +1075,10 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                         b.string(name.map(|n| n.as_str()).unwrap_or("")),
                     ),
                     ("type".to_string(), b.string(kind)),
+                    (
+                        "catalog_id".to_string(),
+                        b.string(catalog_id.map(|id| id.0.as_str()).unwrap_or("")),
+                    ),
                     ("pos".to_string(), pos),
                 ])
             })
@@ -1085,7 +1091,10 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
 /// `find(name)` — first entity gid with that `Name`, or `-1`.
 pub fn find(name: &str) -> i64 {
     with_world(|world| {
-        let pairs = world.resource::<ApiEntityRegistry>().entities();
+        let Some(registry) = world.get_resource::<ApiEntityRegistry>() else {
+            return -1;
+        };
+        let pairs = registry.entities();
         for (gid, entity) in pairs {
             if world.get::<Name>(entity).map(|n| n.as_str()) == Some(name) {
                 return gid.get() as i64;
@@ -1336,6 +1345,21 @@ mod tests {
     use super::*;
     use bevy::math::DQuat;
     use lunco_core::session::{AuthorityRole, CommandPolicy, UserSession};
+
+    #[test]
+    fn script_pose_reads_are_empty_before_a_simulation_frame_exists() {
+        let mut world = World::new();
+        world.init_resource::<ApiEntityRegistry>();
+        let entity = world.spawn_empty().id();
+        world
+            .resource_mut::<ApiEntityRegistry>()
+            .assign(entity, GlobalEntityId::from_raw(42));
+
+        let _scope = WorldScope::enter(&mut world);
+        assert_eq!(world_pos(42), None);
+        assert_eq!(world_forward(42), None);
+        assert_eq!(world_rotation(42), None);
+    }
 
     #[test]
     fn script_pose_reads_share_the_active_frame_below_rotating_ancestors() {

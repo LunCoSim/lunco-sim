@@ -86,10 +86,12 @@ fn apply_projection(
     for (entity, mut light, suppressed) in lights.p0().iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
         if let Some(mut suppressed) = suppressed {
-            // The recovery ladder owns the temporary disable. Keep the latest
-            // user/possession intent in the marker so an explicit quality
-            // change can restore the current policy rather than stale state.
-            suppressed.was_enabled = want;
+            // The explicit graphics caster limit owns the temporary disable.
+            // Keep the latest user/possession intent in the marker so a later
+            // quality change can restore the current policy rather than stale
+            // state.
+            suppressed.restore_enabled = want;
+            suppressed.last_applied_enabled = false;
             light.shadow_maps_enabled = false;
         } else if light.shadow_maps_enabled != want {
             light.shadow_maps_enabled = want;
@@ -98,7 +100,8 @@ fn apply_projection(
     for (entity, mut light, suppressed) in lights.p1().iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
         if let Some(mut suppressed) = suppressed {
-            suppressed.was_enabled = want;
+            suppressed.restore_enabled = want;
+            suppressed.last_applied_enabled = false;
             light.shadow_maps_enabled = false;
         } else if light.shadow_maps_enabled != want {
             light.shadow_maps_enabled = want;

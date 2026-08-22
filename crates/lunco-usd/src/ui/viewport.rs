@@ -76,6 +76,8 @@ use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
+use lunco_render::{GraphicsCameraDefaults, SceneCamera};
+use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_workbench::{
     Panel, PanelCtx, PanelId, PanelRect, PanelRects, PanelSlot, ScenePickGate, SceneTarget,
@@ -124,6 +126,7 @@ pub struct UsdViewportPlugin;
 impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
+        app.init_resource::<RenderingQualitySettings>();
         app.register_panel(UsdViewportPanel);
         app.add_observer(on_doc_opened_for_viewport);
         app.add_observer(on_doc_changed_for_viewport);
@@ -311,6 +314,16 @@ fn bootstrap(world: &mut World) {
     if !world.contains_resource::<Assets<Image>>() {
         return;
     }
+    let preview_illuminance = match world
+        .resource::<RenderingQualitySettings>()
+        .validated_profile()
+    {
+        Ok(profile) => profile.distant_light_default_illuminance,
+        Err(reason) => {
+            error!("[UsdViewport] invalid Graphics quality; refusing preview light: {reason}");
+            return;
+        }
+    };
 
     // Bootstrap with a tiny placeholder. `resize_viewport_image` will
     // grow it to the actual `UsdViewportPanel` rect on the first
@@ -332,6 +345,8 @@ fn bootstrap(world: &mut World) {
     let mut commands = world.commands();
     let camera = commands
         .spawn((
+            SceneCamera::default(),
+            GraphicsCameraDefaults,
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.10, 0.12)),
@@ -358,9 +373,14 @@ fn bootstrap(world: &mut World) {
     let light = commands
         .spawn((
             DirectionalLight {
-                illuminance: 8_000.0,
+                illuminance: preview_illuminance,
                 shadow_maps_enabled: false,
                 ..default()
+            },
+            LightGraphicsDefaults {
+                intensity_uses_graphics_default: true,
+                intensity_scale: 1.0,
+                range_uses_graphics_default: false,
             },
             Transform::from_xyz(5.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             preview_layers.clone(),
@@ -853,5 +873,34 @@ mod tests {
         assert!(state.tex_id.is_none());
         // active_doc gates on bootstrap so we don't half-attach.
         assert!(state.active_doc.is_none());
+    }
+
+    #[test]
+    fn preview_light_uses_graphics_distant_light_default() {
+        let mut app = App::new();
+        app.insert_resource(UsdViewportState::default());
+        app.init_resource::<Assets<Image>>();
+        let mut settings = RenderingQualitySettings::default();
+        settings.distant_light_default_illuminance = 42_000.0;
+        app.insert_resource(settings);
+
+        bootstrap(app.world_mut());
+
+        let mut lights = app
+            .world_mut()
+            .query::<(&DirectionalLight, &LightGraphicsDefaults)>();
+        let (light, defaults) = lights
+            .iter(app.world())
+            .next()
+            .expect("preview bootstrap creates its Graphics-owned sun");
+        assert_eq!(light.illuminance, 42_000.0);
+        assert!(defaults.intensity_uses_graphics_default);
+        assert_eq!(defaults.intensity_scale, 1.0);
+        let camera = app
+            .world()
+            .get_entity(app.world().resource::<UsdViewportState>().camera.unwrap())
+            .expect("preview bootstrap creates its camera");
+        assert!(camera.contains::<SceneCamera>());
+        assert!(camera.contains::<GraphicsCameraDefaults>());
     }
 }

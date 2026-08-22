@@ -13,10 +13,55 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::ar::ResolvedPath;
+use openusd::sdf::{FieldKey, Path as SdfPath, Value};
 use openusd::usd::Stage;
 
 use crate::view::StageView;
+
+/// Read binary asset arcs from one authored prim spec in the live stage.
+///
+/// Binary files cannot be opened as USD layers by the pure-Rust resolver, so
+/// composition maps them to an empty stub. The authored payload/reference is
+/// still the authoritative asset identity; reading it here keeps the render
+/// projection live and avoids a second precomputed cache or a custom USD
+/// attribute.
+fn binary_assets_in_spec(stage: &Stage, layer_id: &str, path: &SdfPath) -> Vec<String> {
+    let Some(layer) = stage.layer(layer_id) else {
+        return Vec::new();
+    };
+    let data = layer.data();
+    let anchor = ResolvedPath::new(layer_id);
+    let mut arcs = Vec::new();
+
+    if let Ok(Some(value)) = data.try_field(path, "references") {
+        if let Value::ReferenceListOp(op) = value.as_ref() {
+            arcs.extend(
+                op.iter()
+                    .filter(|reference| !reference.asset_path.is_empty())
+                    .map(|reference| reference.asset_path.clone()),
+            );
+        }
+    }
+    if let Ok(Some(value)) = data.try_field(path, "payload") {
+        match value.as_ref() {
+            Value::Payload(payload) if !payload.asset_path.is_empty() => {
+                arcs.push(payload.asset_path.clone());
+            }
+            Value::PayloadListOp(op) => arcs.extend(
+                op.iter()
+                    .filter(|payload| !payload.asset_path.is_empty())
+                    .map(|payload| payload.asset_path.clone()),
+            ),
+            _ => {}
+        }
+    }
+
+    arcs.into_iter()
+        .filter(|asset_path| lunco_usd_compose::is_binary_asset(asset_path))
+        .map(|asset_path| lunco_usd_compose::canonicalize_at(&asset_path, Some(&anchor)))
+        .collect()
+}
 
 /// Parsed `customData` UI hint for a scalar attribute — the bounds + unit a
 /// data-driven parameter slider derives from an asset. All fields optional; a
@@ -64,6 +109,16 @@ fn dict_string(dict: &openusd::sdf::Dictionary, key: &str) -> Option<String> {
     dict.get(key).and_then(|v| v.clone().get::<String>())
 }
 
+fn numeric_value_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float(value) => Some(f64::from(*value)),
+        Value::Double(value) => Some(*value),
+        Value::Int(value) => Some(f64::from(*value)),
+        Value::Int64(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
 /// Composed, default-time reads served by the live canonical `StageView`.
 /// Extractors depend on this seam rather than reaching into OpenUSD directly.
 pub trait UsdRead {
@@ -73,6 +128,14 @@ pub trait UsdRead {
 
     /// The default-time composed value of attribute `name` on `prim`, owned.
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value>;
+
+    /// Whether a composed attribute has an authored default or time-sample
+    /// opinion in any contributing layer. This deliberately inspects the
+    /// authored prim stack rather than the resolved value, because a schema
+    /// fallback must not be mistaken for a scene override.
+    fn has_authored_attribute(&self, _prim: &SdfPath, _name: &str) -> bool {
+        false
+    }
 
     /// The composed USD `doc` metadata for `prim`, or `None` when no authored
     /// opinion exists. Implementations must resolve the prim's authored stack
@@ -135,18 +198,18 @@ pub trait UsdRead {
             .map(|a| a.into_string())
     }
 
-    /// A real scalar tolerant of `float` **or** `double` authoring, as `f64`.
+    /// A real scalar tolerant of `float`, `double`, `int`, or `int64` authoring,
+    /// as `f64`.
     ///
     /// `scalar::<f64>` matches only a `Double` opinion, so a value authored in the
     /// other precision — a gain authored `float` to match the `float` port it
-    /// scales, a georeference metre offset, a hand-authored `float radius` — reads
-    /// as `None` and is silently dropped. A real value is a real value regardless
-    /// of authored precision: this tries `f64`, then `f32`, so the opinion is never
-    /// lost on a type mismatch. Every real-valued read should use this, not
-    /// `scalar::<f64>`. Provided.
+    /// scales, a georeference metre offset, a hand-authored `float radius`, or
+    /// an integer-valued range — reads as `None` and is silently dropped. Every
+    /// real-valued read should use this, not `scalar::<f64>`. Provided.
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64> {
-        self.scalar::<f64>(prim, name)
-            .or_else(|| self.scalar::<f32>(prim, name).map(f64::from))
+        self.attr_value(prim, name)
+            .as_ref()
+            .and_then(numeric_value_as_f64)
     }
 
     /// The ARRAY counterpart of [`text`](Self::text): a `token[]` **or** `string[]`.
@@ -221,19 +284,24 @@ pub trait UsdRead {
     }
 
     /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
-    /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
-    /// `double`-authored value is not dropped by a strict `scalar::<f32>` — and of
-    /// integer authoring (`int`/`int64`), so a bare `rotateZ = 90` or an
-    /// integer-spelled intensity reads as the number it is instead of silently
-    /// `None`. The ONE tolerant scalar read: every float-like attribute goes
-    /// through here (or [`real_f32_at`](Self::real_f32_at) when animated).
+    /// params, physics gains). Tolerant of `double`/`float`/`int`/`int64`
+    /// authoring, so a value is not dropped by a strict typed scalar read. The
+    /// ONE tolerant scalar read: every float-like attribute goes through here
+    /// (or [`real_f32_at`](Self::real_f32_at) when animated).
     /// Provided.
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
+        self.real(prim, name).map(|value| value as f32)
+    }
+
+    /// Read a boolean attribute, accepting USD's native `bool` and integer
+    /// spellings used by some exporters. Integer authoring follows the usual
+    /// USD convention: zero is false and any non-zero value is true.
+    /// Provided.
+    fn boolean(&self, prim: &SdfPath, name: &str) -> Option<bool> {
         match self.attr_value(prim, name)? {
-            Value::Float(v) => Some(v),
-            Value::Double(v) => Some(v as f32),
-            Value::Int(v) => Some(v as f32),
-            Value::Int64(v) => Some(v as f32),
+            Value::Bool(value) => Some(value),
+            Value::Int(value) => Some(value != 0),
+            Value::Int64(value) => Some(value != 0),
             _ => None,
         }
     }
@@ -241,21 +309,16 @@ pub trait UsdRead {
     /// The timeSamples-or-default [`real`](Self::real) — precision-tolerant sibling
     /// of [`scalar_at`](Self::scalar_at) for animated real channels. Provided.
     fn real_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f64> {
-        self.scalar_at::<f64>(prim, name, time)
-            .or_else(|| self.scalar_at::<f32>(prim, name, time).map(f64::from))
+        self.attr_value_at(prim, name, time)
+            .as_ref()
+            .and_then(numeric_value_as_f64)
     }
 
     /// The `f32` timeSamples-or-default tolerant read — [`real_f32`](Self::real_f32)
     /// at a time code, with the same `float`/`double`/`int`/`int64` tolerance.
     /// Provided.
     fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32> {
-        match self.attr_value_at(prim, name, time)? {
-            Value::Float(v) => Some(v),
-            Value::Double(v) => Some(v as f32),
-            Value::Int(v) => Some(v as f32),
-            Value::Int64(v) => Some(v as f32),
-            _ => None,
-        }
+        self.real_at(prim, name, time).map(|value| value as f32)
     }
 
     /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —
@@ -342,11 +405,10 @@ pub trait UsdRead {
             .and_then(|v| v.get::<T>())
     }
 
-    /// The glTF/binary asset URI resolved for `prim` (`lunco:resolvedAsset`) —
-    /// authored, or synthesized from a binary (glTF) reference/payload in the
-    /// prim's composition stack — synthesized on read from the stage's
-    /// precomputed binary arc sites.
-    fn resolved_asset(&self, prim: &SdfPath) -> Option<String>;
+    /// The single binary asset URI authored by a payload/reference on `prim`'s
+    /// composed stack. The read is live: it scans the current authored arc
+    /// opinions and never consults a generated cache or custom attribute.
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String>;
 
     /// Whether `prim` is active (`active` metadata; defaults to `true`, matching
     /// USD semantics). The visual extractor skips mesh/child creation for
@@ -394,16 +456,12 @@ pub trait UsdRead {
     /// camera-track key enumeration.
     fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
 
-    /// The stage's authored `metersPerUnit` (SI metres per authored linear unit),
-    /// or `None` when unauthored — the USD default is then `1.0`. Tolerant of
-    /// `float`/`double` authoring. **Interpreted in exactly one place**:
-    /// [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
-    fn stage_meters_per_unit(&self) -> Option<f64>;
-
-    /// The stage's authored `upAxis` token (`"Y"` / `"Z"`), or `None` when
-    /// unauthored — the USD default is then `"Y"`. **Interpreted in exactly one
-    /// place**: [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
-    fn stage_up_axis(&self) -> Option<String>;
+    /// The composed pseudo-root metadata value for `name`, or `None` when the
+    /// metadata is unauthored. Stage convention metadata is interpreted in one
+    /// place by [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader),
+    /// which must distinguish an omitted USD default from an authored value of
+    /// the wrong type.
+    fn stage_metadata_value(&self, name: &str) -> Option<Value>;
 
     /// The authored `timeSamples` span `(first, last)` of attribute `name` on
     /// `prim` — the min/max sample time codes. Provided from
@@ -432,6 +490,29 @@ impl UsdRead for StageView<'_> {
             .get::<Value>()
             .ok()
             .flatten()
+    }
+
+    fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool {
+        if prim.append_property(name).is_err() {
+            return false;
+        }
+        self.stage()
+            .prim(prim.clone())
+            .prim_stack()
+            .ok()
+            .into_iter()
+            .flatten()
+            .any(|(layer_id, authored_path)| {
+                let Some(layer) = self.stage().layer(&layer_id) else {
+                    return false;
+                };
+                let Ok(authored_property) = authored_path.append_property(name) else {
+                    return false;
+                };
+                let data = layer.data();
+                data.has_field(&authored_property, FieldKey::Default.as_str())
+                    || data.has_field(&authored_property, FieldKey::TimeSamples.as_str())
+            })
     }
 
     fn documentation(&self, prim: &SdfPath) -> Option<String> {
@@ -545,14 +626,29 @@ impl UsdRead for StageView<'_> {
             .flatten()
     }
 
-    fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
-        // Authored value wins; else synthesize from a binary arc in the stack.
-        if let Some(authored) = self.value_str(prim, "lunco:resolvedAsset") {
-            return Some(authored);
-        }
-        let sites = self.binary_sites()?;
+    fn binary_asset_uri(&self, prim: &SdfPath) -> Option<String> {
         let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
-        stack.iter().find_map(|site| sites.get(site)).cloned()
+        let mut matches = Vec::new();
+        for (layer_id, authored_path) in stack {
+            for asset in binary_assets_in_spec(self.stage(), &layer_id, &authored_path) {
+                if !matches.contains(&asset) {
+                    matches.push(asset);
+                }
+            }
+        }
+        match matches.as_slice() {
+            [asset] => Some(asset.clone()),
+            [] => None,
+            _ => {
+                bevy::log::error!(
+                    target: "usd-bevy",
+                    prim = %prim.as_str(),
+                    assets = ?matches,
+                    "ambiguous binary payload/reference set; author exactly one binary asset"
+                );
+                None
+            }
+        }
     }
 
     fn is_active(&self, prim: &SdfPath) -> bool {
@@ -617,34 +713,17 @@ impl UsdRead for StageView<'_> {
             .unwrap_or_default()
     }
 
-    fn stage_meters_per_unit(&self) -> Option<f64> {
-        // Composed pseudo-root metadata (session layer wins over root), the same
-        // resolution `timeCodesPerSecond` gets. Precision-tolerant: `metersPerUnit`
-        // is spec'd `double` but exporters do author `float`.
-        let v = self
-            .stage()
-            .stage_metadata("metersPerUnit")
-            .ok()
-            .flatten()?;
-        v.clone()
-            .get::<f64>()
-            .or_else(|| v.get::<f32>().map(f64::from))
-    }
-
-    fn stage_up_axis(&self) -> Option<String> {
-        // `upAxis` is authored as a `Token`; `as_str` coerces Token/String alike.
-        let v = self.stage().stage_metadata("upAxis").ok().flatten()?;
-        v.as_str().map(str::to_string).filter(|s| !s.is_empty())
+    fn stage_metadata_value(&self, name: &str) -> Option<Value> {
+        self.stage().stage_metadata(name).ok().flatten()
     }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod real_reader_tests {
-    //! The precision-tolerant [`real`](UsdRead::real) family reads a real value
-    //! regardless of whether it was authored `float` or `double`. This is the
-    //! guard against the silent-fallback bug: `scalar::<f64>` matches only a
-    //! `Double` opinion and `scalar::<f32>` only a `Float` one, so a value
-    //! authored in the other precision reads `None` and is silently dropped.
+    //! The precision-tolerant [`real`](UsdRead::real) family reads a numeric
+    //! value regardless of whether it was authored `float`, `double`, `int`,
+    //! or `int64`. This is the guard against the silent-fallback bug:
+    //! strict scalar reads match only one USD type and silently drop the rest.
 
     use super::UsdRead;
     use crate::canonical::{CanonicalStage, StageRecipe};
@@ -667,6 +746,26 @@ mod real_reader_tests {
             .create_attribute("/World.d_val", "double")
             .unwrap()
             .set(Value::Double(3.5))
+            .unwrap();
+        stage
+            .create_attribute("/World.i_val", "int")
+            .unwrap()
+            .set(Value::Int(4))
+            .unwrap();
+        stage
+            .create_attribute("/World.i64_val", "int64")
+            .unwrap()
+            .set(Value::Int64(5))
+            .unwrap();
+        stage
+            .create_attribute("/World.bool_val", "bool")
+            .unwrap()
+            .set(Value::Bool(true))
+            .unwrap();
+        stage
+            .create_attribute("/World.int_flag", "int64")
+            .unwrap()
+            .set(Value::Int64(1))
             .unwrap();
         cs
     }
@@ -766,6 +865,8 @@ mod real_reader_tests {
         // `real` (→ f64) reads BOTH a float- and a double-authored opinion.
         assert_eq!(view.real(&world, "f_val"), Some(2.5), "real reads float");
         assert_eq!(view.real(&world, "d_val"), Some(3.5), "real reads double");
+        assert_eq!(view.real(&world, "i_val"), Some(4.0), "real reads int");
+        assert_eq!(view.real(&world, "i64_val"), Some(5.0), "real reads int64");
 
         // `real_f32` (→ f32) likewise reads either precision.
         assert_eq!(
@@ -778,6 +879,11 @@ mod real_reader_tests {
             Some(2.5),
             "real_f32 reads float"
         );
+        assert_eq!(view.real_f32(&world, "i_val"), Some(4.0));
+        assert_eq!(view.real_f32(&world, "i64_val"), Some(5.0));
+        assert_eq!(view.boolean(&world, "bool_val"), Some(true));
+        assert_eq!(view.boolean(&world, "int_flag"), Some(true));
+        assert_eq!(view.boolean(&world, "i_val"), Some(true));
 
         // The time-sampled variants fall back to the `default` opinion when a
         // channel has no `timeSamples`, and are precision-tolerant there too.
@@ -791,8 +897,25 @@ mod real_reader_tests {
             Some(3.5),
             "real_f32_at reads double default"
         );
+        assert_eq!(view.real_at(&world, "i_val", 0.0), Some(4.0));
+        assert_eq!(view.real_f32_at(&world, "i64_val", 0.0), Some(5.0));
 
         // A genuinely absent attribute is still `None` (tolerance ≠ fabrication).
         assert_eq!(view.real(&world, "missing"), None, "absent attr stays None");
+    }
+
+    #[test]
+    fn authored_attribute_presence_is_separate_from_composed_value() {
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+            .expect("stage builds");
+        cs.stage()
+            .create_attribute("/World.authored", "float")
+            .unwrap()
+            .set(Value::Float(1.0))
+            .unwrap();
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+        assert!(view.has_authored_attribute(&world, "authored"));
+        assert!(!view.has_authored_attribute(&world, "missing"));
     }
 }

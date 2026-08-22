@@ -38,7 +38,6 @@ use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 use lunco_render::SceneCamera;
 use lunco_scripting::python::{get_python_status, PythonStatus};
@@ -50,10 +49,10 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
-    UsdSceneRoot, UsdStageAsset,
+    read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
+    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
 };
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
 use crate::domain_projection::GeneratedModelicaSource;
@@ -229,14 +228,6 @@ fn environment_probe_interface() -> DeclaredOutputPorts {
             .collect(),
     }
 }
-
-/// Return the authored body-level presentation scope for an environment probe.
-///
-/// A probe is often nested below the part whose mount frame it measures (an
-/// antenna or a solar panel), but its values describe the local environment of
-/// the rigid body, not that consumer. Walk the composed USD ancestry to the
-/// nearest body and expose the provider as `<body>/Environment`. This keeps the
-/// physical frame relationship intact while keeping the operator tree semantic.
 
 /// A compile-specific port-contract verdict already reported to the console.
 ///
@@ -550,6 +541,34 @@ fn reset_python_unavailable(mut diagnostics: ResMut<PythonUnavailablePrograms>) 
     *diagnostics = PythonUnavailablePrograms::default();
 }
 
+fn read_authored_telemetry_string(
+    view: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<String>, ()> {
+    if !view.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match view.attr_value(path, attribute) {
+        Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
+fn read_authored_telemetry_real(
+    view: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+    attribute: &str,
+) -> Result<Option<f64>, ()> {
+    if !view.has_authored_attribute(path, attribute) {
+        return Ok(None);
+    }
+    match view.real(path, attribute) {
+        Some(value) if value.is_finite() => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
 /// Project the standard LunCo telemetry declaration attributes into the shared
 /// telemetry sampler. The declaration stays in USD; this is only the runtime
 /// projection, so descriptions and units remain authored data all the way to
@@ -579,16 +598,84 @@ fn project_usd_telemetry(
             continue;
         };
         let view = stage.view();
-        let authored = view
-            .scalar::<bool>(&path, "lunco:telemetry")
-            .unwrap_or(false);
+        let authored = match read_authored_bool_strict(&view, &path, "lunco:telemetry") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "[usd-cosim] {} has malformed `lunco:telemetry`; declaration ignored",
+                    path.as_str()
+                );
+                false
+            }
+        };
         if authored {
-            let port = view.text(&path, "lunco:telemetry:port");
-            let name = view.text(&path, "lunco:telemetry:name");
-            if let (Some(port), Some(name)) = (
-                port.filter(|p| !p.is_empty()),
-                name.filter(|n| !n.is_empty()),
-            ) {
+            let declaration = (|| {
+                let port = read_authored_telemetry_string(&view, &path, "lunco:telemetry:port")?
+                    .filter(|value| !value.is_empty());
+                let reflect =
+                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:reflect")?
+                        .filter(|value| !value.is_empty());
+                let source = match (port, reflect) {
+                    (Some(port), _) => ChannelSource::Port(port),
+                    (None, Some(reflect)) => ChannelSource::Reflect(reflect),
+                    (None, None) => return Err(()),
+                };
+                let source_name = match &source {
+                    ChannelSource::Port(name) => name.rsplit('.').next().unwrap_or(name.as_str()),
+                    ChannelSource::Reflect(path) => {
+                        path.rsplit('.').next().unwrap_or(path.as_str())
+                    }
+                    ChannelSource::Diagnostic(path) => path,
+                };
+                let name = read_authored_telemetry_string(&view, &path, "lunco:telemetry:name")?
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| source_name.to_string());
+                let unit = read_authored_telemetry_string(&view, &path, "lunco:telemetry:unit")?
+                    .unwrap_or_default();
+                let description =
+                    read_authored_telemetry_string(&view, &path, "lunco:telemetry:description")?;
+                let rate_hz =
+                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:rateHz")? {
+                        None | Some(0.0) => None,
+                        Some(value) if value > 0.0 => Some(value),
+                        Some(_) => return Err(()),
+                    };
+                let enabled =
+                    match read_authored_bool_strict(&view, &path, "lunco:telemetry:enabled") {
+                        Ok(Some(value)) => value,
+                        Ok(None) => true,
+                        Err(()) => return Err(()),
+                    };
+                let deadband =
+                    match read_authored_telemetry_real(&view, &path, "lunco:telemetry:deadband")? {
+                        None | Some(0.0) => None,
+                        Some(value) if value > 0.0 => Some(value),
+                        Some(_) => return Err(()),
+                    };
+                let retention = match view.scalar::<i64>(&path, "lunco:telemetry:retention") {
+                    Some(0) | None
+                        if !view.has_authored_attribute(&path, "lunco:telemetry:retention") =>
+                    {
+                        None
+                    }
+                    Some(0) => None,
+                    Some(value) if value > 0 => Some(usize::try_from(value).map_err(|_| ())?),
+                    _ => return Err(()),
+                };
+                Ok(Parameter {
+                    name,
+                    unit,
+                    description,
+                    source,
+                    target: Some(entity),
+                    rate_hz,
+                    enabled,
+                    deadband,
+                    retention,
+                })
+            })();
+            if let Ok(parameter) = declaration {
                 // A generated domain root is projected one Update before its
                 // Modelica wrapper can publish SimComponent. Publish the typed
                 // lifecycle fact before the first FixedUpdate so the sampler
@@ -602,17 +689,15 @@ fn project_usd_telemetry(
                         .try_insert(lunco_core::PortSurfacePending);
                 }
                 commands.spawn((
-                    Name::new(format!("telemetry:{name}")),
+                    Name::new(format!("telemetry:{}", parameter.name)),
                     ChildOf(entity),
-                    Parameter {
-                        name,
-                        unit: view.text(&path, "lunco:telemetry:unit").unwrap_or_default(),
-                        description: view.text(&path, "lunco:telemetry:description"),
-                        source: ChannelSource::Port(port),
-                        target: Some(entity),
-                        ..default()
-                    },
+                    parameter,
                 ));
+            } else {
+                warn!(
+                    "[usd-cosim] {} has invalid telemetry attributes; declaration ignored",
+                    path.as_str()
+                );
             }
         }
         commands.entity(entity).try_insert(UsdTelemetryProjected);
@@ -650,30 +735,63 @@ fn process_usd_cosim_prim_read(
             );
             return;
         };
-        let Some(name) = reader.text(sdf_path, "lunco:event:name") else {
-            warn!(
-                "[usd-cosim] {}: LunCoEvent has no lunco:event:name",
-                sdf_path
-            );
-            return;
+        let name = match reader.attr_value(sdf_path, "lunco:event:name") {
+            Some(Value::Token(value)) if !value.as_str().is_empty() => value.to_string(),
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has no valid lunco:event:name",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let severity = match reader.attr_value(sdf_path, "lunco:event:severity") {
+            Some(Value::Token(value)) => match parse_event_severity(value.as_str()) {
+                Some(severity) => severity,
+                None => {
+                    warn!(
+                        "[usd-cosim] {}: LunCoEvent has invalid lunco:event:severity",
+                        sdf_path
+                    );
+                    return;
+                }
+            },
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has invalid lunco:event:severity",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let latched = match read_authored_bool_strict(reader, sdf_path, "lunco:event:latched") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has malformed lunco:event:latched",
+                    sdf_path
+                );
+                return;
+            }
+        };
+        let qualification_time_s = match reader.real(sdf_path, "lunco:event:qualificationTime") {
+            Some(value) if value.is_finite() && value >= 0.0 => value,
+            _ => {
+                warn!(
+                    "[usd-cosim] {}: LunCoEvent has invalid lunco:event:qualificationTime",
+                    sdf_path
+                );
+                return;
+            }
         };
         commands.entity(entity).try_insert(EventBinding {
             source_path: source_path.to_string(),
             output: output.to_string(),
             name,
-            severity: parse_event_severity(
-                reader
-                    .text(sdf_path, "lunco:event:severity")
-                    .as_deref()
-                    .unwrap_or("info"),
-            ),
-            latched: reader
-                .scalar::<bool>(sdf_path, "lunco:event:latched")
-                .unwrap_or(false),
-            qualification_time_s: reader
-                .scalar::<f64>(sdf_path, "lunco:event:qualificationTime")
-                .unwrap_or(0.0)
-                .max(0.0),
+            severity,
+            latched,
+            qualification_time_s,
             qualified_for_s: 0.0,
             armed: true,
         });
@@ -762,24 +880,17 @@ fn process_usd_cosim_prim_read(
                 .attr_names(sdf_path)
                 .iter()
                 .any(|name| name == "lunco:program:communicationPeriod");
-            if !authored {
-                Ok(Some(DEFAULT_COMMUNICATION_PERIOD_SECS))
-            } else {
-                match reader.real(sdf_path, "lunco:program:communicationPeriod") {
-                    Some(value) => lunco_modelica::validate_communication_period_secs(value)
-                        .map(Some)
-                        .map_err(|reason| {
-                            format!(
-                                "{}: lunco:program:communicationPeriod is invalid: {reason}",
-                                prim_path.path,
-                            )
-                        }),
-                    None => Err(format!(
-                        "{}: lunco:program:communicationPeriod is not a valid authored real value",
-                        prim_path.path,
-                    )),
-                }
-            }
+            lunco_modelica::resolve_communication_period_secs(
+                authored,
+                reader.real(sdf_path, "lunco:program:communicationPeriod"),
+            )
+            .map(Some)
+            .map_err(|reason| {
+                format!(
+                    "{}: lunco:program:communicationPeriod is invalid: {reason}",
+                    prim_path.path,
+                )
+            })
         }
     };
     let communication_period_secs = match communication_period_result {
@@ -956,13 +1067,17 @@ fn process_usd_cosim_prim_read(
     // to step. Absent ⇒ not promised, and `rewire_usd_connections` refuses it a
     // force/torque port on a client-predicted body (see
     // `docs/architecture/28-modelica-realtime-physics.md`).
-    if reader
-        .scalar::<bool>(sdf_path, "lunco:program:realtimeSafe")
-        .unwrap_or(false)
-    {
-        commands
-            .entity(entity)
-            .try_insert(lunco_cosim::RealtimeSafe);
+    match read_authored_bool_strict(reader, sdf_path, "lunco:program:realtimeSafe") {
+        Ok(Some(true)) => {
+            commands
+                .entity(entity)
+                .try_insert(lunco_cosim::RealtimeSafe);
+        }
+        Ok(Some(false)) | Ok(None) => {}
+        Err(()) => warn!(
+            "[usd-cosim] program {} has malformed `lunco:program:realtimeSafe`; promise ignored",
+            prim_path.path
+        ),
     }
 
     info!(
@@ -1502,7 +1617,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
 fn modelica_status(model: &ModelicaModel) -> SimStatus {
     if let Some(error) = &model.last_error {
         SimStatus::Error(error.clone())
-    } else if !model.is_compiled || model.current_time <= 0.0 || model.variables.is_empty() {
+    } else if !model.is_compiled || model.current_time <= 0.0 {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
@@ -1604,13 +1719,14 @@ pub struct EventBinding {
     armed: bool,
 }
 
-fn parse_event_severity(value: &str) -> lunco_core::Severity {
+fn parse_event_severity(value: &str) -> Option<lunco_core::Severity> {
     match value {
-        "debug" => lunco_core::Severity::Debug,
-        "warning" => lunco_core::Severity::Warning,
-        "error" => lunco_core::Severity::Error,
-        "critical" => lunco_core::Severity::Critical,
-        _ => lunco_core::Severity::Info,
+        "debug" => Some(lunco_core::Severity::Debug),
+        "info" => Some(lunco_core::Severity::Info),
+        "warning" => Some(lunco_core::Severity::Warning),
+        "error" => Some(lunco_core::Severity::Error),
+        "critical" => Some(lunco_core::Severity::Critical),
+        _ => None,
     }
 }
 
@@ -1655,6 +1771,7 @@ pub fn fire_connected_events(
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     fixed_time: Res<Time<Fixed>>,
+    world_time: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
 ) {
     // Nothing is listening: don't index the scene. This runs every FixedUpdate
@@ -1663,6 +1780,10 @@ pub fn fire_connected_events(
     if bindings.is_empty() {
         return;
     }
+    let Some(world_time) = world_time else {
+        warn!("[usd-cosim] cannot publish a connected event without the authoritative WorldTime");
+        return;
+    };
     let instance_of =
         |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
     let mut by_path = HashMap::new();
@@ -1705,7 +1826,7 @@ pub fn fire_connected_events(
                 source,
                 severity: binding.severity,
                 data: lunco_core::TelemetryValue::F64(value),
-                timestamp: 0.0,
+                timestamp: world_time.epoch_jd,
             });
         }
     }
@@ -3847,9 +3968,14 @@ pub fn spawn_usd_child(
     // Pre-populate the translate so physics sees the spawn offset before the
     // observer refines the full transform (matches the loader's child branch).
     let sdf_path = SdfPath::new(path).ok()?;
-    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
-        .map(Transform::from_translation)
-        .unwrap_or_default();
+    let tf = match lunco_usd_bevy::local_transform_at(reader, &sdf_path, 0.0) {
+        Ok(Some(transform)) => transform,
+        Ok(None) => Transform::IDENTITY,
+        Err(error) => {
+            warn!("[usd-cosim] incremental spawn rejected for {path}: {error}");
+            return None;
+        }
+    };
     spawn_usd_child_with_translate(world, stage_handle_id, path, tf)
 }
 
@@ -4781,7 +4907,6 @@ mod tests {
     fn status_tracks_compile_run_pause_and_failure() {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
-        model.variables.insert("soc_out".into(), 1.0);
         model.is_compiled = true;
         model.current_time = lunco_core::SECS_PER_TICK;
         assert_eq!(modelica_status(&model), SimStatus::Running);
@@ -4792,6 +4917,55 @@ mod tests {
             modelica_status(&model),
             SimStatus::Error("singular system".into())
         );
+    }
+
+    #[derive(Resource, Default)]
+    struct CapturedTelemetry(Vec<lunco_core::TelemetryEvent>);
+
+    fn capture_telemetry(
+        trigger: On<lunco_core::TelemetryEvent>,
+        mut captured: ResMut<CapturedTelemetry>,
+    ) {
+        captured.0.push(trigger.event().clone());
+    }
+
+    #[test]
+    fn connected_event_uses_authoritative_world_epoch() {
+        let mut app = App::new();
+        app.add_observer(capture_telemetry)
+            .init_resource::<Time<Fixed>>()
+            .insert_resource(lunco_time::WorldTime {
+                epoch_jd: 2_451_600.25,
+                ..default()
+            })
+            .init_resource::<CapturedTelemetry>();
+
+        let mut source = SimComponent::default();
+        source.outputs.insert("armed".into(), 1.0);
+        app.world_mut().spawn((UsdPrimPath::default(), source));
+        let event_path = UsdPrimPath {
+            path: "/Event".into(),
+            ..default()
+        };
+        app.world_mut().spawn((
+            event_path,
+            EventBinding {
+                source_path: "/".into(),
+                output: "armed".into(),
+                name: "ARMED".into(),
+                severity: lunco_core::Severity::Info,
+                latched: false,
+                qualification_time_s: 0.0,
+                qualified_for_s: 0.0,
+                armed: true,
+            },
+        ));
+        app.add_systems(Update, fire_connected_events);
+        app.update();
+
+        let events = &app.world().resource::<CapturedTelemetry>().0;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].timestamp, 2_451_600.25);
     }
 
     #[test]
@@ -5074,14 +5248,11 @@ mod tests {
     }
 
     #[test]
-    fn event_severity_defaults_to_info() {
-        assert_eq!(
-            parse_event_severity("not-a-severity"),
-            lunco_core::Severity::Info
-        );
+    fn event_severity_rejects_unknown_tokens() {
+        assert_eq!(parse_event_severity("not-a-severity"), None);
         assert_eq!(
             parse_event_severity("critical"),
-            lunco_core::Severity::Critical
+            Some(lunco_core::Severity::Critical)
         );
     }
 

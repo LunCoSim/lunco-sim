@@ -77,6 +77,8 @@ def Xform "Rover" {
         float physxVehicleWheel:dampingRate = 0.45
         float physxVehicleWheel:maxBrakeTorque = 1500.0
         float physxVehicleTire:longitudinalStiffness = 8000.0
+        float2 physxVehicleTire:lateralStiffnessGraph = (1.0, 1160.0)
+        float physxVehicleTire:restLoad = 400.0
 
         float lunco:suspension:restLength = 0.7
         float physxVehicleSuspension:springStrength = 5000.0

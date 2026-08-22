@@ -420,11 +420,21 @@ class "PhysxVehicleTireAPI" (
         }
         displayName = "Longitudinal Stiffness"
     )
-    float physxVehicleTire:lateralStiffness = 0.0 (
+    float2 physxVehicleTire:lateralStiffnessGraph = (0, 0) (
         customData = {
-            string userDocBrief = "Lateral tire stiffness — the slope of lateral force vs slip."
+            string unit = "(normalized load, N/rad)"
+            string userDocBrief = "Lateral tire stiffness as the standard PhysX load graph."
         }
-        displayName = "Lateral Stiffness"
+        displayName = "Lateral Stiffness Graph"
+    )
+    float physxVehicleTire:restLoad = 0.0 (
+        customData = {
+            double min = 0
+            double max = 100000
+            string unit = "N"
+            string userDocBrief = "Reference tire load used to normalize the lateral stiffness graph."
+        }
+        displayName = "Rest Load"
     )
     float physxVehicleTire:camberStiffness = 0.0 (
         customData = {

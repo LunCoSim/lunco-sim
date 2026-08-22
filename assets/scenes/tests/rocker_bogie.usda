@@ -26,7 +26,7 @@ def Xform "RockerBogieTest" (
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -42,7 +42,7 @@ def Xform "RockerBogieTest" (
     # (root-level, no rigid body): centred on y=0 with a 0.5 m Y scale, so its top
     # is at y=0.25 and it lifts that foot a quarter of a metre.
     def Cube "Step" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

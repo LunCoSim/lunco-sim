@@ -263,6 +263,15 @@ def Xform "World"
 /// Helper: parse a USDA stage, bind it to one prim, run the visual sync, and
 /// return the resulting appearance intent.
 fn material_for(usda: &str, prim_path: &str) -> PbrLook {
+    material_for_optional(usda, prim_path).expect("entity should have a PbrLook")
+}
+
+/// Run the production USD visual projection and preserve the distinction
+/// between a valid look and a rejected authored material.  A missing look is
+/// the important assertion for malformed USD: the old implementation returned
+/// a plausible default, so a test that only inspected parser success missed
+/// the bug at the consumer boundary.
+fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
@@ -289,10 +298,7 @@ fn material_for(usda: &str, prim_path: &str) -> PbrLook {
         .id();
     app.update();
 
-    app.world()
-        .get::<PbrLook>(entity)
-        .expect("entity should have a PbrLook")
-        .clone()
+    app.world().get::<PbrLook>(entity).cloned()
 }
 
 const OPACITY_STAGE: &str = r#"#usda 1.0
@@ -414,6 +420,96 @@ fn opaque_material_stays_opaque() {
         "no opacity → Opaque"
     );
     assert!((look.base_color.alpha - 1.0).abs() < 1e-4);
+}
+
+const MALFORMED_DISPLAY_COLOR_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Cube "Body"
+    {
+        // UsdGeomGprim declares this as color3f[], not scalar color3f.
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        double size = 2.0
+    }
+}
+"#;
+
+/// A scalar display color must not become the white semantic default.  The
+/// authored type is invalid for `UsdGeomGprim`, so the visual projection refuses
+/// the PBR intent and surfaces the asset error through its log.
+#[test]
+fn malformed_display_color_does_not_fall_back_to_white() {
+    assert!(
+        material_for_optional(MALFORMED_DISPLAY_COLOR_STAGE, "/World/Body").is_none(),
+        "wrong USD displayColor type must not produce a plausible PbrLook"
+    );
+}
+
+const MALFORMED_ROUGHNESS_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Look"
+    {
+        token outputs:surface.connect = </World/Look/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.2, 0.3, 0.4)
+            string inputs:roughness = "not-a-number"
+            token outputs:surface
+        }
+    }
+    def Cube "Body" ( apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Look>
+        double size = 2.0
+    }
+}
+"#;
+
+/// An authored wrong-type shader input must not silently select the
+/// `UsdPreviewSurface` roughness default.
+#[test]
+fn malformed_shader_scalar_does_not_use_preview_default() {
+    assert!(
+        material_for_optional(MALFORMED_ROUGHNESS_STAGE, "/World/Body").is_none(),
+        "wrong USD roughness type must reject the PBR intent"
+    );
+}
+
+const OUT_OF_RANGE_ROUGHNESS_STAGE: &str = r#"#usda 1.0
+( defaultPrim = "World" )
+def Xform "World"
+{
+    def Material "Look"
+    {
+        token outputs:surface.connect = </World/Look/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.2, 0.3, 0.4)
+            float inputs:roughness = 2.0
+            token outputs:surface
+        }
+    }
+    def Cube "Body" ( apiSchemas = ["MaterialBindingAPI"] )
+    {
+        rel material:binding = </World/Look>
+        double size = 2.0
+    }
+}
+"#;
+
+/// Unit-interval Preview Surface inputs are rejected, never clamped into a
+/// different authored look.
+#[test]
+fn out_of_range_shader_scalar_is_rejected() {
+    assert!(
+        material_for_optional(OUT_OF_RANGE_ROUGHNESS_STAGE, "/World/Body").is_none(),
+        "out-of-range roughness must not be clamped or defaulted"
+    );
 }
 
 const SPECULAR_STAGE: &str = r#"#usda 1.0

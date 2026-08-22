@@ -41,8 +41,9 @@ Prove the "adopt USD-standard spelling" muscle on the safest items. All tier-1 p
   `openusd` has `usd/collection.rs`. *Verify:* grouping/visibility behavior unchanged.
 - **P0.3 — Author `kind`.** Add `kind="component"` to reusable part assets, `kind="assembly"` to composed
   vehicles/robots (doc 38 §8.4/§A6). *Verify:* `is_model`/`is_group` reflect it; no runtime change.
-- **P0.4 — Rename `lunco:scale` → `lunco:factor`** (SSP term; doc 38 §14.1). Pure rename across assets +
-  the reader; keep `lunco:offset`. *Verify:* wiring math identical. *Unblocks:* Phase 1 naming.
+- **P0.4 [in place] — Rename `lunco:scale` → `lunco:factor`** (SSP term; doc 38 §14.1). The shipped
+  assets and reader use `lunco:factor` with no legacy `lunco:scale` path; `lunco:offset` remains. Wiring
+  math is covered by the factor/offset derivation tests. *Unblocks:* Phase 1 naming.
 
 **Phase 0 done when:** four PRs merged, no behavior delta, team has seen a standard-schema adoption land.
 
@@ -169,7 +170,8 @@ Mostly independent of Phases 1–2; can interleave.
   where it exists (`R`, …). Drop bespoke duplicates.
 - **P3.2 — Camera → `UsdGeomCamera`; lights → `UsdLux`; sensors → mirror Isaac shapes** (doc 38 §8.5).
   Keep `lunco:cameraMode` (behavior). *Verify:* camera/light/sensor behavior unchanged.
-- **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `lunco:resolvedAsset`/`assetMode`
+- **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `assetMode` and the authored
+  `payload`/`references` arc
   shrink to a thin runtime cache (doc 38 §14.7).
 
 **Phase 3 done when:** params are typed attributes/model parameters; camera/light/sensor use standard (or

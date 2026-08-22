@@ -1052,6 +1052,21 @@ pub fn validate_communication_period_secs(value: f64) -> Result<f64, String> {
     Ok(value)
 }
 
+/// Resolve the authored communication-period opinion shared by every USD
+/// Modelica projection. An omitted opinion is the documented schema default;
+/// an explicit missing or invalid value is an authoring error.
+pub fn resolve_communication_period_secs(
+    authored: bool,
+    value: Option<f64>,
+) -> Result<f64, String> {
+    if !authored {
+        return Ok(DEFAULT_COMMUNICATION_PERIOD_SECS);
+    }
+    value
+        .ok_or_else(|| "not a valid authored real value".to_string())
+        .and_then(validate_communication_period_secs)
+}
+
 /// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
 ///
 /// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
@@ -1197,6 +1212,57 @@ fn reset_ok(
         is_reset: true,
         ..Default::default()
     }
+}
+
+/// Build the terminal response for a command that panicked inside the solver
+/// worker. The response must retain the command's lifecycle shape: a Compile
+/// panic closes compilation, a Step panic closes its exact transaction, and a
+/// source-root panic resolves the root load. A placeholder-only response
+/// cannot clear any of those state machines.
+pub fn panic_result_for_command(cmd: &ModelicaCommand, message: &str) -> ModelicaResult {
+    let mut result = ModelicaResult {
+        error: Some(format!("Modelica worker panic: {message}")),
+        log_message: Some("Modelica worker recovered after a command panic".to_string()),
+        ..Default::default()
+    };
+    match cmd {
+        ModelicaCommand::Step {
+            entity,
+            session_id,
+            step_id,
+            ..
+        } => {
+            result.entity = *entity;
+            result.session_id = *session_id;
+            result.step_id = Some(*step_id);
+        }
+        ModelicaCommand::Compile {
+            entity, session_id, ..
+        } => {
+            result.entity = *entity;
+            result.session_id = *session_id;
+            result.is_new_model = true;
+        }
+        ModelicaCommand::UpdateParameters {
+            entity, session_id, ..
+        } => {
+            result.entity = *entity;
+            result.session_id = *session_id;
+            result.is_parameter_update = true;
+        }
+        ModelicaCommand::Reset {
+            entity, session_id, ..
+        } => {
+            result.entity = *entity;
+            result.session_id = *session_id;
+            result.is_reset = true;
+        }
+        ModelicaCommand::LoadSourceRoot { id, .. } => {
+            result.loaded_source_root_id = Some(id.clone());
+        }
+        ModelicaCommand::Despawn { .. } => {}
+    }
+    result
 }
 
 /// Where a captured default was declared, which decides how its leaf name is
@@ -1769,6 +1835,18 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
         for cmd in to_process {
             let tx_inner = tx.clone();
+            let panic_entity = match &cmd {
+                ModelicaCommand::Step { entity, .. }
+                | ModelicaCommand::Compile { entity, .. }
+                | ModelicaCommand::UpdateParameters { entity, .. }
+                | ModelicaCommand::Reset { entity, .. }
+                | ModelicaCommand::Despawn { entity } => Some(*entity),
+                ModelicaCommand::LoadSourceRoot { .. } => None,
+            };
+            let panic_result = panic_result_for_command(
+                &cmd,
+                "the affected Modelica command was aborted; see the worker log",
+            );
             // Instrumentation for the "sometimes stuck" class of bugs:
             // when the worker hangs (usually inside a pathological
             // rumoca compile on a malformed model), the main-thread
@@ -2444,20 +2522,17 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             }
 
             if result.is_err() {
-                let _ = tx.send(ModelicaResult {
-                    entity: Entity::PLACEHOLDER,
-                    session_id: 0,
-                    new_time: 0.0,
-                    outputs: Vec::new(),
-                    detected_symbols: Vec::new(),
-                    error: Some("Internal Worker Panic!".to_string()),
-                    log_message: None,
-                    is_new_model: false,
-                    is_parameter_update: false,
-                    is_reset: false,
-                    detected_input_names: Vec::new(),
-                    ..Default::default()
-                });
+                if let Some(entity) = panic_entity {
+                    steppers.remove(&entity);
+                    if let Some(cached) = cached_models.remove(&entity) {
+                        prepared_solve_cache.remove_compiled(&cached.compiled);
+                    }
+                    sim_streams.remove(&entity);
+                    current_sessions.remove(&entity);
+                    realtime_models.remove(&entity);
+                    rejected_inputs.retain(|(candidate, _)| *candidate != entity);
+                }
+                let _ = tx.send(panic_result);
             }
         }
     }
@@ -2654,9 +2729,19 @@ pub(crate) fn inline_worker_process(
         return;
     };
     let tx = channels.tx_res.clone();
-    process_inline_command(&mut worker.inner, cmd, |r| {
-        let _ = tx.send(r);
-    });
+    let panic_result = panic_result_for_command(
+        &cmd,
+        "the affected Modelica command was aborted; see the worker log",
+    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        process_inline_command(&mut worker.inner, cmd, |r| {
+            let _ = tx.send(r);
+        });
+    }));
+    if outcome.is_err() {
+        worker.inner = InlineWorkerInner::default();
+        let _ = tx.send(panic_result);
+    }
 }
 
 /// Apply a single `ModelicaCommand` against the inline worker state, sending
@@ -4461,8 +4546,10 @@ mod macro_step_tests {
 
     #[test]
     fn communication_schedule_default_is_valid_and_reanchors_exactly() {
-        let mut model = ModelicaModel::default();
-        model.current_time = 3.25;
+        let mut model = ModelicaModel {
+            current_time: 3.25,
+            ..Default::default()
+        };
 
         assert_eq!(
             model.validated_communication_period_secs().unwrap(),
@@ -4508,6 +4595,68 @@ mod macro_step_tests {
         assert!(validate_communication_period_secs(3.0 * lunco_core::SECS_PER_TICK).is_ok());
         assert!(validate_communication_period_secs(0.13).is_err());
         assert!(validate_communication_period_secs(MAX_MACRO_STEP_DT + LIVE_MICRO_DT).is_err());
+    }
+
+    #[test]
+    fn panic_results_preserve_command_lifecycle_identity() {
+        let entity = Entity::from_raw_u32(7).expect("valid test entity");
+        let compile = panic_result_for_command(
+            &ModelicaCommand::Compile {
+                entity,
+                session_id: 4,
+                model_name: "Balloon".into(),
+                source: String::new(),
+                realtime_safe: false,
+                doc_uri: "balloon.mo".into(),
+                extra_sources: Vec::new(),
+                parameter_overrides: Vec::new(),
+                stream: None,
+            },
+            "panic",
+        );
+        assert_eq!(compile.entity, entity);
+        assert_eq!(compile.session_id, 4);
+        assert!(compile.is_new_model);
+        assert!(!compile.is_parameter_update);
+
+        let step = panic_result_for_command(
+            &ModelicaCommand::Step {
+                entity,
+                session_id: 4,
+                step_id: 19,
+                start_time: 0.0,
+                stop_time: 0.1,
+                model_name: "Balloon".into(),
+                inputs: Vec::new(),
+                dt: 0.1,
+            },
+            "panic",
+        );
+        assert_eq!(step.step_id, Some(19));
+        assert!(!step.is_new_model);
+        assert!(step.error.is_some());
+
+        let root = panic_result_for_command(
+            &ModelicaCommand::LoadSourceRoot {
+                id: "Modelica".into(),
+                payload: LoadSourceRootPayload::InMemory {
+                    label: "test".into(),
+                    files: Vec::new(),
+                },
+            },
+            "panic",
+        );
+        assert_eq!(root.loaded_source_root_id.as_deref(), Some("Modelica"));
+    }
+
+    #[test]
+    fn resolves_only_omitted_period_to_the_documented_default() {
+        assert_eq!(
+            resolve_communication_period_secs(false, None).unwrap(),
+            DEFAULT_COMMUNICATION_PERIOD_SECS
+        );
+        assert!(resolve_communication_period_secs(true, None).is_err());
+        assert!(resolve_communication_period_secs(true, Some(0.13)).is_err());
     }
 
     #[test]

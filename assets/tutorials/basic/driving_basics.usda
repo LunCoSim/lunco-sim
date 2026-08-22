@@ -67,7 +67,7 @@ def Xform "DrivingBasics" (
 
     # Flat plot, ±60 m.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -84,7 +84,7 @@ def Xform "DrivingBasics" (
     # are authored along X; rotating the old wide slab around X made its
     # transverse edge an uncrossable wall.
     def Cube "Ramp" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

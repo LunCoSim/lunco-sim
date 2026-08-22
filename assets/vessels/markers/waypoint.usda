@@ -56,6 +56,7 @@ def Xform "WaypointMarker" (
     # waypoint without having to overlap the top of a dome floating one radius
     # above the terrain.
     def Sphere "Dome" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
     )
     {
         custom string lunco:interaction:left = "pass_through"

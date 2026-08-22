@@ -176,6 +176,20 @@ fn build_app() -> App {
     app.register_type::<Knob>()
         .register_type::<SimConfig>()
         .init_resource::<SimConfig>();
+
+    // `world_pos` is deliberately frame-relative. Give this headless fixture
+    // the same canonical frame that a production scene mount supplies, rather
+    // than relying on the bridge to invent a position when no frame exists.
+    let frame = app
+        .world_mut()
+        .spawn((
+            big_space::prelude::Grid::new(2_000.0, 100.0),
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    app.world_mut()
+        .insert_resource(lunco_core::ActivePhysicsFrame(frame));
     app
 }
 
@@ -184,12 +198,14 @@ fn build_app() -> App {
 /// TransformPlugin to propagate it. Maps gid → entity so cmd() target
 /// resolution + world_pos lookups work.
 fn spawn_rover(app: &mut App) -> Entity {
+    let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
     let rover = app
         .world_mut()
         .spawn((
             Transform::from_xyz(0.0, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 0.0)),
             GlobalEntityId::from_raw(ROVER_GID),
+            ChildOf(frame),
         ))
         .id();
     app.world_mut()
@@ -201,6 +217,7 @@ fn spawn_rover(app: &mut App) -> Entity {
 /// Spawn a rover carrying a `ControlBinding` (so `list_entities().type == "rover"` and
 /// the selection toolkit / formation tool library can find it) at world x = `x`.
 fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
+    let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
     let e = app
         .world_mut()
         .spawn((
@@ -208,6 +225,7 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
             lunco_core::ControlBinding { binds: Vec::new() },
+            ChildOf(frame),
         ))
         .id();
     app.world_mut()

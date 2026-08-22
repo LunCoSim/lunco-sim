@@ -162,9 +162,8 @@ impl Default for LinkNode {
 #[reflect(Component)]
 pub struct LinkOccluder {
     /// Half-size of the prim's UsdGeom `extent`, in its local space, BEFORE the
-    /// prim's own scale. Defaults to a unit cube (`0.5`), so a `Cube` with
-    /// `size = 1` and no authored extent — which is how `props/wall.usda` and the
-    /// sandbox slabs are written — resolves to `scale/2`.
+    /// prim's own scale. USD projection derives this from authored `extent`, or
+    /// from a standard Cube's `size` when its computed extent is omitted.
     pub half_extents: DVec3,
     /// Centre of that `extent` in local space. UsdGeom's extent is not required to
     /// be origin-centred, so an offset mesh occludes where it actually sits.

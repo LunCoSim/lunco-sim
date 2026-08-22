@@ -34,7 +34,7 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Part | File | Owns |
 |---|---|---|
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, drive/brake/spin dynamics — THE default set every wheel composes |
-| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
+| Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
 | Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |

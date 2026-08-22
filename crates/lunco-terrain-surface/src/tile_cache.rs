@@ -146,6 +146,43 @@ pub fn bake_tile_mesh_cached(
     )
 }
 
+/// Wasm counterpart of [`bake_tile_mesh_cached`]. OPFS is asynchronous, so the
+/// browser path performs the same content-addressed lookup at the async task
+/// boundary instead of routing through the native-only synchronous cache API.
+#[cfg(target_arch = "wasm32")]
+pub async fn bake_tile_mesh_cached_async(
+    oracle: std::sync::Arc<SurfaceOracle>,
+    coord: QuadCoord,
+    region: Square,
+    res: usize,
+    dem_half_extent: f64,
+    origin_xz: [f64; 2],
+) -> TileMesh {
+    use lunco_precompute::Bake;
+
+    let bake = TileBake {
+        oracle: oracle.as_ref(),
+        coord,
+        region,
+        res,
+        dem_half_extent,
+        origin_xz,
+    };
+    let key_hex = lunco_precompute::key_hex(bake.key());
+    if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {
+        if let Some(mesh) = tile_mesh_from_bytes(&blob) {
+            return mesh;
+        }
+    }
+
+    let mesh = bake.bake();
+    let blob = tile_mesh_to_bytes(&mesh);
+    wasm_bindgen_futures::spawn_local(async move {
+        lunco_storage::opfs_blob::write(TileBake::NAMESPACE, &key_hex, &blob).await;
+    });
+    mesh
+}
+
 fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     let verts = m.positions.len();
     let mut out =

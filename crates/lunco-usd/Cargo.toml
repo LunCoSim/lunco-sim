@@ -19,6 +19,7 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
 lunco-doc = { path = "../lunco-doc" }
 # Only the document-lifecycle EVENTS (core); its egui systems are behind
 # doc-bevy's own `ui`, re-enabled by our `ui` feature below.
@@ -63,7 +64,6 @@ bevy = { workspace = true, features = ["bevy_pbr"] }
 # The entity-pipeline tests assert on appearance INTENT (`PbrLook`), not on a bound
 # `MeshMaterial3d` — a headless test adds no `LuncoRenderPlugin`, and the intent is
 # what USD actually authors. See docs/architecture/render-decoupling.md.
-lunco-render = { path = "../lunco-render" }
 # The rover-structure tests inspect the actuator wiring a vessel projects, which
 # is `SimConnection` — owned by `lunco-cosim`. Dev-only: the library itself does
 # not wire actuators, it authors the USD they are built from.

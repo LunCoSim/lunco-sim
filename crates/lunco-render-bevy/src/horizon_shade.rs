@@ -37,9 +37,15 @@ pub(crate) fn build(app: &mut App) {
     // no-op when it is already there. Doing it here too means adding the render
     // plugin without the environment plugin cannot fail system-param validation.
     app.init_resource::<HorizonShadowCacheConfig>();
+    app.init_resource::<lunco_render::RenderingQualitySettings>();
     app.add_systems(
         Update,
-        (wire_terrain_materials, wire_sun_for_non_terrain_materials)
+        (
+            sync_horizon_quality_settings
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+            wire_terrain_materials,
+            wire_sun_for_non_terrain_materials,
+        )
             .chain()
             .after(finish_shadow_cache_bake)
             // The bake half is gated on the asset stores existing; the material
@@ -47,6 +53,28 @@ pub(crate) fn build(app: &mut App) {
             // below so an app without `ShaderMaterialPlugin` degrades quietly).
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
+}
+
+/// Project the persisted Graphics quality settings into the render-free horizon
+/// bake resource. The environment crate owns the bake implementation, while
+/// Graphics owns the user's rendering-quality intent; this is the sole bridge.
+/// Invalid settings remain unapplied and are reported by the camera/shadow
+/// policy that already validates the same resource.
+fn sync_horizon_quality_settings(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut cfg: ResMut<HorizonShadowCacheConfig>,
+) {
+    let profile = match settings.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration");
+            return;
+        }
+    };
+    cfg.enabled = profile.horizon_shadow_cache_enabled;
+    cfg.sun_threshold_deg = profile.horizon_shadow_cache_sun_threshold_deg;
+    cfg.march_steps = profile.horizon_march_steps;
+    cfg.samples_per_axis = profile.horizon_cache_samples_per_axis;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -57,9 +85,20 @@ pub(crate) fn build(app: &mut App) {
 /// texture, static size/resolution, the per-frame sun direction, and the
 /// **shadow cache** binding + `shadow_cache_on` flag.
 /// A terrain with no authored shader gets the default `terrain_shadow.wgsl`
-/// (albedo from its `displayColor`). Idempotent and self-healing against
-/// later material swaps; steady-state cost is a uniform compare per terrain
-/// (writes only when the sun moves or the cache swaps).
+/// (albedo from its already-resolved `StandardMaterial`). Idempotent and
+/// self-healing against later material swaps; steady-state cost is a uniform
+/// compare per terrain (writes only when the sun moves or the cache swaps).
+///
+/// A pending or missing standard-material asset is not replaced with a guessed
+/// colour. The appearance binder may not have resolved the USD look yet; taking
+/// over the entity at that point would permanently erase the authored look.
+fn resolved_terrain_albedo(
+    material: Option<&MeshMaterial3d<StandardMaterial>>,
+    materials: &Assets<StandardMaterial>,
+) -> Option<Color> {
+    material.and_then(|handle| materials.get(&handle.0).map(|material| material.base_color))
+}
+
 #[allow(clippy::type_complexity)]
 pub fn wire_terrain_materials(
     mut commands: Commands,
@@ -103,7 +142,7 @@ pub fn wire_terrain_materials(
         return;
     };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — inside it the live 48-step march is
+    // gate, not just cosmetics — inside it the configured live march is
     // skipped (CSM owns the near field), and "march everywhere" turned low
     // flight into a slideshow. (Streamed tiles DO get a baked cache on
     // native — `lunco-luncosim/src/terrain_horizon.rs` samples the oracle
@@ -115,6 +154,7 @@ pub fn wire_terrain_materials(
     // it would make the terrain obey a different illumination model from every
     // dynamic PBR object and would incorrectly look like bounced light.
     let to_sun_world: Vec3 = sun_gt.back().into();
+    let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
         // The world→terrain inverse only moves when the terrain does; `sun_local`
@@ -161,11 +201,13 @@ pub fn wire_terrain_materials(
         };
         let cache_current = shadow_cache
             .is_some_and(|cache| cache.is_valid_for_sun(sun_local, cfg.sun_threshold_deg));
-        let shadow_cache_on: f32 = if cfg.enabled && engaged && cache_current {
+        let shadow_cache_on: f32 = if cache_quality_valid && cfg.enabled && engaged && cache_current
+        {
             1.0
         } else {
             0.0
         };
+        let horizon_march_steps = cfg.march_steps as f32;
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
@@ -197,6 +239,7 @@ pub fn wire_terrain_materials(
                 ("hf_res", ParamValue::F32(hf_res)),
                 ("csm_far", ParamValue::F32(csm_far)),
                 ("shadow_cache_on", ParamValue::F32(shadow_cache_on)),
+                ("horizon_march_steps", ParamValue::F32(horizon_march_steps)),
             ]);
         };
 
@@ -232,6 +275,8 @@ pub fn wire_terrain_materials(
                         .is_none_or(|r| (r - hf_res).abs() > 1e-3)
                     || m.get_scalar("csm_far")
                         .is_none_or(|c| (c - csm_far).abs() > 1e-3)
+                    || m.get_scalar("horizon_march_steps")
+                        .is_none_or(|s| (s - horizon_march_steps).abs() > 1e-3)
             });
             if needs {
                 if let Some(mut m) = shader_mats.get_mut(&handle.0) {
@@ -241,10 +286,13 @@ pub fn wire_terrain_materials(
         } else {
             // No authored shader: apply the default ray-march terrain
             // shader, carrying the displayColor albedo over.
-            let albedo = std_mat
-                .and_then(|h| std_mats.get(&h.0))
-                .map(|m| m.base_color)
-                .unwrap_or(Color::srgb(0.5, 0.5, 0.5));
+            // The StandardMaterial may be absent for one or more frames while
+            // the PbrLook observer resolves the authored appearance. Do not
+            // turn that transient state into an irreversible shader takeover
+            // with an arbitrary gray colour.
+            let Some(albedo) = resolved_terrain_albedo(std_mat, &std_mats) else {
+                continue;
+            };
             let a = albedo.to_linear();
             let mut material = ShaderMaterial {
                 shader: asset_server.load("shaders/terrain_shadow.wgsl"),
@@ -599,5 +647,14 @@ mod tests {
             None,
             "terrain must be wired by wire_terrain_materials, not this system"
         );
+    }
+
+    #[test]
+    fn terrain_shader_waits_for_a_resolved_material_instead_of_guessing_gray() {
+        let materials = Assets::<StandardMaterial>::default();
+        let missing = MeshMaterial3d::<StandardMaterial>(Handle::default());
+
+        assert_eq!(resolved_terrain_albedo(None, &materials), None);
+        assert_eq!(resolved_terrain_albedo(Some(&missing), &materials), None);
     }
 }

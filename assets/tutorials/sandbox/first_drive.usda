@@ -10,9 +10,10 @@
 #
 # ALL lesson logic is data: this scene sets the stage, and the orchestrator on
 # `/FirstDrive/Scenario` (scenarios-style .rhai) drives the HUD and evaluates
-# progress. It advances on REAL user actions — possession is a `cmd:PossessVessel`
-# event; arrival is the flag's `enter:waypoint` trigger-zone event — never a
-# scripted timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
+# progress. It advances on REAL user actions — possession is verified from the
+# rover's live controller and arrival is verified by distance to this scene's
+# named flag, never by a generic event or scripted timer. See
+# crates/lunco-tutorial and the tutorial_overlay HUD.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/first_drive.usda
 # or start it from the Tutorials panel.
@@ -40,7 +41,7 @@ def Xform "FirstDrive" (
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -82,7 +83,8 @@ def Xform "FirstDrive" (
     }
 
     # The goal: a glowing dome with an overlap-only "waypoint" trigger zone that
-    # fires `enter:waypoint` when the rover reaches it — the mission's arrival event.
+    # can emit `enter:waypoint` for other task consumers; First Drive's mission
+    # deliberately verifies distance to this named flag instead.
     def Xform "Flag" (
         prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )

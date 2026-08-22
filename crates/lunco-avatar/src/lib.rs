@@ -94,10 +94,6 @@ mod intents;
 /// (Unifies the former ad-hoc `0..10` / `MAX_DEPTH = 8` bounds.)
 const MAX_HIERARCHY_WALK_DEPTH: usize = 16;
 
-/// Fallback body radius (Earth mean radius, metres) used when a target
-/// `CelestialBody` is missing — keeps altitude math finite instead of
-/// collapsing distances to zero.
-
 /// UI panels for avatar status, camera mode, and surface coordinates.
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -1108,6 +1104,7 @@ fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
 /// * `commands` — Bevy commands for entity spawning.
 /// * `grid_entity` — The big_space grid entity to parent the avatar to.
 /// * `initial_offset` — Starting position offset in grid-local coordinates.
+/// * `profile` — The already-resolved authoritative graphics profile.
 ///
 /// # Returns
 /// The spawned entity ID.
@@ -1115,6 +1112,7 @@ pub fn spawn_avatar_camera(
     commands: &mut Commands,
     grid_entity: Entity,
     initial_offset: DVec3,
+    profile: lunco_render::RenderQualityProfile,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
     // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
@@ -1130,19 +1128,17 @@ pub fn spawn_avatar_camera(
         .spawn((
             // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
             //
-            // `scene_camera_look(None)` — the SAME pair the USD camera projection
-            // uses, with no authored opinion to honour here. This camera used to
-            // spawn `SceneCamera::default()` and no `Exposure`, which left it at
-            // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
-            // surface white) and, because `project_env_settings` only writes
-            // cameras that already have the component, permanently uncorrectable.
+            // The same camera/exposure pair the USD camera projection uses, with
+            // no authored opinion to honour here. The caller supplies the
+            // authoritative graphics profile; this camera must not invent one.
             // `SceneCamera` is the render-free camera intent. The render-side
             // binder adds `Camera3d` and its complete render graph atomically;
             // inserting a bare `Camera` here would trigger Bevy's missing
             // render-graph warning before that binder runs.
             (
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(None, profile),
                 lunco_render::usd_default_perspective_projection(),
+                lunco_render::GraphicsCameraDefaults,
             ),
             FreeFlightCamera {
                 yaw,
@@ -2551,7 +2547,7 @@ fn freeflight_scroll_transit_system(
                 .try_insert(OrbitViewReturn {
                     parent_grid: child_of.parent(),
                     cell: *cell,
-                    transform: tf.clone(),
+                    transform: *tf,
                     behavior,
                     gravity_body: gravity_body.copied(),
                     surface_relative,
@@ -3331,14 +3327,14 @@ fn on_return_from_orbit(
 
     if child_of.parent() == return_state.parent_grid {
         *cell = return_state.cell;
-        *transform = return_state.transform.clone();
+        *transform = return_state.transform;
     } else {
         migrate_to_grid(
             &mut commands,
             avatar,
             return_state.parent_grid,
             return_state.cell,
-            return_state.transform.clone(),
+            return_state.transform,
         );
     }
     apply_orbit_return(&mut commands, avatar, &return_state);
@@ -3423,14 +3419,14 @@ fn on_release_command(
             if let Some(state) = &return_state {
                 if child_of.parent() == state.parent_grid {
                     *cell = state.cell;
-                    *tf = state.transform.clone();
+                    *tf = state.transform;
                 } else {
                     migrate_to_grid(
                         &mut commands,
                         avatar_ent,
                         state.parent_grid,
                         state.cell,
-                        state.transform.clone(),
+                        state.transform,
                     );
                 }
             }
@@ -4108,7 +4104,7 @@ fn on_focus_command(
         ent.try_insert(OrbitViewReturn {
             parent_grid: cam_parent.parent(),
             cell: *cam_cell,
-            transform: cam_tf.clone(),
+            transform: *cam_tf,
             behavior,
             gravity_body: gravity_body.copied(),
             surface_relative,
@@ -5182,7 +5178,7 @@ mod tests {
                 OrbitViewReturn {
                     parent_grid: surface_grid,
                     cell: return_cell,
-                    transform: return_transform.clone(),
+                    transform: return_transform,
                     behavior: OrbitReturnBehavior::Surface(return_surface.clone()),
                     gravity_body: Some(GravityBody { body_entity: body }),
                     surface_relative: true,
@@ -5260,7 +5256,7 @@ mod tests {
                     ..default()
                 },
                 original_cell,
-                original_transform.clone(),
+                original_transform,
                 ChildOf(surface_grid),
                 original_surface.clone(),
                 GravityBody { body_entity: moon },
@@ -5366,7 +5362,7 @@ mod tests {
                     ..default()
                 },
                 original_cell,
-                original_transform.clone(),
+                original_transform,
                 ChildOf(surface_grid),
                 original_spring.clone(),
                 ControllerLink {
@@ -5759,7 +5755,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Camera::default(),
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(
+                    None,
+                    lunco_render::RenderingQuality::Balanced.profile(),
+                ),
                 lunco_core::Avatar,
                 LocalAvatar,
             ))
@@ -5775,7 +5774,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Camera::default(),
-                lunco_render::scene_camera_look(None),
+                lunco_render::scene_camera_look_with_profile(
+                    None,
+                    lunco_render::RenderingQuality::Balanced.profile(),
+                ),
                 lunco_core::Avatar,
                 LocalAvatar,
             ))

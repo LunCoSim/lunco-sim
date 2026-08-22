@@ -372,7 +372,7 @@ pub fn resolve_embedded_scenario_paths(
             // scenario script syncs (whole-twin content plane) but fails to load on
             // the peer. Fix: author the ref as a USD `asset` attribute (`@…rhai@`)
             // read through the resolver's `canonicalize`, which anchors it to the
-            // scene's source (like `lunco:resolvedAsset`). Inline `lunco:script` /
+            // scene's source (like a standard USD payload). Inline `lunco:script` /
             // `LunCoPolicy` sources are unaffected (they ride the doc).
             info!(
                 "[scripting] loading scenario script `{}` as `{uri}`",

@@ -58,8 +58,8 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use bevy::log::{error_once, warn_once};
-use bevy::math::{DQuat, DVec3, Quat, Vec3};
+use bevy::log::warn_once;
+use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 
 use crate::read::UsdRead;
@@ -89,6 +89,33 @@ pub struct StageMetrics {
     pub up_axis: UpAxis,
 }
 
+/// An authored stage-convention declaration that cannot be interpreted under
+/// the USD contract. Omission remains eligible for the USD schema defaults;
+/// explicit malformed metadata is terminal for that stage instead of being
+/// replaced with canonical units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageMetricsError {
+    /// `upAxis` was authored with a value other than `Y` or `Z`, or with an
+    /// unsupported USD value type.
+    InvalidUpAxis(String),
+    /// `metersPerUnit` was authored with an unsupported type or a non-positive
+    /// or non-finite value.
+    InvalidMetersPerUnit(String),
+}
+
+impl std::fmt::Display for StageMetricsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUpAxis(value) => write!(f, "invalid upAxis metadata: {value}"),
+            Self::InvalidMetersPerUnit(value) => {
+                write!(f, "invalid metersPerUnit metadata: {value}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StageMetricsError {}
+
 impl Default for StageMetrics {
     /// Our canonical frame: `upAxis = "Y"`, `metersPerUnit = 1.0`. NOT the
     /// unauthored-stage fallback — USD's is `0.01` (centimetres); an unauthored
@@ -104,37 +131,48 @@ impl Default for StageMetrics {
 impl StageMetrics {
     /// Read the composed stage metrics from any [`UsdRead`] source.
     ///
-    /// **Warns loudly** rather than importing wrong silently:
+    /// **Rejects malformed declarations** rather than importing wrong silently:
     /// - an unauthored `metersPerUnit` takes the USD spec fallback `0.01`
     ///   (centimetres, `UsdGeomLinearUnits::centimeters`) — NOT `1.0`;
-    /// - an `upAxis` token that is neither `Y` nor `Z` is an **error** (USD only
-    ///   defines those two) → treated as `Y`;
-    /// - a non-finite or non-positive `metersPerUnit` is an **error** → `1.0`;
+    /// - an `upAxis` value that is neither `Y` nor `Z` is an **error** (USD only
+    ///   defines those two);
+    /// - a non-finite or non-positive `metersPerUnit` is an **error**;
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
     ///   one-shot warning naming what is being converted, so an unexpected
     ///   Omniverse/Isaac stage is visible rather than merely handled.
-    pub fn from_reader(reader: &crate::StageView<'_>) -> Self {
-        let up_axis = match reader.stage_up_axis().as_deref() {
-            None | Some("Y") => UpAxis::Y,
-            Some("Z") => UpAxis::Z,
-            Some(other) => {
-                error_once!(
-                    "[usd-units] stage declares unsupported upAxis = {other:?} (USD defines only \
-                     \"Y\" and \"Z\"); importing as Y-up — geometry may be rotated wrongly"
-                );
-                UpAxis::Y
-            }
+    pub fn from_reader(reader: &crate::StageView<'_>) -> Result<Self, StageMetricsError> {
+        let up_axis = match reader.stage_metadata_value("upAxis") {
+            None => UpAxis::Y,
+            Some(value) => match value.as_str().map(str::to_string).as_deref() {
+                Some("Y") => UpAxis::Y,
+                Some("Z") => UpAxis::Z,
+                Some(other) => {
+                    return Err(StageMetricsError::InvalidUpAxis(other.to_string()));
+                }
+                None => {
+                    return Err(StageMetricsError::InvalidUpAxis(
+                        "unsupported USD value type".to_string(),
+                    ));
+                }
+            },
         };
-        let meters_per_unit = match reader.stage_meters_per_unit() {
+        let meters_per_unit = match reader.stage_metadata_value("metersPerUnit") {
             // Unauthored ⇒ the USD spec fallback: centimetres.
             None => 0.01,
-            Some(m) if m.is_finite() && m > 0.0 => m,
-            Some(bad) => {
-                error_once!(
-                    "[usd-units] stage declares unsupported metersPerUnit = {bad}; importing at \
-                     1.0 (metres) — scene scale may be wrong"
-                );
-                1.0
+            Some(value) => {
+                let value = value
+                    .clone()
+                    .get::<f64>()
+                    .or_else(|| value.get::<f32>().map(f64::from))
+                    .ok_or_else(|| {
+                        StageMetricsError::InvalidMetersPerUnit(
+                            "unsupported USD value type".to_string(),
+                        )
+                    })?;
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(StageMetricsError::InvalidMetersPerUnit(value.to_string()));
+                }
+                value
             }
         };
         let metrics = Self {
@@ -150,7 +188,7 @@ impl StageMetrics {
                 metrics.meters_per_unit
             );
         }
-        metrics
+        Ok(metrics)
     }
 
     /// The same metrics off an authoring [`Stage`](openusd::usd::Stage).
@@ -168,34 +206,45 @@ impl StageMetrics {
     ///
     /// Silent on a non-canonical stage: `from_reader` warned already at import, and
     /// this runs once per edit.
-    pub fn from_stage(stage: &openusd::usd::Stage) -> Self {
+    pub fn from_stage(stage: &openusd::usd::Stage) -> Result<Self, StageMetricsError> {
         let up_axis = match stage
             .stage_metadata("upAxis")
             .ok()
             .flatten()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .as_deref()
+            .map(|v| v.as_str().map(str::to_string))
         {
-            Some("Z") => UpAxis::Z,
-            _ => UpAxis::Y,
+            None => UpAxis::Y,
+            Some(Some(value)) if value == "Y" => UpAxis::Y,
+            Some(Some(value)) if value == "Z" => UpAxis::Z,
+            Some(Some(value)) => return Err(StageMetricsError::InvalidUpAxis(value)),
+            Some(None) => {
+                return Err(StageMetricsError::InvalidUpAxis(
+                    "unsupported USD value type".to_string(),
+                ));
+            }
         };
-        let meters_per_unit = stage
-            .stage_metadata("metersPerUnit")
-            .ok()
-            .flatten()
-            .and_then(|v| {
-                v.clone()
+        let meters_per_unit = match stage.stage_metadata("metersPerUnit").ok().flatten() {
+            None => 0.01,
+            Some(value) => {
+                let value = value
+                    .clone()
                     .get::<f64>()
-                    .or_else(|| v.get::<f32>().map(f64::from))
-            })
-            // Invalid ⇒ 1.0, unauthored ⇒ the USD spec fallback (centimetres) —
-            // mirroring `from_reader`, so read and write agree on the frame.
-            .map(|m| if m.is_finite() && m > 0.0 { m } else { 1.0 })
-            .unwrap_or(0.01);
-        Self {
+                    .or_else(|| value.get::<f32>().map(f64::from))
+                    .ok_or_else(|| {
+                        StageMetricsError::InvalidMetersPerUnit(
+                            "unsupported USD value type".to_string(),
+                        )
+                    })?;
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(StageMetricsError::InvalidMetersPerUnit(value.to_string()));
+                }
+                value
+            }
+        };
+        Ok(Self {
             meters_per_unit,
             up_axis,
-        }
+        })
     }
 
     /// Whether the stage is already in the canonical frame (Y-up, metres) ⇒ the
@@ -579,6 +628,234 @@ impl ConventionTransform {
         Vec3::new(s.x.abs(), s.y.abs(), s.z.abs())
     }
 
+    /// A canonical local scale in `f64` → the stage's axis order. USD xform
+    /// attributes are commonly `double3`; keeping this path in `f64` avoids
+    /// narrowing an edit merely because the live authoring API received a
+    /// double-valued USD op.
+    pub fn stage_scale_vec_d(&self, s: DVec3) -> DVec3 {
+        let s = self.rot.as_dquat().inverse() * s;
+        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// A stage-local scale in `f64` → canonical axis order.
+    pub fn scale_vec_d(&self, s: DVec3) -> DVec3 {
+        let s = self.rot.as_dquat() * s;
+        DVec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// Convert a canonical `xformOp:rotateXYZ` Euler triple to the stage's
+    /// basis. Euler angles do not have an independent axis remap; the
+    /// represented rotation must be remapped as a quaternion and decomposed
+    /// again in the same USD extrinsic order used by the reader.
+    pub fn stage_euler_xyz_deg(&self, deg: [f64; 3]) -> [f64; 3] {
+        if self.is_identity() {
+            return deg;
+        }
+        let q = Quat::from_euler(
+            EulerRot::XYZEx,
+            (deg[0] as f32).to_radians(),
+            (deg[1] as f32).to_radians(),
+            (deg[2] as f32).to_radians(),
+        );
+        let (x, y, z) = self.stage_rotation(q).to_euler(EulerRot::XYZEx);
+        [
+            x.to_degrees() as f64,
+            y.to_degrees() as f64,
+            z.to_degrees() as f64,
+        ]
+    }
+
+    /// Convert a stage-local `xformOp:rotateXYZ` Euler triple to canonical
+    /// degrees. This is the exact inverse of [`stage_euler_xyz_deg`].
+    pub fn canonical_euler_xyz_deg(&self, deg: [f64; 3]) -> [f64; 3] {
+        if self.is_identity() {
+            return deg;
+        }
+        let q = Quat::from_euler(
+            EulerRot::XYZEx,
+            (deg[0] as f32).to_radians(),
+            (deg[1] as f32).to_radians(),
+            (deg[2] as f32).to_radians(),
+        );
+        let (x, y, z) = self.rotation(q).to_euler(EulerRot::XYZEx);
+        [
+            x.to_degrees() as f64,
+            y.to_degrees() as f64,
+            z.to_degrees() as f64,
+        ]
+    }
+
+    /// Convert a canonical value for a standard USD xform attribute to the
+    /// stage representation. Standard xform roles are not expressible by the
+    /// generic USD type name (`double3` is used for both points and scales), so
+    /// this is the single owner of that narrowly-defined distinction. Unknown
+    /// attributes still use [`stage_value`] and are never guessed by name.
+    pub fn stage_xform_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("xformOp:translate", "float3", V::Vec3f(a)) => {
+                let r = self.stage_point(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:translate", "double3", V::Vec3d(a)) => {
+                let r = self.stage_point_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:rotateXYZ", "float3", V::Vec3f(a)) => {
+                let r = self.stage_euler_xyz_deg([a.x as f64, a.y as f64, a.z as f64]);
+                V::Vec3f(gf::Vec3f {
+                    x: r[0] as f32,
+                    y: r[1] as f32,
+                    z: r[2] as f32,
+                })
+            }
+            ("xformOp:rotateXYZ", "double3", V::Vec3d(a)) => {
+                let r = self.stage_euler_xyz_deg([a.x, a.y, a.z]);
+                V::Vec3d(gf::Vec3d {
+                    x: r[0],
+                    y: r[1],
+                    z: r[2],
+                })
+            }
+            ("xformOp:scale", "float3", V::Vec3f(a)) => {
+                let r = self.stage_scale_vec(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:scale", "double3", V::Vec3d(a)) => {
+                let r = self.stage_scale_vec_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatf", V::Quatf(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatd", V::Quatd(q)) => {
+                let r = self.stage_rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.stage_value(type_name, value),
+        }
+    }
+
+    /// The inverse of [`stage_xform_value`], for a composed stage value read
+    /// back into the canonical op representation.
+    pub fn canonical_xform_value(
+        &self,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        match (name, type_name, value) {
+            ("xformOp:translate", "float3", V::Vec3f(a)) => {
+                let r = self.point(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:translate", "double3", V::Vec3d(a)) => {
+                let r = self.point_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:rotateXYZ", "float3", V::Vec3f(a)) => {
+                let r = self.canonical_euler_xyz_deg([a.x as f64, a.y as f64, a.z as f64]);
+                V::Vec3f(gf::Vec3f {
+                    x: r[0] as f32,
+                    y: r[1] as f32,
+                    z: r[2] as f32,
+                })
+            }
+            ("xformOp:rotateXYZ", "double3", V::Vec3d(a)) => {
+                let r = self.canonical_euler_xyz_deg([a.x, a.y, a.z]);
+                V::Vec3d(gf::Vec3d {
+                    x: r[0],
+                    y: r[1],
+                    z: r[2],
+                })
+            }
+            ("xformOp:scale", "float3", V::Vec3f(a)) => {
+                let r = self.scale_vec(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:scale", "double3", V::Vec3d(a)) => {
+                let r = self.scale_vec_d(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatf", V::Quatf(q)) => {
+                let r = self.rotation(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
+            }
+            ("xformOp:orient", "quatd", V::Quatd(q)) => {
+                let r = self.rotation(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
+            }
+            (_, _, value) => self.canonical_value(type_name, value),
+        }
+    }
+
     /// De-conjugate a prim's **local** transform back to the stage's frame:
     /// `L = S⁻¹·L'·S`. Inverse of
     /// [`local_transform`](Self::local_transform) — this is what an authoring
@@ -598,8 +875,12 @@ impl ConventionTransform {
 /// The stage → canonical conversion for `reader`'s stage. Cheap (two metadata
 /// field reads); the decoders call it per prim rather than threading a gate
 /// through every signature.
-pub fn stage_convention(reader: &crate::StageView<'_>) -> ConventionTransform {
-    ConventionTransform::from_stage_metrics(&StageMetrics::from_reader(reader))
+pub fn stage_convention(
+    reader: &crate::StageView<'_>,
+) -> Result<ConventionTransform, StageMetricsError> {
+    Ok(ConventionTransform::from_stage_metrics(
+        &StageMetrics::from_reader(reader)?,
+    ))
 }
 
 #[cfg(test)]

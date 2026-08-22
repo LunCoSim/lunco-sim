@@ -85,7 +85,7 @@ pub enum TextureLayer {
     /// Tangent/world-space normals — DEM-derived relief the procedural FBM cannot carry.
     Normal,
     /// Pre-baked sun visibility (R8Unorm), so the fragment shader samples once
-    /// instead of running the 48-step horizon march.
+    /// instead of running the configured horizon march.
     ShadowCache,
 }
 

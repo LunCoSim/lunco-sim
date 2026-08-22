@@ -71,19 +71,19 @@ use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
-    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, SimConnection,
-    TorqueActuator,
+    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, PassivePrismaticSuspension,
+    SimConnection, TorqueActuator,
 };
 use lunco_hardware::{MotorReadback, MotorReadbackTarget, SteeringActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_mobility::{
-    DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
-    WheelRaycast,
+    DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
+    SuspensionSpring, WheelRaycast,
 };
-use lunco_render::{PbrLook, SceneCamera};
-use openusd::sdf::Path as SdfPath;
+use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
+use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
 pub mod wheel_params;
@@ -303,6 +303,15 @@ struct StageJointTopology {
     authored_joints: HashMap<String, (String, String)>,
     articulation_roots: HashSet<String>,
     wheel_attachment_targets: HashMap<String, String>,
+    /// Standard attachment tire bindings, keyed by the referenced wheel path.
+    /// The tire may be a separate prim named by the attachment relationship or
+    /// the attachment itself when the standard direct-API form is authored.
+    wheel_attachment_tires: HashMap<String, String>,
+    /// Wheels whose attachment topology is malformed or ambiguous. Keeping the
+    /// rejection in the composed-stage scan prevents a first-target or
+    /// last-attachment heuristic from silently selecting different tire and
+    /// suspension data.
+    invalid_wheel_attachments: HashSet<String>,
     /// Standard attachment index, keyed by the referenced wheel path. The
     /// index is authored on the attachment prim, never inferred from wheel
     /// order or copied into a wheel-local field.
@@ -339,7 +348,9 @@ impl JointTopologyIndex {
         topology.authored_joints.clear();
         topology.articulation_roots.clear();
         topology.wheel_attachment_targets.clear();
+        topology.wheel_attachment_tires.clear();
         topology.wheel_attachment_indices.clear();
+        topology.invalid_wheel_attachments.clear();
         collect_joint_scan_read(reader, topology);
         topology.canonical_generation = Some(generation);
         topology.projection_revision = Some(projection_revision);
@@ -454,8 +465,104 @@ mod runtime_safety_tests {
     }
 }
 
+#[cfg(test)]
+mod wheel_wiring_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn spawn_wiring_fixture(
+        world: &mut World,
+        actuator_names: &[&str],
+        steer_name: Option<&str>,
+    ) -> Entity {
+        let stage = Handle::<UsdStageAsset>::default();
+        let drive_port = world.spawn_empty().id();
+        let mut actuators = HashMap::new();
+        for name in actuator_names {
+            actuators.insert((*name).to_owned(), drive_port);
+        }
+        world.spawn((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/World/Rover".into(),
+            },
+            lunco_core::ActuatorPorts::new(actuators),
+        ));
+        world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/World/Rover/Wheel".into(),
+                },
+                PendingWheelWiring {
+                    p_drive: drive_port,
+                    p_steer: drive_port,
+                    drive_port_name: "drive_left".to_owned(),
+                    steer_port_name: steer_name.map(str::to_owned),
+                },
+            ))
+            .id()
+    }
+
+    #[test]
+    fn missing_authored_drive_port_is_a_terminal_fault_and_not_ready_wiring() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &[], None);
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        let fault = world.resource::<lunco_core::RuntimeFaults>().first.as_ref();
+        assert_eq!(
+            fault.map(|fault| fault.kind),
+            Some("vehicle-port-wiring-invalid")
+        );
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn missing_authored_steer_port_is_a_terminal_fault_without_partial_drive_edge() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &["drive_left"], Some("steer"));
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        let fault = world.resource::<lunco_core::RuntimeFaults>().first.as_ref();
+        assert_eq!(
+            fault.map(|fault| fault.kind),
+            Some("vehicle-port-wiring-invalid")
+        );
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn authored_drive_and_steer_ports_create_both_edges() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let wheel = spawn_wiring_fixture(&mut world, &["drive_left", "steer"], Some("steer"));
+
+        world.run_system_once(try_wire_wheel).unwrap();
+
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+        assert!(world.get::<PendingWheelWiring>(wheel).is_none());
+        let mut connections = world.query::<&SimConnection>();
+        assert_eq!(connections.iter(&world).count(), 2);
+    }
+}
+
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        // `try_wire_wheel` is part of this plugin's unconditional schedule and
+        // records malformed authored topology as a scene-terminal fault.  Do
+        // not make callers depend on the unrelated full core plugin merely to
+        // satisfy that system parameter; the plugin owns the system and must
+        // establish its shared fault resource when used on its own.
+        app.init_resource::<lunco_core::RuntimeFaults>();
         crate::shader_ports::build(app);
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
             .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
@@ -662,7 +769,11 @@ pub struct PendingDifferential {
     /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
     pub ratio: f64,
     pub rest_offset: f64,
+    pub target_velocity: f64,
     pub stiffness: f64,
+    pub damping: f64,
+    pub max_force: f64,
+    pub drive_type: DifferentialDriveType,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -910,7 +1021,10 @@ fn process_usd_sim_prims(
 /// `body0` targets (articulation roots) only when `body1` is a declared vehicle wheel.
 /// Generic revolute mechanisms must not change a host's vehicle classification.
 /// Also collects the canonical
-/// `PhysxVehicleWheelAttachmentAPI` wheel→suspension bindings (doc 53 §3.2).
+/// `PhysxVehicleWheelAttachmentAPI` wheel→tire/suspension bindings (doc 53 §3.2).
+/// Every relationship is required to resolve to at most one target. A USD
+/// relationship is a list-op, so taking `rel_target` here would silently turn
+/// malformed fan-out authoring into a first-target choice.
 fn collect_joint_scan_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     topology: &mut StageJointTopology,
@@ -976,44 +1090,26 @@ fn collect_joint_scan_read(
                 }
             }
         }
-        // Canonical wheel-attachment binding: an attachment prim names its wheel
-        // (`physxVehicleWheelAttachment:wheel`) and its suspension
-        // (`physxVehicleWheelAttachment:suspension`) via USD relationships. The
-        // standard schema also permits wheel/tire/suspension APIs directly on the
-        // attachment prim; that direct form is explicit and is handled by mapping
-        // the attachment to itself. There is no flat legacy fallback.
-        if reader.has_api_schema(&path, "PhysxVehicleWheelAttachmentAPI") {
-            let wheel = reader
-                .rel_target(&path, "physxVehicleWheelAttachment:wheel")
-                .or_else(|| {
-                    reader
-                        .has_api_schema(&path, "PhysxVehicleWheelAPI")
-                        .then(|| path.as_str().to_string())
-                });
-            let suspension = reader
-                .rel_target(&path, "physxVehicleWheelAttachment:suspension")
-                .or_else(|| {
-                    reader
-                        .has_api_schema(&path, "PhysxVehicleSuspensionAPI")
-                        .then(|| path.as_str().to_string())
-                });
-            if let (Some(wheel), Some(suspension)) = (wheel, suspension) {
-                debug!(
-                    "USD wheel attachment: wheel {} → suspension {} (via {})",
-                    wheel,
-                    suspension,
-                    path.as_str()
-                );
-                topology
-                    .wheel_attachment_targets
-                    .insert(wheel.clone(), suspension);
-                if let Some(index) =
-                    reader.scalar::<i32>(&path, "physxVehicleWheelAttachment:index")
-                {
-                    topology.wheel_attachment_indices.insert(wheel, index);
-                }
-            }
-        }
+    }
+
+    let attachments = wheel_params::collect_wheel_attachment_topology(reader);
+    topology
+        .invalid_wheel_attachments
+        .extend(attachments.invalid_wheels().cloned());
+    for (wheel, binding) in attachments.bindings() {
+        debug!(
+            "USD wheel attachment: wheel {} → tire {} / suspension {}",
+            wheel, binding.tire, binding.suspension
+        );
+        topology
+            .wheel_attachment_targets
+            .insert(wheel.clone(), binding.suspension.clone());
+        topology
+            .wheel_attachment_tires
+            .insert(wheel.clone(), binding.tire.clone());
+        topology
+            .wheel_attachment_indices
+            .insert(wheel.clone(), binding.index);
     }
 }
 
@@ -1047,6 +1143,289 @@ fn collect_behavior_sources(
     }
 }
 
+fn read_gear_drive_real(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    name: &str,
+    default: f64,
+    allow_infinity: bool,
+) -> Result<f64, ()> {
+    match reader.real(prim, name) {
+        Some(value) if value.is_finite() || (allow_infinity && value == f64::INFINITY) => Ok(value),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(prim, name) => Err(()),
+        None => Ok(default),
+    }
+}
+
+fn read_gear_drive_values(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Result<(f64, f64, f64, f64, f64), ()> {
+    let rest_offset = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:targetPosition",
+        0.0,
+        false,
+    )?;
+    let target_velocity = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:targetVelocity",
+        0.0,
+        false,
+    )?;
+    let stiffness =
+        read_gear_drive_real(reader, prim, "drive:angular:physics:stiffness", 0.0, false)?;
+    let damping = read_gear_drive_real(reader, prim, "drive:angular:physics:damping", 0.0, false)?;
+    let max_force = read_gear_drive_real(
+        reader,
+        prim,
+        "drive:angular:physics:maxForce",
+        f64::INFINITY,
+        true,
+    )?;
+    if stiffness < 0.0 || damping < 0.0 || max_force < 0.0 {
+        return Err(());
+    }
+    Ok((rest_offset, target_velocity, stiffness, damping, max_force))
+}
+
+fn read_gear_drive_type(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<DifferentialDriveType> {
+    match reader.text(prim, "drive:angular:physics:type") {
+        Some(value) if value == "force" => Some(DifferentialDriveType::Force),
+        Some(value) if value == "acceleration" => Some(DifferentialDriveType::Acceleration),
+        Some(_) => None,
+        None if reader.has_authored_attribute(prim, "drive:angular:physics:type") => None,
+        None => Some(DifferentialDriveType::Force),
+    }
+}
+
+#[cfg(test)]
+mod gear_drive_tests {
+    use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    const FIXTURE: &str = r#"#usda 1.0
+def PhysxPhysicsGearJoint "Differential" (
+    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+)
+{
+    float physxGearJoint:gearRatio = -1.0
+    float drive:angular:physics:targetPosition = 0.25
+    float drive:angular:physics:targetVelocity = 0.5
+    float drive:angular:physics:stiffness = 8000.0
+    float drive:angular:physics:damping = 1200.0
+    float drive:angular:physics:maxForce = 100.0
+    uniform token drive:angular:physics:type = "force"
+}
+"#;
+
+    #[test]
+    fn reads_standard_angular_drive_parameters_without_solver_defaults() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", FIXTURE))
+            .expect("gear fixture composes");
+        let view = stage.view();
+        let path = SdfPath::new("/Differential").expect("gear path");
+        assert_eq!(
+            read_gear_drive_values(&view, &path).expect("drive values"),
+            (0.25, 0.5, 8000.0, 1200.0, 100.0)
+        );
+        assert_eq!(
+            read_gear_drive_type(&view, &path),
+            Some(DifferentialDriveType::Force)
+        );
+    }
+
+    #[test]
+    fn rejects_negative_authored_drive_coefficients() {
+        let source = FIXTURE.replace("damping = 1200.0", "damping = -1.0");
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", &source))
+            .expect("gear fixture composes");
+        let view = stage.view();
+        let path = SdfPath::new("/Differential").expect("gear path");
+        assert!(read_gear_drive_values(&view, &path).is_err());
+    }
+}
+
+/// Project the explicitly classified passive prismatic suspension API onto its
+/// generic co-simulation physics component. A bilateral `PhysicsDriveAPI` is
+/// intentionally not inferred here: elevators and actuators are also
+/// prismatic joints, and only the applied suspension API means "compression
+/// only".
+fn passive_prismatic_suspension_from_usd(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<PassivePrismaticSuspension> {
+    if !reader.has_api_schema(prim, "LunCoPrismaticSuspensionAPI") {
+        return None;
+    }
+    if reader.type_name(prim).as_deref() != Some("PhysicsPrismaticJoint") {
+        warn!(
+            "USD prim {} applies LunCoPrismaticSuspensionAPI but is not a PhysicsPrismaticJoint",
+            prim.as_str()
+        );
+        return None;
+    }
+
+    let read_required_real = |name: &str, default: Option<f64>| -> Result<f64, ()> {
+        match reader.real_f32(prim, name) {
+            Some(value) if value.is_finite() => Ok(f64::from(value)),
+            Some(_) => Err(()),
+            None if reader.has_authored_attribute(prim, name) => Err(()),
+            None => default.ok_or(()),
+        }
+    };
+    let parsed: Result<(f64, f64, f64, f64, f64), ()> = (|| {
+        Ok((
+            read_required_real("lunco:prismaticSuspension:restPosition", Some(0.0))?,
+            read_required_real("lunco:prismaticSuspension:stiffness", None)?,
+            read_required_real("lunco:prismaticSuspension:damping", None)?,
+            read_required_real("lunco:prismaticSuspension:yieldForce", None)?,
+            read_required_real("lunco:prismaticSuspension:maxForce", None)?,
+        ))
+    })();
+    let Ok((rest_position, spring_k, damping_c, yield_force, max_force)) = parsed else {
+        warn!(
+            "USD passive suspension {} has malformed or missing numeric attributes; suspension ignored",
+            prim.as_str()
+        );
+        return None;
+    };
+    if !spring_k.is_finite()
+        || spring_k <= 0.0
+        || !damping_c.is_finite()
+        || damping_c < 0.0
+        || !rest_position.is_finite()
+        || !yield_force.is_finite()
+        || yield_force <= 0.0
+        || !max_force.is_finite()
+        || max_force <= 0.0
+        || max_force < yield_force
+    {
+        warn!(
+            "USD passive suspension {} has invalid parameters: rest={} m, k={} N/m, c={} N*s/m, yield={} N, max={} N",
+            prim.as_str(), rest_position, spring_k, damping_c, yield_force, max_force
+        );
+        return None;
+    }
+    Some(PassivePrismaticSuspension {
+        rest_position,
+        plastic_position: rest_position,
+        spring_k,
+        damping_c,
+        yield_force,
+        max_force,
+        reaction_force: 0.0,
+    })
+}
+
+fn read_authored_camera_look_at(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<[f64; 3]>, ()> {
+    if !reader.has_authored_attribute(path, "lunco:cameraLookAt") {
+        return Ok(None);
+    }
+    match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:cameraLookAt") {
+        Some(value) if value.iter().all(|value| value.is_finite()) => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
+fn read_raycast_observation(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    path: &SdfPath,
+) -> Result<RaycastObservation, ()> {
+    let axis = match reader.text(path, "lunco:raycast:axis").as_deref() {
+        Some("X") => DVec3::X,
+        Some("-X") => DVec3::NEG_X,
+        Some("Y") => DVec3::Y,
+        Some("-Y") => DVec3::NEG_Y,
+        Some("Z") => DVec3::Z,
+        Some("-Z") => DVec3::NEG_Z,
+        Some(_) | None => return Err(()),
+    };
+    let max_distance = match reader.real(path, "lunco:raycast:maxDistance") {
+        Some(value) if value.is_finite() && value > 0.0 => value,
+        Some(_) | None => return Err(()),
+    };
+    let offset = match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:raycast:offset") {
+        Some(value) if value.iter().all(|value| value.is_finite()) => {
+            DVec3::new(value[0], value[1], value[2])
+        }
+        Some(_) | None => return Err(()),
+    };
+    Ok(RaycastObservation {
+        offset,
+        axis,
+        max_distance,
+        ..default()
+    })
+}
+
+#[cfg(test)]
+mod raycast_tests {
+    use super::read_raycast_observation;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    fn read(source: &str) -> Result<lunco_cosim::avian_queries::RaycastObservation, ()> {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("ray.usda", source))
+            .expect("raycast fixture composes");
+        let path = SdfPath::new("/Sensor").expect("raycast path");
+        read_raycast_observation(&stage.view(), &path)
+    }
+
+    #[test]
+    fn malformed_authored_offset_is_rejected() {
+        assert!(read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    string lunco:raycast:offset = "bad"
+}
+"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn non_positive_authored_distance_is_rejected() {
+        assert!(read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    float lunco:raycast:maxDistance = 0.0
+}
+"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn standard_defaults_and_authored_values_are_read_together() {
+        let observation = read(
+            r#"#usda 1.0
+def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
+{
+    token lunco:raycast:axis = "Z"
+    float lunco:raycast:maxDistance = 12.5
+    double3 lunco:raycast:offset = (1.0, 2.0, 3.0)
+}
+"#,
+        )
+        .expect("valid raycast");
+        assert_eq!(observation.axis, bevy::math::DVec3::Z);
+        assert_eq!(observation.max_distance, 12.5);
+        assert_eq!(observation.offset, bevy::math::DVec3::new(1.0, 2.0, 3.0));
+    }
+}
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -1068,6 +1447,33 @@ fn process_usd_sim_prim_read(
     commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
+    let is_avatar =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:avatar`; prim ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+    let avatar_exposure = if is_avatar {
+        match lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path) {
+            Ok(exposure) => exposure,
+            Err(_) => {
+                // An invalid authored exposure is a broken camera contract, not
+                // an invitation to replace it with a calibrated value. Mark the
+                // prim complete so the scene does not retry the same bad opinion.
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        }
+    } else {
+        None
+    };
 
     // --- Network replication policy, derived from USD ---
     // Structure from the joint graph (Pass 1) + `lunco:net:*` overrides. Stamps
@@ -1092,24 +1498,70 @@ fn process_usd_sim_prim_read(
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
     // never make an existing scene sprout labels.
-    if reader.scalar::<bool>(&sdf_path, "lunco:billboard") == Some(true) {
+    let billboard_enabled =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:billboard`; label ignored",
+                    prim_path.path
+                );
+                false
+            }
+        };
+    if billboard_enabled {
         let default = billboard::UsdBillboard::default();
-        commands.entity(entity).try_insert(billboard::UsdBillboard {
-            template: reader
-                .text(&sdf_path, "lunco:billboard:text")
-                .unwrap_or(default.template),
-            offset_y: reader
-                .real_f32(&sdf_path, "lunco:billboard:offsetY")
-                .unwrap_or(default.offset_y),
-            fade_end: reader
-                .real_f32(&sdf_path, "lunco:billboard:fadeEnd")
-                .unwrap_or(default.fade_end),
-        });
+        let billboard = (|| {
+            let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
+                Some(Value::String(value)) => value,
+                Some(_) if reader.has_authored_attribute(&sdf_path, "lunco:billboard:text") => {
+                    return Err(())
+                }
+                _ => default.template.clone(),
+            };
+            let read_real = |name: &str, default_value: f32| -> Result<f32, ()> {
+                match reader.real_f32(&sdf_path, name) {
+                    Some(value) if value.is_finite() => Ok(value),
+                    Some(_) => Err(()),
+                    None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
+                    None => Ok(default_value),
+                }
+            };
+            let offset_y = read_real("lunco:billboard:offsetY", default.offset_y)?;
+            let fade_end = read_real("lunco:billboard:fadeEnd", default.fade_end)?;
+            if fade_end <= 0.0 {
+                return Err(());
+            }
+            Ok(billboard::UsdBillboard {
+                template,
+                offset_y,
+                fade_end,
+            })
+        })();
+        match billboard {
+            Ok(billboard) => {
+                commands.entity(entity).try_insert(billboard);
+            }
+            Err(()) => warn!(
+                "USD prim {} has invalid billboard attributes; label ignored",
+                prim_path.path
+            ),
+        }
     }
-    if reader
-        .scalar::<bool>(&sdf_path, "lunco:waypoint")
-        .unwrap_or(false)
-    {
+    let waypoint =
+        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:waypoint") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(()) => {
+                warn!(
+                    "USD prim {} has malformed `lunco:waypoint`; marker ignored",
+                    prim_path.path
+                );
+                false
+            }
+        };
+    if waypoint {
         commands.entity(entity).try_insert(marker::WaypointMarker);
     }
     // Pointer behavior is scene intent, not a picking-backend concern.  The
@@ -1137,19 +1589,37 @@ fn process_usd_sim_prim_read(
     // Screen-constant marker, keyed on the size that IS the request: a prim
     // authoring no `angularSizeDeg` is not a half-declared marker, it is simply
     // not one. Same opt-in shape as the billboard above.
-    if let Some(angular_deg) = reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
+    if reader.has_authored_attribute(&sdf_path, "lunco:marker:angularSizeDeg") {
         let default = marker::ScreenConstantMarker::default();
-        commands
-            .entity(entity)
-            .try_insert(marker::ScreenConstantMarker {
+        let marker = (|| {
+            let angular_deg = match reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
+                Some(value) if value.is_finite() && value > 0.0 => value,
+                _ => return Err(()),
+            };
+            let show_beyond_m = match reader.real_f32(&sdf_path, "lunco:marker:showBeyondM") {
+                Some(value) if value.is_finite() && value >= 0.0 => value,
+                None if !reader.has_authored_attribute(&sdf_path, "lunco:marker:showBeyondM") => {
+                    default.show_beyond_m
+                }
+                _ => return Err(()),
+            };
+            Ok(marker::ScreenConstantMarker {
                 angular_deg,
-                show_beyond_m: reader
-                    .real_f32(&sdf_path, "lunco:marker:showBeyondM")
-                    .unwrap_or(default.show_beyond_m),
-            });
+                show_beyond_m,
+            })
+        })();
+        match marker {
+            Ok(marker) => {
+                commands.entity(entity).try_insert(marker);
+            }
+            Err(()) => warn!(
+                "USD prim {} has invalid screen marker attributes; marker ignored",
+                prim_path.path
+            ),
+        }
     }
 
-    let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
+    let net_replicate = reader.boolean(&sdf_path, "lunco:net:replicate");
     let net_authority = reader.text(&sdf_path, "lunco:net:authority");
     let (net_excluded, net_opaque) = net_override_markers(net_replicate, net_authority.as_deref());
     if net_excluded {
@@ -1159,6 +1629,14 @@ fn process_usd_sim_prim_read(
         commands
             .entity(entity)
             .try_insert(lunco_core::NotPredictable);
+    }
+
+    // The applied USD suspension API is the sole classifier for passive
+    // prismatic material. Geometry and standard prismatic joints are projected
+    // by their owning bridges; this component carries only the material law to
+    // the co-simulation solver.
+    if let Some(suspension) = passive_prismatic_suspension_from_usd(reader, &sdf_path) {
+        commands.entity(entity).try_insert(suspension);
     }
 
     // --- Suspension visual roles: a prim that applies `LunCoSuspensionVisualAPI`
@@ -1207,33 +1685,16 @@ fn process_usd_sim_prim_read(
     // that the result is an altimeter, range sensor, or touchdown detector;
     // those conversions are ordinary Modelica scopes authored in USD.
     if reader.has_api_schema(&sdf_path, "LunCoRaycastAPI") {
-        let axis = reader
-            .text(&sdf_path, "lunco:raycast:axis")
-            .and_then(|axis| match axis.as_str() {
-                "X" => Some(DVec3::X),
-                "-X" => Some(DVec3::NEG_X),
-                "Y" => Some(DVec3::Y),
-                "-Y" => Some(DVec3::NEG_Y),
-                "Z" => Some(DVec3::Z),
-                "-Z" => Some(DVec3::NEG_Z),
-                _ => None,
-            });
-        let max_distance = reader.real(&sdf_path, "lunco:raycast:maxDistance");
-        if let (Some(axis), Some(max_distance)) = (axis, max_distance) {
-            let offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:raycast:offset")
-                .map(|v| DVec3::new(v[0], v[1], v[2]))
-                .unwrap_or_default();
-            commands.entity(entity).try_insert(RaycastObservation {
-                offset,
-                axis,
-                max_distance,
-                ..default()
-            });
-        } else {
-            warn!(
-                "USD raycast {} is missing a valid axis or maxDistance",
-                sdf_path
-            );
+        match read_raycast_observation(reader, &sdf_path) {
+            Ok(observation) => {
+                commands.entity(entity).try_insert(observation);
+            }
+            Err(()) => {
+                warn!(
+                    "USD raycast {} has malformed or invalid axis, offset, or maxDistance",
+                    sdf_path
+                );
+            }
         }
     }
 
@@ -1241,14 +1702,8 @@ fn process_usd_sim_prim_read(
     // `project_celestial_comms_prims` system, NOT here — see its doc. Bundling it
     // in this system made a cosim prim, which skips this system, lose its LinkNode.)
 
-    // 0. Detect Avatar prim. `lunco:avatar` is a marker flag, but scenes author it
-    // with EITHER type — `bool true` (moonbase) or `string "true"` (sandbox). A
-    // `scalar::<String>` read silently misses the `bool`, so the avatar's camera is
-    // never set up and the viewport is blank after a scene swap. Read it
-    // type-tolerantly (same principle as the `text`/`real` reader family).
-    let is_avatar = reader
-        .scalar::<bool>(&sdf_path, "lunco:avatar")
-        .unwrap_or_else(|| reader.text(&sdf_path, "lunco:avatar").as_deref() == Some("true"));
+    // 0. Avatar role and photographic exposure were validated before any
+    // per-prim simulation components were projected.
     if is_avatar {
         info!(
             "Detected Avatar prim at {}, setting up camera",
@@ -1280,15 +1735,68 @@ fn process_usd_sim_prim_read(
         // `LunCoAvatarAPI` declares `freeflight` as the USD schema fallback.
         // That is an authored semantic default, not a Rust recovery path: a
         // malformed token must remain an explicit scene error below.
-        let camera_mode = reader
-            .text(&sdf_path, "lunco:cameraMode")
-            .unwrap_or_else(|| "freeflight".to_string());
-        let mut yaw = reader
-            .real_f32(&sdf_path, "lunco:cameraYaw")
-            .unwrap_or(std::f32::consts::PI * 0.8);
-        let mut pitch = reader
-            .real_f32(&sdf_path, "lunco:cameraPitch")
-            .unwrap_or(-0.3);
+        let camera_mode = match reader.attr_value(&sdf_path, "lunco:cameraMode") {
+            Some(Value::Token(value)) => {
+                let value = value.to_string();
+                if matches!(value.as_str(), "freeflight" | "orbit" | "springarm") {
+                    value
+                } else {
+                    warn!(
+                        "USD avatar {} has unsupported camera mode `{}`; avatar ignored",
+                        prim_path.path, value
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            }
+            Some(_) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+            None if reader.has_authored_attribute(&sdf_path, "lunco:cameraMode") => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+            None => "freeflight".to_string(),
+        };
+        let read_camera_real = |name: &str, default_value: f32| -> Result<f32, ()> {
+            match reader.real_f32(&sdf_path, name) {
+                Some(value) if value.is_finite() => Ok(value),
+                Some(_) => Err(()),
+                None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
+                None => Ok(default_value),
+            }
+        };
+        let mut yaw = match read_camera_real("lunco:cameraYaw", std::f32::consts::PI * 0.8) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraYaw`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+        let mut pitch = match read_camera_real("lunco:cameraPitch", -0.3) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraPitch`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
 
         // `lunco:cameraLookAt` (double3, scene-local): when authored,
         // derive yaw/pitch so the camera aims from its USD
@@ -1300,9 +1808,18 @@ fn process_usd_sim_prim_read(
         // `Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0)`, whose forward
         // is `(-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch))`:
         //   pitch = asin(dir.y),  yaw = atan2(-dir.x, -dir.z).
-        if let Some([lx, ly, lz]) =
-            lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt")
-        {
+        let look_at = match read_authored_camera_look_at(reader, &sdf_path) {
+            Ok(value) => value,
+            Err(()) => {
+                warn!(
+                    "USD avatar {} has malformed `lunco:cameraLookAt`; avatar ignored",
+                    prim_path.path
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+        };
+        if let Some([lx, ly, lz]) = look_at {
             // The EYE must be the avatar's authored position, not `existing_tf`:
             // `maybe_tf` is `None` on this path, so `existing_tf` defaults to the
             // origin, and aiming from (0,0,0) instead of (e.g.) (14,6,12) points the
@@ -1374,7 +1891,7 @@ fn process_usd_sim_prim_read(
         // An authored camera is authoritative over the calibrated scene default.
         // Both paths use the one USD photographic conversion, so ISO/shutter/
         // f-stop never acquire a second spelling at the avatar boundary.
-        let ev100 = lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path)
+        let ev100 = avatar_exposure
             .unwrap_or_else(|| active_sun.copied().unwrap_or_default().exposure_ev100);
         // AgX tonemapping: a filmic curve that rolls off the blown highlights
         // and lifts the toe of the brutal grazing-sun terminator (vs the hard
@@ -1388,6 +1905,10 @@ fn process_usd_sim_prim_read(
                 // and it is what every "which entity is the scene camera?"
                 // query filters on.
                 SceneCamera::agx(),
+                // This avatar camera is renderer-owned intent. The render
+                // binder must keep it synchronized with live Graphics settings
+                // just like canonical USD and native avatar cameras.
+                GraphicsCameraDefaults,
             )
         };
 
@@ -1645,12 +2166,14 @@ fn process_usd_sim_prim_read(
     //
     // Nothing here is rocker-bogie code. A gear joint is a gear joint, and any
     // geared linkage authored this way gets the same coupling with no new Rust.
-    // A gear joint is a zero-compliance relation. A positive authored angular
-    // stiffness enables the relation; zero disables it for an explicit control
-    // scene.
+    // The backend implements the standard angular drive on the gear relation;
+    // an omitted drive therefore leaves the gear passive instead of inventing a
+    // solver stiffness.
     //
     // Defer-resolved once both geared bodies spawn.
-    if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint") {
+    if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint")
+        && reader.has_api_schema(&sdf_path, "PhysicsDriveAPI:angular")
+    {
         let hinges = (
             reader.rel_target(&sdf_path, "physxGearJoint:hinge0"),
             reader.rel_target(&sdf_path, "physxGearJoint:hinge1"),
@@ -1666,19 +2189,47 @@ fn process_usd_sim_prim_read(
             ))
         };
         if let (Some((body_a, frame)), Some((body_b, _))) = (geared(&hinges.0), geared(&hinges.1)) {
-            let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            let ratio = read_f("physxGearJoint:gearRatio", -1.0);
+            let Some(ratio) = reader
+                .real(&sdf_path, "physxGearJoint:gearRatio")
+                .filter(|value| value.is_finite() && *value != 0.0)
+            else {
+                warn!(
+                    "Gear joint {} has no valid non-zero physxGearJoint:gearRatio; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
+            let Ok((rest_offset, target_velocity, stiffness, damping, max_force)) =
+                read_gear_drive_values(reader, &sdf_path)
+            else {
+                warn!(
+                    "Gear joint {} has malformed angular PhysicsDriveAPI values; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
+            let Some(drive_type) = read_gear_drive_type(reader, &sdf_path) else {
+                warn!(
+                    "Gear joint {} has an unsupported angular PhysicsDriveAPI type; coupling ignored",
+                    prim_path.path
+                );
+                return;
+            };
             info!(
-                "Gear joint {} couples {} / {} (ratio {})",
-                prim_path.path, body_a, body_b, ratio,
+                "Gear joint {} couples {} / {} (ratio {}, stiffness {}, damping {})",
+                prim_path.path, body_a, body_b, ratio, stiffness, damping,
             );
             commands.entity(entity).try_insert(PendingDifferential {
                 chassis: frame,
                 rocker_a: body_a,
                 rocker_b: body_b,
                 ratio,
-                rest_offset: read_f("drive:angular:physics:targetPosition", 0.0),
-                stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
+                rest_offset,
+                target_velocity,
+                stiffness,
+                damping,
+                max_force,
+                drive_type,
             });
         }
     }
@@ -1692,6 +2243,14 @@ fn process_usd_sim_prim_read(
     // "happens to carry a wheel-ish attr" — any prim with a stray radius was
     // a wheel, and a wheel could not be authored without one.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleWheelAPI") {
+        if topology.invalid_wheel_attachments.contains(&prim_path.path) {
+            error!(
+                "USD wheel {} has malformed or ambiguous PhysxVehicleWheelAttachmentAPI topology — refusing to spawn",
+                prim_path.path
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        }
         // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
         // this prim. We'll retry next frame (not marking UsdSimProcessed).
         // Headless (no renderer) or recovered (watchdog): the mesh never
@@ -1739,6 +2298,8 @@ fn process_usd_sim_prim_read(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
+        let attachment_tire =
+            wheel_params::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
         let powertrain = match powertrain::find_binding_for_wheel(reader, &sdf_path) {
             Ok(binding) => binding,
             Err(missing) => {
@@ -1773,6 +2334,7 @@ fn process_usd_sim_prim_read(
             reader,
             &sdf_path,
             attachment_susp.as_ref(),
+            attachment_tire.as_ref(),
             powertrain.as_ref().map(|binding| &binding.params),
         ) {
             Ok(p) => p,
@@ -1889,25 +2451,23 @@ fn process_usd_sim_prim_read(
         // in favour of the steering APIs, and a skid rover's wheels have no such
         // angle at all. RADIANS, as everywhere in PhysX (only the Kit authoring
         // wizard's UI field is in degrees).
-        let max_steer_angle = match &steering_vehicle {
-            Some(vehicle) => {
-                let Some(rad) = reader.real(vehicle, "physxVehicleAckermannSteering:maxSteerAngle")
-                else {
+        let (max_steer_angle, ackermann_strength) = match &steering_vehicle {
+            Some(vehicle) => match steering_vehicle_params(reader, vehicle) {
+                Ok(params) => params,
+                Err(reason) => {
                     error!(
-                        "USD vehicle {} applies PhysxVehicleAckermannSteeringAPI but \
-                             authors no physxVehicleAckermannSteering:maxSteerAngle — \
-                             refusing to spawn wheel {}. A steering rover must say how \
-                             far it steers.",
+                        "USD vehicle {} has invalid Ackermann steering for wheel {}: {} — refusing to spawn",
                         vehicle.as_str(),
-                        sdf_path.as_str()
+                        sdf_path.as_str(),
+                        reason
                     );
                     commands.entity(entity).try_insert(UsdSimProcessed);
                     return;
-                };
-                rad
-            }
-            // Not a steering vehicle: no lock, because there is no steering.
-            None => 0.0,
+                }
+            },
+            // Not a steering vehicle: no lock or Ackermann correction, because
+            // there is no steering actuator.
+            None => (0.0, 0.0),
         };
         if topology.joint_targets.contains_key(&prim_path.path) {
             setup_physical_wheel(
@@ -1936,6 +2496,7 @@ fn process_usd_sim_prim_read(
                 p_drive,
                 steer_for_wheel,
                 max_steer_angle,
+                ackermann_strength,
             );
         } else {
             // Strict validation (doc 53 §4): a raycast wheel uses an
@@ -1973,6 +2534,7 @@ fn process_usd_sim_prim_read(
                 p_steer,
                 steer_for_wheel,
                 max_steer_angle,
+                ackermann_strength,
             );
         }
     }
@@ -2039,38 +2601,63 @@ fn read_drive_mix_scope(
     }
 
     let mut valid = true;
-    let mut entries: Vec<lunco_mobility::kernels::MixEntry> = terms
-        .into_iter()
-        .filter_map(|term| {
-            if !reader.has_api_schema(&term, "LunCoDriveMixTermAPI") {
-                error!(
-                    "DriveMix term {} does not apply LunCoDriveMixTermAPI",
-                    term.as_str()
-                );
-                valid = false;
-                return None;
+    let mut entries = Vec::with_capacity(terms.len());
+    for term in terms {
+        if !reader.has_api_schema(&term, "LunCoDriveMixTermAPI") {
+            error!(
+                "DriveMix term {} does not apply LunCoDriveMixTermAPI",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        }
+        let Some(port) = term.name().map(str::to_owned) else {
+            error!("DriveMix term {} has no valid USD name", term.as_str());
+            valid = false;
+            continue;
+        };
+
+        // An omitted factor is the documented zero contribution.  An authored
+        // factor that fails numeric resolution is different: treating it as
+        // zero silently changes the allocation and makes a misspelled or
+        // wrongly typed source look like an intentional non-response.
+        let read_factor = |name: &str| -> Result<Option<f64>, ()> {
+            match reader.real(&term, name) {
+                Some(value) if value.is_finite() => Ok(Some(value)),
+                Some(_) => Err(()),
+                None if reader.has_authored_attribute(&term, name) => Err(()),
+                None => Ok(None),
             }
-            let port = term.name()?.to_string();
-            let forward = reader.real(&term, "lunco:factor:throttle");
-            let steer = reader.real(&term, "lunco:factor:steer");
-            let brake = reader.real(&term, "lunco:factor:brake");
-            if forward.is_none() && steer.is_none() && brake.is_none() {
-                error!(
-                    "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
-                     the allocation is invalid",
-                    term.as_str()
-                );
-                valid = false;
-                return None;
-            }
-            Some(lunco_mobility::kernels::MixEntry {
-                port,
-                forward: forward.unwrap_or(0.0),
-                steer: steer.unwrap_or(0.0),
-                brake: brake.unwrap_or(0.0),
-            })
-        })
-        .collect();
+        };
+        let factors = (
+            read_factor("lunco:factor:throttle"),
+            read_factor("lunco:factor:steer"),
+            read_factor("lunco:factor:brake"),
+        );
+        let (Ok(forward), Ok(steer), Ok(brake)) = factors else {
+            error!(
+                "DriveMix term {} has a malformed authored factor; the allocation is invalid",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        };
+        if forward.is_none() && steer.is_none() && brake.is_none() {
+            error!(
+                "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
+                 the allocation is invalid",
+                term.as_str()
+            );
+            valid = false;
+            continue;
+        }
+        entries.push(lunco_mobility::kernels::MixEntry {
+            port,
+            forward: forward.unwrap_or(0.0),
+            steer: steer.unwrap_or(0.0),
+            brake: brake.unwrap_or(0.0),
+        });
+    }
     entries.sort_by(|a, b| a.port.cmp(&b.port));
     valid.then_some(entries)
 }
@@ -2221,6 +2808,67 @@ fn derive_drive_mix(
 }
 
 #[cfg(test)]
+mod drive_mix_tests {
+    use super::read_drive_mix_scope;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    #[test]
+    fn malformed_authored_factor_rejects_the_whole_mix() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "drive_mix.usda",
+            r#"#usda 1.0
+def Xform "Vehicle"
+{
+    def Scope "DriveMix"
+    {
+        def Scope "left" (prepend apiSchemas = ["LunCoDriveMixTermAPI"])
+        {
+            double lunco:factor:throttle = 1.0
+            string lunco:factor:steer = "not-a-number"
+        }
+    }
+}
+"#,
+        ))
+        .expect("drive mix fixture composes");
+        let scope = SdfPath::new("/Vehicle/DriveMix").expect("scope path");
+
+        assert!(
+            read_drive_mix_scope(&stage.view(), &scope).is_none(),
+            "a malformed authored factor must not degrade to a zero contribution"
+        );
+    }
+
+    #[test]
+    fn omitted_factor_remains_the_documented_zero_contribution() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "drive_mix.usda",
+            r#"#usda 1.0
+def Xform "Vehicle"
+{
+    def Scope "DriveMix"
+    {
+        def Scope "left" (prepend apiSchemas = ["LunCoDriveMixTermAPI"])
+        {
+            double lunco:factor:throttle = 1.0
+        }
+    }
+}
+"#,
+        ))
+        .expect("drive mix fixture composes");
+        let scope = SdfPath::new("/Vehicle/DriveMix").expect("scope path");
+
+        let entries = read_drive_mix_scope(&stage.view(), &scope).expect("valid mix");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].forward, 1.0);
+        assert_eq!(entries[0].steer, 0.0);
+        assert_eq!(entries[0].brake, 0.0);
+    }
+}
+
+#[cfg(test)]
 mod drive_output_ownership_tests {
     use super::{drive_output_ownership, DriveOutputOwnership};
 
@@ -2276,6 +2924,33 @@ fn steering_vehicle_of(
     None
 }
 
+/// Read and validate the complete authored Ackermann steering contract from
+/// one vehicle prim. The schema's documented strength default is parallel
+/// steering (`0.0`), so an omitted strength is the semantic USD default; an
+/// explicit non-finite or out-of-range value is an asset error, never a clamp.
+pub(crate) fn steering_vehicle_params(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    vehicle: &SdfPath,
+) -> Result<(f64, f64), String> {
+    let max_steer_angle = reader
+        .real(vehicle, "physxVehicleAckermannSteering:maxSteerAngle")
+        .ok_or_else(|| "missing physxVehicleAckermannSteering:maxSteerAngle".to_string())?;
+    if !max_steer_angle.is_finite() || !(0.0..=1.2).contains(&max_steer_angle) {
+        return Err(format!(
+            "physxVehicleAckermannSteering:maxSteerAngle must be finite and in [0, 1.2] rad, got {max_steer_angle}"
+        ));
+    }
+    let strength = reader
+        .real(vehicle, "physxVehicleAckermannSteering:strength")
+        .unwrap_or(0.0);
+    if !strength.is_finite() || !(0.0..=1.0).contains(&strength) {
+        return Err(format!(
+            "physxVehicleAckermannSteering:strength must be finite and in [0, 1], got {strength}"
+        ));
+    }
+    Ok((max_steer_angle, strength))
+}
+
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
 ///
 /// Raycast wheels need two entities:
@@ -2297,6 +2972,7 @@ fn setup_raycast_wheel(
     p_steer: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
+    ackermann_strength: f64,
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
 
@@ -2437,6 +3113,7 @@ fn setup_raycast_wheel(
         commands.entity(entity).try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
+            ackermann_strength,
             current_ref: 0.0,
             lateral: mount.x,
             wheelbase: 2.0 * mount.z.abs(),
@@ -2524,6 +3201,7 @@ fn setup_physical_wheel(
     p_drive: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
+    ackermann_strength: f64,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
@@ -2648,7 +3326,10 @@ fn setup_physical_wheel(
         // second, unauthored aerodynamic-style drag on the vehicle (≈22 N at
         // cruise) that the raycast rover — whose wheels are not bodies — could not
         // have. Rolling drag is the bearing term above; there is no air on the Moon.
-        AngularDamping(params.bearing_damping / params.axle_inertia().max(1e-6)),
+        // `WheelParams::read` rejects every non-finite/non-positive wheel input,
+        // so the authored inertia is already finite and positive here. Do not
+        // hide an invalid projection behind a numerical floor.
+        AngularDamping(params.bearing_damping / params.axle_inertia()),
         // Continuous collision detection: a thin, fast-falling wheel cylinder can
         // pass THROUGH the one-sided terrain heightfield in a single step (and once
         // below a one-sided surface, no contact ever pushes it back — it falls
@@ -2793,6 +3474,7 @@ fn setup_physical_wheel(
         joint_cmd.try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
+            ackermann_strength,
             current_ref: 0.0,
             // Chassis-local geometry for the Ackermann correction. `mount_local`
             // is the wheel's offset from the chassis origin: X = lateral (+left),
@@ -2812,7 +3494,7 @@ fn setup_physical_wheel(
         radius: params.radius,
         axle_inertia: params.axle_inertia(),
         slip_stiffness: params.slip_stiffness,
-        cornering_stiffness: params.cornering_stiffness,
+        lateral_stiffness_graph: params.lateral_stiffness_graph,
         min_validated_speed: params.min_validated_speed,
         friction_mu: params.friction_mu,
         bearing_damping: params.bearing_damping,
@@ -3052,8 +3734,9 @@ fn animate_proxy_physical_wheels(
         );
         let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, chassis_pos);
         let forward = VehicleFrame::forward(GridRot(wheel_rot.0));
-        let r = (wheel.wheel_radius as f64).max(1e-3);
-        let w = wheel_roll_rate(hub_vel, forward, r);
+        let Some(w) = wheel_roll_rate(hub_vel, forward, wheel.wheel_radius as f64) else {
+            continue;
+        };
 
         let angle = (wheel.spin_angle as f64 + ROLL_SIGN * w * dt).rem_euclid(TAU);
         wheel.spin_angle = angle as f32;
@@ -3238,6 +3921,7 @@ fn try_wire_wheel(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
@@ -3249,58 +3933,86 @@ fn try_wire_wheel(
         });
 
         if let Some((_, _, actuators)) = vehicle_root {
+            // Resolve every authored endpoint before creating any edge. A
+            // partially wired vehicle is unsafe: one wheel receiving drive while
+            // another authored endpoint is absent must be a terminal scene fault,
+            // not a warning followed by a ready API response.
+            let drive_port_name = pending.drive_port_name.as_str();
+            let Some(d_port) = actuators.get(drive_port_name) else {
+                let detail = format!(
+                    "wheel {} requires actuator output '{}' but the vehicle authored no such output",
+                    prim_path.path, drive_port_name
+                );
+                error!("{detail}");
+                faults.raise(
+                    "vehicle-port-wiring-invalid",
+                    Some(ent),
+                    prim_path.path.as_str(),
+                    detail,
+                );
+                commands.entity(ent).remove::<PendingWheelWiring>();
+                continue;
+            };
+
+            let steer_port = match pending.steer_port_name.as_deref() {
+                None => None,
+                Some(name) => match actuators.get(name) {
+                    Some(port) => Some(port),
+                    None => {
+                        let detail = format!(
+                            "wheel {} requires actuator output '{}' but the vehicle authored no such output",
+                            prim_path.path, name
+                        );
+                        error!("{detail}");
+                        faults.raise(
+                            "vehicle-port-wiring-invalid",
+                            Some(ent),
+                            prim_path.path.as_str(),
+                            detail,
+                        );
+                        commands.entity(ent).remove::<PendingWheelWiring>();
+                        continue;
+                    }
+                },
+            };
+
             // Drive is an authored USD connection. No inferred mapping.
-            let drive_port_name = pending.drive_port_name.clone();
-            if let Some(d_port) = actuators.get(&drive_port_name) {
-                // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
-                // on scene swap — the same general lifecycle contract the ports/joint use.
-                commands.spawn((
-                    SimConnection {
-                        start_element: d_port,
-                        start_connector: PORT_NAME.to_string(),
-                        end_element: pending.p_drive,
-                        end_connector: PORT_NAME.to_string(),
-                        ..Default::default()
-                    },
-                    Name::new(format!("Conn_Drive_{}", drive_port_name)),
-                    ChildOf(ent),
-                ));
-                debug!(
-                    "Wired wheel {} drive to FSW port {}",
-                    prim_path.path, drive_port_name
-                );
-            } else {
-                warn!(
-                    "Wheel {} drive port '{}' not in rover ActuatorPorts; skipping",
-                    prim_path.path, drive_port_name
-                );
-            }
+            // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
+            // on scene swap — the same general lifecycle contract the ports/joint use.
+            commands.spawn((
+                SimConnection {
+                    start_element: d_port,
+                    start_connector: PORT_NAME.to_string(),
+                    end_element: pending.p_drive,
+                    end_connector: PORT_NAME.to_string(),
+                    ..Default::default()
+                },
+                Name::new(format!("Conn_Drive_{drive_port_name}")),
+                ChildOf(ent),
+            ));
+            debug!(
+                "Wired wheel {} drive to FSW port {}",
+                prim_path.path, drive_port_name
+            );
 
             // Steering is optional, but if present it is also an authored USD
             // connection. An unsteered wheel has no steering endpoint.
-            if let Some(name) = pending.steer_port_name.clone() {
-                if let Some(s_port) = actuators.get(&name) {
-                    commands.spawn((
-                        SimConnection {
-                            start_element: s_port,
-                            start_connector: PORT_NAME.to_string(),
-                            end_element: pending.p_steer,
-                            end_connector: PORT_NAME.to_string(),
-                            ..Default::default()
-                        },
-                        Name::new(format!("Conn_Steer_{}", name)),
-                        ChildOf(ent),
-                    ));
-                    info!(
-                        "Wired wheel {} steering to FSW port {}",
-                        prim_path.path, name
-                    );
-                } else {
-                    warn!(
-                        "Wheel {} steer port '{}' not in rover ActuatorPorts; skipping",
-                        prim_path.path, name
-                    );
-                }
+            if let (Some(name), Some(s_port)) = (pending.steer_port_name.as_deref(), steer_port) {
+                commands.spawn((
+                    SimConnection {
+                        start_element: s_port,
+                        start_connector: PORT_NAME.to_string(),
+                        end_element: pending.p_steer,
+                        end_connector: PORT_NAME.to_string(),
+                        ..Default::default()
+                    },
+                    Name::new(format!("Conn_Steer_{name}")),
+                    ChildOf(ent),
+                ));
+                info!(
+                    "Wired wheel {} steering to FSW port {}",
+                    prim_path.path, name
+                );
             }
             commands.entity(ent).remove::<PendingWheelWiring>();
         } else {
@@ -3467,7 +4179,11 @@ fn resolve_differential_coupling(
             rocker_b,
             ratio: pending.ratio,
             rest_offset: pending.rest_offset,
+            target_velocity: pending.target_velocity,
             stiffness: pending.stiffness,
+            damping: pending.damping,
+            max_force: pending.max_force,
+            drive_type: pending.drive_type,
         });
         commands.entity(joint).remove::<PendingDifferential>();
         info!(
@@ -3662,10 +4378,12 @@ def Xform "Rover" {
     }
     def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
         rel physxVehicleWheelAttachment:wheel = </Rover/Wheel>
+        rel physxVehicleWheelAttachment:tire = </Rover/Tire>
         rel physxVehicleWheelAttachment:suspension = </Rover/Suspension>
         int physxVehicleWheelAttachment:index = 7
     }
-    def Xform "Suspension" {}
+    def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {}
+    def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
 }
 "#;
 
@@ -3687,6 +4405,10 @@ def Xform "Rover" {
         assert_eq!(
             topology.wheel_attachment_targets.get("/Rover/Wheel"),
             Some(&"/Rover/Suspension".to_string())
+        );
+        assert_eq!(
+            topology.wheel_attachment_tires.get("/Rover/Wheel"),
+            Some(&"/Rover/Tire".to_string())
         );
         assert_eq!(
             topology.wheel_attachment_indices.get("/Rover/Wheel"),
@@ -3728,6 +4450,66 @@ def Xform "Rover" {
             Some(&"/Rover/WheelJoint".to_string()),
             "a projection revision must rebuild a replacement stage"
         );
+    }
+
+    #[test]
+    fn topology_index_supports_the_standard_direct_api_attachment_form() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "direct_attachment.usda",
+            r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = [
+    "PhysxVehicleWheelAttachmentAPI",
+    "PhysxVehicleWheelAPI",
+    "PhysxVehicleTireAPI",
+    "PhysxVehicleSuspensionAPI"
+]) {
+    int physxVehicleWheelAttachment:index = 2
+}
+"#,
+        ))
+        .expect("direct attachment fixture composes");
+        let id = Handle::<UsdStageAsset>::default().id();
+        let mut index = JointTopologyIndex::default();
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        let topology = index.get(id).expect("direct attachment is indexed");
+
+        assert_eq!(
+            topology.wheel_attachment_targets.get("/Wheel"),
+            Some(&"/Wheel".to_string())
+        );
+        assert_eq!(
+            topology.wheel_attachment_tires.get("/Wheel"),
+            Some(&"/Wheel".to_string())
+        );
+        assert_eq!(topology.wheel_attachment_indices.get("/Wheel"), Some(&2));
+        assert!(topology.invalid_wheel_attachments.is_empty());
+    }
+
+    #[test]
+    fn topology_index_rejects_multi_target_tire_relationships() {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "ambiguous_attachment.usda",
+            r#"#usda 1.0
+def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {}
+def Xform "Suspension" (prepend apiSchemas = ["PhysxVehicleSuspensionAPI"]) {}
+def Xform "TireA" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
+def Xform "TireB" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {}
+def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"]) {
+    rel physxVehicleWheelAttachment:wheel = </Wheel>
+    rel physxVehicleWheelAttachment:tire = [</TireA>, </TireB>]
+    rel physxVehicleWheelAttachment:suspension = </Suspension>
+    int physxVehicleWheelAttachment:index = 0
+}
+"#,
+        ))
+        .expect("ambiguous attachment fixture composes");
+        let id = Handle::<UsdStageAsset>::default().id();
+        let mut index = JointTopologyIndex::default();
+        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        let topology = index.get(id).expect("ambiguous attachment is indexed");
+
+        assert!(topology.invalid_wheel_attachments.contains("/Wheel"));
+        assert!(!topology.wheel_attachment_tires.contains_key("/Wheel"));
     }
 }
 
@@ -4271,5 +5053,47 @@ mod proxy_wheel_tests {
             (p - p0).length() < 1e-12,
             "steer moved the hub: {p:?} vs {p0:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod authored_camera_tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+
+    fn stage_view(source: &str) -> (CanonicalStage, SdfPath) {
+        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("camera.usda", source))
+            .expect("camera fixture composes");
+        let path = SdfPath::new("/World/Avatar").expect("camera path");
+        (stage, path)
+    }
+
+    #[test]
+    fn omitted_camera_look_at_does_not_override_authored_angles() {
+        let (stage, path) = stage_view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Avatar" {}
+}
+"#,
+        );
+        assert_eq!(read_authored_camera_look_at(&stage.view(), &path), Ok(None));
+    }
+
+    #[test]
+    fn malformed_authored_camera_look_at_is_rejected() {
+        let (stage, path) = stage_view(
+            r#"#usda 1.0
+def Xform "World"
+{
+    def Xform "Avatar"
+    {
+        string lunco:cameraLookAt = "origin"
+    }
+}
+"#,
+        );
+        assert!(read_authored_camera_look_at(&stage.view(), &path).is_err());
     }
 }

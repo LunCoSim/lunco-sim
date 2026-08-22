@@ -76,7 +76,9 @@ def Xform "SandboxScene" (
     # `doubleSided` because it is viewed from INSIDE, and `NotShadowCaster` via
     # `primvars:doNotCastShadows` so a 20 km shell does not eclipse the arena
     # the way the Sun's disc once did.
-    def Sphere "SkyDome"
+    def Sphere "SkyDome" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
     {
         # THE RADIUS IS ONLY THE CULLING VOLUME. The material's vertex stage
         # (`info:wgsl:vertexAsset` on `Looks/Starfield/Shader`) re-anchors every
@@ -233,7 +235,7 @@ def Xform "SandboxScene" (
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
     def Cube "Ground"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -248,7 +250,7 @@ def Xform "SandboxScene" (
     # --- Ramp obstacles (static terrain) ---
     def Cube "Ramp"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -264,7 +266,7 @@ def Xform "SandboxScene" (
 
     def Cube "Ramp1"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
@@ -554,7 +556,7 @@ def Xform "SandboxScene" (
     }
 
     def Sphere "CosimTarget" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double radius = 0.5
@@ -669,6 +671,7 @@ def Xform "SandboxScene" (
         {
             def Xform "arm" (
                 kind = "subcomponent"
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
             )
             {
                 uniform token lunco:mount:socket = "arm"     # what may attach
@@ -684,6 +687,7 @@ def Xform "SandboxScene" (
             # and references + joints it here with the plug landed on this socket.
             def Xform "probe" (
                 kind = "subcomponent"
+                prepend apiSchemas = ["LunCoMountSocketAPI"]
             )
             {
                 uniform token lunco:mount:socket = "probe"
@@ -695,7 +699,7 @@ def Xform "SandboxScene" (
         }
 
         def Cube "Arm" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoMountPlugAPI"]
         )
         {
             double size = 1.0

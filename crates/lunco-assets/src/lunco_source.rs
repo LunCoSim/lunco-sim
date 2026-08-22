@@ -76,7 +76,8 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
 /// again. A drive-qualified Windows path is already absolute and passes through.
 pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
     match parse_lunco_uri(id) {
-        Some(rel) => Some(assets_root?.join(crate::asset_path::relative_path(rel)?)),
+        Some(rel) if crate::asset_path::is_safe_relative_path(rel) => Some(assets_root?.join(rel)),
+        Some(_) => None,
         None => {
             let p = PathBuf::from(id);
             Some(if p.is_absolute() {
@@ -99,7 +100,45 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
             format!("asset `{id}` has no resolvable native root"),
         )
     })?;
+    if let Some(rel) = parse_lunco_uri(id) {
+        let root = assets_root.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("asset `{id}` has no resolvable native root"),
+            )
+        })?;
+        if root.join(rel).exists() && existing_path_within_root(root, Path::new(rel)).is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("asset `{id}` resolves outside its library root"),
+            ));
+        }
+    }
     std::fs::read(path)
+}
+
+/// Resolve an existing file-system entry under `root` without following a
+/// symlink outside that root.
+///
+/// Lexical traversal checks are necessary for URI paths, but they do not stop
+/// an authored or downloaded Twin from placing a symlink inside the root. A
+/// canonicalized result is returned so the subsequent read does not repeat the
+/// symlink lookup. Missing entries return `None`; callers can preserve their
+/// normal not-found handling.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn existing_path_within_root(root: &Path, relative: &Path) -> Option<PathBuf> {
+    if !crate::asset_path::is_safe_relative_components(relative) {
+        return None;
+    }
+    let candidate = root.join(relative);
+    if !candidate.exists() {
+        return None;
+    }
+    let canonical_root = std::fs::canonicalize(root).ok()?;
+    let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
+    canonical_candidate
+        .starts_with(canonical_root)
+        .then_some(canonical_candidate)
 }
 
 /// Read a canonical asset identity when the composing document belongs to an
@@ -123,17 +162,117 @@ pub fn read_asset_bytes_with_twin_root(
         let relative = crate::asset_path::relative_path(rel).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("Twin asset `{id}` is not a portable path below its root"),
+                format!("Twin asset `{id}` escapes its root"),
             )
         })?;
         let authored = root.join(&relative);
-        if authored.is_file() {
-            return std::fs::read(authored);
+        if authored.exists() {
+            let path = existing_path_within_root(root, &relative)
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("Twin asset `{id}` resolves outside its root"),
+                    )
+                })?;
+            return std::fs::read(path);
         }
-        let cached = crate::twin_cache_dir(root).join(relative);
+        let cache_root = crate::twin_cache_dir(root);
+        let cached = cache_root.join(&relative);
+        if cached.exists() {
+            let path = existing_path_within_root(&cache_root, &relative)
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("Twin cached asset `{id}` resolves outside its cache root"),
+                    )
+                })?;
+            return std::fs::read(path);
+        }
         return std::fs::read(cached);
     }
     read_asset_bytes(id, assets_root)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        std::fs::write(root.path().join("lesson.rhai"), "40 + 2").expect("lesson");
+
+        let id = "twin://example/lesson.rhai";
+        assert_eq!(
+            read_asset_bytes_with_twin_root(id, None, Some(root.path())).expect("authored file"),
+            b"40 + 2"
+        );
+        for id in [
+            "twin://example/../outside.rhai",
+            "twin://example/a/../../outside.rhai",
+            r"twin://example/..\outside.rhai",
+        ] {
+            let error = read_asset_bytes_with_twin_root(id, None, Some(root.path()))
+                .expect_err("unsafe Twin path must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn library_ids_cannot_escape_the_asset_root() {
+        let root = tempfile::tempdir().expect("temporary asset root");
+        assert_eq!(
+            id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())),
+            Some(root.path().join("terrain/moon.usda"))
+        );
+        for id in [
+            "lunco://../outside.usda",
+            "lunco://terrain/../../outside.usda",
+            r"lunco://terrain\outside.usda",
+        ] {
+            assert!(
+                id_to_disk_path(id, Some(root.path())).is_none(),
+                "unsafe library id must be rejected: {id}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn twin_reads_reject_symlinks_that_leave_the_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "must not be read").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+
+        assert!(existing_path_within_root(root.path(), Path::new("linked.txt")).is_none());
+        let error =
+            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
+                .expect_err("Twin symlink must not escape its root");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsafe_authored_twin_entry_cannot_fall_through_to_cache() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "must not be read").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+
+        let cache = crate::twin_cache_dir(root.path());
+        std::fs::create_dir_all(&cache).expect("cache root");
+        std::fs::write(cache.join("linked.txt"), "cache shadow").expect("cache file");
+
+        let error =
+            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
+                .expect_err("an unsafe authored path must block cache fallback");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
 }
 
 /// Native read for a caller-selected root document. Kept in `lunco-assets` so
@@ -227,13 +366,34 @@ struct FallbackReader {
     roots: Vec<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn local_root_allows(root: &str, path: &Path) -> bool {
+    let root = Path::new(root);
+    let candidate = root.join(path);
+    !candidate.exists() || crate::existing_path_within_root(root, path).is_some()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn local_root_allows(_root: &str, _path: &Path) -> bool {
+    true
+}
+
 /// Try each root in order; the first non-`NotFound` answer wins.
 macro_rules! try_both {
     ($self:ident, $method:ident, $path:expr) => {{
         // `readers` is non-empty by construction (`assets/` is always first),
         // so the loop always assigns before the unwrap.
         let mut last = None;
-        for reader in &$self.readers {
+        for (reader, root) in $self.readers.iter().zip($self.roots.iter()) {
+            if !local_root_allows(root, $path) {
+                return Err(AssetReaderError::from(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "asset path `{}` escapes library root `{root}`",
+                        $path.display()
+                    ),
+                )));
+            }
             match reader.$method($path).await {
                 Err(AssetReaderError::NotFound(p)) => {
                     last = Some(Err(AssetReaderError::NotFound(p)))
@@ -247,6 +407,9 @@ macro_rules! try_both {
 
 impl AssetReader for FallbackReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         let result = try_both!(self, read, path);
         if matches!(result, Err(AssetReaderError::NotFound(_))) {
             // Only `read`. Bevy probes for a sibling `.meta` on EVERY asset and
@@ -267,6 +430,9 @@ impl AssetReader for FallbackReader {
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         try_both!(self, read_meta, path)
     }
 
@@ -274,10 +440,16 @@ impl AssetReader for FallbackReader {
         &'a self,
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         try_both!(self, read_directory, path)
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Ok(false);
+        }
         // `is_directory` answers false rather than erroring for a missing path,
         // so `NotFound` is not the signal here — a plain `false` is.
         let mut last = Ok(false);
@@ -293,7 +465,7 @@ impl AssetReader for FallbackReader {
 }
 
 #[cfg(test)]
-mod tests {
+mod windows_uri_tests {
     use super::*;
 
     #[test]

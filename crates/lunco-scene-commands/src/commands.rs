@@ -21,7 +21,7 @@ use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
-use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
+use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::UsdDocument;
@@ -290,6 +290,13 @@ fn runtime_spawn_ops(
             name,
             type_name: None,
             reference: Some(asset_path.to_string()),
+        },
+        UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: prim_path.clone(),
+            name: "lunco:catalogId".to_string(),
+            type_name: "string".to_string(),
+            value: entry_id.to_string(),
         },
         UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
@@ -1582,6 +1589,36 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
+    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+    let env_path = if parent_path == "/" {
+        "/Environment".to_string()
+    } else {
+        format!("{parent_path}/Environment")
+    };
+    // Resolve the ambient solve before queuing any other edits. A malformed
+    // authored DomeLight must reject the whole command rather than allowing the
+    // unrelated sun/environment edits through while silently fabricating a
+    // different ambient value.
+    let ambient_plan = if let Some(requested) = cmd.ambient_brightness {
+        let fill_path = format!("{env_path}/AmbientFill");
+        let composed = host.document().composed_arc();
+        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
+        match lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref()) {
+            Ok(others) => Some((requested, others, fill_path)),
+            Err(_) => {
+                error!(
+                    "[scene-commands] refusing environment update: authored DomeLight \
+                     intensity, exposure, or texture data is malformed or unresolved"
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     for (prim, tf) in &q_sun {
         // Ownership guard: only author for suns the active document actually
         // holds (base or runtime), so an engine-fallback sun never gets opinions.
@@ -1706,14 +1743,6 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
-    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
-    let env_path = if parent_path == "/" {
-        "/Environment".to_string()
-    } else {
-        format!("{parent_path}/Environment")
-    };
     // Ensure the settings prim exists, but only author `AddPrim` when it's
     // actually absent (else every render tweak would journal a redundant
     // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
@@ -1764,15 +1793,11 @@ pub fn persist_environment_light_to_runtime_layer(
     // ask for 50, compose 2650, and the slider jumps to 2650 on the next frame.
     // Authoring `requested - others` makes the composed total land exactly on the
     // request, so the knob is stable under its own feedback.
-    if let Some(requested) = cmd.ambient_brightness {
-        let fill_path = format!("{env_path}/AmbientFill");
+    if let Some((requested, others, fill_path)) = ambient_plan {
         // Read the composed (base ⊕ runtime) layer data, so a fill dome authored
         // by an earlier drag — which lives only in the runtime overlay — is seen
         // and correctly EXCLUDED from "other domes" rather than subtracted from
         // itself, which would ratchet the value down on every drag.
-        let composed = host.document().composed_arc();
-        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
-        let others = lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref());
         let intensity = lunco_usd_bevy::ambient_fill_intensity(requested, others);
 
         if lunco_usd_bevy::ambient_fill_saturates(requested, others) {
@@ -2088,9 +2113,8 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
 /// Read straight out of the loaded WGSL source (`Material` struct + `//!@`
 /// annotations) rather than off a material — the schema is a property of the
 /// *asset*, and reading it this way keeps the shader-param paths render-free.
-/// `None` while the shader is still loading (or if it declares no `Material`), in
-/// which case callers infer the type from the value's arity, exactly as the old
-/// material path did with its empty default schema.
+/// `None` while the shader is still loading (or if it declares no `Material`) is
+/// an unavailable edit target, not permission to infer a type.
 fn shader_schema(
     path: &str,
     asset_server: &AssetServer,
@@ -2106,33 +2130,17 @@ fn shader_schema(
 
 /// Parse one `SetObjectProperty` value into a typed [`ParamValue`] for `key`.
 ///
-/// Same grammar (and the same type resolution) as the former
-/// `lunco_materials::apply_param`: the field's type comes from the shader's
-/// reflected schema when it is known, else from the value's arity; a vector field
-/// takes `r,g,b` and is stored as a `Vec4` with alpha 1, which is what
-/// `ShaderMaterial::set_color` did and what the shader's uniform block expects.
+/// The field's type comes from the shader's reflected schema. Unknown fields,
+/// unavailable schemas, engine-owned fields, and malformed component text are
+/// rejected; RGB receives the explicit opaque-alpha convention only for a
+/// reflected `vec4` field.
 fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> Option<ParamValue> {
-    let ty = schema
-        .and_then(|s| s.field(key))
-        .map(|f| f.ty)
-        .unwrap_or_else(
-            || match value.split(',').filter(|s| !s.trim().is_empty()).count() {
-                0 | 1 => ParamType::F32,
-                2 => ParamType::Vec2,
-                3 => ParamType::Vec3,
-                _ => ParamType::Vec4,
-            },
-        );
-    match ty {
-        ParamType::Vec3 | ParamType::Vec4 => {
-            let n: Vec<f32> = value
-                .split(',')
-                .filter_map(|s| s.trim().parse::<f32>().ok())
-                .collect();
-            (n.len() >= 3).then(|| ParamValue::Vec4([n[0], n[1], n[2], 1.0]))
-        }
-        _ => ParamValue::parse(ty, value),
+    let schema = schema?;
+    let field = schema.field(key)?;
+    if schema.is_engine(key) {
+        return None;
     }
+    ParamValue::parse_authoring(field.ty, value)
 }
 
 /// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any params it
@@ -3404,6 +3412,24 @@ impl Plugin for SpawnCommandPlugin {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn shader_property_values_require_the_reflected_schema() {
+        let schema = lunco_materials::ParamSchema::parse(
+            "//!@engine sun_dir\n\
+             struct Material { color: vec4<f32>, amount: f32, sun_dir: vec3<f32> }",
+        )
+        .expect("shader schema");
+
+        assert_eq!(
+            super::shader_param_value(Some(&schema), "color", "0.1,0.2,0.3"),
+            Some(lunco_materials::ParamValue::Vec4([0.1, 0.2, 0.3, 1.0]))
+        );
+        assert!(super::shader_param_value(Some(&schema), "unknown", "1").is_none());
+        assert!(super::shader_param_value(Some(&schema), "amount", "1,bad").is_none());
+        assert!(super::shader_param_value(Some(&schema), "sun_dir", "1,2,3").is_none());
+        assert!(super::shader_param_value(None, "amount", "1").is_none());
+    }
+
+    #[test]
     fn test_spawn_entity_struct_exists() {
         // Verify the struct can be constructed
         let cmd = super::SpawnEntity {
@@ -4017,7 +4043,7 @@ mod tests {
             DVec3::new(2.0, 0.0, 7.0),
             DQuat::IDENTITY,
         );
-        assert_eq!(ops.len(), 3, "spawn lowers to one complete change set");
+        assert_eq!(ops.len(), 4, "spawn lowers to one complete change set");
         app.world_mut().trigger(ApplyUsdOps {
             doc,
             label: "Spawn Test Rover".into(),
@@ -4045,6 +4071,12 @@ mod tests {
                 .prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
             Some([2.0, 0.0, 7.0]),
             "spawn drop position recorded in runtime layer"
+        );
+        assert_eq!(
+            docu.runtime_data()
+                .prim_attribute_value::<String>(&prim, "lunco:catalogId"),
+            Some("test_rover".to_string()),
+            "spawn catalog identity must be authored with the runtime prim"
         );
         // ...rides into the composed view as a resolvable reference...
         let composed = docu.composed_source();

@@ -116,7 +116,7 @@ pub struct NurbsSurface {
 }
 
 impl NurbsSurface {
-    /// Tessellate into a `Mesh`. `None` when the definition is malformed —
+    /// Tessellate into a `Mesh` at the requested graphics quality. `None` when the definition is malformed —
     /// [`crate::nurbs::sample_nurbs_patch`] has already warned which guard fired.
     ///
     /// This is the UNTRIMMED build. Trimmed patches (`trimCurve:*`) keep their
@@ -125,13 +125,13 @@ impl NurbsSurface {
     /// the patch's parameter space and re-deriving it from a changed control net is
     /// a different problem than this one. Better to not offer the capability than to
     /// offer it wrong.
-    pub fn mesh(&self) -> Option<Mesh> {
+    pub fn mesh(&self, quality: lunco_render::RenderQualityProfile) -> Option<Mesh> {
         use bevy::asset::RenderAssetUsages;
         use bevy_mesh::PrimitiveTopology;
 
         let (u_count, v_count) = (self.u_count as usize, self.v_count as usize);
-        let u_steps = (u_count * 6).clamp(8, 128);
-        let v_steps = (v_count * 6).clamp(8, 128);
+        let u_steps = quality.nurbs_surface_subdivisions(u_count);
+        let v_steps = quality.nurbs_surface_subdivisions(v_count);
 
         let grid = crate::nurbs::sample_nurbs_patch(
             &self.points,
@@ -259,10 +259,7 @@ impl LatheProfile {
                 length,
                 contour,
             } => {
-                // `powf` on a clamped, non-negative `s` — a negative base with a
-                // fractional exponent is NaN, and NaN control points make the whole
-                // patch vanish with no mesh and no obvious cause.
-                let t = s.clamp(0.0, 1.0).powf(contour.max(1e-6));
+                let t = s.powf(contour);
                 (
                     throat_radius + (exit_radius - throat_radius) * t,
                     -length * s,
@@ -273,8 +270,8 @@ impl LatheProfile {
                 rim_radius,
                 focal_length,
             } => {
-                let r = apex_radius + (rim_radius - apex_radius) * s.clamp(0.0, 1.0);
-                (r, r * r / (4.0 * focal_length.max(1e-6)))
+                let r = apex_radius + (rim_radius - apex_radius) * s;
+                (r, r * r / (4.0 * focal_length))
             }
         }
     }
@@ -332,9 +329,44 @@ impl UsdLathe {
     /// The u direction is the exact rational 4-arc circle, generated here rather
     /// than authored so it cannot drift: 9 control points per ring with √2/2 on the
     /// diagonals and doubled interior knots. v walks the profile.
-    pub fn surface(&self) -> NurbsSurface {
-        let rings = self.rings.max(2);
-        let v_order = self.v_order.clamp(2, rings);
+    pub fn surface(&self) -> Option<NurbsSurface> {
+        if self.rings < 2 || self.v_order < 2 || self.v_order > self.rings {
+            return None;
+        }
+        let valid_profile = match self.profile {
+            LatheProfile::Bell {
+                throat_radius,
+                exit_radius,
+                length,
+                contour,
+            } => {
+                throat_radius.is_finite()
+                    && throat_radius > 0.0
+                    && exit_radius.is_finite()
+                    && exit_radius > 0.0
+                    && length.is_finite()
+                    && length > 0.0
+                    && contour.is_finite()
+                    && (0.0..=1.0).contains(&contour)
+            }
+            LatheProfile::Paraboloid {
+                apex_radius,
+                rim_radius,
+                focal_length,
+            } => {
+                apex_radius.is_finite()
+                    && apex_radius > 0.0
+                    && rim_radius.is_finite()
+                    && rim_radius > 0.0
+                    && focal_length.is_finite()
+                    && focal_length > 0.0
+            }
+        };
+        if !valid_profile {
+            return None;
+        }
+        let rings = self.rings;
+        let v_order = self.v_order;
 
         let mut points = Vec::with_capacity((rings * CIRCLE_U_COUNT) as usize);
         let mut weights = Vec::with_capacity((rings * CIRCLE_U_COUNT) as usize);
@@ -358,7 +390,7 @@ impl UsdLathe {
             weights.extend_from_slice(&[1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0]);
         }
 
-        NurbsSurface {
+        Some(NurbsSurface {
             points,
             weights,
             u_count: CIRCLE_U_COUNT,
@@ -368,14 +400,14 @@ impl UsdLathe {
             u_knots: CIRCLE_U_KNOTS.to_vec(),
             v_knots: crate::nurbs::default_clamped_knots(rings as usize, v_order as usize),
             left_handed: self.left_handed,
-        }
+        })
     }
 }
 
 /// Read a prim's lathe parameters into a [`UsdLathe`].
 ///
-/// The profile comes from `lunco:lathe:*`; its sampling comes from the standard
-/// `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`.
+/// The profile comes from `lunco:lathe:*`; its sampling is required in the
+/// standard `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`.
 ///
 /// `None` when `lunco:lathe:profile` is absent — that is an ordinary hand-authored
 /// patch, read from its `points` array as before. An UNKNOWN profile token warns
@@ -387,21 +419,45 @@ impl UsdLathe {
 /// "unauthored", which would silently substitute a default.
 pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
-    let p = |name: &str, default: f32| -> f32 {
-        reader.real(path, name).map(|v| v as f32).unwrap_or(default)
+    let p = |name: &str, default: f32, valid: fn(f32) -> bool| -> Option<f32> {
+        let value = match reader.real(path, name) {
+            Some(value) => value as f32,
+            None if reader.has_authored_attribute(path, name) => {
+                error!(
+                    "[usd-bevy] {} has an authored lathe parameter {name} with an unsupported value type",
+                    path.as_str()
+                );
+                return None;
+            }
+            None => default,
+        };
+        if !valid(value) {
+            error!(
+                "[usd-bevy] {} has invalid lathe parameter {name} = {value}",
+                path.as_str()
+            );
+            return None;
+        }
+        Some(value)
     };
 
     let profile = match kind.as_str() {
         "bell" => LatheProfile::Bell {
-            throat_radius: p("lunco:lathe:throatRadius", 0.35),
-            exit_radius: p("lunco:lathe:exitRadius", 1.35),
-            length: p("lunco:lathe:length", 1.90),
-            contour: p("lunco:lathe:contour", 0.55),
+            throat_radius: p("lunco:lathe:throatRadius", 0.35, |v| {
+                v.is_finite() && v > 0.0
+            })?,
+            exit_radius: p("lunco:lathe:exitRadius", 1.35, |v| v.is_finite() && v > 0.0)?,
+            length: p("lunco:lathe:length", 1.90, |v| v.is_finite() && v > 0.0)?,
+            contour: p("lunco:lathe:contour", 0.55, |v| {
+                v.is_finite() && (0.0..=1.0).contains(&v)
+            })?,
         },
         "paraboloid" => LatheProfile::Paraboloid {
-            apex_radius: p("lunco:lathe:apexRadius", 0.02),
-            rim_radius: p("lunco:lathe:rimRadius", 0.58),
-            focal_length: p("lunco:lathe:focalLength", 0.35),
+            apex_radius: p("lunco:lathe:apexRadius", 0.02, |v| v.is_finite() && v > 0.0)?,
+            rim_radius: p("lunco:lathe:rimRadius", 0.58, |v| v.is_finite() && v > 0.0)?,
+            focal_length: p("lunco:lathe:focalLength", 0.35, |v| {
+                v.is_finite() && v > 0.0
+            })?,
         },
         other => {
             warn!(
@@ -423,15 +479,50 @@ pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> O
     // Cylinder / Cone / Capsule / Plane, and NurbsPatch is a RESULT format — points
     // and knots — not a generator), so there is no standard field to reuse for
     // `profile`, `throatRadius`, `contour` and friends.
+    let rings = read_required_nurbs_int(reader, path, "vVertexCount")? as u32;
+    let v_order = read_required_nurbs_int(reader, path, "vOrder")? as u32;
     Some(UsdLathe {
         profile,
-        rings: reader
-            .scalar::<i32>(path, "vVertexCount")
-            .unwrap_or(4)
-            .max(2) as u32,
-        v_order: reader.scalar::<i32>(path, "vOrder").unwrap_or(3).max(2) as u32,
+        rings,
+        v_order,
         left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
     })
+}
+
+/// Read a required standard `NurbsPatch` integer without inventing a sampling
+/// profile when an author omitted or mistyped it.
+pub(crate) fn read_required_nurbs_int(
+    reader: &crate::StageView<'_>,
+    path: &openusd::sdf::Path,
+    name: &str,
+) -> Option<usize> {
+    match reader.scalar::<i32>(path, name) {
+        Some(value) if value >= 2 => Some(value as usize),
+        Some(value) => {
+            error!(
+                "[usd-bevy] {} has invalid NurbsPatch {} = {value}; expected an integer >= 2",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, name) => {
+            error!(
+                "[usd-bevy] {} has an authored NurbsPatch {} with an unsupported value type",
+                path.as_str(),
+                name
+            );
+            None
+        }
+        None => {
+            error!(
+                "[usd-bevy] {} is missing required NurbsPatch {}",
+                path.as_str(),
+                name
+            );
+            None
+        }
+    }
 }
 
 /// Re-lathe the control net when a [`UsdLathe`]'s parameters change.
@@ -448,7 +539,10 @@ pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> O
 /// an identical net does not cascade into a pointless retessellation.
 pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdLathe>>) {
     for (lathe, mut surface) in &mut q {
-        let next = lathe.surface();
+        let Some(next) = lathe.surface() else {
+            warn!("[usd-bevy] invalid UsdLathe parameters; retaining the previous surface");
+            continue;
+        };
         if *surface != next {
             *surface = next;
         }
@@ -468,12 +562,54 @@ pub fn relathe_changed(mut q: Query<(&UsdLathe, &mut NurbsSurface), Changed<UsdL
 pub fn regenerate_patch_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>), Changed<NurbsSurface>>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
 ) {
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics NURBS quality; retaining current meshes: {reason}");
+            return;
+        }
+    };
     for (surface, handle, name) in &q {
-        let Some(mesh) = surface.mesh() else {
+        let Some(mesh) = surface.mesh(profile) else {
             warn!(
                 "[usd-bevy] {} NurbsSurface changed but produced no samples — mesh left \
                  as it was (check the control net / knot vectors)",
+                name.map(|n| n.as_str().to_string()).unwrap_or_default()
+            );
+            continue;
+        };
+        let Some(mut slot) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        *slot = mesh;
+    }
+}
+
+/// Rebuild every live untrimmed NURBS mesh when the graphics tessellation policy
+/// changes. Quality is an explicit user setting, so existing geometry must update
+/// immediately rather than only newly loaded patches adopting the new density.
+pub fn retessellate_patch_meshes_on_quality_change(
+    mut meshes: ResMut<Assets<Mesh>>,
+    q: Query<(&NurbsSurface, &Mesh3d, Option<&Name>)>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+) {
+    if !quality.is_changed() {
+        return;
+    }
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            warn!("[usd-bevy] invalid Graphics NURBS quality; retaining current meshes: {reason}");
+            return;
+        }
+    };
+    for (surface, handle, name) in &q {
+        let Some(mesh) = surface.mesh(profile) else {
+            warn!(
+                "[usd-bevy] {} NurbsSurface quality change produced no samples — mesh left as it was \
+                 (check the control net / knot vectors)",
                 name.map(|n| n.as_str().to_string()).unwrap_or_default()
             );
             continue;
@@ -508,7 +644,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         assert_eq!(s.u_count, 9);
         assert_eq!(s.v_count, 4);
         assert_eq!(s.points.len(), 36);
@@ -547,8 +683,11 @@ mod tests {
             v_order: 3,
             left_handed: false,
         }
-        .surface();
-        let mesh = surface.mesh().expect("valid reflector mesh");
+        .surface()
+        .expect("valid lathe");
+        let mesh = surface
+            .mesh(lunco_render::RenderingQuality::Balanced.profile())
+            .expect("valid reflector mesh");
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .and_then(|attribute| attribute.as_float3())
@@ -584,6 +723,32 @@ mod tests {
         assert!(checked > 100, "expected the full reflector tessellation");
     }
 
+    #[test]
+    fn mesh_density_follows_graphics_quality_settings() {
+        let surface = UsdLathe {
+            profile: LatheProfile::Paraboloid {
+                apex_radius: 0.02,
+                rim_radius: 0.58,
+                focal_length: 0.35,
+            },
+            rings: 4,
+            v_order: 3,
+            left_handed: false,
+        }
+        .surface()
+        .expect("valid lathe");
+        let low = surface
+            .mesh(lunco_render::RenderingQuality::Low.profile())
+            .expect("low-quality reflector mesh");
+        let high = surface
+            .mesh(lunco_render::RenderingQuality::High.profile())
+            .expect("high-quality reflector mesh");
+        assert!(
+            high.count_vertices() > low.count_vertices(),
+            "graphics quality must control NURBS tessellation density"
+        );
+    }
+
     /// The bell's control net must be exactly what `BellNozzle.mo` says it is.
     /// `r_station_1` / `r_station_2` are defined at s = 1/3 and 2/3, so with the
     /// default 4 rings they ARE control points 1 and 2 — the model and the drawn
@@ -602,7 +767,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         for (ring, station) in [(1usize, 1.0f32 / 3.0), (2, 2.0 / 3.0)] {
             // Verbatim `r_station_N = throat + (exit - throat) * (N/3)^contour`.
             let want = throat + (exit - throat) * station.powf(contour);
@@ -637,7 +802,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let s = lathe.surface();
+        let s = lathe.surface().expect("valid lathe");
         let grid = crate::nurbs::sample_nurbs_patch(
             &s.points,
             &s.weights,
@@ -685,7 +850,7 @@ mod tests {
             v_order: 3,
             left_handed: false,
         };
-        let before = lathe.surface();
+        let before = lathe.surface().expect("valid lathe");
         if let LatheProfile::Bell {
             ref mut exit_radius,
             ..
@@ -693,7 +858,7 @@ mod tests {
         {
             *exit_radius = 2.0;
         }
-        let after = lathe.surface();
+        let after = lathe.surface().expect("valid lathe");
         assert_ne!(before, after, "a changed parameter must change the net");
         assert!((after.points[27][0] - 2.0).abs() < 1e-6, "new exit radius");
         // ...and the untouched end must NOT have moved.
@@ -703,9 +868,8 @@ mod tests {
         );
     }
 
-    /// A profile with a wild exponent must not produce NaN control points. A NaN in
-    /// the net makes the entire patch vanish with no mesh, which is the worst
-    /// failure mode available and the reason `at()` clamps its base.
+    /// Invalid reflected/script parameters are refused rather than normalized into
+    /// a different surface. The last valid ECS mesh remains authoritative.
     #[test]
     fn degenerate_parameters_do_not_produce_nan_points() {
         for profile in [
@@ -721,19 +885,39 @@ mod tests {
                 focal_length: 0.0,
             },
         ] {
-            let s = UsdLathe {
+            let surface = UsdLathe {
                 profile,
                 rings: 4,
                 v_order: 3,
                 left_handed: false,
             }
             .surface();
-            for p in &s.points {
-                assert!(
-                    p.iter().all(|c| c.is_finite()),
-                    "non-finite control point {p:?}"
-                );
-            }
+            assert!(
+                surface.is_none(),
+                "invalid lathe parameters must be refused"
+            );
         }
+        let valid_profile = LatheProfile::Bell {
+            throat_radius: 0.35,
+            exit_radius: 1.35,
+            length: 1.9,
+            contour: 0.55,
+        };
+        assert!((UsdLathe {
+            profile: valid_profile.clone(),
+            rings: 1,
+            v_order: 2,
+            left_handed: false,
+        })
+        .surface()
+        .is_none());
+        assert!((UsdLathe {
+            profile: valid_profile,
+            rings: 4,
+            v_order: 5,
+            left_handed: false,
+        })
+        .surface()
+        .is_none());
     }
 }

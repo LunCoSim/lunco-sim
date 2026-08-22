@@ -807,7 +807,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
 `lunco:avatar`, `lunco:scenario`, `lunco:nextScene`, `lunco:triggerZone`, `lunco:waypoint`,
 `lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (behavior; the camera prim itself is
-`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`/`resolvedAsset`.
+`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`.
 These are genuine LunCo glue — keep the `lunco:` prefix, group consistently (`lunco:<domain>:<prop>`), and
 prefer a `ui:nodegraph:node:pos` (UsdUI) over any bespoke diagram-position attr.
 
@@ -882,7 +882,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 | `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
 | diagram/node positions | **`UsdUINodeGraphNodeAPI`** (`ui:nodegraph:node:pos`) | §14 |
 | EPS/motor params | typed USD **attributes** (the bound program's parameters) | §14.3 |
-| `lunco:placeholder` / `lunco:resolvedAsset` / `lunco:assetMode` | USD **payloads** + Ar asset resolution | mechanism already used; the attrs shrink to a thin runtime cache/sentinel |
+| `lunco:placeholder` / `lunco:assetMode` | USD **payloads** + Ar asset resolution | the payload/reference is authoritative; render projection selects the Bevy realization |
 | `lunco:layer` (logical grouping) / render selection | **`UsdCollectionAPI`** (membership) + **`UsdGeomImageable.purpose`** (default/render/proxy/guide) + `visibility` | `openusd` has `collection.rs` |
 | `kind`, rigid body/joint/drive/vehicle | **`kind`**, **`UsdPhysics`/`Physx*`** | §14.1–2 |
 

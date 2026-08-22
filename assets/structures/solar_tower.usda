@@ -95,7 +95,9 @@ def Xform "SolarTower" (
         # Vertical PV panel — thin cube standing on edge, solar_panel
         # shader. Visual-only child of the head, so it swings with the
         # tracker (no physics of its own).
-        def Cube "Panel"
+        def Cube "Panel" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
         {
             double size = 1.0
             double3 xformOp:translate = (0, 1.2, 0)

@@ -882,7 +882,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         },
     );
 
-    // list_entities() -> [#{ id, name, type, pos }] for every registered entity.
+    // list_entities() -> [#{ id, name, type, pos, catalog_id }] for every
+    // registered entity. `catalog_id` is authored identity, never a name guess.
     engine.register_fn("list_entities", || -> Dynamic {
         bridge_core::list_entities(&RhaiBuilder)
     });
@@ -2671,5 +2672,41 @@ mod tests {
             "[true, true, 100, 1, 200, true, true]",
             "got {out}"
         );
+    }
+
+    #[test]
+    fn list_entities_exposes_authored_catalog_identity_separately_from_name() {
+        use bevy::prelude::*;
+        use lunco_api::registry::ApiEntityRegistry;
+        use lunco_core::GlobalEntityId;
+
+        let mut world = World::new();
+        world.init_resource::<ApiEntityRegistry>();
+        let frame = world
+            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .id();
+        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        let real = world
+            .spawn((
+                Name::new("Solar Tower"),
+                lunco_core::CatalogEntryId("solar_tower".into()),
+            ))
+            .id();
+        let lookalike = world.spawn(Name::new("Solar Panel")).id();
+        {
+            let mut reg = world.resource_mut::<ApiEntityRegistry>();
+            reg.assign(real, GlobalEntityId::from_raw(100));
+            reg.assign(lookalike, GlobalEntityId::from_raw(200));
+        }
+
+        let code = r#"
+            let items = list_entities();
+            [
+                items.some(|e| e.catalog_id == "solar_tower"),
+                items.some(|e| e.name == "Solar Panel" && e.catalog_id == ""),
+            ]
+        "#;
+        let out = super::eval_with_world(&mut world, code).unwrap();
+        assert_eq!(out.trim(), "[true, true]", "got {out}");
     }
 }

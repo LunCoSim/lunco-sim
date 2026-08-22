@@ -46,9 +46,9 @@ def DistantLight "Sun" (
     prepend apiSchemas = ["ShadowAPI", "LunCoShadowAPI"]
 )
 {
-    # The calibrated lunar sun, paired with EV100 16 on the camera
-    # (`lunco_render::LUNAR_SUN_EXPOSURE_EV100`). The pair must agree on one
-    # number or a scene opens ~5 stops off.
+    # The calibrated lunar sun. When a camera omits exposure, the active
+    # Graphics profile supplies the matching EV100; an authored camera exposure
+    # remains authoritative.
     float inputs:intensity = 128000
 
     # Sol's angular diameter, driving physically-scaled penumbra width in the

@@ -1983,11 +1983,13 @@ pub fn recompute_interest(
     let owned_any: HashSet<u64> = table.iter().map(|&(g, _)| g).collect();
     for (entity, gid, rb) in q.iter() {
         let key = gid.get();
-        let Some(abs) =
-            lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
-        else {
-            error_once!("cannot compute AOI position for disconnected gid {key}");
-            continue;
+        let abs = match lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
+        {
+            Ok(abs) => abs,
+            Err(error) => {
+                error_once!("cannot compute AOI position for gid {key}: {error}");
+                continue;
+            }
         };
         positions.insert(key, abs.0);
         // Predict candidate = Dynamic AND ownerless (owned Dynamic bodies are already

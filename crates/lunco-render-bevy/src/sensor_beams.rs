@@ -33,23 +33,22 @@ const DRIVER_ID: &str = "range_beam";
 /// The `info:id` the landing-point marker answers to.
 const HIT_DRIVER_ID: &str = "range_hit";
 
-/// Fallback marker radius, if the program prim authors no `lunco:param:radius`.
-const DEFAULT_HIT_RADIUS: f64 = 0.06;
+/// Read a required positive authored visual parameter. Missing and malformed
+/// values are distinct from a meaningful zero: this driver never invents a
+/// geometry scale when the USD program prim omitted one.
+fn authored_positive_param(params: Option<&lunco_core::ScriptParams>, key: &str) -> Option<f64> {
+    params
+        .and_then(|p| p.0.get(key).copied())
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
 
-/// Fallback beam half-width, if the program prim authors no `lunco:param:width`.
-/// A beam is a RAY: it should read as a line, not a pipe — thinner than the waypoint
-/// route ribbon, which is a path you drive along rather than a measurement.
-const DEFAULT_HALF_WIDTH: f64 = 0.03;
-
-/// Fallback alphas, if the program prim authors no `lunco:param:hitAlpha` /
-/// `lunco:param:missAlpha`. `hit` = the sensor reports real geometry; `miss` = it is
-/// reporting its out-of-range fallback.
-///
-/// These only BLEND if the bound material resolves to `SurfaceAlpha::Blend` — which
-/// means its `inputs:opacity` must be sub-1. An opaque material ignores alpha
-/// entirely, so writing these would be a silent no-op.
-const DEFAULT_HIT_ALPHA: f64 = 0.85;
-const DEFAULT_MISS_ALPHA: f64 = 0.35;
+/// Read a required authored alpha. It is a unit interval by USD Preview
+/// Surface semantics; clamping would hide a malformed scene opinion.
+fn authored_alpha_param(params: Option<&lunco_core::ScriptParams>, key: &str) -> Option<f64> {
+    params
+        .and_then(|p| p.0.get(key).copied())
+        .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+}
 
 pub(crate) fn build(app: &mut App) {
     // No `Assets<Mesh>`, no `GizmoConfigStore`, no render resource of any kind: this
@@ -113,9 +112,10 @@ fn drive_range_hit(
             continue;
         }
 
-        let radius = params
-            .and_then(|p| p.0.get("radius").copied())
-            .unwrap_or(DEFAULT_HIT_RADIUS);
+        let Some(radius) = authored_positive_param(params, "radius") else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
         // `distance`, NOT `max_distance` — the point the sensor actually reported.
         let axis = s.axis.normalize_or_zero();
         let want = Transform {
@@ -144,22 +144,17 @@ fn drive_range_beam(
         &mut Transform,
         Option<&lunco_core::ScriptParams>,
         Option<&mut PbrLook>,
+        &mut Visibility,
     )>,
     q_sensors: Query<&RaycastObservation>,
 ) {
-    for (id, parent, mut tf, params, look) in q_beams.iter_mut() {
+    for (id, parent, mut tf, params, look, mut vis) in q_beams.iter_mut() {
         if id.0 != DRIVER_ID {
             continue;
         }
         let Ok(s) = q_sensors.get(parent.parent()) else {
             continue;
         };
-        let param = |key: &str, fallback: f64| {
-            params
-                .and_then(|p| p.0.get(key).copied())
-                .unwrap_or(fallback)
-        };
-
         // The stored `distance` when the cast hit, else the full range — so the beam
         // shows what the sensor actually REPORTED, not a fresh cast that could
         // disagree with the value the simulation is using.
@@ -168,7 +163,18 @@ fn drive_range_beam(
         } else {
             s.max_distance
         };
-        let half_width = param("width", DEFAULT_HALF_WIDTH);
+        let Some(half_width) = authored_positive_param(params, "width") else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let Some(hit_alpha) = authored_alpha_param(params, "hitAlpha") else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let Some(miss_alpha) = authored_alpha_param(params, "missAlpha") else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
 
         // The authored prim is a UNIT cylinder (`radius = 1`, `height = 1`), because
         // `radius`/`height` are baked into the mesh at instantiation and never re-read
@@ -196,14 +202,43 @@ fn drive_range_beam(
         // for a value that varies continuously, and would otherwise mint one cached
         // material per frame, forever).
         if let Some(mut look) = look {
-            let want = if s.hit_valid {
-                param("hitAlpha", DEFAULT_HIT_ALPHA)
-            } else {
-                param("missAlpha", DEFAULT_MISS_ALPHA)
-            } as f32;
+            let want = if s.hit_valid { hit_alpha } else { miss_alpha } as f32;
             if look.base_color.alpha != want {
                 look.base_color.alpha = want;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{authored_alpha_param, authored_positive_param};
+    use lunco_core::ScriptParams;
+    use std::collections::HashMap;
+
+    fn params(values: [(&str, f64); 3]) -> ScriptParams {
+        ScriptParams(
+            values
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn visual_parameters_are_required_and_not_clamped() {
+        let valid = params([("radius", 0.06), ("hitAlpha", 0.85), ("missAlpha", 0.35)]);
+        assert_eq!(authored_positive_param(Some(&valid), "radius"), Some(0.06));
+        assert_eq!(authored_alpha_param(Some(&valid), "hitAlpha"), Some(0.85));
+        assert_eq!(authored_alpha_param(Some(&valid), "missAlpha"), Some(0.35));
+
+        let missing = ScriptParams(HashMap::new());
+        assert_eq!(authored_positive_param(Some(&missing), "radius"), None);
+        assert_eq!(authored_alpha_param(Some(&missing), "hitAlpha"), None);
+
+        let invalid = params([("radius", -1.0), ("hitAlpha", 1.1), ("missAlpha", f64::NAN)]);
+        assert_eq!(authored_positive_param(Some(&invalid), "radius"), None);
+        assert_eq!(authored_alpha_param(Some(&invalid), "hitAlpha"), None);
+        assert_eq!(authored_alpha_param(Some(&invalid), "missAlpha"), None);
     }
 }

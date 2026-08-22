@@ -306,15 +306,24 @@ impl PhysicsStepRequest {
 /// gate is open for the entire window this needs to close. Both are checked here —
 /// a paused world clock must stop force application too, and `Time<Physics>` does
 /// not report itself paused merely because virtual time is.
-pub fn physics_is_live(
-    physics_time: Res<Time<Physics>>,
-    virtual_time: Res<Time<Virtual>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
+pub fn physics_is_live_state(
+    physics_time: &Time<Physics>,
+    virtual_time: &Time<Virtual>,
+    faults: Option<&lunco_core::RuntimeFaults>,
 ) -> bool {
     !faults.is_some_and(|state| state.active())
         && !physics_time.is_paused()
         && !virtual_time.is_paused()
         && virtual_time.relative_speed_f64() > 0.0
+}
+
+/// Bevy run condition for systems that write force or torque into avian.
+pub fn physics_is_live(
+    physics_time: Res<Time<Physics>>,
+    virtual_time: Res<Time<Virtual>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+) -> bool {
+    physics_is_live_state(&physics_time, &virtual_time, faults.as_deref())
 }
 
 /// Project [`PhysicsHolds`] onto avian's `Time<Physics>`.

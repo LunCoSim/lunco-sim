@@ -36,12 +36,29 @@ def Xform "DrivetrainParity" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Two instances of the same skid rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the drivetrain parity regression test."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
 
     # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false
+
+    # The shared rover carries an Earth-tracking communications probe. Celestial
+    # content and the lunar site frame are therefore explicit scene inputs, just
+    # as they are in the focused antenna and high-speed rover fixtures. Without
+    # them the tracker is correctly denied a fabricated Earth direction and the
+    # runtime test carries an avoidable no-data warning.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
+
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
 
     # Parity is only meaningful if the surface is bit-identical under each rover,
     # so there is a single ground prim rather than two pads, bound to the one
@@ -52,7 +69,7 @@ def Xform "DrivetrainParity" (
     # do not fight gravity through the same path), turning a parity test into a
     # gradeability test.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0

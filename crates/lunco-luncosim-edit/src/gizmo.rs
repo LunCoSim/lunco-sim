@@ -828,6 +828,14 @@ mod tests {
         app.init_resource::<GizmoDragSession>();
         app.add_observer(lunco_scene_commands::commands::persist_move_to_runtime_layer);
         app.add_systems(Update, restore_gizmo_dynamic);
+        let active_frame = app
+            .world_mut()
+            .spawn((
+                big_space::prelude::Grid::new(2_000.0, 100.0),
+                Transform::default(),
+            ))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
 
         let doc = {
             let mut reg = app
@@ -859,6 +867,7 @@ mod tests {
                     stage_handle: Handle::default(),
                     path: "/World".to_string(),
                 },
+                ChildOf(active_frame),
                 lunco_core::GlobalEntityId::from_raw(42),
                 GizmoDragState {
                     original_body: Some(RigidBody::Dynamic),

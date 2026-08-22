@@ -284,8 +284,14 @@ pub(crate) fn apply_translates_live(
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::get_attribute_as_vec3(&view, &sp, TRANSLATE_ATTR)
-                    .map(|v| (p.clone(), v))
+                match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
+                    Ok(Some(transform)) => Some((p.clone(), transform.translation)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        error!("[usd] translate edit rejected for {p}: {error}");
+                        None
+                    }
+                }
             })
             .collect()
     };
@@ -463,10 +469,14 @@ pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, 
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                lunco_usd_bevy::get_attribute_as_vec3(&view, &sp, ROTATE_ATTR)
-                    // Degrees → quat, via the canonical converter, so the Euler
-                    // order lives in exactly one place.
-                    .map(|deg| (p.clone(), lunco_usd_bevy::euler_xyz_deg_to_quat(deg)))
+                match lunco_usd_bevy::local_transform_at(&view, &sp, 0.0) {
+                    Ok(Some(transform)) => Some((p.clone(), transform.rotation)),
+                    Ok(None) => None,
+                    Err(error) => {
+                        error!("[usd] rotate edit rejected for {p}: {error}");
+                        None
+                    }
+                }
             })
             .collect()
     };
@@ -492,9 +502,24 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
         return;
     };
+    let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
+        warn!("cannot refresh USD domes without graphics settings");
+        return;
+    };
+    let quality = match settings.validated_profile() {
+        Ok(quality) => quality,
+        Err(reason) => {
+            warn!("cannot refresh USD domes while Graphics settings are invalid: {reason}");
+            return;
+        }
+    };
 
     // Re-read the intent under one short borrow of the `!Send` stage.
-    let domes: Vec<(String, Option<dome::UsdDomeEnvironment>, f32)> = {
+    let domes: Vec<(
+        String,
+        Option<dome::UsdDomeEnvironment>,
+        Option<lunco_usd_bevy::DomeIntensity>,
+    )> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
@@ -507,10 +532,38 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 if view.type_name(&sp).as_deref() != Some("DomeLight") {
                     return None;
                 }
-                let env = dome::read_dome_environment(&view, &sp, &asset_server, id);
+                let env = match dome::read_dome_environment(
+                    &view,
+                    &sp,
+                    &asset_server,
+                    id,
+                    quality,
+                ) {
+                    Ok(env) => env,
+                    Err(_) => {
+                        bevy::log::error!(
+                            "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                            sp.as_str()
+                        );
+                        return None;
+                    }
+                };
                 // The fallback if the author dropped the texture: a bare dome is
-                // a scalar ambient.
-                let ambient = view.real_f32(&sp, "inputs:intensity").unwrap_or(0.0);
+                // a scalar ambient, read through the same photometry path as load.
+                let ambient = if env.is_none() {
+                    match lunco_usd_bevy::read_dome_intensity(&view, &sp, quality) {
+                        Ok(intensity) => Some(intensity),
+                        Err(_) => {
+                            bevy::log::error!(
+                                "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                                sp.as_str()
+                            );
+                            return None;
+                        }
+                    }
+                } else {
+                    None
+                };
                 Some((p.clone(), env, ambient))
             })
             .collect()
@@ -749,13 +802,17 @@ pub(crate) fn reconcile_structural_live(
                 // observer builds the subtree from the still-present stage.
                 let tf = {
                     let stages = world.non_send::<CanonicalStages>();
-                    stages
-                        .get(id)
-                        .and_then(|cs| {
-                            lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
-                        })
-                        .map(Transform::from_translation)
-                        .unwrap_or_default()
+                    let Some(cs) = stages.get(id) else {
+                        continue;
+                    };
+                    match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
+                        Ok(Some(transform)) => transform,
+                        Ok(None) => Transform::IDENTITY,
+                        Err(error) => {
+                            error!("[usd] incremental spawn rejected for {path}: {error}");
+                            continue;
+                        }
+                    }
                 };
                 lunco_usd_sim::cosim::spawn_usd_child_with_translate(world, id, path, tf);
             }
@@ -786,12 +843,20 @@ pub(crate) fn reconcile_structural_live(
                     let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                         return;
                     };
-                    stages.get(id).and_then(|cs| {
-                        lunco_usd_bevy::get_attribute_as_vec3(&cs.view(), &sp, TRANSLATE_ATTR)
-                    })
+                    let Some(cs) = stages.get(id) else {
+                        return;
+                    };
+                    match lunco_usd_bevy::local_transform_at(&cs.view(), &sp, 0.0) {
+                        Ok(Some(transform)) => Some(transform.translation),
+                        Ok(None) => None,
+                        Err(error) => {
+                            error!("[usd] resync transform rejected for {path}: {error}");
+                            None
+                        }
+                    }
                 };
-                if let Some(v) = v {
-                    seat_authored_translate(world, entity, v);
+                if let Some(translate) = v {
+                    seat_authored_translate(world, entity, translate);
                 }
             }
             _ => {}
@@ -919,7 +984,7 @@ mod tests {
         use bevy::prelude::*;
         use lunco_usd_bevy::{CanonicalStages, StageRecipe};
 
-        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())

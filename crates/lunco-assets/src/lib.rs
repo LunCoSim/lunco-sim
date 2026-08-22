@@ -76,13 +76,13 @@ pub mod web_fetch;
 pub use asset_sources::register_lunco_asset_sources;
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
-pub use lunco_source::{
-    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lunco_source::{
-    read_asset_bytes, read_asset_bytes_with_twin_root, read_asset_file_bytes,
-    read_asset_file_string,
+    existing_path_within_root, read_asset_bytes, read_asset_bytes_with_twin_root,
+    read_asset_file_bytes, read_asset_file_string,
+};
+pub use lunco_source::{
+    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
 pub use scheme_registry::SchemeRegistry;
 pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_SCHEME};
@@ -684,13 +684,28 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     if has_scheme(rel) {
         return None; // another scheme's root — not in the shipped library
     }
+    if !asset_path::is_safe_relative_path(rel) {
+        return None;
+    }
     let authored = assets_dir_abs().join(rel);
     if authored.exists() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return existing_path_within_root(&assets_dir_abs(), Path::new(rel))
+                .filter(|path| path.is_file());
+        }
+        #[cfg(target_arch = "wasm32")]
         return Some(authored);
     }
     for root in cache_roots() {
         let candidate = root.join(rel);
         if candidate.exists() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                return existing_path_within_root(&root, Path::new(rel))
+                    .filter(|path| path.is_file());
+            }
+            #[cfg(target_arch = "wasm32")]
             return Some(candidate);
         }
     }
@@ -844,5 +859,21 @@ mod tests {
         let twin = std::path::Path::new("/tmp/some_twin");
         assert_eq!(twin_cache_dir(twin), twin.join(".cache"));
         assert!(!twin_cache_dir(twin).starts_with(cache_dir()));
+    }
+
+    #[test]
+    fn engine_local_paths_reject_root_escape() {
+        for reference in [
+            "../outside.usda",
+            "terrain/../../outside.usda",
+            "lunco://../outside.usda",
+            "lunco://terrain/../../outside.usda",
+        ] {
+            assert_eq!(
+                engine_asset_local_path(reference),
+                None,
+                "unsafe engine reference must be rejected: {reference}"
+            );
+        }
     }
 }

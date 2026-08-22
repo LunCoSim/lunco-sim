@@ -30,12 +30,12 @@
 //! 1. **MSAA was never configured anywhere in the workspace** — grep found zero
 //!    `Msaa`. So Bevy's default `Sample4` was on *everywhere*, including WebGL2,
 //!    where a 4× multisampled colour+depth target for a full-screen terrain is the
-//!    single most expensive default in the build. [`SceneCamera::default`] picks
-//!    [`MsaaLevel::Off`] on wasm and `X2` on native, deliberately.
-//! 2. **Bloom was configured on non-HDR cameras** in four crates. `hdr` is set true
-//!    nowhere in the repo, and bloom on a non-HDR view is at best a no-op with a
-//!    downsample/upsample chain bolted on. Here bloom is `Option`, and the binder
-//!    **refuses to attach it without `hdr`** rather than silently wasting the passes.
+//!    single most expensive default in the build. The balanced Graphics profile
+//!    requests `X2` explicitly; it is not changed by the target platform.
+//! 2. **Bloom was configured on non-HDR cameras** in four crates. Bloom is now an
+//!    explicit Graphics setting or an authored environment override. The camera
+//!    intent makes HDR a consequence of an enabled bloom look, and the binder
+//!    refuses the broken non-HDR combination rather than wasting post-process work.
 
 use bevy::camera::Exposure;
 use bevy::prelude::*;
@@ -86,7 +86,9 @@ impl WorldLabel {
 }
 
 /// Tonemapping curve, named without depending on `bevy_core_pipeline`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum ToneMap {
     None,
     /// Bevy's default.
@@ -99,7 +101,7 @@ pub enum ToneMap {
 }
 
 /// Multisample level.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
 pub enum MsaaLevel {
     Off,
     X2,
@@ -113,11 +115,12 @@ pub struct BloomLook {
     pub low_frequency_boost: f32,
 }
 
-impl Default for BloomLook {
-    fn default() -> Self {
+impl BloomLook {
+    /// Construct a bloom look from the explicit graphics settings that own it.
+    pub const fn new(intensity: f32, low_frequency_boost: f32) -> Self {
         Self {
-            intensity: 0.15,
-            low_frequency_boost: 0.7,
+            intensity,
+            low_frequency_boost,
         }
     }
 }
@@ -131,7 +134,8 @@ impl Default for BloomLook {
 #[reflect(Component)]
 pub struct SceneCamera {
     pub tone_map: ToneMap,
-    /// Multisampling. **Off on wasm by default** — see the module docs.
+    /// Multisampling. The suggested balanced profile uses 2×; Graphics settings
+    /// can explicitly choose another supported request.
     pub msaa: MsaaLevel,
     /// HDR render target. Required for [`bloom`](Self::bloom) to do anything.
     pub hdr: bool,
@@ -140,18 +144,23 @@ pub struct SceneCamera {
     pub bloom: Option<BloomLook>,
 }
 
+/// Opts an engine-owned camera into live persisted Graphics look settings.
+///
+/// A bare [`SceneCamera`] remains explicit intent and is never silently rewritten
+/// by a global settings resource. Canonical USD, celestial, and avatar camera
+/// factories add this marker because their renderer-owned fields are profile
+/// defaults rather than per-entity authored opinions.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+pub struct GraphicsCameraDefaults;
+
 impl Default for SceneCamera {
     fn default() -> Self {
         Self {
             tone_map: ToneMap::default(),
-            // R4: MSAA was never set, so WebGL2 silently ran 4×. Off on the web —
-            // the terrain shader's own footprint fades already do the AA that
-            // actually matters at this scale.
-            msaa: if cfg!(target_arch = "wasm32") {
-                MsaaLevel::Off
-            } else {
-                MsaaLevel::X2
-            },
+            // R4: MSAA was never set, so Bevy silently ran 4×. The balanced
+            // renderer request is explicit and platform-independent.
+            msaa: MsaaLevel::X2,
             hdr: false,
             bloom: None,
         }
@@ -179,10 +188,9 @@ impl SceneCamera {
 /// **The one photometric setup every scene camera gets** — grade + exposure, as a
 /// single pair no spawn path may split.
 ///
-/// Exposure is not a per-camera preference: it is calibrated against the physical
-/// sun the celestial system drives (`LUNAR_SUN_EXPOSURE_EV100`, the same number
-/// `lunco_environment::LunarSun` defaults to). A camera that picks its own is
-/// simply wrong by a measurable number of stops.
+/// Exposure is a Graphics setting when USD does not author a camera opinion. A
+/// camera that picks an unrelated renderer default is wrong by a measurable
+/// number of stops; the profile keeps the scene-camera and avatar paths aligned.
 ///
 /// It exists because there were two spawn paths and only one of them was
 /// calibrated: the USD camera projection paired `agx()` with the calibrated
@@ -193,15 +201,32 @@ impl SceneCamera {
 /// only to cameras that already carry the component, so the avatar camera was
 /// unreachable by the very system meant to keep exposure consistent.
 ///
-/// `authored_ev100` is the scene's opinion (a `UsdGeomCamera`'s exposure attribute)
-/// and wins when present — engine calibration is the fallback, never an override.
-pub fn scene_camera_look(authored_ev100: Option<f32>) -> (SceneCamera, Exposure) {
+/// Build the canonical camera look from the authoritative Graphics settings.
+///
+/// USD owns camera exposure and environment bloom when those values are
+/// authored. Tone mapping, MSAA, and the unauthored bloom suggestion are
+/// renderer settings and therefore do not get invented in a projector.
+pub fn scene_camera_look_with_profile(
+    authored_ev100: Option<f32>,
+    profile: crate::RenderQualityProfile,
+) -> (SceneCamera, Exposure) {
+    let camera = SceneCamera {
+        tone_map: profile.camera_tone_map,
+        msaa: profile.camera_msaa,
+        ..Default::default()
+    };
+    let camera = if profile.camera_bloom_intensity > 0.0 {
+        camera.with_bloom(BloomLook::new(
+            profile.camera_bloom_intensity,
+            profile.camera_bloom_low_frequency_boost,
+        ))
+    } else {
+        camera
+    };
     (
-        // Keep the camera HDR so high-intensity emitters (especially the Sun)
-        // produce a controlled bloom halo instead of clipping as hard white.
-        SceneCamera::agx().with_bloom(BloomLook::default()),
+        camera,
         Exposure {
-            ev100: authored_ev100.unwrap_or(crate::LUNAR_SUN_EXPOSURE_EV100),
+            ev100: authored_ev100.unwrap_or(profile.camera_exposure_ev100),
         },
     )
 }

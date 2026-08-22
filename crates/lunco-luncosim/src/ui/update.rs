@@ -117,25 +117,15 @@ pub(crate) struct UpdateActions {
     pub(crate) apply_requested: bool,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct UpdateTasks {
     check: Option<Task<UpdateCheckResult>>,
     download: Option<Task<UpdateDownloadResult>>,
     download_progress: Option<Arc<Mutex<mpsc::Receiver<i16>>>>,
 }
 
-impl Default for UpdateTasks {
-    fn default() -> Self {
-        Self {
-            check: None,
-            download: None,
-            download_progress: None,
-        }
-    }
-}
-
 enum UpdateCheckResult {
-    Available(UpdateInfo),
+    Available(Box<UpdateInfo>),
     NoUpdate,
     NotInstalled,
     Error(String),
@@ -454,7 +444,7 @@ fn poll_update_tasks(mut state: ResMut<UpdateState>, mut tasks: ResMut<UpdateTas
         match result {
             UpdateCheckResult::Available(info) => {
                 state.status = UpdateStatus::Available;
-                state.available = Some(info);
+                state.available = Some(*info);
                 state.download_progress = None;
             }
             UpdateCheckResult::NoUpdate => {
@@ -761,7 +751,7 @@ fn check_for_updates() -> UpdateCheckResult {
         Err(error) => return UpdateCheckResult::Error(error.to_string()),
     };
     match manager.check_for_updates() {
-        Ok(UpdateCheck::UpdateAvailable(info)) => UpdateCheckResult::Available(*info),
+        Ok(UpdateCheck::UpdateAvailable(info)) => UpdateCheckResult::Available(info),
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
             UpdateCheckResult::NoUpdate
         }
@@ -832,12 +822,13 @@ mod tests {
     fn automatic_check_does_not_duplicate_pending_or_disabled_checks() {
         let mut settings = UpdateSettings::default();
         let state = UpdateState::default();
-        let mut actions = UpdateActions::default();
-
-        actions.check_requested = true;
+        let actions = UpdateActions {
+            check_requested: true,
+            ..Default::default()
+        };
         assert!(!automatic_check_due(&settings, &state, &actions));
 
-        actions.check_requested = false;
+        let actions = UpdateActions::default();
         settings.auto_check = false;
         assert!(!automatic_check_due(&settings, &state, &actions));
     }
@@ -857,8 +848,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_starts_download_for_available_update() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::Available;
+        let state = UpdateState {
+            status: UpdateStatus::Available,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
@@ -869,8 +862,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_installs_downloaded_update() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::ReadyToRestart;
+        let state = UpdateState {
+            status: UpdateStatus::ReadyToRestart,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
@@ -881,8 +876,10 @@ mod tests {
 
     #[test]
     fn status_bar_click_ignores_other_sources_and_in_flight_downloads() {
-        let mut state = UpdateState::default();
-        state.status = UpdateStatus::Downloading;
+        let state = UpdateState {
+            status: UpdateStatus::Downloading,
+            ..Default::default()
+        };
         let mut actions = UpdateActions::default();
 
         queue_status_bar_action("scene", &state, &mut actions);

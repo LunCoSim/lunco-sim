@@ -159,14 +159,14 @@ pub struct NotACameraPath;
 
 impl CameraPath {
     /// The aim mode in force at `t` — the last key at or before it (held).
-    pub fn aim_at(&self, t: f64) -> AimMode {
+    /// An empty track is invalid and returns `None`.
+    pub fn aim_at(&self, t: f64) -> Option<AimMode> {
         self.aim
             .iter()
             .rev()
             .find(|k| k.t <= t)
             .or_else(|| self.aim.first())
             .map(|k| k.mode.clone())
-            .expect("resolved camera paths always contain an aim key")
     }
 
     /// Return the preceding and current aim modes while an authored blend is
@@ -238,9 +238,12 @@ pub struct CameraPathDriven {
 /// the loop/clamp policy would hide. The playhead is already wrapped or clamped by
 /// `step_playhead` per the domain's own loop policy — looping is the domain's
 /// business, not ours — so this only has to guard a degenerate span.
-fn path_u(t: f64, start: f64, end: f64) -> f32 {
-    let span = (end - start).max(f64::EPSILON);
-    (((t - start) / span) as f32).clamp(0.0, 1.0)
+fn path_u(t: f64, start: f64, end: f64) -> Option<f32> {
+    if !t.is_finite() || !start.is_finite() || !end.is_finite() || end <= start {
+        return None;
+    }
+    let u = ((t - start) / (end - start)).clamp(0.0, 1.0) as f32;
+    u.is_finite().then_some(u)
 }
 
 /// Resolve an authored target path to the live spatial twin. Prim paths are the
@@ -474,25 +477,61 @@ pub fn resolve_camera_paths(
         //   token[]  lunco:path:aim:modes = ["target", "target", "manual"]
         //   rel      lunco:path:aim:targets = [</Hab>, </Lander>]
         //
-        // With no key arrays, use the whole-path `lunco:path:lookAt` relation or
-        // the explicit tangent semantic default. The simple case stays a one-liner
-        // and the track is opt-in.
-        // `aim:blendDuration` is explicit: absent means the authored track keeps
-        // its cut semantics, while a positive value makes every target-to-target
-        // transition continuous.
-        // `UsdRead::texts`/`reals` accept the two USD precisions, while cardinality
-        // and enum values below remain strict so malformed authoring cannot select
-        // an invisible tangent pose.
-        let times = reader.reals(&path, "lunco:path:aim:times");
-        let modes = reader.texts(&path, "lunco:path:aim:modes");
-        let aim_blend_duration = reader.real(&path, "lunco:path:aim:blendDuration");
-        if aim_blend_duration.is_some_and(|duration| !duration.is_finite() || duration < 0.0) {
-            warn!(
-                "[camera-path] {} has invalid `lunco:path:aim:blendDuration`; refusing the path",
+        // Absent arrays use the authored whole-path relation, otherwise the
+        // semantic tangent default. Authored arrays are read strictly so a type
+        // mismatch cannot become an omitted track.
+        let times = match crate::read_curve_real_array(reader, &path, "lunco:path:aim:times") {
+            Ok(Some(times)) => times,
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[camera-path] {} has authored aim times with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        let modes = match crate::read_curve_token_array(reader, &path, "lunco:path:aim:modes") {
+            Ok(Some(modes)) => modes,
+            Ok(None) => Vec::new(),
+            Err(()) => {
+                error!(
+                    "[camera-path] {} has authored aim modes with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        if times.len() != modes.len()
+            || times.iter().any(|time| !time.is_finite() || *time < 0.0)
+            || modes
+                .iter()
+                .any(|mode| !["tangent", "target", "manual"].contains(&mode.as_str()))
+        {
+            error!(
+                "[camera-path] {} has invalid or non-parallel aim times and modes",
                 prim.path
             );
             continue;
         }
+        let aim_blend_duration = match reader.real(&path, "lunco:path:aim:blendDuration") {
+            Some(value) if value.is_finite() && value >= 0.0 => Some(value),
+            Some(value) => {
+                error!(
+                    "[camera-path] {} has invalid aim blend duration {value}",
+                    prim.path
+                );
+                continue;
+            }
+            None if reader.has_authored_attribute(&path, "lunco:path:aim:blendDuration") => {
+                error!(
+                    "[camera-path] {} has authored aim blend duration with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+            None => None,
+        };
         if times.len() != modes.len() {
             warn!(
                 "[camera-path] {} has {} aim times but {} aim modes; refusing the path",
@@ -507,6 +546,19 @@ pub fn resolve_camera_paths(
         // runtime state and may change during composition; resolving it once was
         // the source of stale aim bindings and silently held rotations.
         let target_paths = reader.rel_targets(&path, "lunco:path:aim:targets");
+        let target_count = modes
+            .iter()
+            .filter(|mode| mode.as_str() == "target")
+            .count();
+        if target_count != target_paths.len() {
+            error!(
+                "[camera-path] {} has {} target aim modes but {} aim target relationships",
+                prim.path,
+                target_count,
+                target_paths.len()
+            );
+            continue;
+        }
 
         let mut keys: Vec<AimKey> = Vec::new();
         let mut next_target = 0usize;
@@ -583,42 +635,56 @@ pub fn resolve_camera_paths(
         // A camera rides ONE curve — the first — so slice it out rather than
         // interpolating across curve boundaries as if the batch were one polyline.
         if reader.attr_value(&path, "curveVertexCounts").is_some() {
-            let Some(counts) = crate::read_int_array(reader, &path, "curveVertexCounts") else {
-                warn!(
-                    "[camera-path] {} has a non-integer `curveVertexCounts`; refusing the path",
-                    prim.path
-                );
-                continue;
+            let counts = match crate::read_curve_int_array(reader, &path, "curveVertexCounts") {
+                Ok(Some(counts)) if !counts.is_empty() => counts,
+                Ok(Some(_)) | Ok(None) | Err(()) => {
+                    error!(
+                        "[camera-path] {} has unusable authored curveVertexCounts",
+                        prim.path
+                    );
+                    continue;
+                }
             };
-            let total: usize = counts.iter().map(|count| (*count).max(0) as usize).sum();
             let Some(&first) = counts.first() else {
-                warn!(
-                    "[camera-path] {} has an empty `curveVertexCounts`; refusing the path",
+                continue;
+            };
+            let Ok(first) = usize::try_from(first) else {
+                error!(
+                    "[camera-path] {} has a negative curveVertexCounts entry",
                     prim.path
                 );
                 continue;
             };
-            if counts.iter().any(|count| *count < 2) || total != points.len() {
-                warn!(
-                    "[camera-path] {} has invalid `curveVertexCounts` {:?} for {} points; refusing the path",
-                    prim.path,
-                    counts,
-                    points.len()
+            let total = counts.iter().try_fold(0usize, |total, count| {
+                usize::try_from(*count)
+                    .ok()
+                    .and_then(|count| total.checked_add(count))
+            });
+            if first < 2 || first > points.len() || total != Some(points.len()) {
+                error!(
+                    "[camera-path] {} has curveVertexCounts inconsistent with points",
+                    prim.path
                 );
                 continue;
             }
-            let n = first as usize;
             if counts.len() > 1 {
                 warn!(
-                    "[camera-path] {} carries {} curves — driving the first ({n} pts)",
+                    "[camera-path] {} carries {} curves — driving the first ({first} pts)",
                     prim.path,
                     counts.len()
                 );
             }
-            points.truncate(n);
+            points.truncate(first);
         }
         if points.is_empty() {
             warn!("[camera-path] {} has no `points`", prim.path);
+            continue;
+        }
+        if points.iter().any(|point| !point.is_finite()) {
+            error!(
+                "[camera-path] {} has non-finite authored control points",
+                prim.path
+            );
             continue;
         }
         if points.len() < 2 {
@@ -632,93 +698,106 @@ pub fn resolve_camera_paths(
         // is diagnosing is worse than no diagnostic.
         let n_points = points.len();
 
-        let curve_type = reader.text(&path, "type");
-        let cubic = match curve_type.as_deref() {
-            Some("linear") => false,
-            Some("cubic") => true,
-            Some(other) => {
-                warn!(
-                    "[camera-path] {} has unsupported BasisCurves type `{other}`; refusing the path",
-                    prim.path
-                );
-                continue;
-            }
-            None => true,
-        };
-        let basis = match reader.text(&path, "basis").as_deref() {
-            _ if !cubic => CurveBasis::Linear,
-            // No bspline evaluator here — catmullRom is the closest interpolating
-            // stand-in (the same approximation the tube mesher takes).
-            Some("catmullRom") | Some("bspline") => CurveBasis::CatmullRom,
-            // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
-            Some("bezier") | None => CurveBasis::Bezier,
-            Some(other) => {
-                warn!(
-                    "[camera-path] {} has unsupported BasisCurves basis `{other}`; refusing the path",
-                    prim.path
-                );
-                continue;
+        let curve_type =
+            match crate::read_curve_token(reader, &path, "type", "cubic", &["linear", "cubic"]) {
+                Ok(value) => value,
+                Err(()) => continue,
+            };
+        let basis = if curve_type == "linear" {
+            CurveBasis::Linear
+        } else {
+            match crate::read_curve_token(
+                reader,
+                &path,
+                "basis",
+                "bezier",
+                &["bezier", "catmullRom"],
+            ) {
+                Ok(value) if value == "bezier" => CurveBasis::Bezier,
+                Ok(_) => CurveBasis::CatmullRom,
+                Err(()) => continue,
             }
         };
-        let periodic = match reader.text(&path, "wrap").as_deref() {
-            Some("periodic") => true,
-            Some("nonperiodic") | Some("pinned") | None => false,
-            Some(other) => {
-                warn!(
-                    "[camera-path] {} has unsupported BasisCurves wrap `{other}`; refusing the path",
-                    prim.path
-                );
-                continue;
-            }
+        let wrap = match crate::read_curve_token(
+            reader,
+            &path,
+            "wrap",
+            "nonperiodic",
+            &["nonperiodic", "periodic", "pinned"],
+        ) {
+            Ok(value) => value,
+            Err(()) => continue,
         };
-        let valid_topology = match basis {
+        if wrap == "pinned" {
+            error!(
+                "[camera-path] {} uses unsupported BasisCurves wrap=pinned",
+                prim.path
+            );
+            continue;
+        }
+        let periodic = wrap == "periodic";
+        let valid_shape = match basis {
             CurveBasis::Linear => points.len() >= 2,
             CurveBasis::CatmullRom => {
-                (periodic && points.len() >= 3) || (!periodic && points.len() >= 4)
+                if periodic {
+                    points.len() >= 3
+                } else {
+                    points.len() >= 4
+                }
             }
             CurveBasis::Bezier => {
-                (periodic && points.len() >= 3 && points.len() % 3 == 0)
-                    || (!periodic && points.len() >= 4 && (points.len() - 1) % 3 == 0)
+                if periodic {
+                    points.len() >= 3 && points.len().is_multiple_of(3)
+                } else {
+                    points.len() >= 4 && (points.len() - 1).is_multiple_of(3)
+                }
             }
         };
-        if !valid_topology {
-            warn!(
-                "[camera-path] {} has an invalid {:?} control-point topology for {} curve; refusing the path",
+        if !valid_shape {
+            error!(
+                "[camera-path] {} has a control-point count incompatible with {:?} {:?}",
                 prim.path,
                 basis,
                 if periodic { "periodic" } else { "nonperiodic" }
             );
             continue;
         }
-        // `real`, not `scalar::<f64>`: a `float lunco:path:duration = 8` would
-        // otherwise read as unauthored and silently run the shot for 60 s.
-        let Some(duration) = reader.real(&path, "lunco:path:duration") else {
-            warn!(
-                "[camera-path] {} has no composed `lunco:path:duration`; refusing the path",
-                prim.path
-            );
-            continue;
-        };
-        if !duration.is_finite() || duration <= 0.0 {
-            warn!(
-                "[camera-path] {} has invalid `lunco:path:duration` {duration}; refusing the path",
-                prim.path
-            );
-            continue;
-        }
-        // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
-        // running while the sim is paused, "sim" freezes with it (the default —
-        // authored motion is part of the scene, doc 19 §11b).
-        let on_wall = match reader.text(&path, "lunco:path:clock").as_deref() {
-            Some("real") => true,
-            Some("sim") | None => false,
-            Some(other) => {
-                warn!(
-                    "[camera-path] {} has unsupported clock `{other}`; refusing the path",
+        let duration = match reader.real(&path, "lunco:path:duration") {
+            Some(value) if value.is_finite() && value > 0.0 => value,
+            Some(value) => {
+                error!(
+                    "[camera-path] {} has invalid duration {value}; expected a finite positive value",
                     prim.path
                 );
                 continue;
             }
+            None if reader.has_authored_attribute(&path, "lunco:path:duration") => {
+                error!(
+                    "[camera-path] {} has authored duration with an unsupported value type",
+                    prim.path
+                );
+                continue;
+            }
+            None => {
+                error!(
+                    "[camera-path] {} has no composed lunco:path:duration",
+                    prim.path
+                );
+                continue;
+            }
+        };
+        // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
+        // running while the sim is paused, "sim" freezes with it (the default —
+        // authored motion is part of the scene, doc 19 §11b).
+        let on_wall = match crate::read_curve_token(
+            reader,
+            &path,
+            "lunco:path:clock",
+            "sim",
+            &["sim", "real"],
+        ) {
+            Ok(value) => value == "real",
+            Err(()) => continue,
         };
         let parent = if on_wall {
             clocks.interaction
@@ -890,7 +969,12 @@ pub fn drive_camera_paths(
         let Some(t) = resolved.get(path.domain) else {
             continue;
         };
-        let u = path_u(t, pb.start, pb.end);
+        let Some(u) = path_u(t, pb.start, pb.end) else {
+            warn_once!(
+                "[camera-path] path {curve_entity:?} has an invalid playback span — camera not driven"
+            );
+            continue;
+        };
 
         // Control points are the CURVE prim's own geometry, so they are in its
         // local space. Resolve the curve's live Grid and compose only within
@@ -921,11 +1005,20 @@ pub fn drive_camera_paths(
             );
             continue;
         };
-        let at = |u: f32| -> DVec3 {
-            let local = eval_curve(&path.points, path.basis, path.periodic, u);
-            curve_pos + curve_rot * local.as_dvec3()
+        let Some(local) = eval_curve(&path.points, path.basis, path.periodic, u) else {
+            if faults.as_deref_mut().is_some_and(|faults| {
+                faults.raise(
+                    "camera-path-invalid-curve",
+                    Some(curve_entity),
+                    "camera path",
+                    "authored curve cannot be evaluated",
+                )
+            }) {
+                error!("[camera-path] terminal runtime failure: invalid curve evaluation");
+            }
+            continue;
         };
-        let world = at(u);
+        let world = curve_pos + curve_rot * local.as_dvec3();
         if !world.is_finite() {
             if faults.as_deref_mut().is_some_and(|faults| {
                 faults.raise(
@@ -940,22 +1033,27 @@ pub fn drive_camera_paths(
             continue;
         }
 
-        // Aim, per the track in force at this instant. Both points are in the
-        // path frame, so the direction is a local-frame difference and remains
-        // small even when the site is millions of metres from the inertial root.
-        let aim_mode = path.aim_at(t);
+        let Some(aim_mode) = path.aim_at(t) else {
+            error!(
+                "[camera-path] curve {curve_entity:?} has an empty aim track — camera not driven"
+            );
+            continue;
+        };
         let mut invalid_target = false;
+        let tangent_dir = || {
+            eval_curve_tangent(&path.points, path.basis, path.periodic, u)
+                .map(|tangent| (curve_rot * tangent.as_dvec3()).as_vec3())
+        };
         let look_dir = match &aim_mode {
             AimMode::Target(target_path) => {
-                let Some(e) = live_target(target_path, &q_targets) else {
+                let Some(entity) = live_target(target_path, &q_targets) else {
                     warn_once!(
-                        "[camera-path] {curve_entity:?}: aim target {target_path} has no \
-                         live Transform-bearing entity; sample withheld"
+                        "[camera-path] {curve_entity:?}: aim target {target_path} has no live spatial entity; sample withheld"
                     );
                     continue;
                 };
                 match lunco_core::coords::pose_in_grid(
-                    e,
+                    entity,
                     target_grid,
                     &q_parents,
                     &q_grids,
@@ -968,36 +1066,43 @@ pub fn drive_camera_paths(
                             if faults.as_deref_mut().is_some_and(|faults| {
                                 faults.raise(
                                     "camera-path-nonfinite-target",
-                                    Some(e),
-                                    format!("target={e:?}"),
+                                    Some(entity),
+                                    format!("target={entity:?}"),
                                     format!("eye={world:?}, target={target:?}, look={dir:?}"),
                                 )
                             }) {
                                 error!(
-                                    "[camera-path] terminal runtime failure: non-finite target pose for {e:?}"
+                                    "[camera-path] terminal runtime failure: non-finite target pose for {entity:?}"
                                 );
                             }
                         }
-                        info_once!(
-                            "[camera-path] target aim live: eye {:?} -> target {:?}",
-                            world,
-                            target
-                        );
                         Some(dir)
                     }
                     None => {
                         warn_once!(
-                            "[camera-path] aim target {e:?} has no resolvable pose — \
-                             sample withheld"
+                            "[camera-path] aim target {entity:?} has no resolvable pose — sample withheld"
                         );
                         invalid_target = true;
                         None
                     }
                 }
             }
-            AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
-            // Hands off: position only, so free-look (or any other system) owns
-            // the rotation for this stretch.
+            AimMode::Tangent => {
+                let Some(dir) = tangent_dir() else {
+                    if faults.as_deref_mut().is_some_and(|faults| {
+                        faults.raise(
+                            "camera-path-invalid-tangent",
+                            Some(curve_entity),
+                            "camera path",
+                            "tangent sample cannot be evaluated",
+                        )
+                    }) {
+                        error!("[camera-path] terminal runtime failure: invalid tangent sample");
+                    }
+                    continue;
+                };
+                Some(dir)
+            }
             AimMode::Manual => None,
         };
 
@@ -1020,72 +1125,37 @@ pub fn drive_camera_paths(
             continue;
         }
 
-        // A target track is normally a held mode track, so a key change is an
-        // intentional cut. When the USD path authors a blend duration, resolve
-        // the preceding target at this same eye position and interpolate the
-        // two complete look rotations. This keeps the path analytic and avoids
-        // the one-frame re-aim jump without introducing a render-history filter.
+        // A positive authored blend duration creates an analytic transition
+        // between the preceding and current aim keys. Target paths remain USD
+        // identities and are resolved against live entities for this frame.
         let blended_rotation =
             path.aim_transition_at(t)
                 .and_then(|(previous_mode, current_mode, alpha)| {
-                    let previous_dir = match previous_mode {
-                        AimMode::Target(target_path) => {
-                            let Some(entity) = live_target(&target_path, &q_targets) else {
-                                invalid_target = true;
-                                return None;
-                            };
-                            let Some((target, _)) = lunco_core::coords::pose_in_grid(
-                                entity,
-                                target_grid,
-                                &q_parents,
-                                &q_grids,
-                                &q_spatial,
-                            ) else {
-                                warn_once!(
-                                "[camera-path] blend aim target {entity:?} has no resolvable pose"
-                            );
-                                invalid_target = true;
-                                return None;
-                            };
-                            Some((target - world).as_vec3())
+                    let direction_for = |mode: AimMode| -> Option<Vec3> {
+                        match mode {
+                            AimMode::Target(target_path) => {
+                                let entity = live_target(&target_path, &q_targets)?;
+                                let (target, _) = lunco_core::coords::pose_in_grid(
+                                    entity,
+                                    target_grid,
+                                    &q_parents,
+                                    &q_grids,
+                                    &q_spatial,
+                                )?;
+                                Some((target - world).as_vec3())
+                            }
+                            AimMode::Tangent => tangent_dir(),
+                            AimMode::Manual => None,
                         }
-                        AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
-                        AimMode::Manual => None,
-                    }?;
-                    // `aim_mode` is deliberately still the held preceding mode until
-                    // the key time. The blend endpoint must therefore resolve the
-                    // upcoming mode explicitly; using `look_dir` here would slerp
-                    // the old pose to itself and leave the key as a cut.
-                    let current_dir = match current_mode {
-                        AimMode::Target(target_path) => {
-                            let Some(entity) = live_target(&target_path, &q_targets) else {
-                                invalid_target = true;
-                                return None;
-                            };
-                            let Some((target, _)) = lunco_core::coords::pose_in_grid(
-                                entity,
-                                target_grid,
-                                &q_parents,
-                                &q_grids,
-                                &q_spatial,
-                            ) else {
-                                warn_once!(
-                                "[camera-path] blend aim target {entity:?} has no resolvable pose"
-                            );
-                                invalid_target = true;
-                                return None;
-                            };
-                            Some((target - world).as_vec3())
-                        }
-                        AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
-                        AimMode::Manual => None,
-                    }?;
-                    if !previous_dir.is_finite() || !current_dir.is_finite() {
-                        invalid_target = true;
-                        return None;
-                    }
-                    if previous_dir.length_squared() <= 1e-9 || current_dir.length_squared() <= 1e-9
+                    };
+                    let previous_dir = direction_for(previous_mode)?;
+                    let current_dir = direction_for(current_mode)?;
+                    if !previous_dir.is_finite()
+                        || !current_dir.is_finite()
+                        || previous_dir.length_squared() <= 1e-9
+                        || current_dir.length_squared() <= 1e-9
                     {
+                        invalid_target = true;
                         return None;
                     }
                     let previous_rotation = Transform::default()
@@ -1216,40 +1286,73 @@ pub fn apply_camera_paths(
     }
 }
 
-/// Evaluate the curve at normalised `u` ∈ [0, 1].
+/// Evaluate the curve at normalised `u` ∈ [0, 1]. Invalid authored geometry is
+/// rejected rather than replaced by a point, polygon, or other guessed curve.
 ///
 /// Uniform in the curve parameter, NOT arc length — so points spaced unevenly
 /// make the camera speed up through sparse stretches. Fine for an even orbit;
 /// a shot with clustered points wants arc-length reparameterisation (doc 50 §9.7).
-pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Vec3 {
-    assert!(
-        points.len() >= 2,
-        "camera curves require at least two control points"
-    );
+pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Option<Vec3> {
+    eval_curve_with_tangent(points, basis, periodic, u).map(|(position, _)| position)
+}
+
+/// Evaluate the curve's position and exact parametric tangent at `u`.
+///
+/// The tangent comes from the same cubic segment coefficients as the position;
+/// camera aiming and the editor overlay therefore do not depend on arbitrary
+/// finite-difference offsets.
+pub fn eval_curve_tangent(
+    points: &[Vec3],
+    basis: CurveBasis,
+    periodic: bool,
+    u: f32,
+) -> Option<Vec3> {
+    let (_, tangent) = eval_curve_with_tangent(points, basis, periodic, u)?;
+    tangent
+        .is_finite()
+        .then_some(tangent)
+        .filter(|tangent| tangent.length_squared() > f32::EPSILON)
+}
+
+fn eval_curve_with_tangent(
+    points: &[Vec3],
+    basis: CurveBasis,
+    periodic: bool,
+    u: f32,
+) -> Option<(Vec3, Vec3)> {
+    if points.len() < 2
+        || !u.is_finite()
+        || !(0.0..=1.0).contains(&u)
+        || points.iter().any(|point| !point.is_finite())
+    {
+        return None;
+    }
     match basis {
-        CurveBasis::Linear => eval_linear(points, periodic, u),
-        CurveBasis::Bezier => eval_bezier(points, periodic, u),
-        CurveBasis::CatmullRom => eval_catmull_rom(points, periodic, u),
+        CurveBasis::Linear => eval_linear_with_tangent(points, periodic, u),
+        CurveBasis::Bezier => eval_bezier_with_tangent(points, periodic, u),
+        CurveBasis::CatmullRom => eval_catmull_rom_with_tangent(points, periodic, u),
     }
 }
 
-fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_linear_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let segs = if periodic {
         points.len()
     } else {
         points.len() - 1
     };
-    let (i, f) = segment(segs, u);
+    let (i, f) = segment(segs, u)?;
     let a = points[i % points.len()];
     let b = points[(i + 1) % points.len()];
-    a.lerp(b, f)
+    let result = a.lerp(b, f);
+    let tangent = b - a;
+    (result.is_finite() && tangent.is_finite()).then_some((result, tangent))
 }
 
 /// Catmull-Rom: interpolates its control points, so the curve goes THROUGH the
 /// points you place. Periodic curves wrap. Non-periodic ones follow USD's end
 /// conditions: the first and last CVs are TANGENT PHANTOMS, so the curve spans
 /// p₁…pₙ₋₂ with `n − 3` segments (UsdGeomBasisCurves segment counting). Fewer
-/// than 4 CVs cannot form an open cubic segment and are rejected.
+/// than 4 CVs cannot form a cubic segment and are rejected.
 ///
 /// The numeric core is `bevy_math`'s [`CubicCardinalSpline`] at tension 0.5 —
 /// the same generator `lunco-celestial/src/trajectories.rs` uses, and the same
@@ -1261,22 +1364,21 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 ///   whereas USD says the authored ends ARE the phantoms, so sampling starts
 ///   one segment in — `t = 1 + u·(n − 3)` — and bevy's mirrored end segments
 ///   are never touched.
-fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_catmull_rom_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let n = points.len();
-    assert!(
-        (periodic && n >= 3) || (!periodic && n >= 4),
-        "invalid Catmull-Rom control-point topology"
-    );
-    let u = u.clamp(0.0, 1.0);
+    if (!periodic && n < 4) || (periodic && n < 3) {
+        return None;
+    }
     let spline = CubicCardinalSpline::new_catmull_rom(points.iter().copied());
-    let sampled = if periodic {
-        spline.to_curve_cyclic().map(|c| c.position(u * n as f32))
+    let (sampled, tangent) = if periodic {
+        let curve = spline.to_curve_cyclic().ok()?;
+        (curve.position(u * n as f32), curve.velocity(u * n as f32))
     } else {
-        spline
-            .to_curve()
-            .map(|c| c.position(1.0 + u * (n - 3) as f32))
+        let curve = spline.to_curve().ok()?;
+        let t = 1.0 + u * (n - 3) as f32;
+        (curve.position(t), curve.velocity(t))
     };
-    sampled.expect("validated camera-path control points must produce a Catmull-Rom curve")
+    (sampled.is_finite() && tangent.is_finite()).then_some((sampled, tangent))
 }
 
 /// Cubic Bezier: 4 CVs per segment, consecutive segments sharing an endpoint.
@@ -1285,17 +1387,18 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// carries `4 + 3(segs − 1)` CVs, a `periodic` one exactly `3·segs`. The
 /// periodic form authors no closing CV — the final segment borrows the first CV
 /// back as its endpoint, which is what makes the loop close rather than stop.
-/// A control-point count that cannot form a complete segment is rejected.
+/// Too few CVs to form even one cubic segment, or a non-periodic count that is
+/// not `4 + 3n`, is rejected.
 ///
 /// Segment windows are gathered here (that indexing IS the USD wrapping rule);
 /// the Bernstein evaluation itself is `bevy_math`'s [`CubicBezier`].
-fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
+fn eval_bezier_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(Vec3, Vec3)> {
     let n = points.len();
     let segs = if periodic { n / 3 } else { (n - 1) / 3 };
-    assert!(
-        (periodic && n >= 3 && n % 3 == 0) || (!periodic && n >= 4 && (n - 1) % 3 == 0),
-        "invalid Bezier control-point topology"
-    );
+    if segs == 0 || (periodic && !n.is_multiple_of(3)) || (!periodic && !(n - 1).is_multiple_of(3))
+    {
+        return None;
+    }
     // Wrapping the index is the whole of periodicity here: only the closing
     // segment's `b + 3` ever reaches `n`, and there it lands back on CV 0.
     let windows = (0..segs).map(|i| {
@@ -1307,20 +1410,25 @@ fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
             points[(b + 3) % n],
         ]
     });
-    match CubicBezier::new(windows).to_curve() {
-        Ok(curve) => curve.position(u.clamp(0.0, 1.0) * segs as f32),
-        Err(error) => {
-            panic!("validated camera-path control points must produce a Bezier curve: {error:?}")
-        }
-    }
+    let curve = CubicBezier::new(windows).to_curve().ok()?;
+    let t = u * segs as f32;
+    let sampled = curve.position(t);
+    let tangent = curve.velocity(t);
+    (sampled.is_finite() && tangent.is_finite()).then_some((sampled, tangent))
 }
 
 /// Split `u` into (segment index, local fraction).
-fn segment(segs: usize, u: f32) -> (usize, f32) {
-    let segs = segs.max(1);
-    let x = (u.clamp(0.0, 1.0)) * segs as f32;
-    let i = (x.floor() as usize).min(segs - 1);
-    (i, x - i as f32)
+fn segment(segs: usize, u: f32) -> Option<(usize, f32)> {
+    if segs == 0 || !u.is_finite() || !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let x = u * segs as f32;
+    let i = if u == 1.0 {
+        segs - 1
+    } else {
+        x.floor() as usize
+    };
+    Some((i, x - i as f32))
 }
 
 #[cfg(test)]
@@ -1345,7 +1453,7 @@ mod tests {
         let p = ring();
         for (i, want) in p.iter().enumerate() {
             let u = i as f32 / p.len() as f32; // periodic: 4 segments
-            let got = eval_curve(&p, CurveBasis::CatmullRom, true, u);
+            let got = eval_curve(&p, CurveBasis::CatmullRom, true, u).expect("valid curve");
             assert!(
                 (got - *want).length() < 1e-5,
                 "u={u} got {got:?} want {want:?}"
@@ -1356,8 +1464,8 @@ mod tests {
     #[test]
     fn periodic_curve_closes_without_a_seam() {
         let p = ring();
-        let start = eval_curve(&p, CurveBasis::CatmullRom, true, 0.0);
-        let end = eval_curve(&p, CurveBasis::CatmullRom, true, 1.0);
+        let start = eval_curve(&p, CurveBasis::CatmullRom, true, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::CatmullRom, true, 1.0).expect("valid curve");
         assert!(
             (start - end).length() < 1e-5,
             "loop must close: {start:?} vs {end:?}"
@@ -1378,8 +1486,8 @@ mod tests {
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(3.0, 0.0, 0.0), // tangent phantom
         ];
-        let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0);
-        let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0);
+        let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0).expect("valid curve");
         assert!(
             (start - p[1]).length() < 1e-5,
             "u=0 is p1, not the phantom p0"
@@ -1389,21 +1497,35 @@ mod tests {
             "u=1 is pₙ₋₂, not the phantom pₙ₋₁"
         );
         // Interior knot: n − 3 = 2 segments, so u = 0.5 sits exactly on p2.
-        let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5);
+        let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5).expect("valid curve");
         assert!((mid - p[2]).length() < 1e-5, "interior knot interpolated");
     }
 
-    /// Fewer than 4 CVs cannot form an open cubic segment and must fail loudly
-    /// instead of being silently reinterpreted as a linear path.
+    /// Fewer than 4 CVs cannot form an open cubic segment and are rejected rather
+    /// than being silently changed into a polygon.
     #[test]
-    #[should_panic(expected = "invalid Catmull-Rom control-point topology")]
     fn open_catmull_rom_under_four_cvs_is_rejected() {
         let p = vec![
             Vec3::ZERO,
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(2.0, 2.0, 0.0),
         ];
-        let _ = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
+        assert!(eval_curve(&p, CurveBasis::CatmullRom, false, 0.25).is_none());
+    }
+
+    #[test]
+    fn malformed_curve_inputs_are_rejected_without_geometry_fallback() {
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::ONE,
+            Vec3::NEG_X,
+        ];
+        assert!(eval_curve(&p, CurveBasis::Bezier, false, 0.5).is_none());
+        assert!(eval_curve(&p, CurveBasis::Linear, false, 1.1).is_none());
+        assert!(eval_curve(&[Vec3::NAN, Vec3::X], CurveBasis::Linear, false, 0.5).is_none());
     }
 
     #[test]
@@ -1413,8 +1535,8 @@ mod tests {
         // toward the true circle — i.e. it is not a 12-gon.
         let p = ring();
         let u = 0.125; // midpoint of the first periodic segment
-        let lin = eval_curve(&p, CurveBasis::Linear, true, u);
-        let cr = eval_curve(&p, CurveBasis::CatmullRom, true, u);
+        let lin = eval_curve(&p, CurveBasis::Linear, true, u).expect("valid curve");
+        let cr = eval_curve(&p, CurveBasis::CatmullRom, true, u).expect("valid curve");
         let r_lin = (lin.x * lin.x + lin.z * lin.z).sqrt();
         let r_cr = (cr.x * cr.x + cr.z * cr.z).sqrt();
         assert!(r_lin < 0.72, "chord midpoint should cut inside: {r_lin}");
@@ -1426,13 +1548,37 @@ mod tests {
     }
 
     #[test]
+    fn tangent_comes_from_the_curve_derivative() {
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::new(2.0, 1.0, 0.0),
+            Vec3::new(3.0, 1.0, 0.0),
+        ];
+        let tangent = eval_curve_tangent(&p, CurveBasis::Linear, false, 0.25)
+            .expect("non-degenerate linear tangent");
+        assert_eq!(tangent, Vec3::X);
+        assert!(
+            eval_curve_tangent(&[Vec3::ZERO, Vec3::ZERO], CurveBasis::Linear, false, 0.5).is_none()
+        );
+    }
+
+    #[test]
     fn path_u_is_a_pure_function_of_domain_time() {
         // The determinism property the fixed-cadence + `overstep_fraction()` design
         // did NOT have: the pose depends on the domain clock and nothing else, so a
         // given `t` maps to a given point on the curve regardless of frame timing,
         // frame rate, or how many fixed steps the frame happened to run.
         let p = ring();
-        let sample = |t: f64| eval_curve(&p, CurveBasis::CatmullRom, true, path_u(t, 0.0, 8.0));
+        let sample = |t: f64| {
+            eval_curve(
+                &p,
+                CurveBasis::CatmullRom,
+                true,
+                path_u(t, 0.0, 8.0).expect("valid playback span"),
+            )
+            .expect("valid curve")
+        };
         assert_eq!(sample(3.0), sample(3.0), "same t ⇒ same pose, bit for bit");
         // …and distinct times genuinely move the camera (the multi-fixed-step defect
         // was `prev == target`, i.e. two evaluations that could not differ).
@@ -1443,25 +1589,11 @@ mod tests {
     }
 
     #[test]
-    fn path_u_clamps_and_survives_a_degenerate_span() {
-        assert_eq!(
-            path_u(-5.0, 0.0, 10.0),
-            0.0,
-            "before the span clamps to the start"
-        );
-        assert_eq!(
-            path_u(50.0, 0.0, 10.0),
-            1.0,
-            "after the span clamps to the end"
-        );
-        assert!((path_u(5.0, 0.0, 10.0) - 0.5).abs() < 1e-6);
-        // A zero-length `Playback` span must not divide by zero and produce NaN — a
-        // NaN `u` propagates into the camera's Transform and the view goes black,
-        // which is a spectacularly unhelpful symptom for "duration = 0".
-        assert!(
-            path_u(1.0, 4.0, 4.0).is_finite(),
-            "degenerate span must stay finite"
-        );
+    fn path_u_clamps_and_rejects_a_degenerate_span() {
+        assert_eq!(path_u(-5.0, 0.0, 10.0), Some(0.0));
+        assert_eq!(path_u(50.0, 0.0, 10.0), Some(1.0));
+        assert!((path_u(5.0, 0.0, 10.0).expect("valid span") - 0.5).abs() < 1e-6);
+        assert!(path_u(1.0, 4.0, 4.0).is_none());
     }
 
     #[test]
@@ -1504,8 +1636,14 @@ mod tests {
             Vec3::new(1.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
         ];
-        assert!((eval_curve(&p, CurveBasis::Bezier, false, 0.0) - p[0]).length() < 1e-5);
-        assert!((eval_curve(&p, CurveBasis::Bezier, false, 1.0) - p[3]).length() < 1e-5);
+        assert!(
+            (eval_curve(&p, CurveBasis::Bezier, false, 0.0).expect("valid curve") - p[0]).length()
+                < 1e-5
+        );
+        assert!(
+            (eval_curve(&p, CurveBasis::Bezier, false, 1.0).expect("valid curve") - p[3]).length()
+                < 1e-5
+        );
     }
 
     /// `wrap = "periodic"` means the closing segment ends on CV 0, so `u = 1`
@@ -1521,16 +1659,18 @@ mod tests {
             Vec3::new(2.0, -1.0, 0.0),
             Vec3::new(1.0, -1.0, 0.0),
         ];
-        let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0);
-        let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0);
+        let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0).expect("valid curve");
+        let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0).expect("valid curve");
         assert!((start - p[0]).length() < 1e-5, "periodic start is CV 0");
         assert!(
             (end - start).length() < 1e-5,
             "periodic end wraps back onto the start"
         );
-        // An open path needs its own complete 4-CV topology; the periodic
-        // six-CV topology is not silently truncated or reinterpreted.
-        let open_end = eval_curve(&p[..4], CurveBasis::Bezier, false, 1.0);
+        // A periodic six-CV path is not a valid nonperiodic cubic (the latter
+        // requires 4 + 3(n - 1) control points), so it must not silently drop
+        // the trailing two points. A valid four-CV open path ends on CV 3.
+        assert!(eval_curve(&p, CurveBasis::Bezier, false, 1.0).is_none());
+        let open_end = eval_curve(&p[..4], CurveBasis::Bezier, false, 1.0).expect("valid curve");
         assert!(
             (open_end - p[3]).length() < 1e-5,
             "nonperiodic stops at its last endpoint"

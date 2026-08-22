@@ -192,6 +192,7 @@ pub fn spawn_usd_entry(
 
     let mut ent = commands.spawn((
         Name::new(entry.display_name.clone()),
+        lunco_core::CatalogEntryId(entry.id.clone()),
         lunco_core::SelectableRoot,
         // Seeds hierarchical instance identity (gap G2/B.1): the USD loader
         // gives this runtime spawn's descendants `Derived` ids off this root's

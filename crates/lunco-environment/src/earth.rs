@@ -107,6 +107,8 @@ pub fn compute_local_earth(
         }
     }
     if q_targets.is_empty() {
+        *warned = false;
+        *missing_frames = 0;
         return;
     }
     // Absent OR degenerate is the same fact: nobody has told us where Earth is.

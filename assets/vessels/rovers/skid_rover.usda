@@ -376,10 +376,26 @@ def Xform "SkidRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
-            # Nothing motor-side belongs here. The motors name their WHEELS on the
-            # motor prims above, in both realizations; this variant only adds the
-            # articulation root and the per-wheel revolute joints the loader reaches
-            # by following wheel → joint.
+            # Physical wheels are rigid axles. Replace the compliant raycast
+            # suspension arc with the explicit rigid-mount component; leaving the
+            # standard arc composed would make the physical projection claim a
+            # spring it does not integrate.
+            over "Wheel_FL" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_FR" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_RL" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
+            over "Wheel_RR" (
+                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
+            ) {}
         }
     }
 
@@ -618,7 +634,6 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_FL>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FL>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -626,7 +641,6 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_RL>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RL>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalLeft.connectors:port>
                 }
@@ -647,7 +661,6 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_FR>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_FR>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }
@@ -655,7 +668,6 @@ def Xform "SkidRover" (
                     prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
                 )
                 {
-                    prepend rel lunco:telemetry:owner = </SkidRover/Motor_RR>
                     float inputs:heat_w.connect = </SkidRover/Thermal.inputs:motor_heat_RR>
                     custom token connectors:port.connect = </SkidRover/Thermal/MotorThermalRight.connectors:port>
                 }

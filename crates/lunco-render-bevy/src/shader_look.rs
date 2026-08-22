@@ -615,7 +615,7 @@ mod tests {
             app.world().resource::<Assets<Image>>()
         ));
 
-        material.height_map = Some(image.clone());
+        material.height_map = Some(image);
         assert!(material_texture_dependencies_ready(
             &material,
             app.world().resource::<Assets<Image>>()

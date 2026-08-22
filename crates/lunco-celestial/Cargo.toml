@@ -26,8 +26,8 @@ embed-assets = []
 #   cargo tree -p lunco-celestial -i bevy_pbr
 #   cargo tree -p lunco-celestial -i bevy_core_pipeline
 # Dropped with it: `bevy_post_process`/`bevy_anti_alias`/`smaa_luts` (the observer
-# camera's `Bloom` was a no-op on a non-HDR target — review `R4` — and SMAA was
-# already gone; MSAA/tonemapping now come from `SceneCamera`) and `tonemapping_luts`.
+# camera's concrete post-process binding belongs to `lunco-render-bevy`; MSAA and
+# tonemapping intent now come from `SceneCamera`) and `tonemapping_luts`.
 #
 # Also dropped: `bevy_text`/`bevy_sprite_render`/`default_font`. They were here for
 # ONE billboard `Text2d` on a spacecraft — and `bevy_sprite_render` pulls
