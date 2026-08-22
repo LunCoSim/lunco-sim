@@ -62,12 +62,17 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // that must reach them without the `AssetServer` (scenario sync, shader
     // pre-validation, file dialogs) cannot disagree with the readers.
     let schemes = crate::scheme_registry::SchemeRegistry::default();
-    schemes.register(crate::LUNCO_SCHEME, move |rel| Some(assets_dir.join(rel)));
+    schemes.register(crate::LUNCO_SCHEME, move |rel| {
+        crate::asset_path::is_safe_relative_path(rel).then(|| assets_dir.join(rel))
+    });
     let roots = twin_roots.clone();
     schemes.register(crate::TWIN_SCHEME, move |rest| {
         // `twin://<name>/<rel>` — the name selects the root, so this handler is
         // stateful where `lunco://`'s is constant.
         let (name, rel) = crate::split_twin_rel(rest)?;
+        if !crate::asset_path::is_safe_relative_path(rel) {
+            return None;
+        }
         let root = roots.root_of(name)?;
         let authored = root.join(rel);
         if authored.exists() {
