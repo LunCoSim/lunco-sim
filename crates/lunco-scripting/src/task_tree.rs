@@ -15,7 +15,8 @@
 //! - `act` runs every tick while the leaf is live (`once` completes on the
 //!   first tick, so its action runs once);
 //! - explicit leaf kinds select exactly one contract: `once`, `step`, `act_for`,
-//!   `wait`, `wait_until`, `wait_for`, `wait_for_from`, or `check`; a missing
+//!   `act_until_event`, `wait`, `wait_until`, `wait_for`, `wait_for_from`, or
+//!   `check`; a missing
 //!   kind or a field belonging to another kind is rejected at compile time;
 //! - dwell is entry-stamped and cleared on [`Node::reset`] so `repeat`/`forever`
 //!   re-dwell; event matching uses name + optional source, with a string source
@@ -49,6 +50,7 @@ const INTERNAL_TASK_MARKER: &str = "__bt";
 const KIND_ONCE: &str = "once";
 const KIND_STEP: &str = "step";
 const KIND_ACT_FOR: &str = "act_for";
+const KIND_ACT_UNTIL_EVENT: &str = "act_until_event";
 const KIND_WAIT: &str = "wait";
 const KIND_WAIT_UNTIL: &str = "wait_until";
 const KIND_WAIT_FOR: &str = "wait_for";
@@ -76,6 +78,7 @@ enum TaskKind {
     Once,
     Step,
     ActFor,
+    ActUntilEvent,
     Wait,
     WaitUntil,
     WaitFor,
@@ -101,6 +104,7 @@ impl TaskKind {
             KIND_ONCE => Ok(Self::Once),
             KIND_STEP => Ok(Self::Step),
             KIND_ACT_FOR => Ok(Self::ActFor),
+            KIND_ACT_UNTIL_EVENT => Ok(Self::ActUntilEvent),
             KIND_WAIT => Ok(Self::Wait),
             KIND_WAIT_UNTIL => Ok(Self::WaitUntil),
             KIND_WAIT_FOR => Ok(Self::WaitFor),
@@ -188,7 +192,7 @@ enum SrcSpec {
     Path(String),
 }
 
-/// Leaf node: the explicit `once`/`step`/`act_for`/`wait`/`wait_until`/
+/// Leaf node: the explicit `once`/`step`/`act_for`/`act_until_event`/`wait`/`wait_until`/
 /// `wait_for`/`check` map shapes.
 struct Leaf {
     act: Option<FnPtr>,
@@ -356,6 +360,14 @@ fn leaf_for(kind: TaskKind, m: &Map) -> Result<Leaf, String> {
             None,
             SrcSpec::Any,
         ),
+        TaskKind::ActUntilEvent => (
+            Some(required_fnptr_field(m, ACTION_FIELD)?),
+            None,
+            None,
+            None,
+            Some(event_field(m)?),
+            source_field(m)?,
+        ),
         TaskKind::Wait => (
             None,
             None,
@@ -420,6 +432,7 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         TaskKind::Once => &[ACTION_FIELD][..],
         TaskKind::Step => &[ACTION_FIELD, DONE_FIELD][..],
         TaskKind::ActFor => &[ACTION_FIELD, SECONDS_FIELD][..],
+        TaskKind::ActUntilEvent => &[ACTION_FIELD, EVENT_FIELD, SOURCE_FIELD][..],
         TaskKind::Wait => &[SECONDS_FIELD][..],
         TaskKind::WaitUntil => &[DONE_FIELD][..],
         TaskKind::WaitFor => &[EVENT_FIELD][..],
@@ -443,6 +456,7 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         TaskKind::Once
             | TaskKind::Step
             | TaskKind::ActFor
+            | TaskKind::ActUntilEvent
             | TaskKind::Wait
             | TaskKind::WaitUntil
             | TaskKind::WaitFor
@@ -479,6 +493,7 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         TaskKind::Once
         | TaskKind::Step
         | TaskKind::ActFor
+        | TaskKind::ActUntilEvent
         | TaskKind::Wait
         | TaskKind::WaitUntil
         | TaskKind::WaitFor
@@ -603,6 +618,26 @@ mod tests {
             Status::Running,
             "wrong name must not match"
         );
+        ctx.events = vec![("GO".into(), 42)];
+        assert_eq!(node.tick(&mut ctx), Status::Success);
+    }
+
+    #[test]
+    fn act_until_event_requires_the_named_source() {
+        let tree = tagged(
+            "act_until_event",
+            &[
+                ("act", Dynamic::from(FnPtr::new("noop").unwrap())),
+                ("event", "GO".into()),
+                ("src", "launcher".into()),
+            ],
+        );
+        let mut node = compile_node(&tree).unwrap();
+        let mut ctx = FakeCtx {
+            now: 0.0,
+            events: vec![("GO".into(), 7)],
+        };
+        assert_eq!(node.tick(&mut ctx), Status::Running);
         ctx.events = vec![("GO".into(), 42)];
         assert_eq!(node.tick(&mut ctx), Status::Success);
     }

@@ -4,40 +4,25 @@
 // dwell timing, event delivery, and fixed-step progression. Return the tree
 // from `task(me)`; do not implement a second cursor in `on_tick`.
 
-// These are the only script-side spellings of the task schema discriminators.
-// They are data tags at the Rhai-to-Rust boundary, not user-facing mission
-// text; `lunco-scripting/src/task_tree.rs` parses them immediately into its
-// typed runtime enum.
-const TASK_KIND_SEQ = "seq";
-const TASK_KIND_ALL = "all";
-const TASK_KIND_RACE = "race";
-const TASK_KIND_REPEAT = "repeat";
-const TASK_KIND_FOREVER = "forever";
-const TASK_KIND_SEL = "sel";
-const TASK_KIND_RETRY = "retry";
-const TASK_KIND_INVERT = "invert";
-const TASK_KIND_FORCE_OK = "force_ok";
-const TASK_KIND_FORCE_FAIL = "force_fail";
-const TASK_KIND_REACTIVE_SEQ = "reactive_seq";
-const TASK_KIND_REACTIVE_SEL = "reactive_sel";
-const TASK_KIND_STEP = "step";
-const TASK_KIND_ONCE = "once";
-const TASK_KIND_ACT_FOR = "act_for";
-const TASK_KIND_WAIT = "wait";
-const TASK_KIND_WAIT_UNTIL = "wait_until";
-const TASK_KIND_WAIT_FOR = "wait_for";
-const TASK_KIND_WAIT_FOR_FROM = "wait_for_from";
-const TASK_KIND_CHECK = "check";
+// The constructors below are the only script-side spellings of the task
+// schema discriminators. They are data tags at the Rhai-to-Rust boundary, not
+// user-facing mission text; `lunco-scripting/src/task_tree.rs` parses them
+// immediately into its typed runtime enum. Keep the tags in these constructors
+// rather than top-level Rhai constants: indirect prelude calls do not resolve
+// top-level constants in the runtime's separate function-call scope.
 
 /// Step constructors (sugar over the map literals; all optional to use).
-fn step(act, done) { #{ kind: TASK_KIND_STEP, act: act, done: done } }
-fn once(act)       { #{ kind: TASK_KIND_ONCE, act: act } }
-fn act_for(act, secs) { #{ kind: TASK_KIND_ACT_FOR, act: act, secs: secs } }
-fn wait(secs)      { #{ kind: TASK_KIND_WAIT, secs: secs } }
-fn wait_until(done){ #{ kind: TASK_KIND_WAIT_UNTIL, done: done } }
-fn wait_for(event) { #{ kind: TASK_KIND_WAIT_FOR, event: event } }
+fn step(act, done) { #{ kind: "step", act: act, done: done } }
+fn once(act)       { #{ kind: "once", act: act } }
+fn act_for(act, secs) { #{ kind: "act_for", act: act, secs: secs } }
+fn act_until_event(act, event, src) {
+    #{ kind: "act_until_event", act: act, event: event, src: src }
+}
+fn wait(secs)      { #{ kind: "wait", secs: secs } }
+fn wait_until(done){ #{ kind: "wait_until", done: done } }
+fn wait_for(event) { #{ kind: "wait_for", event: event } }
 fn wait_for_from(event, src) {
-    #{ kind: TASK_KIND_WAIT_FOR_FROM, event: event, src: src }
+    #{ kind: "wait_for_from", event: event, src: src }
 }
 // This is the built-in "do X, wait until Y, then Z" capability available to
 // every script:
@@ -61,7 +46,7 @@ fn wait_for_from(event, src) {
 // for external event policy; task event waits are delivered by the kernel.
 
 // A task is a TREE of nodes. Leaves are the Layer-1 step maps (once/step/
-// act_for/wait/wait_until/wait_for); composites nest other nodes:
+// act_for/act_until_event/wait/wait_until/wait_for); composites nest other nodes:
 //   seq([a, b, c])      run in order, advance when each is done
 //   par_all([a, b])     run concurrently, done when ALL are done
 //   par_race([a, b])    run concurrently, done when ANY is done
@@ -94,21 +79,21 @@ fn __task_decorator(kind, body) { #{ kind: kind, body: body } }
 
 /// Node constructors (return the root from `task(me)`, or assign it once in
 /// `on_start` when setup needs to happen first).
-fn seq(items)      { __task_composite(TASK_KIND_SEQ, items) }
-fn par_all(items)  { __task_composite(TASK_KIND_ALL, items) }
-fn par_race(items) { __task_composite(TASK_KIND_RACE, items) }
-fn repeat(n, body) { let out = __task_decorator(TASK_KIND_REPEAT, body); out.n = n; out }
-fn forever(body)   { __task_decorator(TASK_KIND_FOREVER, body) }
-fn sel(items)      { __task_composite(TASK_KIND_SEL, items) }
-fn retry(n, body)  { let out = __task_decorator(TASK_KIND_RETRY, body); out.n = n; out }
-fn invert(body)    { __task_decorator(TASK_KIND_INVERT, body) }
-fn force_ok(body)  { __task_decorator(TASK_KIND_FORCE_OK, body) }
-fn force_fail(body){ __task_decorator(TASK_KIND_FORCE_FAIL, body) }
-fn reactive_seq(items) { __task_composite(TASK_KIND_REACTIVE_SEQ, items) }
-fn reactive_sel(items) { __task_composite(TASK_KIND_REACTIVE_SEL, items) }
+fn seq(items)      { __task_composite("seq", items) }
+fn par_all(items)  { __task_composite("all", items) }
+fn par_race(items) { __task_composite("race", items) }
+fn repeat(n, body) { let out = __task_decorator("repeat", body); out.n = n; out }
+fn forever(body)   { __task_decorator("forever", body) }
+fn sel(items)      { __task_composite("sel", items) }
+fn retry(n, body)  { let out = __task_decorator("retry", body); out.n = n; out }
+fn invert(body)    { __task_decorator("invert", body) }
+fn force_ok(body)  { __task_decorator("force_ok", body) }
+fn force_fail(body){ __task_decorator("force_fail", body) }
+fn reactive_seq(items) { __task_composite("reactive_seq", items) }
+fn reactive_sel(items) { __task_composite("reactive_sel", items) }
 /// Predicate leaf that can FAIL (for sel/retry/invert): Success when the
 /// predicate is true, Failure when false — unlike wait_until, which waits.
-fn check(pred)     { #{ kind: TASK_KIND_CHECK, check: pred } }
+fn check(pred)     { #{ kind: "check", check: pred } }
 
 /// Engine driver — buffer an event for a declarative `mission(me)`'s
 /// `requires_event` objectives. (The task tree's `wait_for` leaves are fed

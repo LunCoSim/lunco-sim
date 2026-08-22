@@ -169,6 +169,6 @@ fn task(me) {
         step(Fn("lander_drive_gate_1"), Fn("lander_gate_1_done")),
         step(Fn("lander_drive_gate_2"), Fn("lander_gate_2_done")),
         step(Fn("lander_drive_gate_3"), Fn("lander_gate_3_done")),
-        #{ act: Fn("lander_brake"), secs: 1.0 },
+        act_for(Fn("lander_brake"), 1.0),
     ])
 }

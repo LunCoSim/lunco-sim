@@ -52,6 +52,33 @@ fn embedded_prelude_files_all_parse() {
 }
 
 #[test]
+fn authored_timeline_requires_one_explicit_operation() {
+    let source = lunco_assets::scripting::prelude_files()
+        .into_iter()
+        .map(|(_, source)| source)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let engine = runtime_engine();
+
+    let valid = engine
+        .eval::<i64>(&format!(
+            "{source}\ncompile_timeline([#{{ wait: 1.0 }}]).len()"
+        ))
+        .expect("a single explicit timeline operation must lower");
+    assert_eq!(valid, 1);
+
+    for invalid in [
+        "compile_timeline([#{}])",
+        "compile_timeline([#{ wait: 1.0, emit: \"AMBIGUOUS\" }])",
+    ] {
+        let error = engine
+            .eval::<rhai::Dynamic>(&format!("{source}\n{invalid}"))
+            .expect_err("timeline operation ambiguity must be rejected");
+        assert!(error.to_string().contains("operation word"), "{error}");
+    }
+}
+
+#[test]
 fn set_property_helper_uses_the_reflected_command_fields() {
     let (_, src) = lunco_assets::scripting::prelude_files()
         .into_iter()
@@ -182,7 +209,7 @@ fn link_policy_allows_rover_earth_or_relay() {
 /// change to either compiles perfectly well on its own.
 #[test]
 fn readiness_policy_agrees_with_the_engines_builtin() {
-    use lunco_readiness::{kinds, Action, Subject};
+    use lunco_readiness::{Action, Subject, kinds};
 
     let (_, src) = lunco_assets::scripting::policies()
         .into_iter()

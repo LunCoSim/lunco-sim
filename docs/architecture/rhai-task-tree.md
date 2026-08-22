@@ -23,6 +23,7 @@ policy only when they obey this same schema.
 | `once` | `act` | Call the action once, then succeed. |
 | `step` | `act`, `done` | Call the action while the predicate is false. |
 | `act_for` | `act`, `secs` | Call the action while the simulation dwell is active. |
+| `act_until_event` | `act`, `event`, `src` | Call the action until the named event arrives from the specified gid or path. |
 | `wait` | `secs` | Succeed after the simulation dwell. |
 | `wait_until` | `done` | Succeed when the predicate returns true. |
 | `wait_for` | `event` | Succeed when any emitter produces the event name. |

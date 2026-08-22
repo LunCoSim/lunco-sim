@@ -211,8 +211,29 @@ fn timeline_subject(m, s) {
     ()
 }
 
+/// Enumerate the operation words present on one data step. A timeline step is
+/// a tagged union: exactly one operation word is required. This check is shared
+/// by authored timelines and generated `RunTimeline` data, so the direct Rhai
+/// path cannot silently choose a branch because two fields happen to be set.
+fn __timeline_operations(s) {
+    let out = [];
+    if s.move_to != () { out.push("move_to"); }
+    if s.move_to_entity != () { out.push("move_to_entity"); }
+    if s.possess != () { out.push("possess"); }
+    if s.brake != () { out.push("brake"); }
+    if s.cmd != () { out.push("cmd"); }
+    if s.emit != () { out.push("emit"); }
+    if s.wait != () { out.push("wait"); }
+    if s.wait_event != () { out.push("wait_event"); }
+    out
+}
+
 /// Lower ONE data step to an explicit task leaf (closures capture its fields).
 fn timeline_step(s) {
+    let ops = __timeline_operations(s);
+    if ops.len() == 0 { throw "timeline step requires one operation word"; }
+    if ops.len() != 1 { throw "timeline step requires exactly one operation word"; }
+
     if s.move_to != () {
         let wp  = s.move_to;
         let spd = if s.speed  != () { s.speed  } else { 1.0 };

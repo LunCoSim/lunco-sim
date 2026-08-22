@@ -129,8 +129,8 @@ fn task(me) {
         // ~2.3 m back. Aiming short, not just braking, is what puts it on the flag.
         step(Fn("first_drive_creep"), Fn("first_drive_creep_done")),
         // Brake and HOLD for a couple of sim-seconds so it parks instead of coasting.
-        // A raw step map: `act` re-brakes every tick while the `secs` dwell holds the
-        // step, so the brake persists (a single pulse would let it roll onward).
-        #{ act: Fn("first_drive_brake"), secs: 2.0 },
+        // `act_for` re-brakes every tick while the dwell holds the step, so the
+        // brake persists (a single pulse would let it roll onward).
+        act_for(Fn("first_drive_brake"), 2.0),
     ])
 }
