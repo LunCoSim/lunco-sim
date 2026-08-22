@@ -215,6 +215,20 @@ impl TwinMode {
         if manifest_path.is_file() {
             let manifest = TwinManifest::read(&manifest_path)?;
 
+            if let Some(default_scene) = manifest
+                .usd
+                .as_ref()
+                .and_then(|usd| usd.default_scene.as_deref())
+            {
+                let scene_path = twin.root.join(default_scene);
+                if !is_safe_child_path(Path::new(default_scene)) {
+                    return Err(TwinError::PathOutsideRoot {
+                        path: scene_path,
+                        root: twin.root.clone(),
+                    });
+                }
+            }
+
             // Recursively open children with local paths. External URL
             // children are left for the future remote-twin pipeline;
             // they stay on the manifest but don't produce a loaded
@@ -779,6 +793,26 @@ version = "0.1.0"
 [[children]]
 name = "outside"
 path = "../outside"
+"#,
+        );
+
+        assert!(matches!(
+            TwinMode::open(tmp.path()),
+            Err(TwinError::PathOutsideRoot { .. })
+        ));
+    }
+
+    #[test]
+    fn default_scene_cannot_escape_the_twin_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "parent"
+version = "0.1.0"
+
+[usd]
+default_scene = "../outside.usda"
 "#,
         );
 
