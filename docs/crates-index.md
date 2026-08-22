@@ -126,8 +126,7 @@ Primary entry points and simulation assembly targets.
 
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
-| **`luncosim`** | `luncosim` | The flagship windowed simulator: celestial bodies + ephemeris, solar-system-scale `big_space`, orbital camera, and the full FSW/hardware/mobility/robotics/avatar stack under the workbench. |
-| **`lunco-luncosim`** | `luncosim` | Ground-physics test bed (ground mobility + physics, loaded from USD): USD scene + Avian physics and luncosim edit tools. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
+| **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, and the embedded Modelica workbench. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica`** | `lunica`, `lunica_worker`, `msl_indexer` | The Modelica workbench app + its wasm worker and MSL index builder. |
 
@@ -311,11 +310,8 @@ Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** hal
 
 ### Applications
 
-**`luncosim`**
-The flagship windowed application and full lunar-mission simulator. Assembles celestial bodies + ephemeris, solar-system-scale `big_space`, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. (cf. `luncosim` = ground-physics test bed, `lunica` = Modelica workbench.)
-
 **`lunco-luncosim`**
-The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries. (Historically this crate's README mis-titled it "lunco-client"; the package name is `lunco-luncosim`.)
+The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
 
 **`lunco-luncosim-server`**
 Headless launcher for the luncosim — the same app as `luncosim`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).

@@ -1,5 +1,7 @@
 # Lander actuation and Modelica network architecture
 
+> Status: Active · Audience: contributors on lander propulsion, actuation, and Modelica/Avian co-simulation
+
 This is the canonical boundary for a powered lander. The airframe, control law,
 propulsion, physical actuator placement, and physics engine are separate
 projections of one composed USD design.

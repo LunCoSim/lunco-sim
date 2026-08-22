@@ -32,7 +32,7 @@
 - [9. Window & layout persistence](#9-window--layout-persistence)
 - [10. Theming and keybinds](#10-theming-and-keybinds)
 - [11. Relationship to `lunco-ui` and domain crates](#11-relationship-to-lunco-ui-and-domain-crates)
-- [12. Three LunCoSim apps, different compositions](#12-three-luncosim-apps-different-compositions)
+- [12. Workbench apps and the headless launcher](#12-workbench-apps-and-the-headless-launcher)
 - [14. Open questions](#14-open-questions)
 - [Cross-domain URI handling](#cross-domain-uri-handling)
 - [See also](#see-also)
@@ -587,27 +587,27 @@ Both `lunco-workbench` and `lunco-ui` are LunCoSim-agnostic at their core —
 they don't know about balloons, solar panels, or Modelica. Domain knowledge
 lives in domain crates.
 
-## 12. Three LunCoSim apps, different compositions
+## 12. Workbench apps and the headless launcher
 
-Each binary is ~50 lines of plugin registration:
+The two workbench binaries share the shell; the server binary reuses the same
+simulation composition without linking the GUI:
 
 ```
-lunco-luncosim = workbench + SpawnPalette + SceneTree + Inspector +
+luncosim       = workbench + SpawnPalette + SceneTree + Inspector +
                         ModelicaInspector + 3D viewport
-                        (luncosim editor with compact Modelica view)
+                        (ground-physics simulator)
 
-luncosim              = workbench + all luncosim panels + MissionControl +
-                        CelestialBrowser + full 3D world
-                        (main client, everything enabled)
+luncosim-server = the same simulation composition as `luncosim`, headless
+                        and without winit/egui
 
-lunica    = workbench + CodeEditor + Diagram + PackageBrowser +
+lunica         = workbench + CodeEditor + Diagram + PackageBrowser +
                         Telemetry + Graphs + LibraryBrowser
                         (Modelica modeling only, no 3D world needed)
 ```
 
-Same workbench shell, different panel sets, different default workspaces.
-`lunica` opens in the Analyze workspace; `lunco-luncosim`
-in Build; `luncosim` in Observe with quick access to all others.
+Same workbench shell for the two windowed apps, with different panel sets and
+default perspectives. `lunica` opens in the Analyze perspective; `luncosim`
+opens in the scene/Build perspective.
 
 
 ## 14. Open questions

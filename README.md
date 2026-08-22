@@ -59,9 +59,10 @@ cd lunco-sim
 
 Then launch the entry point that fits your goal (each also builds for the browser via `scripts/build_web.sh`):
 
-### 1. LunCoSim — the Full Mission Simulator
-The flagship mission simulator includes celestial bodies, ephemeris, robotics,
-physics, avatar tooling, and the collaborative USD scene.
+### 1. LunCoSim — the Ground-Physics Simulator
+The production simulator loads collaborative USD scenes and provides ground
+physics, rover/mobility tools, scene editing, and the embedded Modelica
+workbench.
 
 ```bash
 cargo build -p lunco-luncosim --bin luncosim

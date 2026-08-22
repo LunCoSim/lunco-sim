@@ -10,7 +10,7 @@ these are the reasoning.
 > (a migration plan, a completed execution checklist, a closed audit) is deleted
 > once the work lands; git remembers it.
 
-Every doc opens with a status line:
+Every architecture doc (other than this index) opens with a status line:
 
 ```
 > Status: Active | Design | Draft · Audience: <who should read this>
@@ -69,6 +69,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`30-wasm-web-worker.md`](30-wasm-web-worker.md) | Off-thread Modelica in the browser |
 | [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md) | The replication planes, the wire, AOI, prediction & reconciliation |
 | [`33-spacecraft-modeling.md`](33-spacecraft-modeling.md) | The lander slice |
+| [`lander-actuation-modelica.md`](lander-actuation-modelica.md) | The powered lander actuation boundary: USD topology, Modelica control/fluids, and Avian force application |
 | [`34-scenario-and-multidomain.md`](34-scenario-and-multidomain.md) | Scenarios, multi-domain vehicles |
 | [`35-animate-perspective.md`](35-animate-perspective.md) | Timeline / sequence editor |
 | [`38-domains-as-packages.md`](38-domains-as-packages.md) | Composition; the domain-neutral-core thesis (absorbs the deleted 36/37 analyses) |

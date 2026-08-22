@@ -11,7 +11,7 @@ description: >
   you edited is well-formed. Also use it as the CHEAP first step of any
   authoring loop (author-usd-component, build-vehicle, use-asset-library).
   Project-specific and non-obvious: it is a QUERY that returns data (not a
-  fire-and-forget command), it is answered by SANDBOX binaries only (lunica does
+  fire-and-forget command), it is answered by `luncosim` binaries only (lunica does
   not link it), the CLI form starts no app/window/GPU at all, `.mo` treats
   `if`/`when` in an equation section as ERRORS (rumoca is branch-free), `.wgsl`
   can never fail (only warn), `twin://` cannot be resolved, and a bare relative
