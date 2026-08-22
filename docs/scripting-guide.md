@@ -290,6 +290,13 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` (capture from a vessel's mounted camera — fires `CaptureFromCamera`), `take_photo()` / `take_photo(args)` (a `run_tool` action value for a waypoint's `on_arrival` list, naming the registered `science::take_photo` tool). The Rust core owns firing & cleaning via the `lunco-tools` registry + `lunco-tools-bevy` dispatch; these helpers just NAME the tool from data.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
+`coach` only presents a step. Tutorial progression is authored in the lesson's
+`on_event`, where it matches raw public event names (`cmd:<Name>`, `key:<Name>`,
+and authored simulation events). Keep lesson-specific runtime checks in Rhai
+observers under `assets/scenarios/tests/`; run them through the production
+`luncosim test` command so changing a tutorial script does not require
+rebuilding Rust.
+
 Add helpers freely — the prelude is loaded **from disk at startup** on native
 (`assets/scripting/prelude/*.rhai`): edit a helper, restart the app, no rebuild.
 The compiled-in copy is used when the editable directory is absent and is the

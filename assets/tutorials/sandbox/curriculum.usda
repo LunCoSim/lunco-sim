@@ -39,6 +39,7 @@ def Scope "Sandbox" (
 )
 {
     string lunco:track:label = "Sandbox Onboarding"
+    string lunco:track:perspective = "rover_build"
 
     def Scope "SandboxIntro" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]

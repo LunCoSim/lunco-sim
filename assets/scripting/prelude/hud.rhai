@@ -18,12 +18,11 @@ fn clear_spotlight()           { cmd("ClearSpotlight") }
 // `anchor` + a card with title/body, progress dots (index/total), and Back/Next/
 // Skip controls. The controls emit `cmd:TutorialNext`/`cmd:TutorialBack`/
 // `cmd:TutorialSkip` on the bus; a tour reacts in `on_event` (see the
-// tutorials/*/tour.rhai step-cursor pattern). `end_tour()` hides the coach.
+// tutorials/*/tour.rhai step-cursor pattern). Action policy belongs in that
+// Rhai event handler, not in this presentation command. `end_tour()` hides
+// the coach.
 fn coach(index, total, anchor, title, body) {
     cmd("SetTourStep", #{ index: index, total: total, anchor: anchor, title: title, body: body });
-}
-fn coach(index, total, anchor, title, body, require) {
-    cmd("SetTourStep", #{ index: index, total: total, anchor: anchor, title: title, body: body, require: require });
 }
 fn end_tour()                  { cmd("ClearTour") }
 
@@ -35,7 +34,10 @@ fn end_tour()                  { cmd("ClearTour") }
 /// touched.
 fn coach_step(steps, i) {
     let s = steps[i];
-    if s.focus != () { cmd("FocusPanel", #{ id: s.focus }); }
+    // A headless scene test has no workbench panel to focus. The lesson still
+    // renders and its event policy remains testable; focus is presentation
+    // only, so it is omitted when no interactive host exists.
+    if s.focus != () && !is_unattended() { cmd("FocusPanel", #{ id: s.focus }); }
     coach(i, steps.len(), s.anchor, s.title, s.body);
 }
 
@@ -80,4 +82,3 @@ fn cmd_data(name, params) {
     let r = cmd(name, params);
     if r.ok { r.data } else { () }
 }
-

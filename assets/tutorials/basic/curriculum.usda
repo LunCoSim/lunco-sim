@@ -22,6 +22,7 @@ def Scope "Basic" (
 )
 {
     string lunco:track:label = "Rover Driving & Slopes"
+    string lunco:track:perspective = "rover_build"
 
     def Scope "MoonDrivingBasics" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]

@@ -40,7 +40,9 @@ use lunco_core::{
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
-use lunco_workbench::tutorial_overlay::{TutorialHud, TutorialStopRequested};
+use lunco_workbench::tutorial_overlay::{
+    TutorialHud, TutorialStopRequested, TutorialTargetUnavailable,
+};
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
@@ -99,6 +101,8 @@ pub struct TutorialMeta {
 pub struct TrackMeta {
     /// Heading shown for this track in the 🎓 menu (`lunco:track:label`).
     pub label: String,
+    /// Authored presentation perspective, if this track declares one.
+    pub perspective: Option<String>,
     /// Position in the composed stack — derived from the order tracks were read,
     /// never authored. Ascending.
     pub order: usize,
@@ -279,6 +283,7 @@ impl CurriculumRoot {
                 track.path,
                 TrackMeta {
                     label: track.label,
+                    perspective: track.perspective,
                     order,
                 },
             );
@@ -465,7 +470,7 @@ struct PendingTutorialStart(Option<PendingTutorial>);
 struct PendingTutorial {
     id: String,
     source: String,
-    world: String,
+    world: Option<String>,
     /// A lesson replacement clears the outgoing owned world before issuing the
     /// new load. This matters when both lessons declare the same stage:
     /// ordinary `LoadScene` intentionally no-ops for an already-mounted
@@ -562,6 +567,7 @@ fn reset_hud<H: std::ops::DerefMut<Target = TutorialHud>>(hud: Option<H>) {
     hud.objectives.clear();
     hud.spotlight = None;
     hud.tour = None;
+    hud.reported_missing_anchor = None;
 }
 
 /// Headless hosts have no presentation to reset.
@@ -677,7 +683,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                     .resource::<PendingTutorialStart>()
                     .0
                     .as_ref()
-                    .map(|pending| pending.world.clone())
+                    .and_then(|pending| pending.world.clone())
             });
 
         // A tutorial is a guided presentation, not a continuation of the
@@ -687,6 +693,23 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         #[cfg(feature = "ui")]
         if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
             layout.reset_to_default_perspective();
+        }
+        let perspective = world
+            .resource::<TutorialRegistry>()
+            .tracks
+            .get(&meta.app)
+            .and_then(|track| track.perspective.clone());
+        #[cfg(feature = "ui")]
+        if let Some(id) = perspective.as_deref() {
+            if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+                if !layout.activate_perspective_by_str(id) {
+                    world.trigger(tutorial_failed(format!(
+                        "tutorial '{}' declares unknown workbench perspective '{}'",
+                        meta.id, id
+                    )));
+                    return;
+                }
+            }
         }
         clear_tutorial_hud(world);
         world.resource_mut::<PendingAdvance>().0 = None;
@@ -701,7 +724,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
                 id,
                 source,
-                world: scene.clone(),
+                world: Some(scene.clone()),
                 clear_before_load,
                 elapsed_secs: 0.0,
             });
@@ -713,10 +736,16 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             } else {
                 world.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
             }
+        } else if outgoing_world.is_some() {
+            world.resource_mut::<PendingTutorialStart>().0 = Some(PendingTutorial {
+                id,
+                source,
+                world: None,
+                clear_before_load: true,
+                elapsed_secs: 0.0,
+            });
+            world.trigger(lunco_core::SceneTransitionIntent::clear());
         } else {
-            if outgoing_world.is_some() {
-                world.trigger(lunco_core::SceneTransitionIntent::clear());
-            }
             start_tutorial_scenario(world, id, source, None);
         }
         #[cfg(feature = "ui")]
@@ -789,6 +818,24 @@ register_commands!(
 
 #[cfg(feature = "ui")]
 fn on_tutorial_stop_requested(_trigger: On<TutorialStopRequested>, mut commands: Commands) {
+    commands.trigger(SkipTutorial {});
+}
+
+#[cfg(feature = "ui")]
+fn on_tutorial_target_unavailable(
+    trigger: On<TutorialTargetUnavailable>,
+    progress: Res<TutorialProgress>,
+    mut commands: Commands,
+) {
+    let Some(id) = progress.current.as_deref() else {
+        return;
+    };
+    let detail = format!(
+        "tutorial '{}' requires UI anchor '{}' but the composed workbench did not publish it",
+        id,
+        trigger.event().anchor
+    );
+    commands.trigger(tutorial_failed(detail));
     commands.trigger(SkipTutorial {});
 }
 
@@ -873,7 +920,8 @@ fn on_scene_transition_started(
         lunco_core::SceneTransition::Load { path, .. } => pending
             .0
             .as_ref()
-            .is_some_and(|request| request.world.as_str() == path.as_str()),
+            .and_then(|request| request.world.as_deref())
+            .is_some_and(|world| world == path.as_str()),
         lunco_core::SceneTransition::Clear | lunco_core::SceneTransition::Restart { .. } => false,
     };
     if !belongs_to_pending && !is_pending_clear {
@@ -907,14 +955,41 @@ fn on_scene_transition_completed(
             else {
                 return;
             };
-            let scene = request.world.clone();
+            let Some(scene) = request.world.clone() else {
+                commands.queue(|world: &mut World| {
+                    let should_start = {
+                        let mut pending = world.resource_mut::<PendingTutorialStart>();
+                        let Some(request) = pending.0.as_mut() else {
+                            return;
+                        };
+                        if !request.clear_before_load || request.world.is_some() {
+                            return;
+                        }
+                        request.clear_before_load = false;
+                        request.elapsed_secs = 0.0;
+                        true
+                    };
+                    if !should_start {
+                        return;
+                    }
+                    let request = world
+                        .resource_mut::<PendingTutorialStart>()
+                        .0
+                        .take()
+                        .expect("pending UI-only tutorial request exists");
+                    start_tutorial_scenario(world, request.id, request.source, None);
+                });
+                return;
+            };
             commands.queue(move |world: &mut World| {
                 let should_load = {
                     let mut pending = world.resource_mut::<PendingTutorialStart>();
                     let Some(request) = pending.0.as_mut() else {
                         return;
                     };
-                    if !request.clear_before_load || request.world != scene {
+                    if !request.clear_before_load
+                        || request.world.as_deref() != Some(scene.as_str())
+                    {
                         return;
                     }
                     request.clear_before_load = false;
@@ -933,11 +1008,11 @@ fn on_scene_transition_completed(
                 let Some(request) = world.resource_mut::<PendingTutorialStart>().0.take() else {
                     return;
                 };
-                if request.world != path {
+                if request.world.as_deref() != Some(path.as_str()) {
                     world.resource_mut::<PendingTutorialStart>().0 = Some(request);
                     return;
                 }
-                start_tutorial_scenario(world, request.id, request.source, Some(request.world));
+                start_tutorial_scenario(world, request.id, request.source, request.world);
             });
         }
         lunco_core::SceneTransition::Restart { .. } => {}
@@ -972,7 +1047,7 @@ fn pending_tutorial_watchdog(
         stop_tutorial_host(world);
     });
     commands.trigger(tutorial_failed(format!(
-        "abandoning '{}' — scene '{}' did not complete within {MOUNT_TIMEOUT_SECS:.0}s",
+        "abandoning '{}' — scene {:?} did not complete within {MOUNT_TIMEOUT_SECS:.0}s",
         request.id, request.world
     )));
 }
@@ -1016,7 +1091,7 @@ fn on_scene_transition_failed(
         pending_start
             .0
             .as_ref()
-            .is_some_and(|request| request.world == path)
+            .is_some_and(|request| request.world.as_deref() == Some(path))
     });
     if path.is_none()
         && pending_start
@@ -1619,6 +1694,8 @@ impl Plugin for TutorialCorePlugin {
         app.add_observer(on_scene_transition_failed);
         #[cfg(feature = "ui")]
         app.add_observer(on_tutorial_stop_requested);
+        #[cfg(feature = "ui")]
+        app.add_observer(on_tutorial_target_unavailable);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
@@ -1920,6 +1997,105 @@ mod tests {
                 .current
                 .as_deref(),
             Some("/Test/Second")
+        );
+    }
+
+    #[test]
+    fn switching_from_world_lesson_to_ui_lesson_waits_for_clear_completion() {
+        #[derive(Resource, Default)]
+        struct TransitionsSeen(Vec<lunco_core::SceneTransitionRequest>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        for (id, world) in [
+            (
+                "/Test/World",
+                Some("lunco://tutorials/sandbox/first_drive.usda"),
+            ),
+            ("/Test/UI", None),
+        ] {
+            app.register_tutorial(TutorialMeta {
+                id: id.into(),
+                title: id.trim_start_matches("/Test/").into(),
+                blurb: String::new(),
+                app: "/Test".into(),
+                difficulty: String::new(),
+                format: curriculum::LessonFormat::Tour,
+                script: "lunco://tutorials/sandbox/sandbox_intro.rhai".into(),
+                world: world.map(str::to_owned),
+                first_start: false,
+                next: None,
+                source: CurriculumSource::Bundled,
+            });
+        }
+        app.insert_resource(TransitionsSeen::default());
+        app.add_observer(
+            |trigger: On<lunco_core::SceneTransitionIntent>,
+             mut seen: ResMut<TransitionsSeen>| {
+                seen.0.push(trigger.event().request.clone());
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/World".into(),
+        });
+        app.update();
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/World")
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/UI".into(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![
+                lunco_core::SceneTransitionRequest::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+                lunco_core::SceneTransitionRequest::Clear,
+            ]
+        );
+
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                transition: lunco_core::SceneTransition::Clear,
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/UI")
+        );
+        assert_eq!(
+            app.world().resource::<TransitionsSeen>().0,
+            vec![
+                lunco_core::SceneTransitionRequest::load(
+                    "lunco://tutorials/sandbox/first_drive.usda",
+                    "",
+                ),
+                lunco_core::SceneTransitionRequest::Clear,
+            ]
         );
     }
 

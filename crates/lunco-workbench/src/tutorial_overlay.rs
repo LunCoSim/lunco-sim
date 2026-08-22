@@ -40,21 +40,27 @@ pub struct TutorialHud {
     /// leading glyph). Empty = the objectives card is hidden.
     pub objectives: String,
     /// Active spotlight: `(anchor_key, caption)`. `anchor_key` resolves against
-    /// [`HelpAnchors`](crate::HelpAnchors); an unknown/absent key shows a
-    /// centred caption without obscuring the application. `None` = no spotlight.
+    /// [`HelpAnchors`](crate::HelpAnchors); a named key must resolve to a
+    /// visible widget. `None` = no spotlight.
     pub spotlight: Option<(String, String)>,
     /// Active guided-tour coach step (lunica-style). When set, the overlay draws
     /// the scrim+ring on `anchor` plus a coach card with a banner, body, progress
     /// dots, and Back/Next/Skip controls. Takes over the scrim from `spotlight`.
     /// `None` = no tour. Driven from rhai via `coach(...)` / `end_tour()`.
     pub tour: Option<TourStep>,
+    /// Last named anchor reported as unavailable. Prevents one render pass
+    /// from publishing the same authored UI contract failure every frame.
+    pub reported_missing_anchor: Option<String>,
 }
 
-/// Optional host policy for where tutorial overlays may appear. A host with a
-/// dedicated full-window 3D perspective sets the required perspective; hosts
-/// without one keep the default and show tutorials in every perspective.
-#[derive(Resource, Clone, Copy, Debug, Default)]
-pub struct TutorialOverlayPerspective(pub Option<crate::PerspectiveId>);
+/// The authored tutorial target could not be resolved in the current workbench
+/// presentation. The tutorial launcher owns the lifecycle response; the overlay
+/// only reports this generic UI contract failure.
+#[derive(Event, Clone, Debug)]
+pub struct TutorialTargetUnavailable {
+    /// The authored [`HelpAnchors`](crate::HelpAnchors) key that was absent.
+    pub anchor: String,
+}
 
 /// One coach-mark step of a guided tour (see [`TutorialHud::tour`]).
 #[derive(Clone, Debug, Default)]
@@ -63,14 +69,13 @@ pub struct TourStep {
     pub index: usize,
     /// Total step count (drives the progress dots + Next→Done label).
     pub total: usize,
-    /// `HelpAnchors` key to spotlight; empty/unknown = centred card, no cutout.
+    /// `HelpAnchors` key to spotlight; empty = centred card, a named key must
+    /// resolve to a visible widget.
     pub anchor: String,
     /// Card banner title.
     pub title: String,
     /// Card body text.
     pub body: String,
-    /// Optional action requirement key for automatic progression.
-    pub require: Option<String>,
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
@@ -133,10 +138,6 @@ pub struct SetTourStep {
     #[serde(default)]
     #[reflect(default)]
     pub body: String,
-    /// Optional action requirement key for automatic progression.
-    #[serde(default)]
-    #[reflect(default)]
-    pub require: Option<String>,
 }
 
 /// End the guided tour (hide the coach card + scrim). Rhai: `end_tour()`.
@@ -162,11 +163,13 @@ fn on_set_objectives(trigger: On<SetObjectives>, mut hud: ResMut<TutorialHud>) {
 #[on_command(Spotlight)]
 fn on_spotlight(trigger: On<Spotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = Some((cmd.anchor.clone(), cmd.text.clone()));
+    hud.reported_missing_anchor = None;
 }
 
 #[on_command(ClearSpotlight)]
 fn on_clear_spotlight(trigger: On<ClearSpotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = None;
+    hud.reported_missing_anchor = None;
 }
 
 #[on_command(SetTourStep)]
@@ -177,13 +180,14 @@ fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<TutorialHud>) {
         anchor: cmd.anchor.clone(),
         title: cmd.title.clone(),
         body: cmd.body.clone(),
-        require: cmd.require.clone(),
     });
+    hud.reported_missing_anchor = None;
 }
 
 #[on_command(ClearTour)]
 fn on_clear_tour(trigger: On<ClearTour>, mut hud: ResMut<TutorialHud>) {
     hud.tour = None;
+    hud.reported_missing_anchor = None;
 }
 
 register_commands!(
@@ -266,15 +270,6 @@ fn draw_tutorial_hud(
         });
 }
 
-fn tutorial_overlay_visible(
-    layout: Option<Res<crate::WorkbenchLayout>>,
-    policy: Res<TutorialOverlayPerspective>,
-) -> bool {
-    policy
-        .0
-        .is_none_or(|required| layout.is_some_and(|l| l.active_perspective() == Some(required)))
-}
-
 /// The workbench menu bar occupies the first 30 px of the viewport. Keep
 /// spotlight scrims, coach cards, and their placement candidates below it so a
 /// tutorial can never cover the menu it is asking the user to use.
@@ -284,15 +279,37 @@ fn tutorial_content_rect(ctx: &egui::Context) -> egui::Rect {
     rect
 }
 
+fn tutorial_anchor_rect(
+    anchors: &crate::HelpAnchors,
+    key: &str,
+    content: egui::Rect,
+) -> Option<egui::Rect> {
+    anchors
+        .get(key)
+        .map(|rect| rect.expand(6.0).intersect(content))
+        .filter(|rect| rect.width() > 4.0 && rect.height() > 4.0)
+}
+
+fn report_missing_anchor(hud: &mut TutorialHud, commands: &mut Commands, anchor: &str) {
+    if hud.reported_missing_anchor.as_deref() == Some(anchor) {
+        return;
+    }
+    hud.reported_missing_anchor = Some(anchor.to_owned());
+    commands.trigger(TutorialTargetUnavailable {
+        anchor: anchor.to_owned(),
+    });
+}
+
 /// Draw the spotlight: dim the screen except the anchored widget's rect, ring
 /// it with a pulsing accent, and show a caption callout. A named anchor that is
-/// not currently painted falls back to a centred caption without obscuring the
-/// application; an explicitly empty anchor remains the modal full-dim form.
+/// a named anchor must resolve to a painted widget; an explicitly empty anchor
+/// remains the modal full-dim form.
 fn draw_spotlight(
     mut egui_ctx: EguiContexts,
-    hud: Res<TutorialHud>,
+    mut hud: ResMut<TutorialHud>,
     anchors: Res<crate::HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
+    mut commands: Commands,
 ) {
     // A guided tour owns the scrim (see `draw_tour`); don't double-dim.
     if hud.tour.is_some() {
@@ -306,14 +323,15 @@ fn draw_spotlight(
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-    let target = anchors.get(&key);
-    let caption = if target.is_none() && !key.is_empty() {
-        format!(
-            "⚠ The tutorial target `{key}` is not visible. Open the named panel or switch to the required perspective.\n\n{caption}"
-        )
+    let target = if key.is_empty() {
+        None
     } else {
-        caption
+        tutorial_anchor_rect(&anchors, &key, screen)
     };
+    if !key.is_empty() && target.is_none() {
+        report_missing_anchor(&mut hud, &mut commands, &key);
+        return;
+    }
 
     if target.is_some() {
         egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
@@ -465,7 +483,7 @@ fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryVal
 /// running rhai tour advances on them. Shared by lunica and the luncosim.
 fn draw_tour(
     mut egui_ctx: EguiContexts,
-    hud: Res<TutorialHud>,
+    mut hud: ResMut<TutorialHud>,
     anchors: Res<crate::HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
@@ -489,11 +507,12 @@ fn draw_tour(
     let target = if step.anchor.is_empty() {
         None
     } else {
-        anchors
-            .get(&step.anchor)
-            .map(|r| r.expand(6.0).intersect(screen))
-            .filter(|r| r.width() > 4.0 && r.height() > 4.0)
+        tutorial_anchor_rect(&anchors, &step.anchor, screen)
     };
+    if !step.anchor.is_empty() && target.is_none() {
+        report_missing_anchor(&mut hud, &mut commands, &step.anchor);
+        return;
+    }
 
     // ── Card placement — pick the side that fits around the target, matching
     // the lunica tour's Right/Below/Above/Left/Over/Centred logic.
@@ -572,9 +591,8 @@ fn draw_tour(
     };
 
     // ── Scrim + ring + speech-bubble tail (behind the card) ──────────────────
-    // An empty anchor is an intentional modal step and dims the scene. A named
-    // anchor can be absent while a perspective/panel is settling; leave the
-    // scene visible and draw only the centred card in that case.
+    // An empty anchor is an intentional modal step and dims the scene. Named
+    // anchors have already been validated above.
     if target.is_some() || step.anchor.is_empty() {
         egui::Area::new(egui::Id::new("lunco_tour_scrim"))
             .order(egui::Order::Background)
@@ -671,17 +689,6 @@ fn draw_tour(
                     egui::Frame::new()
                         .inner_margin(egui::Margin::symmetric(18, 14))
                         .show(ui, |ui| {
-                            if !step.anchor.is_empty() && target.is_none() {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "⚠ Waiting for `{}` to appear",
-                                        step.anchor
-                                    ))
-                                    .color(theme.tokens.warning)
-                                    .strong(),
-                                );
-                                ui.add_space(6.0);
-                            }
                             if !step.body.is_empty() {
                                 ui.label(egui::RichText::new(&step.body).size(14.0).color(text));
                                 ui.add_space(10.0);
@@ -887,7 +894,6 @@ pub struct TutorialOverlayPlugin;
 impl Plugin for TutorialOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialHud>();
-        app.init_resource::<TutorialOverlayPerspective>();
         register_all_commands(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
         // client-scoped tutorial scenario may drive them (see `ClientCommandPolicy`).
@@ -900,17 +906,14 @@ impl Plugin for TutorialOverlayPlugin {
             .mark_client_local::<ClearTour>();
         // The persistent objectives card is view-independent: it remains
         // visible when the user changes perspective. Spotlight/tour content
-        // still follows the host's perspective policy because its anchors are
-        // view-local.
+        // follows the authored track perspective and its anchors are view-local.
         app.add_systems(
             EguiPrimaryContextPass,
             draw_tutorial_hud.after(crate::WorkbenchRenderSet),
         );
         app.add_systems(
             EguiPrimaryContextPass,
-            (draw_spotlight, draw_tour)
-                .after(crate::WorkbenchRenderSet)
-                .run_if(tutorial_overlay_visible),
+            (draw_spotlight, draw_tour).after(crate::WorkbenchRenderSet),
         );
     }
 }

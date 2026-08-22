@@ -31,6 +31,21 @@ path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the
 Confirm the command result and inspect the unchanged window. Do not relaunch the app just
 to pick up a starfield or material edit.
 
+## Tutorial and Rhai iteration
+
+Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
+tested through its production scene gate in `assets/scenes/tests/` with the
+observer in `assets/scenarios/tests/`. After editing either Rhai file, rerun
+`target/debug/luncosim test --scene ...`; do not rebuild the Rust core for a
+script-only change. The observer must verify public `cmd:*` events plus the
+resulting live state and emit a real verdict. Parsing or `--validate` is only
+preflight evidence.
+
+For an interactive tour, keep one production session and use `StartTutorial`
+through `/api/commands`, then inspect the HUD and event stream. `RunScenario`
+is the live hot-reload path for a script attached to an existing host. Restart
+only when changing Rust or when a clean scene lifecycle is itself under test.
+
 ## Live runtime HTML/CSS iteration
 
 The native `luncosim` UI watches the retained runtime surfaces under

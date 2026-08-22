@@ -59,6 +59,16 @@ own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
    }
    ```
 
+   A track may also author its required workbench presentation once:
+
+   ```usda
+   string lunco:track:perspective = "rover_build"
+   ```
+
+   The host resolves that identifier through its normal perspective registry.
+   Omit the property to keep the host's current presentation; do not encode an
+   app or lesson name in Rust.
+
    The lesson's id is its PRIM PATH, so the chain is a real relationship. The
    launcher mounts the `payload` through `LoadScene` **before** running the
    script; a lesson with no payload deliberately leaves the viewport alone.
@@ -70,6 +80,24 @@ own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
 That's it — **no rebuild, no Rust**. On native the curriculum *and* the script
 are read fresh from disk — edit and relaunch; on wasm scripts are embedded at
 build time. `StartTutorial{id}` mounts the world and runs the script on the host.
+
+## Test tutorial behavior without rebuilding Rust
+
+Runtime tutorial checks are authored Rhai scenarios. Put the fixture in
+`assets/scenes/tests/<name>.usda` and its observer in
+`assets/scenarios/tests/<name>.rhai`. The observer must use the same public
+commands and events as a learner, verify a real state change, and finish with
+`report_verdict(...)`; it must not reproduce the lesson's control policy.
+
+```bash
+target/debug/luncosim test \
+  --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
+```
+
+Edit the lesson or its observer, then rerun the production binary. No core
+rebuild is needed for Rhai edits. Use `--validate` only for syntax/preflight;
+it is not a runtime tutorial test. Keep Rust tests generic to the scripting or
+scene lifecycle boundary, never as a per-lesson list of steps or commands.
 
 ## Anchors (for `spotlight` / `coach_step` focus)
 
@@ -87,6 +115,12 @@ panel id with `focus` when a lesson needs to open a tab. The menu bar and
 toolbar are outside the coach card's content rectangle, so a step that teaches
 `Time`, `Network`, `Help`, or the pause button must use `anchor: ""` and name
 the exact menu/action in its body. Do not invent `panel.<instance>` anchors.
-Windowless scene tests keep these presentation intents explicit but inert
-(`FocusPanel`, `Spotlight`, and the tutorial HUD commands); unknown domain
-commands still fail through the normal command boundary.
+
+An authored non-empty anchor is required to resolve to a visible widget; a
+missing anchor fails the active lesson instead of moving the card to a hidden
+or centred fallback. An empty anchor is the explicit choice for a centred card.
+Interactive presentation owns that resolution. Windowless scene tests keep
+presentation intents explicit but inert (`FocusPanel`, `Spotlight`, and the
+tutorial HUD commands); they verify lesson policy and state without requiring
+an interactive focus panel. Unknown domain commands still fail through the
+normal command boundary.

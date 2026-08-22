@@ -28,11 +28,39 @@ HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
   it (or hot-replace by id) to change startup behavior with no rebuild.
-- **Shipped lessons**: 22 entries across the LunCoSim (2), Basic rover (4), Sandbox (9), and Lunica (7) tracks. Each lesson authors `lunco:tutorial:format`: a **tour** is guided reference content that may complete through coach navigation; an **exercise** may complete only from observed simulator objectives. A source-level curriculum gate rejects exercise scripts that advance from `cmd:TutorialNext`, and production scene gates cover the runtime mechanics. The Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json) remain a separate navigation aid.
+- **Shipped lessons**: 22 entries across the LunCoSim (2), Basic rover (4), Sandbox (9), and Lunica (7) tracks. Each lesson authors `lunco:tutorial:format`: a **tour** is guided reference content whose Rhai policy may require coach navigation or a documented user action; an **exercise** may complete only from observed simulator objectives. A source-level curriculum gate rejects exercise scripts that advance from `cmd:TutorialNext`, and production scene gates cover the runtime mechanics. The Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json) remain a separate navigation aid.
 - **The catalog is a USD layer**: a TRACK is a prim applying `LunCoTutorialTrackAPI` in `assets/tutorials/<track>/curriculum.usda`; each child applying `LunCoTutorialAPI` is a LESSON, whose script is `info:sourceAsset` and whose world is a `payload` arc. An APP offers tracks by sublayering them from `assets/tutorials/<app>.usda` — that layer stack is the whole answer to "which tracks, in what order".
 - **A lesson's world is DECLARED**: the launcher mounts the `payload` through the scene lifecycle before running the script. A lesson with no payload deliberately leaves the viewport alone — absent is a statement, not a missing value.
+- **Presentation is authored**: a track may set `lunco:track:perspective` to the identifier registered by the host. The launcher resolves it through the normal perspective registry; there is no app-specific tutorial hook or Rust fallback.
 - **Dynamic Twin-scoped lessons**: a Twin contributes on exactly the same terms — one `sim/tutorials/curriculum.usda` (the *Space School Seminar* track, SS1–SS4), composed when the Twin opens and dropped when it closes. No twin-specific manifest, no second parse.
 - **Add one — data, not Rust**: drop `assets/tutorials/<track>/<name>.rhai` and declare a prim for it in that track's `curriculum.usda`. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
+
+### Runtime tutorial tests
+
+The test is an authored Rhai observer attached to a production scene fixture:
+
+| Asset | Responsibility |
+|---|---|
+| `assets/scenes/tests/<name>.usda` | Composed world and lesson program |
+| `assets/scenarios/tests/<name>.rhai` | Public command/event observation and verdict |
+
+The observer must check the behavior being taught — for example, command
+events, live movement or ports, and the final objective — rather than merely
+waiting for `MISSION_COMPLETE`. It must not provide a second control path.
+Shared assertions and `report_verdict(...)` come from
+`assets/scripting/prelude/auto_tests.rhai`.
+
+Run a gate directly after editing Rhai; it uses the already-built production
+binary and does not require a Rust rebuild:
+
+```bash
+target/debug/luncosim test \
+  --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
+```
+
+`target/debug/luncosim --validate` is only parse/preflight evidence. Generic
+Rust tests may protect the scripting/lifecycle seam, but lesson-specific steps,
+required events, and command counts belong in Rhai runtime observers.
 
 ## Authoring walkthroughs
 

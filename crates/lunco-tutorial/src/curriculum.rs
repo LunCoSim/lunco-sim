@@ -78,6 +78,10 @@ pub struct Lesson {
 pub struct Track {
     pub path: String,
     pub label: String,
+    /// Optional workbench perspective required by this track. The host applies
+    /// it generically when a lesson starts; an omitted value keeps the host's
+    /// normal presentation.
+    pub perspective: Option<String>,
 }
 
 /// Everything one curriculum layer contributes.
@@ -154,6 +158,8 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
         out.tracks.push(Track {
             path: track_path.clone(),
             label: text(&track_prim, "lunco:track:label").unwrap_or_default(),
+            perspective: text(&track_prim, "lunco:track:perspective")
+                .filter(|value| !value.trim().is_empty()),
         });
 
         let Ok(children) = track_prim.children() else {
