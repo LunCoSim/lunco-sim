@@ -927,21 +927,32 @@ fn restore_suppressed_shadow_maps(
 ) {
     for (entity, mut light, _, suppressed, _) in directional_lights.iter_mut() {
         if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled = suppressed.was_enabled;
+            light.shadow_maps_enabled =
+                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
             commands.entity(entity).remove::<ShadowMapSuppressed>();
         }
     }
     for (entity, mut light, suppressed) in point_lights.iter_mut() {
         if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled = suppressed.was_enabled;
+            light.shadow_maps_enabled =
+                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
             commands.entity(entity).remove::<ShadowMapSuppressed>();
         }
     }
     for (entity, mut light, suppressed) in spot_lights.iter_mut() {
         if let Some(suppressed) = suppressed {
-            light.shadow_maps_enabled = suppressed.was_enabled;
+            light.shadow_maps_enabled =
+                restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
             commands.entity(entity).remove::<ShadowMapSuppressed>();
         }
+    }
+}
+
+fn restored_shadow_map_value(current: bool, suppressed: &ShadowMapSuppressed) -> bool {
+    if current == suppressed.last_applied_enabled {
+        suppressed.restore_enabled
+    } else {
+        current
     }
 }
 
@@ -1221,19 +1232,28 @@ fn apply_shadow_caster_policy(
     if admission_changed {
         for (entity, mut light, _, suppressed, _, _, _) in directionals.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                if let Some(suppressed) = suppressed {
+                    light.shadow_maps_enabled =
+                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
+                }
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
         for (entity, mut light, suppressed, _, _, _) in points.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                if let Some(suppressed) = suppressed {
+                    light.shadow_maps_enabled =
+                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
+                }
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
         for (entity, mut light, suppressed, _, _, _) in spots.iter_mut() {
             if suppressed.is_some_and(|s| s.reason == ShadowMapSuppressionReason::ConfiguredLimit) {
-                light.shadow_maps_enabled = suppressed.is_some_and(|s| s.was_enabled);
+                if let Some(suppressed) = suppressed {
+                    light.shadow_maps_enabled =
+                        restored_shadow_map_value(light.shadow_maps_enabled, suppressed);
+                }
                 commands.entity(entity).remove::<ShadowMapSuppressed>();
             }
         }
@@ -1430,7 +1450,8 @@ fn apply_shadow_caster_policy(
                 commands
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
-                        was_enabled: true,
+                        restore_enabled: true,
+                        last_applied_enabled: false,
                         reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
@@ -1465,7 +1486,8 @@ fn apply_shadow_caster_policy(
                 commands
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
-                        was_enabled: true,
+                        restore_enabled: true,
+                        last_applied_enabled: false,
                         reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
@@ -1500,7 +1522,8 @@ fn apply_shadow_caster_policy(
                 commands
                     .entity(candidate.entity)
                     .try_insert(ShadowMapSuppressed {
-                        was_enabled: true,
+                        restore_enabled: true,
+                        last_applied_enabled: false,
                         reason: ShadowMapSuppressionReason::ConfiguredLimit,
                     });
             }
@@ -1830,6 +1853,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn suppression_restore_preserves_a_later_explicit_light_change() {
+        let suppressed = ShadowMapSuppressed {
+            restore_enabled: true,
+            last_applied_enabled: false,
+            reason: ShadowMapSuppressionReason::ConfiguredLimit,
+        };
+        assert!(restored_shadow_map_value(false, &suppressed));
+        assert!(
+            restored_shadow_map_value(true, &suppressed),
+            "a later owner that enabled the light must not be overwritten"
+        );
+
+        let explicitly_disabled = ShadowMapSuppressed {
+            restore_enabled: false,
+            ..suppressed
+        };
+        assert!(!restored_shadow_map_value(false, &explicitly_disabled));
+    }
+
     #[derive(Resource, Default)]
     struct SubmittedFrames(u32);
 
@@ -1870,7 +1913,8 @@ mod tests {
                     ..default()
                 },
                 ShadowMapSuppressed {
-                    was_enabled: true,
+                    restore_enabled: true,
+                    last_applied_enabled: false,
                     reason: ShadowMapSuppressionReason::ConfiguredLimit,
                 },
             ))

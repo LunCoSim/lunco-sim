@@ -1334,11 +1334,16 @@ pub enum ShadowMapSuppressionReason {
 }
 
 /// Records the user/scene shadow intent while the explicit graphics caster
-/// limit excludes a map. It makes a later settings increase lossless and
-/// preserves an authored `shadow:enable = false` value.
+/// limit excludes a map. `last_applied_enabled` is the effective value written
+/// by the suppression policy. A restore therefore cannot overwrite a later
+/// explicit owner that changed the Bevy component while it was suppressed.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShadowMapSuppressed {
-    pub was_enabled: bool,
+    /// The value to restore when the suppression is removed, including a
+    /// policy or command change made while the map was suppressed.
+    pub restore_enabled: bool,
+    /// The last effective value written by the suppression owner.
+    pub last_applied_enabled: bool,
     pub reason: ShadowMapSuppressionReason,
 }
 
