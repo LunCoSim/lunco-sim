@@ -1705,7 +1705,11 @@ fn append_generated_unit_visual_schema(
         icon_graphics.push(format!(
             "Text(extent={}, textString={}, textColor={}, fontSize=8)",
             modelica_rect(x - 9, y + 5, x + 9, y + 15),
-            modelica_string_literal(&format!("{}.{}", generated_member_display_name(path), connector)),
+            modelica_string_literal(&format!(
+                "{}.{}",
+                generated_member_display_name(path),
+                connector
+            )),
             modelica_color([35, 75, 55]),
         ));
     }
@@ -3806,8 +3810,8 @@ mod tests {
     #[test]
     fn generated_electrical_visual_schema_keeps_each_motor_and_each_connection() {
         let motor_names = [
-            "Motor_L0", "Motor_L1", "Motor_L2", "Motor_L3", "Motor_R0", "Motor_R1",
-            "Motor_R2", "Motor_R3",
+            "Motor_L0", "Motor_L1", "Motor_L2", "Motor_L3", "Motor_R0", "Motor_R1", "Motor_R2",
+            "Motor_R3",
         ];
         let mut battery = component("/Electrical/Battery/Model", None);
         battery.model_class = "LunCo.Electrical.Battery".into();
