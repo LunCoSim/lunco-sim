@@ -1410,11 +1410,12 @@ pub fn estimate_shadow_allocation_bytes(
         .saturating_mul(point_light_count as u64);
 
     // Depth32 plus a conservative 50% allowance for views/alignment/driver use.
+    // The factor is exactly six, so keep the multiplication saturating. Persisted
+    // settings are user input; an overflow here must not turn an enormous request
+    // into a small estimate that slips through the explicit byte ceiling.
     directional_texels
         .saturating_add(point_texels)
-        .saturating_mul(4)
-        .saturating_mul(3)
-        / 2
+        .saturating_mul(6)
 }
 
 #[cfg(test)]
@@ -1444,6 +1445,14 @@ mod tests {
             2 * 1024 * 1024 * 1024
         );
         assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
+    }
+
+    #[test]
+    fn shadow_allocation_estimate_saturates_instead_of_wrapping() {
+        assert_eq!(
+            estimate_shadow_allocation_bytes(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0, 0),
+            u64::MAX
+        );
     }
 
     #[test]
