@@ -115,7 +115,7 @@ impl LunarSunShadow {
             || !self.maximum_distance.is_finite()
             || self.maximum_distance <= self.first_cascade_far_bound
             || !self.overlap_proportion.is_finite()
-            || !(0.0..=1.0).contains(&self.overlap_proportion)
+            || !(0.0..1.0).contains(&self.overlap_proportion)
         {
             return None;
         }
@@ -179,6 +179,10 @@ mod tests {
 
         let mut sun = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced);
         sun.first_cascade_far_bound = sun.maximum_distance;
+        assert!(sun.cascade_config().is_none());
+
+        let mut sun = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced);
+        sun.overlap_proportion = 1.0;
         assert!(sun.cascade_config().is_none());
     }
 
