@@ -161,8 +161,9 @@ and emits `MISSION_COMPLETE`.
 - `done: |m| <predicate>` — a rhai closure over live state (distance, a port
   read, SoC). Use for "reached / held / value crossed".
 
-**Spotlight anchors:** a widget's `HelpAnchors` key; `focus` opens the panel
-first. lunica ids include `modelica_experiments`, `modelica_inspector`,
+**Spotlight anchors:** a widget's `HelpAnchors` key; `focus_panel(id)` opens the
+singleton panel on an interactive host, and `coach_step` uses it before the
+spotlight. Unattended gates omit this presentation-only command. lunica ids include `modelica_experiments`, `modelica_inspector`,
 `modelica_diagnostics`, `modelica_component_palette`,
 `model_view.compile_buttons` (needs a model open); instance panel
 `panel.modelica_plot` — spotlight but don't `focus`. Full list: `assets/tutorials/lunica/README.md`.

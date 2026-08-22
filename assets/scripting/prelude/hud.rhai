@@ -9,6 +9,9 @@
 fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }
 /// Clear the hint line.
 fn clear_hint()                { cmd("SetHint", #{ text: "" }) }
+/// Focus a singleton workbench panel when an interactive host exists.
+/// Headless lesson gates verify policy and state without a panel to focus.
+fn focus_panel(id)              { if !is_unattended() { cmd("FocusPanel", #{ id: id }) } }
 /// Spotlight a workbench widget by its HelpAnchors key, with a caption.
 fn spotlight(anchor, caption)  { cmd("Spotlight", #{ anchor: anchor, text: caption }) }
 /// Remove any active spotlight.
@@ -37,7 +40,7 @@ fn coach_step(steps, i) {
     // A headless scene test has no workbench panel to focus. The lesson still
     // renders and its event policy remains testable; focus is presentation
     // only, so it is omitted when no interactive host exists.
-    if s.focus != () && !is_unattended() { cmd("FocusPanel", #{ id: s.focus }); }
+    if s.focus != () { focus_panel(s.focus); }
     coach(i, steps.len(), s.anchor, s.title, s.body);
 }
 

@@ -28,7 +28,15 @@ pub enum LessonFormat {
 
 impl LessonFormat {
     fn read(prim: &usd::Prim, path: &str, failures: &mut Vec<String>) -> Option<Self> {
-        match text(prim, "lunco:tutorial:format").as_deref() {
+        let value = match text(prim, "lunco:tutorial:format") {
+            Ok(value) => value,
+            Err(error) => {
+                warn!("[tutorial] lesson '{path}' has unreadable format: {error}");
+                failures.push(format!("lesson '{path}' has unreadable format: {error}"));
+                return None;
+            }
+        };
+        match value.as_deref() {
             Some("tour") => Some(Self::Tour),
             Some("exercise") => Some(Self::Exercise),
             Some(other) => {
@@ -37,6 +45,8 @@ impl LessonFormat {
                 ));
                 None
             }
+            // USD schema default: `lunco:tutorial:format` is authored as
+            // `exercise` when omitted. This is the schema's authored meaning.
             None => Some(Self::Exercise),
         }
     }
@@ -103,20 +113,36 @@ pub struct Curriculum {
 /// not: `sdf::Value::String`, `::Token` and `::AssetPath` are different variants
 /// carrying the same characters, and matching only the one an author happened to
 /// use is how an attribute silently reads back empty.
-fn text(prim: &usd::Prim, name: &str) -> Option<String> {
-    match prim.attribute(name).get::<sdf::Value>().ok().flatten()? {
-        sdf::Value::String(s) => Some(s),
-        sdf::Value::Token(t) => Some(t.to_string()),
-        sdf::Value::AssetPath(a) => Some(a.to_string()),
-        _ => None,
+fn text(prim: &usd::Prim, name: &str) -> Result<Option<String>, String> {
+    let value = prim
+        .attribute(name)
+        .get::<sdf::Value>()
+        .map_err(|error| format!("attribute '{name}' could not be read: {error:?}"))?;
+    match value {
+        None => Ok(None),
+        Some(sdf::Value::String(s)) => Ok(Some(s)),
+        Some(sdf::Value::Token(t)) => Ok(Some(t.to_string())),
+        Some(sdf::Value::AssetPath(a)) => Ok(Some(a.to_string())),
+        Some(other) => Err(format!(
+            "attribute '{name}' has unsupported value {other:?}"
+        )),
     }
 }
 
-fn flag(prim: &usd::Prim, name: &str) -> bool {
-    matches!(
-        prim.attribute(name).get::<sdf::Value>().ok().flatten(),
-        Some(sdf::Value::Bool(true))
-    )
+fn flag(prim: &usd::Prim, name: &str) -> Result<bool, String> {
+    let value = prim
+        .attribute(name)
+        .get::<sdf::Value>()
+        .map_err(|error| format!("attribute '{name}' could not be read: {error:?}"))?;
+    match value {
+        // USD schema default: `lunco:tutorial:firstStart` is false when it is
+        // omitted. An authored true/false value is always preserved above.
+        None => Ok(false),
+        Some(sdf::Value::Bool(value)) => Ok(value),
+        Some(other) => Err(format!(
+            "attribute '{name}' has unsupported value {other:?}"
+        )),
+    }
 }
 
 /// The world a lesson declares, or `None` when it declares none.
@@ -124,12 +150,25 @@ fn flag(prim: &usd::Prim, name: &str) -> bool {
 /// `payload_asset_paths` READS the arc; the stage was opened with payloads
 /// unloaded precisely so that asking stays a read. Strongest arc wins — a lesson
 /// declares one world.
-fn payload_assets(prim: &usd::Prim) -> Vec<String> {
+fn payload_assets(prim: &usd::Prim) -> Result<Vec<String>, String> {
     prim.payload_asset_paths()
-        .ok()
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+        .map(|paths| paths.into_iter().map(|path| path.to_string()).collect())
+        .map_err(|error| format!("payload arc could not be read: {error:?}"))
+}
+
+fn next_target(prim: &usd::Prim) -> Result<Option<String>, String> {
+    let targets = prim
+        .relationship("lunco:tutorial:next")
+        .targets()
+        .map_err(|error| format!("successor relationship could not be read: {error:?}"))?;
+    match targets.as_slice() {
+        [] => Ok(None),
+        [target] => Ok(Some(target.to_string())),
+        _ => Err(format!(
+            "successor relationship declares {} targets; exactly one is allowed",
+            targets.len()
+        )),
+    }
 }
 
 /// Project tutorial metadata from an already-composed USD stage.
@@ -144,64 +183,189 @@ pub fn project(stage: &usd::Stage) -> Curriculum {
             .push(format!("composed curriculum stage: {err:?}"));
     }
     let root = stage.prim(sdf::Path::abs_root());
-    let Ok(top) = root.children() else {
-        return out;
+    let top = match root.children() {
+        Ok(top) => top,
+        Err(error) => {
+            let detail = format!("curriculum root children could not be read: {error:?}");
+            warn!("[tutorial] {detail}");
+            out.failures.push(detail);
+            return out;
+        }
     };
     for track_prim in top {
-        if !track_prim
-            .has_api_schema("LunCoTutorialTrackAPI")
-            .unwrap_or(false)
-        {
+        let is_track = match track_prim.has_api_schema("LunCoTutorialTrackAPI") {
+            Ok(value) => value,
+            Err(error) => {
+                let detail = format!(
+                    "track '{}' schema could not be read: {error:?}",
+                    track_prim.path()
+                );
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
+            }
+        };
+        if !is_track {
             continue;
         }
         let track_path = track_prim.path().to_string();
+        let label = match text(&track_prim, "lunco:track:label") {
+            Ok(Some(value)) if !value.trim().is_empty() => value,
+            Ok(_) => {
+                let detail = format!("track '{track_path}' declares no non-empty label");
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
+            }
+            Err(error) => {
+                let detail = format!("track '{track_path}' has unreadable label: {error}");
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
+            }
+        };
+        let perspective = match text(&track_prim, "lunco:track:perspective") {
+            Ok(value) => value.filter(|value| !value.trim().is_empty()),
+            Err(error) => {
+                let detail = format!("track '{track_path}' has unreadable perspective: {error}");
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
+            }
+        };
+        let children = match track_prim.children() {
+            Ok(children) => children,
+            Err(error) => {
+                let detail = format!("track '{track_path}' children could not be read: {error:?}");
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
+            }
+        };
         out.tracks.push(Track {
             path: track_path.clone(),
-            label: text(&track_prim, "lunco:track:label").unwrap_or_default(),
-            perspective: text(&track_prim, "lunco:track:perspective")
-                .filter(|value| !value.trim().is_empty()),
+            label,
+            perspective,
         });
-
-        let Ok(children) = track_prim.children() else {
-            continue;
-        };
         for prim in children {
-            if !prim.has_api_schema("LunCoTutorialAPI").unwrap_or(false) {
+            let is_lesson = match prim.has_api_schema("LunCoTutorialAPI") {
+                Ok(value) => value,
+                Err(error) => {
+                    let detail = format!(
+                        "lesson candidate '{}' schema could not be read: {error:?}",
+                        prim.path()
+                    );
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
+            if !is_lesson {
                 continue;
             }
             let path = prim.path().to_string();
             // The script is the one property a lesson cannot do without: with no
             // program there is nothing to run, so the lesson is not registered
             // rather than offered and then failing when a student picks it.
-            let Some(script) = text(&prim, "info:sourceAsset") else {
-                warn!("[tutorial] lesson '{path}' declares no info:sourceAsset — skipped");
-                out.failures.push(format!(
-                    "lesson '{path}' declares no info:sourceAsset — skipped"
-                ));
-                continue;
+            let script = match text(&prim, "info:sourceAsset") {
+                Ok(Some(value)) if !value.trim().is_empty() => value,
+                Ok(_) => {
+                    let detail =
+                        format!("lesson '{path}' declares no non-empty info:sourceAsset — skipped");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+                Err(error) => {
+                    let detail =
+                        format!("lesson '{path}' has unreadable info:sourceAsset: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
             };
-            let payloads = payload_assets(&prim);
+            let payloads = match payload_assets(&prim) {
+                Ok(payloads) => payloads,
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable payload: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
             if payloads.len() > 1 {
-                out.failures.push(format!(
+                let detail = format!(
                     "lesson '{path}' declares {} payload worlds; exactly one is allowed",
                     payloads.len()
-                ));
+                );
+                warn!("[tutorial] {detail}");
+                out.failures.push(detail);
+                continue;
             }
             let Some(format) = LessonFormat::read(&prim, &path, &mut out.failures) else {
                 continue;
             };
+            let next = match next_target(&prim) {
+                Ok(next) => next,
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable successor: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
+            let title = match text(&prim, "lunco:tutorial:title") {
+                Ok(Some(value)) if !value.trim().is_empty() => value,
+                Ok(_) => {
+                    let detail = format!("lesson '{path}' declares no non-empty title");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable title: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
+            let blurb = match text(&prim, "lunco:tutorial:blurb") {
+                // USD schema default: an omitted blurb is intentionally empty.
+                Ok(value) => value.unwrap_or_default(),
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable blurb: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
+            let difficulty = match text(&prim, "lunco:tutorial:difficulty") {
+                // USD schema default: an omitted difficulty is `beginner`.
+                Ok(value) => value.unwrap_or_else(|| "beginner".to_owned()),
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable difficulty: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
+            let first_start = match flag(&prim, "lunco:tutorial:firstStart") {
+                Ok(value) => value,
+                Err(error) => {
+                    let detail = format!("lesson '{path}' has unreadable firstStart: {error}");
+                    warn!("[tutorial] {detail}");
+                    out.failures.push(detail);
+                    continue;
+                }
+            };
             out.lessons.push(Lesson {
                 world: payloads.into_iter().next(),
-                next: prim
-                    .relationship("lunco:tutorial:next")
-                    .targets()
-                    .ok()
-                    .and_then(|t| t.first().map(|p| p.to_string())),
-                title: text(&prim, "lunco:tutorial:title").unwrap_or_else(|| path.clone()),
-                blurb: text(&prim, "lunco:tutorial:blurb").unwrap_or_default(),
-                difficulty: text(&prim, "lunco:tutorial:difficulty").unwrap_or_default(),
+                next,
+                title,
+                blurb,
+                difficulty,
                 format,
-                first_start: flag(&prim, "lunco:tutorial:firstStart"),
+                first_start,
                 track: track_path.clone(),
                 path,
                 script,

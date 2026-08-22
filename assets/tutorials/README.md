@@ -118,6 +118,6 @@ the exact menu/action in its body. Do not invent `panel.<instance>` anchors.
 
 An authored non-empty anchor is required to resolve to a visible widget; a
 missing anchor fails the active lesson instead of moving the card to a hidden
-or centred fallback. An empty anchor is the explicit choice for a centred card.
+or centred card. An empty anchor is the explicit choice for a centred card.
 Headless Rhai tests verify lesson policy and state, so they do not require an
 interactive focus panel.

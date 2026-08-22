@@ -12,7 +12,7 @@
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
-    cmd("FocusPanel", #{ id: "sandbox_inspector" });
+    focus_panel("sandbox_inspector");
     spotlight("panel.right_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it, then click Possess in the Inspector or Command Deck.");

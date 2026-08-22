@@ -13,7 +13,7 @@ model-centric lessons) opens a model itself:
   (`steps` = a table of `#{ anchor, title, body, focus }`; prelude: `hud.rhai`).
 - `on_event(me, evt)` — advance the `this.i` cursor on the card's
   `cmd:TutorialNext` / `Back` / `Skip` / `Goto` bus events.
-- `cmd("FocusPanel", #{ id })` — open a panel so its spotlight anchor is on screen.
+- `focus_panel(id)` — open a panel on an interactive host so its spotlight anchor is on screen; unattended gates omit this presentation-only command.
 - `cmd("OpenClass", #{ qualified: "CascadedRCFilter" })` — open a bundled model to
   demonstrate on (any bundled/MSL/workspace class resolves — one `OpenClass`).
 - `emit("MISSION_COMPLETE", 0)` — mark the lesson done (menu ✓).
