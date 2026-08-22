@@ -102,6 +102,8 @@ model PositionPID3D
     "Horizontal target radius required before contact may hand off flight authority (m)";
   input Real landing_handoff_position_radius_m = 0.75
     "Final horizontal error required for the contact handoff (m)";
+  input Real predicate_transition_band = 1.0e-3
+    "Continuous transition width for landing predicates in their native units";
   input Real landing_handoff_latched = 0.0
     "Latched mission handoff written by the typed touchdown event (0 or 1)";
   input Real landing_engine_cutoff_latched = 0.0
@@ -195,9 +197,17 @@ model PositionPID3D
   Real roll_command_value;
   Real yaw_command_value;
   Real flight_command_gain;
+  Real predicate_band;
   LunCo.Sensors.FrameVectorTransform thrust_axis_transform;
 
 equation
+  // Rumoca's realtime solver reconstructs continuous equations only. Use one
+  // authored transition width for every measured predicate instead of an
+  // equation-level `if`, which would be reconstructed as zero. At the authored
+  // threshold the ramp is already fully true, preserving the inclusive gate
+  // contract; it reaches zero one band beyond the threshold.
+  predicate_band = max(1.0e-9, predicate_transition_band);
+
   // Sensor -> navigation block.
   navigation.altimeter_range = altimeter_range;
   navigation.altimeter_position_valid = altimeter_position_valid;
@@ -269,17 +279,21 @@ equation
   // remains deliberately separate from the final handoff gate below: being
   // close enough to start the terminal approach is not the same as being
   // settled on the marked pad.
-  target_zone_gate = noEvent(if horizontal_target_error
-      <= max(0.0, landing_zone_radius_m) then 1.0 else 0.0);
-  landing_handoff_position_gate = noEvent(if horizontal_target_error
-      <= max(0.0, landing_handoff_position_radius_m) then 1.0 else 0.0);
+  target_zone_gate = max(0.0, min(1.0,
+    (max(0.0, landing_zone_radius_m) + predicate_band - horizontal_target_error)
+      / predicate_band));
+  landing_handoff_position_gate = max(0.0, min(1.0,
+    (max(0.0, landing_handoff_position_radius_m) + predicate_band
+      - horizontal_target_error) / predicate_band));
   // The continuous flight law publishes a measured transition REQUEST. The
   // event supervisor qualifies it for mission scripts and writes the accepted
   // mode through the typed latch input. That keeps this controller acyclic:
   // contact is a sensor input, while mode ownership remains an event boundary.
-  landing_handoff_request = noEvent(if max(landing_handoff_position_gate,
-      landing_engine_cutoff_latched) >= 0.5
-    and landing_contact >= 0.5 then 1.0 else 0.0);
+  landing_handoff_request = max(0.0, min(1.0,
+    (max(landing_handoff_position_gate, landing_engine_cutoff_latched) - 0.5
+      + predicate_band) / predicate_band))
+    * max(0.0, min(1.0,
+      (landing_contact - 0.5 + predicate_band) / predicate_band));
   landing_handoff = max(0.0, min(1.0, landing_handoff_latched));
   // Keep lateral PID authority live until the target-qualified handoff. The
   // position loop itself brings the vehicle to zero lateral error; an altitude
@@ -309,11 +323,15 @@ equation
   // event supervisor can transfer the vehicle's weight into the shock
   // absorbers. The event boundary is kept separate from the airframe's own
   // native contact cutoff, which prevents a feedback loop through the solver.
-  landing_engine_cutoff_request = noEvent(if landing_handoff_position_gate >= 0.5
-    and engine_cutoff_contact >= 0.5 then 1.0 else 0.0);
+  landing_engine_cutoff_request = max(0.0, min(1.0,
+    (landing_handoff_position_gate - 0.5 + predicate_band) / predicate_band))
+    * max(0.0, min(1.0,
+      (engine_cutoff_contact - 0.5 + predicate_band) / predicate_band));
   landing_engine_cutoff = max(0.0, min(1.0, landing_engine_cutoff_latched));
-  target_contact_engine_gate = noEvent(if landing_handoff >= 0.5
-      or landing_engine_cutoff >= 0.5 then 0.0 else 1.0);
+  target_contact_engine_gate = 1.0 - max(
+    max(0.0, min(1.0, (landing_handoff - 0.5 + predicate_band) / predicate_band)),
+    max(0.0, min(1.0,
+      (landing_engine_cutoff - 0.5 + predicate_band) / predicate_band)));
   // A speed cap by itself would still command the cap at the surface and
   // leave the suspension to remove the vehicle's descent energy.
   flare_descent_rate_magnitude = max(0.0, descent_speed_limit_mps)

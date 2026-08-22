@@ -49,12 +49,9 @@ fn pid_axis_compiles_and_steps_as_a_reusable_controller() {
 #[test]
 fn position_pid3d_compiles_with_live_actuator_outputs() {
     let mut compiler = ModelicaCompiler::new();
+    let source = position_pid_source();
     let dae = compiler
-        .compile_str(
-            "PositionPID3D",
-            &position_pid_source(),
-            "lunco://models/LunCo/GNC/PositionPID3D.mo",
-        )
+        .compile_str("PositionPID3D", &source, "lunco://models/LunCo/GNC/PositionPID3D.mo")
         .expect("sensor-driven PositionPID3D must be structurally balanced");
 
     let outputs: Vec<String> = dae
@@ -82,17 +79,20 @@ fn position_pid3d_compiles_with_live_actuator_outputs() {
         );
     }
     assert!(
-        position_pid_source()
-            .contains("landing_handoff = max(0.0, min(1.0, landing_handoff_latched))"),
+        source.contains("landing_handoff = max(0.0, min(1.0, landing_handoff_latched))"),
         "only the qualified supervisor latch may relinquish flight authority"
     );
     assert!(
-        position_pid_source().contains("landing_handoff_request = noEvent(if"),
-        "measured target-qualified contact must remain a distinct event request"
+        source.contains("landing_handoff_request = max(0.0, min(1.0,"),
+        "measured target-qualified contact must remain a distinct branch-free event request"
     );
     assert!(
-        position_pid_source().contains("landing_engine_cutoff_latched"),
+        source.contains("landing_engine_cutoff_latched"),
         "target-qualified engine cutoff must survive suspension rebound"
+    );
+    assert!(
+        !source.contains("noEvent(if"),
+        "realtime Modelica equations must use continuous gates, not conditional expressions"
     );
 
     let mut stepper = SimulationSession::new(

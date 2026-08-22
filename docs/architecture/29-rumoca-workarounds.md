@@ -244,8 +244,13 @@ reads **0 at full throttle**, which zeroes `thrust` and `p_chamber` with it. Eve
 algebraic observable behind an `if` is dead — it reports a plausible-looking 0
 rather than failing.
 
-**Workaround.** None that works. The model's own comment says the Boolean was
-inlined specifically to dodge this, and that doesn't help either.
+**Resolution in shipped models.** Continuous algebraic observables use explicit
+`max`/`min` clamps. Contact and mission predicates use an authored transition
+band: the gate is fully true at its inclusive threshold and reaches zero one
+band beyond it. The band is part of the controller input contract, so the model
+does not hide a solver-specific fallback or rely on a conditional expression.
+The shipped models must remain free of equation-level `if`/`when`; the validator
+and the modelica lint policy enforce that rule.
 
 **Probe.** `lib.rs::observables_smoke::rocket_engine_observables_round_trip`
 (`#[ignore]`d, `TODO(rumoca-observables)`).

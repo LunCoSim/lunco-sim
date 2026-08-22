@@ -12,6 +12,8 @@ model Lander
     "Attitude-authority filter time constant (s)";
   input Real minimum_time_constant_s = 1.0e-6
     "Smallest permitted controller time constant (s)";
+  input Real predicate_transition_band = 1.0e-3
+    "Continuous transition width for contact predicates in their native units";
   input Real authority_initial = 0.6
     "Initial filtered attitude authority";
   input Real command_lower_bound = 0.0
@@ -187,6 +189,7 @@ model Lander
   Real settled_touchdown_target;
   Real engine_cutoff_latch(start = 0.0);
   Real propulsion_cutoff;
+  Real predicate_band;
 
 initial equation
   // `authority_initial` is part of the live USD input surface, so it has
@@ -195,6 +198,13 @@ initial equation
   live_authority = authority_initial;
 
 equation
+  // Rumoca's realtime solver reconstructs continuous equations only. Use one
+  // authored transition width for every measured predicate instead of an
+  // equation-level `if`, which would be reconstructed as zero. At the authored
+  // threshold the ramp is already fully true, preserving the inclusive gate
+  // contract; it reaches zero one band beyond the threshold.
+  predicate_band = max(1.0e-9, predicate_transition_band);
+
   // Keep scene-tunable values live for the runtime Modelica interface.
   der(live_authority) = (ang_authority - live_authority)
     / noEvent(max(minimum_time_constant_s, authority_filter_tau_s));
@@ -217,8 +227,10 @@ equation
     (1.0 - engine_cutoff_latch) * landing_engine_cutoff
       / max(0.001, spool_tau));
   propulsion_cutoff = max(
-    noEvent(if engine_cutoff_latch >= 0.5 then 1.0 else 0.0),
-    noEvent(if landing_engine_cutoff >= 0.5 then 1.0 else 0.0));
+    max(0.0, min(1.0, (engine_cutoff_latch - 0.5 + predicate_band)
+      / predicate_band)),
+    max(0.0, min(1.0, (landing_engine_cutoff - 0.5 + predicate_band)
+      / predicate_band)));
 
   // The possession flag selects the command source; it is not an attitude
   // authority gate. Guidance and pilot commands therefore use the same law.
@@ -321,24 +333,35 @@ equation
   // value below the flight computer's touchdown threshold. Each predicate is
   // instead derived directly from an authored tolerance and a measured
   // property; the state filter below supplies the temporal qualification.
-  ground_speed_gate = noEvent(if ground_speed
-      <= max(0.0, touchdown_ground_speed_mps) then 1.0 else 0.0);
-  descent_speed_gate = noEvent(if descent_speed
-      <= max(0.0, touchdown_descent_speed_mps) then 1.0 else 0.0);
-  angular_speed_gate = noEvent(if angular_speed
-      <= max(0.0, touchdown_angular_speed_rad_s) then 1.0 else 0.0);
-  engine_cutoff_ground_speed_gate = noEvent(if ground_speed
-      <= max(0.0, engine_cutoff_ground_speed_mps) then 1.0 else 0.0);
-  engine_cutoff_descent_speed_gate = noEvent(if descent_speed
-      <= max(0.0, engine_cutoff_descent_speed_mps) then 1.0 else 0.0);
-  all_legs_contact = noEvent(if leg_contact_px >= 0.5
-      and leg_contact_nx >= 0.5
-      and leg_contact_pz >= 0.5
-      and leg_contact_nz >= 0.5 then 1.0 else 0.0);
-  any_leg_contact = noEvent(if leg_contact_px >= 0.5
-      or leg_contact_nx >= 0.5
-      or leg_contact_pz >= 0.5
-      or leg_contact_nz >= 0.5 then 1.0 else 0.0);
+  ground_speed_gate = max(0.0, min(1.0,
+    (max(0.0, touchdown_ground_speed_mps) + predicate_band - ground_speed)
+      / predicate_band));
+  descent_speed_gate = max(0.0, min(1.0,
+    (max(0.0, touchdown_descent_speed_mps) + predicate_band - descent_speed)
+      / predicate_band));
+  angular_speed_gate = max(0.0, min(1.0,
+    (max(0.0, touchdown_angular_speed_rad_s) + predicate_band - angular_speed)
+      / predicate_band));
+  engine_cutoff_ground_speed_gate = max(0.0, min(1.0,
+    (max(0.0, engine_cutoff_ground_speed_mps) + predicate_band - ground_speed)
+      / predicate_band));
+  engine_cutoff_descent_speed_gate = max(0.0, min(1.0,
+    (max(0.0, engine_cutoff_descent_speed_mps) + predicate_band - descent_speed)
+      / predicate_band));
+  all_legs_contact = min(
+    min(
+      max(0.0, min(1.0, (leg_contact_px - 0.5 + predicate_band) / predicate_band)),
+      max(0.0, min(1.0, (leg_contact_nx - 0.5 + predicate_band) / predicate_band))),
+    min(
+      max(0.0, min(1.0, (leg_contact_pz - 0.5 + predicate_band) / predicate_band)),
+      max(0.0, min(1.0, (leg_contact_nz - 0.5 + predicate_band) / predicate_band))));
+  any_leg_contact = max(
+    max(
+      max(0.0, min(1.0, (leg_contact_px - 0.5 + predicate_band) / predicate_band)),
+      max(0.0, min(1.0, (leg_contact_nx - 0.5 + predicate_band) / predicate_band))),
+    max(
+      max(0.0, min(1.0, (leg_contact_pz - 0.5 + predicate_band) / predicate_band)),
+      max(0.0, min(1.0, (leg_contact_nz - 0.5 + predicate_band) / predicate_band))));
   // A negative prismatic displacement is compression by the joint's authored
   // axis convention. Keep the minimum as measured evidence and require all
   // four suspension rates to be quiet. Do not require a minimum displacement:
@@ -350,14 +373,15 @@ equation
   maximum_leg_speed = max(
     max(abs(leg_velocity_px), abs(leg_velocity_nx)),
     max(abs(leg_velocity_pz), abs(leg_velocity_nz)));
-  suspension_rate_gate = noEvent(if maximum_leg_speed
-      <= max(0.0, touchdown_max_suspension_speed_mps) then 1.0 else 0.0);
+  suspension_rate_gate = max(0.0, min(1.0,
+    (max(0.0, touchdown_max_suspension_speed_mps) + predicate_band
+      - maximum_leg_speed) / predicate_band));
   // The up-axis reading comes from the IMU quaternion through the shared
   // AttitudeReference transform. The authored minimum is a direct body-up
   // projection criterion, so a side-lying or inverted hull cannot qualify.
-  upright_contact_gate = noEvent(if upright_axis_y
-      >= max(-1.0, min(1.0, touchdown_min_upright_axis_y))
-      then 1.0 else 0.0);
+  upright_contact_gate = max(0.0, min(1.0,
+    (upright_axis_y - max(-1.0, min(1.0, touchdown_min_upright_axis_y))
+      + predicate_band) / predicate_band));
   // Main-engine cutoff and final flight handoff are different physical events.
   // A qualified low-speed pad switch starts a rate-only contact phase. Once the
   // measured body rate is quiet, cutoff closes propulsion and the passive gear
