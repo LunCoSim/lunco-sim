@@ -492,15 +492,19 @@ pub(crate) fn install_wgpu_error_handler(app: &mut App) {
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
+    point_map: Res<bevy::light::PointLightShadowMap>,
     directionals: Query<(), Added<bevy::light::DirectionalLight>>,
     points: Query<(), Added<bevy::light::PointLight>>,
     spots: Query<(), Added<bevy::light::SpotLight>>,
+    rects: Query<(), Added<bevy::light::RectLight>>,
 ) -> bool {
     settings.is_changed()
         || directional_map.is_changed()
+        || point_map.is_changed()
         || !directionals.is_empty()
         || !points.is_empty()
         || !spots.is_empty()
+        || !rects.is_empty()
 }
 
 #[derive(Clone, Debug)]
@@ -1739,6 +1743,17 @@ mod tests {
             .world_mut()
             .spawn(bevy::light::SpotLight::default())
             .id();
+        let late_rect = app
+            .world_mut()
+            .spawn((
+                bevy::light::RectLight::default(),
+                LightGraphicsDefaults {
+                    intensity_uses_graphics_default: true,
+                    intensity_scale: 1.0,
+                    range_uses_graphics_default: true,
+                },
+            ))
+            .id();
         app.update();
 
         let late_directional_light = app
@@ -1767,6 +1782,12 @@ mod tests {
             .unwrap();
         assert_eq!(late_spot_light.shadow_depth_bias, 0.37);
         assert_eq!(late_spot_light.shadow_normal_bias, 7.25);
+        let late_rect_light = app
+            .world()
+            .get::<bevy::light::RectLight>(late_rect)
+            .unwrap();
+        assert_eq!(late_rect_light.intensity, 10_000.0);
+        assert_eq!(late_rect_light.range, 30.0);
     }
 
     #[test]
