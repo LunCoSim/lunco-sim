@@ -90,20 +90,35 @@ verbs built on the raw `cmd`/`get` bridge. No control loops to hand-code.
 Attach it to a rover. Get the rover's id (`list_entities()` or the UI), then fire
 `RunScenario` over the API (the same path MCP and in-app launchers use):
 
+`RunScenario.source` is the Rhai source text. It is not a filesystem path. For a
+file-backed script, read the file into the request body; this keeps the command
+contract identical for HTTP, MCP, and the in-app editor:
+
+```bash
+jq -Rs --argjson target 4869542932533563 \
+  '{type:"ExecuteCommand",command:"RunScenario",params:{target:$target,source:.,params:""}}' \
+  assets/scenarios/my_rover_mission.rhai |
+  curl -sS http://127.0.0.1:4101/api/commands \
+    -H 'content-type: application/json' --data-binary @-
+```
+
 ```json
 {
   "type": "ExecuteCommand",
   "command": "RunScenario",
   "params": {
     "target": 4869542932533563,
-    "source": "assets/scenarios/my_rover_mission.rhai"
+    "source": "<rhai source text>"
   }
 }
 ```
 
 The rover drives the waypoints. Re-issue `RunScenario` on the same entity to
-**hot-reload** after you edit the file — no rebuild, no restart (state resets,
-the outgoing program's `on_stop` runs first).
+**hot-reload** after you edit the file by sending the updated contents again —
+no rebuild, no restart (state resets, the outgoing program's `on_stop` runs
+first). For a scene-authored file-backed program, use
+`uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@` instead;
+the asset pipeline owns loading and hot replacement.
 
 ### Inspect & debug
 
