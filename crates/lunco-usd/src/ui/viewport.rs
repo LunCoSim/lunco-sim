@@ -83,6 +83,7 @@ use lunco_workbench::{
     Panel, PanelCtx, PanelId, PanelRect, PanelRects, PanelSlot, ScenePickGate, SceneTarget,
     WorkbenchAppExt,
 };
+use lunco_workspace::TwinClosed;
 
 use crate::document::UsdDocument;
 use lunco_doc_bevy::DocumentRegistry;
@@ -129,6 +130,7 @@ impl Plugin for UsdViewportPlugin {
         app.init_resource::<RenderingQualitySettings>();
         app.register_panel(UsdViewportPanel);
         app.add_observer(on_doc_opened_for_viewport);
+        app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_changed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
         app.add_observer(on_viewport_measured);
@@ -231,6 +233,8 @@ pub struct UsdViewportState {
     light: Option<Entity>,
     current_handle: Option<Handle<UsdStageAsset>>,
     active_doc: Option<DocumentId>,
+    projection_name: Option<String>,
+    projection_is_session_owned: bool,
     last_rebuilt_generation: Option<u64>,
     /// Pointer-driven orbit pose. Pushed onto the camera each input
     /// frame the panel receives drag / scroll input.
@@ -603,6 +607,38 @@ fn on_doc_opened_for_viewport(trigger: On<DocumentOpened>, mut commands: Command
     });
 }
 
+/// A user-owned preview may outlive the Twin that originally supplied its
+/// `twin://` authority. Reinstall it after the Twin-close observer retires that
+/// authority so the document is served from a session-owned source instead of
+/// retaining a stale asset coordinate.
+fn on_twin_closed_for_viewport(_trigger: On<TwinClosed>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let Some(doc) = world.resource::<UsdViewportState>().active_doc else {
+            return;
+        };
+        if !world
+            .resource::<crate::twin_projection::DocBackedTwinScenes>()
+            .is_user_owned(doc)
+        {
+            return;
+        }
+        let Some((name, _)) = world
+            .resource::<crate::twin_projection::DocBackedTwinScenes>()
+            .coords_of(doc)
+        else {
+            install_active_doc(world, doc);
+            return;
+        };
+        if world.resource::<TwinRoots>().root_for(&name).is_some() {
+            return;
+        }
+        world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .detach_projection(doc);
+        install_active_doc(world, doc);
+    });
+}
+
 fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
     // Doc-backed viewport rebuilds are owned by `sync_twin_overlays`: when the
     // document generation moves it refreshes the twin overlay and reloads the
@@ -612,15 +648,27 @@ fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
 fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let scene_root = {
+        let (scene_root, session_projection) = {
             let mut state = world.resource_mut::<UsdViewportState>();
             if state.active_doc != Some(doc) {
                 return;
             }
             state.active_doc = None;
             state.current_handle = None;
-            state.scene_root
+            state.last_rebuilt_generation = None;
+            let projection_name = state.projection_name.take();
+            let projection_is_session_owned = state.projection_is_session_owned;
+            state.projection_is_session_owned = false;
+            (
+                state.scene_root,
+                projection_is_session_owned
+                    .then_some(projection_name)
+                    .flatten(),
+            )
         };
+        if let Some(name) = session_projection {
+            world.resource::<TwinRoots>().unregister_name(&name);
+        }
         if let Some(root) = scene_root {
             if let Ok(mut entity) = world.get_entity_mut(root) {
                 entity.remove::<UsdPrimPath>();
@@ -646,6 +694,17 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     let Some(scene_root) = world.resource::<UsdViewportState>().scene_root else {
         return;
     };
+    let previous_session = {
+        let state = world.resource::<UsdViewportState>();
+        if state.active_doc != Some(doc) && state.projection_is_session_owned {
+            state.projection_name.clone()
+        } else {
+            None
+        }
+    };
+    if let Some(name) = previous_session {
+        world.resource::<TwinRoots>().unregister_name(&name);
+    }
     let doc_generation = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
@@ -657,14 +716,23 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         );
         return;
     };
+    let session_owned = world
+        .resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .coords_of(doc)
+        .is_none();
     let handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
+    let projection_root = viewport_projection_root(world, doc);
     // Track so `sync_twin_overlays` keeps the overlay + preview in step with the
     // document generation (it owns rebuilds — the viewport no longer re-parses).
     world
         .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-        .track(doc, name, rel);
+        .track(doc, projection_root, name, rel);
+    let projection_name = world
+        .resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .coords_of(doc)
+        .map(|(name, _)| name);
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
         entity.remove::<UsdVisualSynced>();
         entity.despawn_related::<Children>();
@@ -676,7 +744,27 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     let mut state = world.resource_mut::<UsdViewportState>();
     state.active_doc = Some(doc);
     state.current_handle = Some(handle);
+    state.projection_name = projection_name;
+    state.projection_is_session_owned = session_owned;
     state.last_rebuilt_generation = doc_generation;
+}
+
+/// The directory containing a file-backed viewport document is the projection
+/// root used for lifetime retirement. In-memory documents use the synthetic
+/// viewport root selected by `viewport_twin_coords`.
+fn viewport_projection_root(world: &World, doc: DocumentId) -> std::path::PathBuf {
+    let Some(host) = world.resource::<DocumentRegistry<UsdDocument>>().host(doc) else {
+        return std::path::PathBuf::from(".");
+    };
+    match host.document().origin() {
+        DocumentOrigin::File { path, .. } => path
+            .parent()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        DocumentOrigin::Untitled { .. } | DocumentOrigin::Bundled { .. } => {
+            std::path::PathBuf::from(".")
+        }
+    }
 }
 
 /// The `twin://` coordinates (`name`, `rel`) to load `doc` through the async
@@ -686,13 +774,18 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
 /// source as a byte-overlay so the async loader composes from the editable
 /// document via storage — references resolve relative to the doc's base dir
 /// through the twin source. `None` when the document is gone.
-fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, String)> {
+fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
     // Already doc-backed (e.g. the default twin scene)? Reuse its overlay + asset.
     if let Some(coords) = world
         .resource::<crate::twin_projection::DocBackedTwinScenes>()
         .coords_of(doc)
     {
-        return Some(coords);
+        if world.resource::<TwinRoots>().root_for(&coords.0).is_some() {
+            return Some(coords);
+        }
+        world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .detach_projection(doc);
     }
     let host = world
         .resource::<DocumentRegistry<UsdDocument>>()

@@ -38,8 +38,8 @@ use web_time::Instant;
 
 /// Telemetry event name published when a DEM terrain build does not produce a
 /// terrain: an unreadable/unfetchable heightmap, a failed worker dispatch, a
-/// failed bake stage, or a build that wedged past the watchdog deadline. The
-/// payload is a human-readable string naming the site/DEM and the cause.
+/// failed coarse bake stage, or a build that wedged before a terrain existed.
+/// The payload is a human-readable string naming the site/DEM and the cause.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
 /// error telemetry observer surfaces it. Terrain IS the world here: a `warn!`
@@ -48,14 +48,30 @@ use web_time::Instant;
 /// tell "still loading" from "never coming".
 pub const DEM_BUILD_FAILED: &str = "DEM_BUILD_FAILED";
 
-/// The one shape every [`DEM_BUILD_FAILED`] publication takes, so the payload
-/// convention (a cause string naming the DEM/site and the underlying error)
-/// cannot drift between the native, web and watchdog sites.
-fn dem_build_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
+/// Telemetry event name published when the optional full-detail DEM
+/// refinement fails after the coarse terrain is already active. This is a
+/// warning, not a terminal build failure: physics and height queries continue
+/// using the coarse product and scene teardown remains the ownership boundary.
+pub const DEM_REFINEMENT_FAILED: &str = "DEM_REFINEMENT_FAILED";
+
+/// Construct terrain failure telemetry for the selected lifecycle phase.
+/// Keeping the mnemonic and severity decision here prevents native, web, and
+/// watchdog paths from disagreeing about whether a coarse or full-stage error
+/// is terminal.
+fn dem_failure_event(
+    detail: impl Into<String>,
+    disposition: DemBuildFailureDisposition,
+) -> lunco_core::TelemetryEvent {
+    let (name, severity) = match disposition {
+        DemBuildFailureDisposition::Terminal => (DEM_BUILD_FAILED, lunco_core::Severity::Error),
+        DemBuildFailureDisposition::Refinement => {
+            (DEM_REFINEMENT_FAILED, lunco_core::Severity::Warning)
+        }
+    };
     lunco_core::TelemetryEvent {
-        name: DEM_BUILD_FAILED.into(),
+        name: name.into(),
         source: 0,
-        severity: lunco_core::Severity::Error,
+        severity,
         data: lunco_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
     }
@@ -349,6 +365,7 @@ fn mark_dem_build_failed(
     }
 }
 
+#[derive(Clone, Copy)]
 enum DemBuildFailureDisposition {
     Terminal,
     Refinement,
@@ -366,7 +383,7 @@ fn report_dem_build_failed(
     if let (DemBuildFailureDisposition::Terminal, Some(entity)) = (disposition, entity) {
         mark_dem_build_failed(faults, holds, entity, detail.clone());
     }
-    commands.trigger(dem_build_failed(detail));
+    commands.trigger(dem_failure_event(detail, disposition));
 }
 
 /// Cancel generation owned by the scene being replaced. A build task and its
@@ -1171,7 +1188,8 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
 /// the [`DemWorkerJob`] id plus a user-facing cause string. The task runs with no
 /// `World` access, so the REASON travels with the id and `finish_dem_worker`
 /// (the drain, which does have `Commands`) publishes it as
-/// [`DEM_BUILD_FAILED`] — the id alone would have made the failure unspeakable.
+/// [`DEM_BUILD_FAILED`] or [`DEM_REFINEMENT_FAILED`] — the id alone would have
+/// made the failure unspeakable.
 #[cfg(target_arch = "wasm32")]
 type WasmBakeFailure = (u32, String);
 
@@ -3061,5 +3079,19 @@ mod visual_product_tests {
         assert_eq!(fault.entity, Some(entity));
         assert!(!holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
         assert!(holds.holds(lunco_physics::PhysicsHolds::CINEMATIC));
+    }
+
+    #[test]
+    fn terrain_failure_telemetry_identifies_terminal_vs_refinement() {
+        let terminal = dem_failure_event("no ground", DemBuildFailureDisposition::Terminal);
+        assert_eq!(terminal.name, DEM_BUILD_FAILED);
+        assert_eq!(terminal.severity, lunco_core::Severity::Error);
+
+        let refinement = dem_failure_event(
+            "coarse terrain remains",
+            DemBuildFailureDisposition::Refinement,
+        );
+        assert_eq!(refinement.name, DEM_REFINEMENT_FAILED);
+        assert_eq!(refinement.severity, lunco_core::Severity::Warning);
     }
 }

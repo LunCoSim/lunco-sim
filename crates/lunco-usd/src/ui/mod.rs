@@ -8,11 +8,9 @@
 //!
 //! ## Lifecycle wiring
 //!
-//! - [`DocumentOpened`] →
-//!   register a [`WorkspaceStage`] in
-//!   [`LoadedUsdStages`],
-//!   gated on registry membership so we don't react to Modelica /
-//!   SysML opens.
+//! - [`DocumentOpened`] → register a [`WorkspaceStage`] in
+//!   [`LoadedUsdStages`] only for user-owned USD documents. Twin default-scene
+//!   documents remain internal scene leases until the user opens or edits one.
 //! - [`DocumentClosed`] →
 //!   unregister by stage id (idempotent — Modelica closes are no-ops).
 //!
@@ -20,10 +18,12 @@
 //! is in place so the loader slots in alongside Twin externals.
 
 use bevy::prelude::*;
+use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
 use lunco_workbench::{BrowserSectionRegistry, PanelId};
 
 use crate::document::UsdDocument;
+use crate::twin_projection::UsdDocumentUserOwned;
 use lunco_doc_bevy::DocumentRegistry;
 
 pub mod browser_dispatch;
@@ -89,6 +89,7 @@ impl Plugin for UsdUiPlugin {
             .register(SceneFilesSection);
 
         app.add_observer(register_workspace_stage_on_doc_opened);
+        app.add_observer(register_workspace_stage_on_doc_user_owned);
         app.add_observer(drop_workspace_stage_on_doc_closed);
 
         // Document hot-exit: persist & restore open USD buffers via the
@@ -157,12 +158,32 @@ fn badge_externally_changed_usd_docs(
 fn register_workspace_stage_on_doc_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,
+    backed: Res<crate::twin_projection::DocBackedTwinScenes>,
+    mut loaded: ResMut<LoadedUsdStages>,
+) {
+    let doc = trigger.event().doc;
+    if !registry.contains(doc) || !backed.is_user_owned(doc) {
+        return;
+    }
+    register_workspace_stage(doc, &mut loaded);
+}
+
+/// Expose a Twin document only after it becomes user-owned. This covers a
+/// scene the user edits while it is running: it started as an internal Twin
+/// projection, so its initial `DocumentOpened` event was intentionally hidden.
+fn register_workspace_stage_on_doc_user_owned(
+    trigger: On<UsdDocumentUserOwned>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
     mut loaded: ResMut<LoadedUsdStages>,
 ) {
     let doc = trigger.event().doc;
     if !registry.contains(doc) {
         return;
     }
+    register_workspace_stage(doc, &mut loaded);
+}
+
+fn register_workspace_stage(doc: DocumentId, loaded: &mut LoadedUsdStages) {
     let stage = WorkspaceStage::new(doc);
     // Guard against duplicate registration if the same DocumentOpened
     // somehow fires twice (replay, observer ordering quirks).
@@ -212,6 +233,9 @@ mod tests {
             )
             .0
         };
+        app.world_mut()
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .claim_user(doc_id);
         // Drain pending events → DocumentOpened trigger → observer
         // registers the WorkspaceStage. Two updates so the trigger
         // queue flushes before we assert.
@@ -224,6 +248,39 @@ mod tests {
             loaded.entries[0].id(),
             format!("workspace-usd:{}", doc_id.raw())
         );
+    }
+
+    #[test]
+    fn twin_scene_document_is_hidden_until_user_owned() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(crate::commands::UsdCommandsPlugin);
+        app.add_plugins(UsdUiPlugin);
+        app.update();
+
+        let doc_id = {
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.open_file(
+                "/tmp/twin-scene.usda",
+                "#usda 1.0\ndef Xform \"World\" {}\n".to_string(),
+            )
+            .0
+        };
+        app.world_mut()
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .track(
+                doc_id,
+                "/tmp/twin".into(),
+                "twin".into(),
+                "twin-scene.usda".into(),
+            );
+
+        app.update();
+        app.update();
+
+        assert!(app.world().resource::<LoadedUsdStages>().entries.is_empty());
     }
 
     /// Closing the document drops the corresponding stage entry.
@@ -242,6 +299,9 @@ mod tests {
             reg.open_file("/tmp/scene.usda", "#usda 1.0\n".to_string())
                 .0
         };
+        app.world_mut()
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .claim_user(doc_id);
         app.update();
         app.update();
         assert_eq!(app.world().resource::<LoadedUsdStages>().entries.len(), 1);

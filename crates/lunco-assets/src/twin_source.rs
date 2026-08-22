@@ -105,6 +105,17 @@ fn canonical_root(root: &Path) -> PathBuf {
 }
 
 impl TwinRoots {
+    fn clear_overlays_for_names(&self, names: &[String]) {
+        if let Ok(mut overlays) = self.overlays.write() {
+            overlays.retain(|path, _| {
+                path.components()
+                    .next()
+                    .and_then(|component| component.as_os_str().to_str())
+                    .is_none_or(|name| !names.iter().any(|removed| removed == name))
+            });
+        }
+    }
+
     /// Map a Twin `name` to its absolute root folder, returning the name
     /// actually assigned — **callers must use the returned name**, not the one
     /// they passed.
@@ -253,14 +264,24 @@ impl TwinRoots {
         if removed.is_empty() {
             return;
         }
-        if let Ok(mut overlays) = self.overlays.write() {
-            overlays.retain(|path, _| {
-                path.components()
-                    .next()
-                    .and_then(|component| component.as_os_str().to_str())
-                    .is_none_or(|name| !removed.iter().any(|removed| removed == name))
-            });
+        self.clear_overlays_for_names(&removed);
+    }
+
+    /// Retire one synthetic or user-session Twin authority by its exact name,
+    /// including its composed-document overlays. This is distinct from
+    /// [`unregister_root`](Self::unregister_root): several authorities may
+    /// intentionally point at the same directory, so a document view must not
+    /// tear down an unrelated Twin merely because their roots match.
+    pub fn unregister_name(&self, name: &str) {
+        let removed = self
+            .roots
+            .write()
+            .ok()
+            .and_then(|mut roots| roots.remove(name).map(|_| name.to_string()));
+        if removed.is_none() {
+            return;
         }
+        self.clear_overlays_for_names(&[name.to_string()]);
     }
 }
 
@@ -536,6 +557,26 @@ mod tests {
         assert!(roots.root_of(&name).is_none());
         assert!(roots
             .overlay_for(Path::new("moonbase/scene.usda"))
+            .is_none());
+    }
+
+    #[test]
+    fn unregistering_a_name_preserves_another_authority_on_the_same_root() {
+        let roots = TwinRoots::default();
+        let twin = roots.register("moonbase", "/tmp/moonbase");
+        let session = roots.register("__viewport_1", "/tmp/moonbase");
+        roots.set_overlay(&twin, "scene.usda", Arc::new(b"twin".to_vec()));
+        roots.set_overlay(&session, "scene.usda", Arc::new(b"session".to_vec()));
+
+        roots.unregister_name(&session);
+
+        assert!(roots.root_of(&twin).is_some());
+        assert!(roots.root_of(&session).is_none());
+        assert!(roots
+            .overlay_for(Path::new("moonbase/scene.usda"))
+            .is_some());
+        assert!(roots
+            .overlay_for(Path::new("__viewport_1/scene.usda"))
             .is_none());
     }
 
