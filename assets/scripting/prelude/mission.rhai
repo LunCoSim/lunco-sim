@@ -66,6 +66,7 @@ fn __obj_ready(m, requires) {
 fn __advance_objective(me, o, now) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
+        mission_checkpoint(me, "objective:" + o.id, "failed");
         emit("OBJECTIVE_FAILED", o.id);
         return o;
     }
@@ -77,6 +78,7 @@ fn __advance_objective(me, o, now) {
         if (now - o.t0) < o.dwell { return o; }
     }
     o.state = "complete";
+    mission_checkpoint(me, "objective:" + o.id, "complete");
     emit("OBJECTIVE_COMPLETE", o.id);
     if o.on_complete != () { o.on_complete.call(me); }
     o
@@ -143,10 +145,29 @@ fn __mission_hud(m) {
     out
 }
 
+/// Restore only terminal objective transitions. Dwell timers and event latches
+/// are deliberately transient: replaying an event or pretending a partially
+/// held condition survived a restart would make a mission non-deterministic.
+fn __restore_mission(me, m) {
+    for i in 0..m.len() {
+        let saved = mission_checkpoint_read(me, "objective:" + m[i].id);
+        if saved == "complete" { m[i].state = "complete"; }
+        if saved == "failed"   { m[i].state = "failed"; }
+    }
+    m
+}
+
 /// Engine driver — called once after on_start; seeds `this.mission` from a user
 /// `mission(me)` if defined and not already set.
 fn __init_mission(me) {
+    if this.__mission_restored == true { return; }
     if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
+    if this.mission != () {
+        this.mission = __restore_mission(me, this.mission);
+        let s = __mission_status(this.mission);
+        if s.all_done || s.any_failed { this.__mission_done = true; }
+        this.__mission_restored = true;
+    }
 }
 
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────

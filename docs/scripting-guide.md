@@ -90,20 +90,35 @@ verbs built on the raw `cmd`/`get` bridge. No control loops to hand-code.
 Attach it to a rover. Get the rover's id (`list_entities()` or the UI), then fire
 `RunScenario` over the API (the same path MCP and in-app launchers use):
 
+`RunScenario.source` is the Rhai source text. It is not a filesystem path. For a
+file-backed script, read the file into the request body; this keeps the command
+contract identical for HTTP, MCP, and the in-app editor:
+
+```bash
+./scripts/api/run_scenario.sh 4869542932533563 \
+  assets/scenarios/my_rover_mission.rhai 4101 '{}'
+```
+
+The wrapper is optional; it is equivalent to reading the file with `jq -Rs`
+and posting the tagged request directly.
+
 ```json
 {
   "type": "ExecuteCommand",
   "command": "RunScenario",
   "params": {
     "target": 4869542932533563,
-    "source": "assets/scenarios/my_rover_mission.rhai"
+    "source": "<rhai source text>"
   }
 }
 ```
 
 The rover drives the waypoints. Re-issue `RunScenario` on the same entity to
-**hot-reload** after you edit the file — no rebuild, no restart (state resets,
-the outgoing program's `on_stop` runs first).
+**hot-reload** after you edit the file by sending the updated contents again —
+no rebuild, no restart (state resets, the outgoing program's `on_stop` runs
+first). For a scene-authored file-backed program, use
+`uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@` instead;
+the asset pipeline owns loading and hot replacement.
 
 ### Inspect & debug
 
@@ -252,6 +267,16 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`/`wait_for_from(event, source_id)`; `seq([steps])` shorthand to build and run immediately.
 - **Task trees (`this.task`):** composites `seq`/`par_all`/`par_race`/`repeat`/`forever` plus the failure-aware kernel vocabulary `check(pred)`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and TICKED NATIVELY on the `lunco-behavior` kernel (the same engine the rover autopilot uses) — a `seq` advances through instantly-done steps within one tick, so use `wait`/`wait_until`/`wait_for` as the suspension points. Emits `TASK_COMPLETE` on root success, `TASK_FAILED` on root failure.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
+- **Script-first authoring:** `usd_document` / `usd_apply_ops` / `usd_add_prim`,
+  `attach_fixed` / `attach_revolute`, `modelica_apply` and typed Modelica op
+  constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
+  These are policy wrappers over the existing journaled command surfaces; USD
+  remains the scene/topology authority and Modelica remains the equation/graph
+  authority.
+- **Mission durability:** `mission_checkpoint` and
+  `mission_checkpoint_read` author phase state on the program prim as USD string
+  attributes. Use them at objective/phase boundaries so a task can resume after
+  a hot reload or restart without a second persistence mechanism.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
@@ -473,6 +498,10 @@ produces the same sequence — no explicit seeding needed.
 | [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via `run_plan` |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | the Layer-1 step sequencer |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
+| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and no `on_tick` loop |
+| [`script_first_robot.rhai`](../assets/scripting/examples/script_first_robot.rhai) | USD component assembly plus a Modelica control graph batch |
+| [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
+| [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
