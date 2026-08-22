@@ -68,10 +68,13 @@ pub struct TwinAdded {
 /// A Twin was just closed (removed from the Workspace). Documents
 /// that were associated with it are *not* closed automatically — they
 /// become loose docs until the Workspace is explicitly told otherwise.
-#[derive(Event, Clone, Copy, Debug)]
+#[derive(Event, Clone, Debug)]
 pub struct TwinClosed {
     /// The id that used to identify the Twin.
     pub twin: TwinId,
+    /// The root that was removed. Consumers use this to retire external
+    /// registries keyed by filesystem root before a replacement is opened.
+    pub root: std::path::PathBuf,
 }
 
 /// A Document was just opened (registered in the Workspace). The

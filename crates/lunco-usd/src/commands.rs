@@ -45,7 +45,7 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
-use lunco_workspace::{TwinAdded, WorkspaceResource};
+use lunco_workspace::{TwinAdded, TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
 use lunco_doc::OpenOutcome;
@@ -73,6 +73,11 @@ pub const USD_DOCUMENT_KIND: &str = "usd";
 #[derive(Resource, Default)]
 pub struct EmptyViewportReason(pub Option<String>);
 
+/// Telemetry mnemonic for a default Twin scene whose authoritative source did
+/// not become available. This is a scene-load failure, not a simulation fault:
+/// the viewport remains empty and a later Twin replacement is still admitted.
+pub(crate) const TWIN_SCENE_LOAD_FAILED: &str = "TWIN_SCENE_LOAD_FAILED";
+
 impl EmptyViewportReason {
     /// Record a diagnostic message naming why the viewport was just emptied.
     fn set(&mut self, msg: impl Into<String>) {
@@ -88,11 +93,67 @@ impl EmptyViewportReason {
 /// gets the document surface, even headless / sandbox bins.
 pub struct UsdCommandsPlugin;
 
+/// Session restore is the one document-open path that does not carry an
+/// explicit user-open command. A restored document is therefore promoted to a
+/// user lease here, while an automatically opened Twin scene is already linked
+/// to a scene lease and remains internal until the user acts on it.
+fn claim_user_document_on_opened(
+    trigger: On<DocumentOpened>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc;
+    if !registry.contains(doc) || backed.coords_of(doc).is_some() {
+        return;
+    }
+    if backed.claim_user(doc) {
+        commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+    }
+}
+
+/// Registry closure is the final lifetime edge for projection bookkeeping.
+/// Remove both scene coordinates and user claims so a closed document cannot
+/// be rediscovered by a later stage-path lookup.
+fn forget_backed_document_on_closed(
+    trigger: On<DocumentClosed>,
+    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+) {
+    backed.forget_document(trigger.event().doc);
+}
+
+/// Workspace replacement owns the scene boundary. Closing the old Twin must
+/// clear its mounted USD scene immediately, even when the replacement Twin's
+/// asynchronous folder scan later fails or takes a long time.
+fn clear_scene_on_twin_closed(
+    trigger: On<TwinClosed>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
+    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    mut commands: Commands,
+) {
+    let root = trigger.event().root.clone();
+    if let Some(twin_roots) = twin_roots {
+        twin_roots.unregister_root(&root);
+    }
+    pending_twin.release_root(&root);
+    for doc in backed.release_root(&root) {
+        registry.remove(doc);
+    }
+    commands.trigger(ClearScene {});
+}
+
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
+        app.add_observer(clear_scene_on_twin_closed);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::twin_projection::reset_scene_projection_state,
+        );
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -173,6 +234,8 @@ impl Plugin for UsdCommandsPlugin {
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
+        app.add_observer(claim_user_document_on_opened);
+        app.add_observer(forget_backed_document_on_closed);
         app.init_resource::<crate::live_consume::LiveTransformEditHints>();
         // Referenced spawns whose asset closure is still loading (fetched once,
         // then authored onto the live stage — no whole-scene reload).
@@ -253,10 +316,10 @@ fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
-    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer` /
-    // `Assets<UsdSourceText>`. The doc-backed mount path (`drain_pending_twin_docs`)
-    // is gated on BOTH, so defer to it only when both exist — otherwise E1b is
-    // skipped and `LoadScene` mounts the scene directly.
+    // Optional because headless hosts may not install the asset pipeline. The
+    // authoritative doc-backed mount below is the only production path; the
+    // test-only branch preserves this observer's decision coverage in
+    // MinimalPlugins apps without pretending to mount a scene there.
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<lunco_usd_bevy::UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
@@ -300,6 +363,7 @@ fn open_usd_docs_on_twin_added(
     let twin_name = twin_roots.register(&twin_name, &twin.root);
     match default_scene {
         Some(scene) => {
+            let scene_uri = lunco_assets::twin_uri(&twin_name, scene);
             // Load the scene THROUGH the `twin://` source registered above —
             // never a bare absolute path. Works identically on native (fs) and
             // web (http), and keeps the scene's co-located relative refs
@@ -314,8 +378,6 @@ fn open_usd_docs_on_twin_added(
             // `restore_runtime` forced a whole-scene rebuild ~70 ms later —
             // every prim (rovers included) spawned twice. Read the base text
             // THROUGH the twin source (web-ready) rather than `std::fs`.
-            // Headless/test apps without the asset pipeline mount directly —
-            // they have no doc projection to wait for.
             if let (Some(asset_server), Some(_)) = (&asset_server, &usd_sources) {
                 info!(
                     "[twin] doc-backing starting scene `twin://{}/{}` (twin `{}`) — mount follows",
@@ -323,21 +385,37 @@ fn open_usd_docs_on_twin_added(
                     scene,
                     twin.root.display()
                 );
-                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(
-                    lunco_assets::twin_uri(&twin_name, scene),
+                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(scene_uri.clone());
+                pending_twin.push(
+                    handle,
+                    twin_name.clone(),
+                    scene.to_string(),
+                    twin.root.join(scene),
+                    twin.root.clone(),
                 );
-                pending_twin.push(handle, twin_name, scene.to_string(), twin.root.join(scene));
-            } else {
+            }
+            #[cfg(test)]
+            if asset_server.is_none() || usd_sources.is_none() {
                 info!(
-                    "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
+                    "[twin:test] recording starting scene `twin://{}/{}` (twin `{}`)",
                     twin_name,
                     scene,
                     twin.root.display()
                 );
                 commands.trigger(LoadScene {
-                    path: lunco_assets::twin_uri(&twin_name, scene),
+                    path: scene_uri,
                     root_prim: String::new(),
                 });
+            }
+            #[cfg(not(test))]
+            if asset_server.is_none() || usd_sources.is_none() {
+                let detail = format!(
+                    "cannot load `{}`: the USD asset pipeline is not installed",
+                    scene_uri
+                );
+                warn!("[twin] {detail}");
+                empty_reason.set(detail.clone());
+                lunco_core::trigger_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
             }
         }
         None => {
@@ -914,6 +992,12 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
                     .open_file(load.path.clone(), source);
+                if world
+                    .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+                    .claim_user(doc)
+                {
+                    world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+                }
                 // A re-open that couldn't take the disk bytes is not an error,
                 // but it IS a surprise the user should see — "I opened the file
                 // and nothing happened" otherwise. `warn!` alone was invisible
@@ -984,6 +1068,13 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
             DEFAULT_USDA_SCAFFOLD.to_string(),
             lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
         );
+        drop(registry);
+        if world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .claim_user(doc_id)
+        {
+            world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc: doc_id });
+        }
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
 }
@@ -1118,9 +1209,17 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
         // `wire_usd_journal_recorders`, so a successful `apply` records the
         // lossless (forward, inverse) pair — no per-op recording code here,
         // and the same seam journals undo/redo too.
-        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-        match registry.apply(doc, op) {
+        let result = world
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .apply(doc, op);
+        match result {
             Ok(ack) => {
+                if world
+                    .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+                    .claim_user(doc)
+                {
+                    world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+                }
                 bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
             }
             Err(reject) => {
@@ -1164,6 +1263,8 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 pub fn on_undo_usd_document(
     trigger: On<UndoDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
     let outcome = {
@@ -1178,6 +1279,9 @@ pub fn on_undo_usd_document(
             // notification has to be raised by hand (documented on `host_mut`). The twin
             // projection then re-derives the scene.
             registry.mark_changed(doc);
+            if backed.claim_user(doc) {
+                commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+            }
             bevy::log::info!("[usd] undo applied on {doc}");
         }
         Ok(false) => bevy::log::info!("[usd] nothing to undo on {doc}"),
@@ -1191,6 +1295,8 @@ pub fn on_undo_usd_document(
 pub fn on_redo_usd_document(
     trigger: On<RedoDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
     let outcome = {
@@ -1202,6 +1308,9 @@ pub fn on_redo_usd_document(
     match outcome {
         Ok(true) => {
             registry.mark_changed(doc);
+            if backed.claim_user(doc) {
+                commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+            }
             bevy::log::info!("[usd] redo applied on {doc}");
         }
         Ok(false) => bevy::log::info!("[usd] nothing to redo on {doc}"),
@@ -1300,6 +1409,13 @@ pub fn apply_ops_as_change_set(
         Some(j) => j.change_set(label, || apply_all(world)),
         None => apply_all(world),
     };
+    if applied != 0
+        && world
+            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .claim_user(doc)
+    {
+        world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+    }
     (applied, total)
 }
 
@@ -1783,7 +1899,12 @@ mod tests {
         let scene = std::path::Path::new("/twins/moonbase/scenes/luncosim.usda");
 
         let (doc, _) = registry.open_file(scene.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(doc, "moonbase".into(), "scenes/luncosim.usda".into());
+        backed.track(
+            doc,
+            "/twins/moonbase".into(),
+            "moonbase".into(),
+            "scenes/luncosim.usda".into(),
+        );
 
         assert_eq!(
             doc_backed_source_for_abs(scene, &registry, &backed).as_deref(),
@@ -1806,7 +1927,12 @@ mod tests {
         let untracked = std::path::Path::new("/twins/moonbase/scenes/other.usda");
 
         let (doc, _) = registry.open_file(tracked.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(doc, "moonbase".into(), "scenes/luncosim.usda".into());
+        backed.track(
+            doc,
+            "/twins/moonbase".into(),
+            "moonbase".into(),
+            "scenes/luncosim.usda".into(),
+        );
         // A document exists for this file, but no twin scene is backed by it.
         registry.open_file(untracked.to_path_buf(), "#usda 1.0\n".to_string());
 

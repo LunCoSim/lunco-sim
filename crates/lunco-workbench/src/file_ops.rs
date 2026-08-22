@@ -45,8 +45,8 @@ use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
 use crate::picker::{PickFollowUp, PickResolved};
 use lunco_workspace::open::{
-    close_all_open_folders, drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace,
-    AddTwin, OpenFolder, OpenTwin, PendingTwinOpens,
+    drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace, AddTwin, OpenFolder, OpenTwin,
+    PendingTwinOpens, TwinOpenMode,
 };
 use lunco_workspace::{FileRenamed, WorkspaceResource};
 
@@ -244,9 +244,8 @@ fn on_show_open_folder_picker(_trigger: On<ShowOpenFolderPicker>, mut commands: 
 fn on_open_file(
     trigger: On<OpenFile>,
     _registry: Res<DocumentKindRegistry>,
-    mut workspace: ResMut<WorkspaceResource>,
+    workspace: Res<WorkspaceResource>,
     mut pending: ResMut<PendingTwinOpens>,
-    mut commands: Commands,
 ) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
@@ -260,8 +259,8 @@ fn on_open_file(
     // handled by the USD-side observer.
     if is_scene_path(&path) && !is_path_inside_open_twin(std::path::Path::new(&path), &workspace) {
         // VS Code semantics, same as OpenFolder: opening replaces the workspace
-        // root rather than accumulating one per scene.
-        close_all_open_folders(&mut workspace, &mut commands, "OpenFile");
+        // root rather than accumulating one per scene. The active root survives
+        // until the candidate scan succeeds.
         spawn_twin_from_scene(std::path::Path::new(&path), &mut pending, "OpenFile");
     }
 }
@@ -337,7 +336,7 @@ pub(crate) fn spawn_twin_from_scene(
                 .to_string_lossy()
                 .into_owned()
         });
-    spawn_twin_scan(&root, pending, log_tag, Some(rel));
+    spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
 }
 
 /// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].

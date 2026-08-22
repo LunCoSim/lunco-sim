@@ -35,12 +35,9 @@ use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 /// this the user is left staring at an unchanged workspace with the reason only
 /// in a terminal they are not watching.
 ///
-/// NOTE (workspace-wide gap, not this module's to close): several crates
-/// document `Severity::Error` telemetry as "the workbench status bar surfaces
-/// it", but no observer in the workspace actually bridges `TelemetryEvent` to
-/// `lunco_workbench::status_bus::StatusBus`. Publishing here is still the right
-/// and only correct move — it is the one bus every host can see — but the
-/// status-bar fan-out has to be built once, centrally, for all of them.
+/// The workbench's `StatusBusPlugin` forwards error/critical events to the
+/// status bar when that UI is present; headless hosts still receive the same
+/// event on the shared telemetry bus.
 ///
 /// The payload is a human-readable string naming WHICH command, WHICH path, and
 /// WHY — that string is what a status bar / diagnostics row shows verbatim.
@@ -75,7 +72,6 @@ pub struct OpenTwin {
 #[on_command(OpenTwin)]
 fn on_open_twin(
     trigger: On<OpenTwin>,
-    mut workspace: ResMut<WorkspaceResource>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
@@ -88,15 +84,15 @@ fn on_open_twin(
     let folder = std::path::Path::new(&path);
     let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
     if !manifest.is_file() {
-        warn!(
-            "[OpenTwin] {} has no {} — refusing (use OpenFolder for plain folders)",
-            path,
+        let detail = format!(
+            "OpenTwin failed: `{path}` has no {} — use OpenFolder for plain folders",
             lunco_twin::MANIFEST_FILENAME
         );
+        warn!("{detail}");
+        commands.trigger(twin_open_failed(detail));
         return;
     }
-    close_all_open_folders(&mut workspace, &mut commands, "OpenTwin");
-    spawn_twin_from_path(folder, &mut pending, "OpenTwin");
+    spawn_twin_from_path(folder, &mut pending, "OpenTwin", TwinOpenMode::Replace);
 }
 
 /// Open a folder as the workspace root — a Twin if it has a `twin.toml`,
@@ -116,7 +112,6 @@ pub struct OpenFolder {
 #[on_command(OpenFolder)]
 fn on_open_folder(
     trigger: On<OpenFolder>,
-    mut workspace: ResMut<WorkspaceResource>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
 ) {
@@ -138,10 +133,10 @@ fn on_open_folder(
         return;
     }
     // VS Code semantics: "Open Folder" *replaces* the current workspace
-    // folders. Callers that want to keep existing roots and add another fire
+    // folders. The replacement is committed only after the off-thread scan
+    // succeeds; callers that want to keep existing roots and add another fire
     // `AddFolderToWorkspace` instead.
-    close_all_open_folders(&mut workspace, &mut commands, "OpenFolder");
-    spawn_twin_from_path(folder, &mut pending, "OpenFolder");
+    spawn_twin_from_path(folder, &mut pending, "OpenFolder", TwinOpenMode::Replace);
 }
 
 /// Add a folder to the workspace **without** closing the open ones —
@@ -175,7 +170,12 @@ fn on_add_folder_to_workspace(
         commands.trigger(AddTwin { path });
         return;
     }
-    spawn_twin_from_path(folder, &mut pending, "AddFolderToWorkspace");
+    spawn_twin_from_path(
+        folder,
+        &mut pending,
+        "AddFolderToWorkspace",
+        TwinOpenMode::Add,
+    );
 }
 
 /// Strict variant of [`AddFolderToWorkspace`] — requires a `twin.toml`.
@@ -189,21 +189,35 @@ pub struct AddTwin {
 }
 
 #[on_command(AddTwin)]
-fn on_add_twin(trigger: On<AddTwin>, mut pending: ResMut<PendingTwinOpens>) {
+fn on_add_twin(
+    trigger: On<AddTwin>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
+) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
         return; // windowed hosts answer this with a picker
     }
     let folder = std::path::Path::new(&path);
     if !folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
-        warn!(
-            "[AddTwin] {} has no {} — refusing (use AddFolderToWorkspace for plain folders)",
-            path,
+        let detail = format!(
+            "AddTwin failed: `{path}` has no {} — use AddFolderToWorkspace for plain folders",
             lunco_twin::MANIFEST_FILENAME
         );
+        warn!("{detail}");
+        commands.trigger(twin_open_failed(detail));
         return;
     }
-    spawn_twin_from_path(folder, &mut pending, "AddTwin");
+    spawn_twin_from_path(folder, &mut pending, "AddTwin", TwinOpenMode::Add);
+}
+
+/// How a completed asynchronous folder scan is admitted to the workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TwinOpenMode {
+    /// Replace every currently open Twin after the candidate has been scanned.
+    Replace,
+    /// Add the candidate without closing existing Twins.
+    Add,
 }
 
 /// Close every open folder/Twin, firing [`TwinClosed`] for each.
@@ -211,15 +225,18 @@ fn on_add_twin(trigger: On<AddTwin>, mut pending: ResMut<PendingTwinOpens>) {
 /// Shared by the replace-semantics openers ([`OpenTwin`], [`OpenFolder`], and
 /// the workbench's `OpenFile`-on-a-scene), so "replacing the workspace" means
 /// the same thing everywhere.
-pub fn close_all_open_folders(
+fn close_all_open_folders(
     workspace: &mut WorkspaceResource,
     commands: &mut Commands,
     log_tag: &str,
 ) {
     let ids: Vec<crate::TwinId> = workspace.twins().map(|(id, _)| id).collect();
     for id in ids {
+        let Some(root) = workspace.twin(id).map(|twin| twin.root.clone()) else {
+            continue;
+        };
         workspace.close_twin(id);
-        commands.trigger(TwinClosed { twin: id });
+        commands.trigger(TwinClosed { twin: id, root });
         info!("[{log_tag}] closed pre-existing Twin {:?}", id);
     }
 }
@@ -236,6 +253,15 @@ pub struct PendingTwinOpens {
     tasks: Vec<TwinOpenTask>,
 }
 
+impl PendingTwinOpens {
+    /// Cancel scans superseded by a newer replacement request. Dropping the
+    /// task handles prevents their results from being observed; the candidate
+    /// that completes owns the next workspace commit.
+    fn cancel_all(&mut self) {
+        self.tasks.clear();
+    }
+}
+
 struct TwinOpenTask {
     task: Task<Result<TwinMode, TwinError>>,
     path: std::path::PathBuf,
@@ -243,6 +269,8 @@ struct TwinOpenTask {
     /// Scene to select once the scan lands, relative to the scanned folder.
     /// `Some` when the caller opened a *scene file* rather than a folder.
     scene: Option<String>,
+    /// Replacement is committed only after this task returns a valid Twin.
+    mode: TwinOpenMode,
 }
 
 /// Shared helper for Open Folder / Open Twin / Add Folder / Add Twin.
@@ -254,8 +282,9 @@ pub fn spawn_twin_from_path(
     folder: &std::path::Path,
     pending: &mut PendingTwinOpens,
     log_tag: &str,
+    mode: TwinOpenMode,
 ) {
-    spawn_twin_scan(folder, pending, log_tag, None);
+    spawn_twin_scan(folder, pending, log_tag, None, mode);
 }
 
 /// As [`spawn_twin_from_path`], but selects `scene` (root-relative) once the
@@ -265,7 +294,11 @@ pub fn spawn_twin_scan(
     pending: &mut PendingTwinOpens,
     log_tag: &str,
     scene: Option<String>,
+    mode: TwinOpenMode,
 ) {
+    if mode == TwinOpenMode::Replace {
+        pending.cancel_all();
+    }
     let path = folder.to_path_buf();
     let scan_path = path.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
@@ -281,6 +314,7 @@ pub fn spawn_twin_scan(
         path,
         log_tag: log_tag.to_string(),
         scene,
+        mode,
     });
 }
 
@@ -305,6 +339,9 @@ pub fn drain_pending_twin_opens(
                 // `twin.toml` happened to name as default.
                 if let Some(rel) = &entry.scene {
                     twin.set_default_scene(rel.clone());
+                }
+                if entry.mode == TwinOpenMode::Replace {
+                    close_all_open_folders(&mut workspace, &mut commands, &entry.log_tag);
                 }
                 let twin_id = workspace.add_twin(twin);
                 commands.trigger(TwinAdded { twin: twin_id });
@@ -361,3 +398,57 @@ register_commands!(
     on_add_folder_to_workspace,
     on_add_twin,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_replacement_scan_keeps_the_active_twin() {
+        let good = tempfile::tempdir().expect("good Twin directory");
+        std::fs::write(
+            good.path().join(lunco_twin::MANIFEST_FILENAME),
+            "name = \"good\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("good manifest");
+        let bad = tempfile::tempdir().expect("bad Twin directory");
+        std::fs::write(
+            bad.path().join(lunco_twin::MANIFEST_FILENAME),
+            "name = [not valid toml",
+        )
+        .expect("bad manifest");
+
+        let existing = match TwinMode::open(good.path()).expect("good Twin opens") {
+            TwinMode::Twin(twin) => twin,
+            other => panic!("expected Twin, got {other:?}"),
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<WorkspaceResource>()
+            .init_resource::<PendingTwinOpens>()
+            .add_systems(Update, drain_pending_twin_opens);
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(existing);
+
+        let good_root = good.path().to_path_buf();
+        {
+            let mut pending = app.world_mut().resource_mut::<PendingTwinOpens>();
+            spawn_twin_from_path(bad.path(), &mut pending, "test", TwinOpenMode::Replace);
+        }
+        for _ in 0..60 {
+            app.update();
+            if app.world().resource::<PendingTwinOpens>().tasks.is_empty() {
+                break;
+            }
+        }
+
+        let workspace = app.world().resource::<WorkspaceResource>();
+        assert_eq!(workspace.twins().count(), 1);
+        assert_eq!(
+            workspace.twins().next().map(|(_, twin)| &twin.root),
+            Some(&good_root)
+        );
+    }
+}

@@ -34,11 +34,12 @@ use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, MAX_CRATERS_PER_HA};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+use web_time::Instant;
 
 /// Telemetry event name published when a DEM terrain build does not produce a
 /// terrain: an unreadable/unfetchable heightmap, a failed worker dispatch, a
-/// failed bake stage, or a build that wedged past the watchdog deadline. The
-/// payload is a human-readable string naming the site/DEM and the cause.
+/// failed coarse bake stage, or a build that wedged before a terrain existed.
+/// The payload is a human-readable string naming the site/DEM and the cause.
 ///
 /// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
 /// error telemetry observer surfaces it. Terrain IS the world here: a `warn!`
@@ -47,14 +48,30 @@ use wasm_bindgen::JsCast;
 /// tell "still loading" from "never coming".
 pub const DEM_BUILD_FAILED: &str = "DEM_BUILD_FAILED";
 
-/// The one shape every [`DEM_BUILD_FAILED`] publication takes, so the payload
-/// convention (a cause string naming the DEM/site and the underlying error)
-/// cannot drift between the native, web and watchdog sites.
-fn dem_build_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
+/// Telemetry event name published when the optional full-detail DEM
+/// refinement fails after the coarse terrain is already active. This is a
+/// warning, not a terminal build failure: physics and height queries continue
+/// using the coarse product and scene teardown remains the ownership boundary.
+pub const DEM_REFINEMENT_FAILED: &str = "DEM_REFINEMENT_FAILED";
+
+/// Construct terrain failure telemetry for the selected lifecycle phase.
+/// Keeping the mnemonic and severity decision here prevents native, web, and
+/// watchdog paths from disagreeing about whether a coarse or full-stage error
+/// is terminal.
+fn dem_failure_event(
+    detail: impl Into<String>,
+    disposition: DemBuildFailureDisposition,
+) -> lunco_core::TelemetryEvent {
+    let (name, severity) = match disposition {
+        DemBuildFailureDisposition::Terminal => (DEM_BUILD_FAILED, lunco_core::Severity::Error),
+        DemBuildFailureDisposition::Refinement => {
+            (DEM_REFINEMENT_FAILED, lunco_core::Severity::Warning)
+        }
+    };
     lunco_core::TelemetryEvent {
-        name: DEM_BUILD_FAILED.into(),
+        name: name.into(),
         source: 0,
-        severity: lunco_core::Severity::Error,
+        severity,
         data: lunco_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
     }
@@ -322,6 +339,53 @@ pub struct TerrainGenStatus {
 /// cancels the actual job and reports it, so the two stories agree.
 const GEN_STATUS_MAX_SECS: f32 = 60.0;
 
+/// Wall-clock start of the current scene-owned terrain generation window.
+///
+/// This is a resource rather than a `Local` so the shared scene-teardown
+/// boundary can reset it before the replacement Twin starts. The next Twin
+/// must never inherit the outgoing Twin's watchdog age.
+#[derive(Resource, Default)]
+struct TerrainGenWatchdog {
+    started_at: Option<Instant>,
+}
+
+/// Mark a DEM build as a terminal scene fault and release the terrain hold
+/// immediately. The fault pauses physics through the shared safety gate while
+/// leaving the process and Twin manager alive, so a replacement scene can clear
+/// it at the normal teardown boundary.
+fn mark_dem_build_failed(
+    faults: &mut lunco_core::RuntimeFaults,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    entity: Entity,
+    detail: impl Into<String>,
+) {
+    faults.raise("terrain-build-failed", Some(entity), "DEM terrain", detail);
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, false);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DemBuildFailureDisposition {
+    Terminal,
+    Refinement,
+}
+
+fn report_dem_build_failed(
+    commands: &mut Commands,
+    faults: &mut lunco_core::RuntimeFaults,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    entity: Option<Entity>,
+    detail: impl Into<String>,
+    disposition: DemBuildFailureDisposition,
+) {
+    let detail = detail.into();
+    if let (DemBuildFailureDisposition::Terminal, Some(entity)) = (disposition, entity) {
+        mark_dem_build_failed(faults, holds, entity, detail.clone());
+    }
+    commands.trigger(dem_failure_event(detail, disposition));
+}
+
 /// Cancel generation owned by the scene being replaced. A build task and its
 /// status are scene state; allowing either to survive the teardown boundary
 /// makes the next scene inherit an old progress overlay (and, on native, keeps
@@ -337,6 +401,8 @@ fn cancel_terrain_generation_on_scene_teardown(
         )>,
     >,
     mut status: ResMut<TerrainGenStatus>,
+    mut watchdog: ResMut<TerrainGenWatchdog>,
+    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     for entity in &requests {
         commands
@@ -344,6 +410,10 @@ fn cancel_terrain_generation_on_scene_teardown(
             .try_remove::<(DemTerrainRequest, DemBuildTask, DemWorkerJob)>();
     }
     *status = TerrainGenStatus::default();
+    *watchdog = TerrainGenWatchdog::default();
+    if let Some(mut holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, false);
+    }
 }
 
 /// Derive [`TerrainGenStatus`] from the terrain build components each frame. A
@@ -357,13 +427,14 @@ fn cancel_terrain_generation_on_scene_teardown(
 /// (full). Native is one async task with no incremental signal → indeterminate.
 fn update_terrain_gen_status(
     mut commands: Commands,
-    time: Res<Time>,
     // `has_request` distinguishes web's two worker phases: the request is dropped
     // once the coarse grid lands, so `job && !request` = refining the full grid.
     requests: Query<(Entity, &DemTerrainRequest, Has<DemBuildTask>)>,
     worker_jobs: Query<(Entity, Option<&DemTerrainRequest>, &DemWorkerJob)>,
     mut status: ResMut<TerrainGenStatus>,
-    mut elapsed: Local<f32>,
+    mut watchdog: ResMut<TerrainGenWatchdog>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let mut baking = false; // native async bake task in flight
     let mut queued = false; // a request exists (queued or mid-bake)
@@ -400,24 +471,25 @@ fn update_terrain_gen_status(
     }
     // Only show the giant centered loader overlay during preparation, download,
     // and coarse build (before the first mesh/collider lands). Background
-    // refinement runs silently in the background, updating tiles dynamically.
-    let active = queued || streaming_coarse;
+    // refinement runs silently, but remains part of the liveness window so a
+    // lost full-resolution reply cannot leak a worker job forever.
+    let overlay_active = queued || streaming_coarse;
+    let generation_present = overlay_active || refining_full;
 
-    if !active {
+    if !generation_present {
         if status.active || status.user_dismissed {
             *status = TerrainGenStatus::default();
         }
-        *elapsed = 0.0;
+        watchdog.started_at = None;
         return;
     }
 
-    if status.user_dismissed {
-        status.active = false;
-        return;
-    }
+    let started_at = *watchdog.started_at.get_or_insert_with(Instant::now);
+    let elapsed = Instant::now()
+        .saturating_duration_since(started_at)
+        .as_secs_f32();
 
-    *elapsed += time.delta_secs();
-    if *elapsed > GEN_STATUS_MAX_SECS {
+    if elapsed > GEN_STATUS_MAX_SECS {
         warn!(
             "[terrain] generation held {GEN_STATUS_MAX_SECS}s — cancelling the wedged build \
              (lost worker reply or stuck bake?)"
@@ -430,7 +502,11 @@ fn update_terrain_gen_status(
         // eligible for a fresh `start_dem_builds` attempt (e.g. a re-issued
         // `SpawnDemTerrain`) instead of being skipped forever.
         let mut stuck: Vec<String> = Vec::new();
+        let mut failure_entity = None;
+        let mut missing_ground = false;
         for (entity, req, _) in &requests {
+            failure_entity.get_or_insert(entity);
+            missing_ground = true;
             stuck.push(
                 req.uri
                     .rsplit(['/', '\\'])
@@ -443,7 +519,9 @@ fn update_terrain_gen_status(
                 .entity(entity)
                 .try_remove::<(DemTerrainRequest, DemBuildTask)>();
         }
-        for (entity, _, _) in &worker_jobs {
+        for (entity, req, _) in &worker_jobs {
+            failure_entity.get_or_insert(entity);
+            missing_ground |= req.is_some();
             commands
                 .entity(entity)
                 .try_remove::<(DemTerrainRequest, DemWorkerJob)>();
@@ -453,12 +531,36 @@ fn update_terrain_gen_status(
         } else {
             stuck.join(", ")
         };
-        commands.trigger(dem_build_failed(format!(
-            "Terrain build for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and was \
-             cancelled — the ground is missing. Reload the scene to retry."
-        )));
+        let detail = if missing_ground {
+            format!(
+                "Terrain build for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and was \
+                 cancelled — the ground is missing. Reload the scene to retry."
+            )
+        } else {
+            format!(
+                "Terrain refinement for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and \
+                 was cancelled; the already-built coarse terrain remains active."
+            )
+        };
+        report_dem_build_failed(
+            &mut commands,
+            &mut faults,
+            holds.as_deref_mut(),
+            failure_entity,
+            detail,
+            if missing_ground {
+                DemBuildFailureDisposition::Terminal
+            } else {
+                DemBuildFailureDisposition::Refinement
+            },
+        );
         *status = TerrainGenStatus::default();
-        *elapsed = 0.0;
+        watchdog.started_at = None;
+        return;
+    }
+
+    if !overlay_active || status.user_dismissed {
+        status.active = false;
         return;
     }
 
@@ -877,6 +979,42 @@ fn static_visual_mesh(oracle: &crate::oracle::SurfaceOracle, target_res: usize) 
     static_visual_mesh_from_native(oracle, &native, target_res)
 }
 
+/// Build the two static products from the one composed terrain oracle.
+///
+/// Native and web must use the same materialization policy and the same
+/// terminal error boundary. Streaming consumers intentionally skip the
+/// product they own: collider-ring terrain has no static collider and LOD
+/// terrain has no static visual mesh.
+fn build_dem_products(
+    oracle: &crate::oracle::SurfaceOracle,
+    collider_ring: bool,
+    lod_viz: bool,
+    target_res: usize,
+) -> Result<(Option<Collider>, Option<MeshData>), String> {
+    let materialized = (!collider_ring || !lod_viz).then(|| oracle.materialize());
+    let collider = if collider_ring {
+        None
+    } else {
+        let Some(grid) = materialized.as_ref() else {
+            return Err("static collider requested without a materialized terrain grid".into());
+        };
+        let half_extent = grid.half_extent as f64;
+        Some(Collider::heightfield(
+            grid.to_avian_heights(),
+            DVec3::new(2.0 * half_extent, 1.0, 2.0 * half_extent),
+        ))
+    };
+    let mesh = if lod_viz {
+        None
+    } else {
+        let Some(grid) = materialized.as_ref() else {
+            return Err("static visual mesh requested without a materialized terrain grid".into());
+        };
+        Some(static_visual_mesh_from_native(oracle, grid, target_res))
+    };
+    Ok((collider, mesh))
+}
+
 #[derive(Component)]
 struct DemBuildTask(Task<Result<DemBuild, String>>);
 
@@ -942,7 +1080,7 @@ fn dem_build_from_baked(
     lod_viz: bool,
     target_res: usize,
     contributions: Vec<crate::oracle::HeightContribution>,
-) -> DemBuild {
+) -> Result<DemBuild, String> {
     let half_extent = baked.grid.half_extent;
     let base_grid = std::sync::Arc::new(baked.base_grid);
     // The worker's `base_grid` IS the (stamped) working grid, so ONE fold keys
@@ -954,32 +1092,8 @@ fn dem_build_from_baked(
         contributions,
         base_key,
     ));
-    // Static consumers rasterise the composed surface once; streaming consumers
-    // sample the oracle directly (so no materialize for the ring/tile path).
-    let needs_static_grid = !collider_ring || !lod_viz;
-    let materialized = needs_static_grid.then(|| oracle.materialize());
-    let collider = if collider_ring {
-        None
-    } else {
-        let g = materialized
-            .as_ref()
-            .expect("materialized for static collider");
-        let h = g.half_extent as f64;
-        Some(Collider::heightfield(
-            g.to_avian_heights(),
-            DVec3::new(2.0 * h, 1.0, 2.0 * h),
-        ))
-    };
-    let mesh = (!lod_viz).then(|| {
-        static_visual_mesh_from_native(
-            oracle.as_ref(),
-            materialized
-                .as_ref()
-                .expect("materialized for static visual mesh"),
-            target_res,
-        )
-    });
-    DemBuild {
+    let (collider, mesh) = build_dem_products(oracle.as_ref(), collider_ring, lod_viz, target_res)?;
+    Ok(DemBuild {
         collider,
         mesh,
         oracle: Some(oracle),
@@ -990,7 +1104,7 @@ fn dem_build_from_baked(
         native_res: baked.native_res,
         visual_target_res: target_res,
         site: baked.site,
-    }
+    })
 }
 
 /// The analytic height contributions for a terrain's layer stack — the SAME
@@ -1074,32 +1188,40 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
 /// the [`DemWorkerJob`] id plus a user-facing cause string. The task runs with no
 /// `World` access, so the REASON travels with the id and `finish_dem_worker`
 /// (the drain, which does have `Commands`) publishes it as
-/// [`DEM_BUILD_FAILED`] — the id alone would have made the failure unspeakable.
+/// [`DEM_BUILD_FAILED`] or [`DEM_REFINEMENT_FAILED`] — the id alone would have
+/// made the failure unspeakable.
 #[cfg(target_arch = "wasm32")]
 type WasmBakeFailure = (u32, String);
 
 #[cfg(target_arch = "wasm32")]
-static WASM_BAKE_FAILURES_TX: std::sync::OnceLock<std::sync::mpsc::Sender<WasmBakeFailure>> =
-    std::sync::OnceLock::new();
+struct WasmBakeFailures {
+    tx: std::sync::mpsc::Sender<WasmBakeFailure>,
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>>,
+}
+
 #[cfg(target_arch = "wasm32")]
-static WASM_BAKE_FAILURES_RX: std::sync::OnceLock<
-    std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>>,
-> = std::sync::OnceLock::new();
+static WASM_BAKE_FAILURES: std::sync::OnceLock<WasmBakeFailures> = std::sync::OnceLock::new();
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_bake_failures() -> &'static WasmBakeFailures {
+    WASM_BAKE_FAILURES.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        WasmBakeFailures {
+            tx,
+            rx: std::sync::Mutex::new(rx),
+        }
+    })
+}
 
 #[cfg(target_arch = "wasm32")]
 fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<WasmBakeFailure> {
-    WASM_BAKE_FAILURES_TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let _ = WASM_BAKE_FAILURES_RX.set(std::sync::Mutex::new(rx));
-        tx
-    })
+    &wasm_bake_failures().tx
 }
 
 #[cfg(target_arch = "wasm32")]
 fn get_wasm_bake_failures_rx(
 ) -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>> {
-    let _ = get_wasm_bake_failures_tx(); // ensures initialized
-    WASM_BAKE_FAILURES_RX.get().unwrap()
+    &wasm_bake_failures().rx
 }
 
 /// Kick a build for each pending request. On native (and the web fallback if no
@@ -1377,36 +1499,10 @@ fn start_dem_builds(
                 std::sync::Arc::new(tile),
                 contributions,
             ));
-            // Static consumers rasterise the composed surface once at base
-            // resolution; streaming consumers sample the oracle directly.
-            let needs_static_grid = !collider_ring || !lod_viz;
-            let materialized = needs_static_grid.then(|| oracle.materialize());
-            // Build the static heightfield collider HERE (off-thread) when this isn't
-            // a streamed collider ring — the parry heightfield build over a
-            // multi-million-point DEM is the load-time cost that used to stall the
-            // main thread in `finish_dem_builds`.
-            let collider = if collider_ring {
-                None
-            } else {
-                let g = materialized
-                    .as_ref()
-                    .expect("materialized for static collider");
-                let h = g.half_extent as f64;
-                Some(Collider::heightfield(
-                    g.to_avian_heights(),
-                    DVec3::new(2.0 * h, 1.0, 2.0 * h),
-                ))
-            };
-            // Static visual mesh unless lod_viz streams visual tiles instead.
-            let mesh = (!lod_viz).then(|| {
-                static_visual_mesh_from_native(
-                    oracle.as_ref(),
-                    materialized
-                        .as_ref()
-                        .expect("materialized for static visual mesh"),
-                    target_res,
-                )
-            });
+            // Static products are derived by the same helper as the web worker
+            // path; this task only owns the native bake and its retained base.
+            let (collider, mesh) =
+                build_dem_products(oracle.as_ref(), collider_ring, lod_viz, target_res)?;
             Ok(DemBuild {
                 collider,
                 mesh,
@@ -1436,6 +1532,8 @@ fn finish_dem_builds(
     // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     use bevy::tasks::futures_lite::future;
 
@@ -1460,12 +1558,20 @@ fn finish_dem_builds(
             Ok(b) => b,
             Err(err) => {
                 warn!("[dem-terrain] build failed: {err}");
-                // The terrain is simply ABSENT from here on — no collider, no
-                // mesh, no oracle. Say so where the user is looking.
-                commands.trigger(dem_build_failed(format!(
+                let detail = format!(
                     "Terrain build failed for DEM '{}' — no ground was created. {err}",
                     req.uri
-                )));
+                );
+                // The terrain is simply ABSENT from here on — no collider, no
+                // mesh, no oracle. Say so where the user is looking.
+                report_dem_build_failed(
+                    &mut commands,
+                    &mut faults,
+                    holds.as_deref_mut(),
+                    Some(entity),
+                    detail,
+                    DemBuildFailureDisposition::Terminal,
+                );
                 continue;
             }
         };
@@ -1659,6 +1765,8 @@ fn finish_dem_worker(
     // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let profile = match quality.validated_profile() {
         Ok(profile) => profile,
@@ -1673,16 +1781,27 @@ fn finish_dem_worker(
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
         while let Ok((failed_id, reason)) = rx.try_recv() {
-            if let Some((entity, _)) = jobs.iter().find(|(_, j)| j.id == failed_id) {
+            let entity = jobs
+                .iter()
+                .find(|(_, job)| job.id == failed_id)
+                .map(|(entity, _)| entity);
+            if let Some(entity) = entity {
                 commands
                     .entity(entity)
                     .remove::<(DemTerrainRequest, DemWorkerJob)>();
+                report_dem_build_failed(
+                    &mut commands,
+                    &mut faults,
+                    holds.as_deref_mut(),
+                    Some(entity),
+                    reason,
+                    DemBuildFailureDisposition::Terminal,
+                );
+            } else {
+                bevy::log::debug!(
+                    "[dem-terrain] ignoring stale failure for retired worker job {failed_id}: {reason}"
+                );
             }
-            // Published here rather than at the failing I/O step: the detached
-            // fetch/dispatch task has no `World`, so the cause rides the channel
-            // and reaches the user from the drain that owns `Commands`.
-            bevy::log::error!("[dem-terrain] {reason}");
-            commands.trigger(dem_build_failed(reason));
         }
     }
 
@@ -1700,21 +1819,42 @@ fn finish_dem_worker(
             (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
                 let contributions =
                     layer_contributions(stacks.get(entity).ok(), &grid, curvature_radius);
+                let site = reply.site.clone();
                 let baked = BakedGrid {
                     base_grid: grid.clone(),
                     grid,
-                    site: reply.site,
+                    site: site.clone(),
                     native_res: reply.native_res,
                     res: reply.res,
                     stage: lunco_terrain_bake::BakeStage::Coarse,
                 };
-                let built = dem_build_from_baked(
+                let built = match dem_build_from_baked(
                     baked,
                     job.collider_ring,
                     job.lod_viz,
                     job.target_res,
                     contributions,
-                );
+                ) {
+                    Ok(built) => built,
+                    Err(err) => {
+                        let detail = format!(
+                            "Terrain '{}': the coarse heightmap assembly failed — no ground was created. {err}",
+                            site
+                        );
+                        commands
+                            .entity(entity)
+                            .remove::<(DemTerrainRequest, DemWorkerJob)>();
+                        report_dem_build_failed(
+                            &mut commands,
+                            &mut faults,
+                            holds.as_deref_mut(),
+                            Some(entity),
+                            detail,
+                            DemBuildFailureDisposition::Terminal,
+                        );
+                        continue;
+                    }
+                };
                 // Drop the request so the physics hold releases (rovers settle on the
                 // coarse collider). Keep DemWorkerJob to receive the full grid.
                 commands.entity(entity).remove::<DemTerrainRequest>();
@@ -1787,18 +1927,36 @@ fn finish_dem_worker(
                     let baked = BakedGrid {
                         base_grid: grid.clone(),
                         grid,
-                        site: reply.site,
+                        site: reply.site.clone(),
                         native_res: reply.native_res,
                         res: reply.res,
                         stage: lunco_terrain_bake::BakeStage::Full,
                     };
-                    let built = dem_build_from_baked(
+                    let built = match dem_build_from_baked(
                         baked,
                         job.collider_ring,
                         job.lod_viz,
                         job.target_res,
                         contributions,
-                    );
+                    ) {
+                        Ok(built) => built,
+                        Err(err) => {
+                            let detail = format!(
+                                "Terrain '{}': the full heightmap assembly failed; the coarse preview remains active. {err}",
+                                reply.site
+                            );
+                            commands.entity(entity).remove::<DemWorkerJob>();
+                            report_dem_build_failed(
+                                &mut commands,
+                                &mut faults,
+                                holds.as_deref_mut(),
+                                Some(entity),
+                                detail,
+                                DemBuildFailureDisposition::Refinement,
+                            );
+                            continue;
+                        }
+                    };
                     commands.entity(entity).remove::<DemTerrainRequest>();
                     assemble_dem_build(
                         &mut commands,
@@ -1821,17 +1979,31 @@ fn finish_dem_worker(
                 // the LAST trace of it. A Coarse failure means no terrain at all;
                 // a Full failure means the coarse preview is all the user will
                 // ever get. Both are the user's business, not just the log's.
-                commands.trigger(dem_build_failed(match stage {
-                    lunco_terrain_bake::BakeStage::Full => format!(
-                        "Terrain '{}': the full-detail heightmap bake failed — the low-detail \
-                         preview is all that will load. {e}",
-                        reply.site
+                let (detail, disposition) = match stage {
+                    lunco_terrain_bake::BakeStage::Full => (
+                        format!(
+                            "Terrain '{}': the full-detail heightmap bake failed — the low-detail \
+                             preview is all that will load. {e}",
+                            reply.site
+                        ),
+                        DemBuildFailureDisposition::Refinement,
                     ),
-                    _ => format!(
-                        "Terrain '{}': the heightmap bake failed — no ground was created. {e}",
-                        reply.site
+                    lunco_terrain_bake::BakeStage::Coarse => (
+                        format!(
+                            "Terrain '{}': the heightmap bake failed — no ground was created. {e}",
+                            reply.site
+                        ),
+                        DemBuildFailureDisposition::Terminal,
                     ),
-                }));
+                };
+                report_dem_build_failed(
+                    &mut commands,
+                    &mut faults,
+                    holds.as_deref_mut(),
+                    Some(entity),
+                    detail,
+                    disposition,
+                );
                 if matches!(stage, lunco_terrain_bake::BakeStage::Full) {
                     commands.entity(entity).remove::<DemWorkerJob>();
                 } else {
@@ -2742,6 +2914,8 @@ pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .init_resource::<TerrainEditSeq>()
         .init_resource::<TerrainGenStatus>()
+        .init_resource::<TerrainGenWatchdog>()
+        .init_resource::<lunco_core::RuntimeFaults>()
         .init_resource::<crate::stream_viz::LodMeshCache>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
@@ -2840,10 +3014,15 @@ mod visual_product_tests {
     fn scene_teardown_cancels_generation_and_clears_status() {
         let mut app = App::new();
         app.init_resource::<TerrainGenStatus>();
+        app.init_resource::<TerrainGenWatchdog>();
+        app.init_resource::<lunco_physics::PhysicsHolds>();
         app.add_systems(
             lunco_core::SceneTeardown,
             cancel_terrain_generation_on_scene_teardown,
         );
+        app.world_mut()
+            .resource_mut::<lunco_physics::PhysicsHolds>()
+            .set(lunco_physics::PhysicsHolds::TERRAIN_READY, true);
         app.world_mut().resource_mut::<TerrainGenStatus>().active = true;
         app.world_mut().resource_mut::<TerrainGenStatus>().site = "apollo15".into();
         let entity = app
@@ -2869,5 +3048,50 @@ mod visual_product_tests {
         assert!(!status.active);
         assert!(status.site.is_empty());
         assert!(!status.user_dismissed);
+        assert!(!app
+            .world()
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
+        assert!(app
+            .world()
+            .resource::<TerrainGenWatchdog>()
+            .started_at
+            .is_none());
+    }
+
+    #[test]
+    fn terrain_failure_is_terminal_and_releases_only_the_terrain_gate() {
+        let entity = Entity::from_raw_u32(1).expect("valid test entity");
+        let mut faults = lunco_core::RuntimeFaults::default();
+        let mut holds = lunco_physics::PhysicsHolds::default();
+        holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, true);
+        holds.set(lunco_physics::PhysicsHolds::CINEMATIC, true);
+
+        mark_dem_build_failed(
+            &mut faults,
+            Some(&mut holds),
+            entity,
+            "heightmap decode failed",
+        );
+
+        let fault = faults.first.as_ref().expect("terrain fault recorded");
+        assert_eq!(fault.kind, "terrain-build-failed");
+        assert_eq!(fault.entity, Some(entity));
+        assert!(!holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
+        assert!(holds.holds(lunco_physics::PhysicsHolds::CINEMATIC));
+    }
+
+    #[test]
+    fn terrain_failure_telemetry_identifies_terminal_vs_refinement() {
+        let terminal = dem_failure_event("no ground", DemBuildFailureDisposition::Terminal);
+        assert_eq!(terminal.name, DEM_BUILD_FAILED);
+        assert_eq!(terminal.severity, lunco_core::Severity::Error);
+
+        let refinement = dem_failure_event(
+            "coarse terrain remains",
+            DemBuildFailureDisposition::Refinement,
+        );
+        assert_eq!(refinement.name, DEM_REFINEMENT_FAILED);
+        assert_eq!(refinement.severity, lunco_core::Severity::Warning);
     }
 }

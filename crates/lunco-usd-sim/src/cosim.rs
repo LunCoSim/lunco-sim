@@ -369,17 +369,28 @@ fn record_scene_load_terminal_outcome(
     let Some(outcome) = matching else {
         return;
     };
-    let transition = coordinator
-        .active()
-        .cloned()
-        .expect("SceneLoadInFlight must belong to the active scene transaction");
-    assert!(
-        matches!(
-            transition,
-            SceneTransition::Load { .. } | SceneTransition::Restart { .. }
-        ),
-        "only load and restart transactions may own SceneLoadInFlight"
-    );
+    let Some(transition) = coordinator.active().cloned() else {
+        // The stage outcome is stale: the scene was cleared before its asset
+        // terminal message arrived. The clear path already removed the load
+        // identity, but keep this guard local so a malformed event cannot
+        // panic the process.
+        warn!("[scene] ignoring stage outcome without an active scene transaction");
+        commands.remove_resource::<SceneLoadInFlight>();
+        return;
+    };
+    if !matches!(
+        &transition,
+        SceneTransition::Load { .. } | SceneTransition::Restart { .. }
+    ) {
+        // A load identity attached to a non-load transaction is a lifecycle
+        // violation. Turn it into a terminal failure so a queued replacement
+        // can proceed instead of leaving the coordinator permanently active.
+        let error = "scene load outcome arrived for a non-load transition".to_string();
+        warn!("[scene] {error}");
+        commands.remove_resource::<SceneLoadInFlight>();
+        commands.trigger(SceneTransitionFailed { transition, error });
+        return;
+    }
 
     if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
         commands.remove_resource::<SceneLoadInFlight>();
@@ -391,10 +402,17 @@ fn record_scene_load_terminal_outcome(
     let still_awaiting = q_awaiting
         .iter()
         .any(|prim| prim.stage_handle.id() == g.stage_id);
-    assert!(
-        !still_awaiting,
-        "loaded stage outcome reached Last before its USD projection queue drained"
-    );
+    if still_awaiting {
+        let error = format!(
+            "loaded stage `{}` reached its terminal asset outcome before USD projection finished",
+            g.path
+        );
+        error!("[scene] {error}");
+        commands.remove_resource::<SceneLoadInFlight>();
+        commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+        commands.trigger(SceneTransitionFailed { transition, error });
+        return;
+    }
 
     // A scene that is meant to be visible must provide its light through USD
     // (or the authored celestial bootstrap). Absence is reported, but it does
@@ -3732,6 +3750,10 @@ fn execute_admitted_clear_scene(
     commands.trigger(lunco_core::SceneTransitionStarted {
         transition: SceneTransition::Clear,
     });
+    // A clear invalidates a stage load that may still be waiting on an asset.
+    // Without removing this identity, a late outcome from the outgoing stage
+    // can close or assert against the replacement transaction.
+    commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
     clear_scene_entities(&mut commands, &scene);
     commands.queue(|world: &mut World| {

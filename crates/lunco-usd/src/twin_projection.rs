@@ -34,13 +34,21 @@
 //!    spawn whose asset isn't loaded yet is fetched once through
 //!    [`drain_ref_spawns`], then authored the same way.
 //!
+//! Ownership: a default Twin scene gets a scene lease in
+//! [`DocBackedTwinScenes`]. An explicit file open, new document, or authored edit
+//! promotes that document to a user lease. Closing a Twin releases its scene
+//! leases and removes documents with no remaining user lease; user documents
+//! remain available for the document UI and can be reused when the Twin opens
+//! again. This keeps runtime projection state bounded without discarding work
+//! the user explicitly opened or authored.
+//!
 //! Scope: the **default twin scene** uses the document overlay. Arbitrary
 //! `OpenFile` scenes retain their additive stage mount, while scheme-qualified
 //! sources (`mem://` / `bundled://`) remain directly addressable assets.
 
 use crate::document::UsdDocument;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bevy::asset::AssetId;
@@ -53,9 +61,19 @@ use lunco_usd_bevy::{
 };
 use lunco_usd_sim::cosim::LoadScene;
 
+use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
 use crate::document::UsdOp;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
+
+/// A USD document transitioned from a Twin-only scene lease to a user-facing
+/// session lease. The UI uses this to expose a document only after the user
+/// explicitly opened, created, or authored it.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct UsdDocumentUserOwned {
+    /// Document whose user-session lease was created.
+    pub doc: DocumentId,
+}
 
 /// Marks a live prim entity that refreshes its own content **in place**, so the
 /// twin projection must NOT structurally despawn/reload it on an attribute-only
@@ -79,6 +97,10 @@ struct PendingTwinDoc {
     rel: String,
     /// On-disk absolute path — the document origin (Save target + dedup key).
     abs_path: PathBuf,
+    /// Workspace Twin root that owns this pending projection request. The
+    /// document receives a scene lease only after the source is ready and is
+    /// retired with this root if the Twin closes first.
+    root: PathBuf,
     attempts: u32,
 }
 
@@ -97,20 +119,32 @@ impl PendingTwinDocs {
         name: String,
         rel: String,
         abs_path: PathBuf,
+        root: PathBuf,
     ) {
         self.items.push(PendingTwinDoc {
             handle,
             name,
             rel,
             abs_path,
+            root,
             attempts: 0,
         });
+    }
+
+    /// Release pending projection work for a closed Twin.
+    pub fn release_root(&mut self, root: &Path) {
+        self.items
+            .retain(|item| !lunco_doc::same_file(&item.root, root));
     }
 }
 
 /// The twin-source coordinates + last-synced generation for a doc-backed twin
 /// scene, so [`sync_twin_overlays`] re-serializes only when the document moved.
 struct TwinSceneRef {
+    /// Workspace Twin roots that own this live projection. This is distinct
+    /// from the document origin: a user-opened document may outlive its Twins,
+    /// and the same file can be projected by more than one open Twin.
+    roots: Vec<PathBuf>,
     name: String,
     rel: String,
     synced_generation: Option<u64>,
@@ -126,6 +160,9 @@ struct TwinSceneRef {
 #[derive(Resource, Default)]
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
+    /// Documents explicitly opened, created, or authored by the user. A
+    /// document can have both this lease and a live Twin scene lease.
+    user_owned: HashSet<DocumentId>,
 }
 
 impl DocBackedTwinScenes {
@@ -147,17 +184,77 @@ impl DocBackedTwinScenes {
         self.map.get(&doc).map(|s| (s.name.clone(), s.rel.clone()))
     }
 
+    /// Claim a document for the user-facing document session. Returns `true`
+    /// only when this call created the claim, allowing callers to publish one
+    /// ownership transition without duplicating lifecycle events.
+    pub fn claim_user(&mut self, doc: DocumentId) -> bool {
+        self.user_owned.insert(doc)
+    }
+
+    /// Whether the document has a user-facing lease.
+    pub fn is_user_owned(&self, doc: DocumentId) -> bool {
+        self.user_owned.contains(&doc)
+    }
+
     /// Track an already-allocated document as doc-backed under `(name, rel)`, so
     /// [`sync_twin_overlays`] keeps its overlay + live entities in step with the
     /// document generation. Idempotent — a document already tracked (e.g. a
     /// default twin scene) keeps its existing coordinates.
-    pub fn track(&mut self, doc: DocumentId, name: String, rel: String) {
-        self.map.entry(doc).or_insert(TwinSceneRef {
-            name,
-            rel,
-            synced_generation: None,
-            overlay_synced_generation: None,
+    pub fn track(&mut self, doc: DocumentId, root: PathBuf, name: String, rel: String) {
+        if let Some(scene) = self.map.get_mut(&doc) {
+            if !scene
+                .roots
+                .iter()
+                .any(|existing| lunco_doc::same_file(existing, &root))
+            {
+                scene.roots.push(root);
+            }
+            return;
+        }
+        self.map.insert(
+            doc,
+            TwinSceneRef {
+                roots: vec![root],
+                name,
+                rel,
+                synced_generation: None,
+                overlay_synced_generation: None,
+            },
+        );
+    }
+
+    /// Release the scene lease for a closed Twin and return documents that no
+    /// longer have any owner. User-owned documents stay in the registry.
+    pub fn release_root(&mut self, root: &Path) -> Vec<DocumentId> {
+        let mut released = Vec::new();
+        self.map.retain(|doc, scene| {
+            scene
+                .roots
+                .retain(|existing| !lunco_doc::same_file(existing, root));
+            if scene.roots.is_empty() {
+                released.push(*doc);
+                false
+            } else {
+                true
+            }
         });
+        released
+            .into_iter()
+            .filter(|doc| !self.user_owned.contains(doc))
+            .collect()
+    }
+
+    /// Forget a document after its registry host has been removed.
+    pub fn forget_document(&mut self, doc: DocumentId) {
+        self.map.remove(&doc);
+        self.user_owned.remove(&doc);
+    }
+
+    /// Drop only the current projection coordinates while retaining the user
+    /// lease. The viewport uses this when a Twin authority disappears and the
+    /// document must be rehomed under its session-owned source.
+    pub fn detach_projection(&mut self, doc: DocumentId) {
+        self.map.remove(&doc);
     }
 }
 
@@ -234,8 +331,42 @@ pub struct PendingRefSpawns {
     items: Vec<RefSpawn>,
 }
 
+/// Clear asynchronous USD projection work owned by the outgoing scene.
+///
+/// Referenced spawns are scene-owned even though they are not scene entities,
+/// so despawning the USD root cannot reclaim them. Keeping an old recipe alive
+/// lets it publish into the replacement Twin after a slow asset load.
+///
+/// Pending default-scene document loads are deliberately not cleared here:
+/// their owner is the admitted Twin, not the outgoing scene. A replacement
+/// closes the old Twin through [`PendingTwinDocs::release_root`], while the
+/// incoming Twin's pending load must survive this scene teardown boundary.
+pub(crate) fn reset_scene_projection_state(mut pending_refs: ResMut<PendingRefSpawns>) {
+    pending_refs.items.clear();
+}
+
+/// Report a terminal failure of the authoritative default-scene source.
+///
+/// A doc-backed Twin has exactly one valid mount input: the composed document
+/// served through its `twin://` identity. If that source never arrives, the
+/// transaction ends empty and diagnosable. Mounting the raw file would create a
+/// second projection with different ownership and silently lose runtime edits.
+fn report_twin_doc_load_failed(
+    empty_reason: &mut EmptyViewportReason,
+    commands: &mut Commands,
+    twin_path: &str,
+    detail: impl Into<String>,
+) {
+    let detail = detail.into();
+    warn!("[usd-e1b] {detail}");
+    empty_reason.0 = Some(format!("`{twin_path}` could not be loaded: {detail}"));
+    lunco_core::trigger_error(commands, TWIN_SCENE_LOAD_FAILED, detail);
+}
+
 /// Give up on a pending twin doc after this many frames without its source
-/// loading (a missing / unreadable scene), so it doesn't retry forever.
+/// loading (a missing / unreadable scene), so it doesn't retry forever. The
+/// asset server's failed state is consumed immediately; the bounded liveness
+/// window covers a loader that never publishes a terminal state.
 const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
 
 /// Allocate the document for each pending twin scene once its base source text
@@ -256,10 +387,12 @@ pub(crate) fn drain_pending_twin_docs(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<DocBackedTwinScenes>,
     sources: Res<Assets<UsdSourceText>>,
+    asset_server: Res<AssetServer>,
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     role: Option<Res<lunco_core::NetworkRole>>,
     runtime_settings: Option<Res<crate::runtime_persistence::RuntimePersistenceSettings>>,
+    mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
 ) {
     if pending.items.is_empty() {
@@ -269,20 +402,28 @@ pub(crate) fn drain_pending_twin_docs(
     let mut still = Vec::new();
     for mut item in taken {
         let twin_path = lunco_assets::twin_uri(&item.name, &item.rel);
+        if asset_server.load_state(item.handle.id()).is_failed() {
+            report_twin_doc_load_failed(
+                &mut empty_reason,
+                &mut commands,
+                &twin_path,
+                format!("the Twin source asset failed to load"),
+            );
+            continue;
+        }
         let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
             item.attempts += 1;
             if item.attempts < MAX_TWIN_DOC_ATTEMPTS {
                 still.push(item);
             } else {
-                // Doc-backing failed (missing / unreadable scene) — mount
-                // file-backed anyway so the viewport isn't left empty.
-                warn!(
-                    "[usd-e1b] base source for `{twin_path}` never loaded — mounting without doc projection"
+                report_twin_doc_load_failed(
+                    &mut empty_reason,
+                    &mut commands,
+                    &twin_path,
+                    format!(
+                        "the Twin source asset did not become available after {MAX_TWIN_DOC_ATTEMPTS} frames"
+                    ),
                 );
-                commands.trigger(LoadScene {
-                    path: twin_path,
-                    root_prim: String::new(),
-                });
             }
             continue;
         };
@@ -336,12 +477,11 @@ pub(crate) fn drain_pending_twin_docs(
             None => continue,
         };
         twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()));
-        backed.map.entry(doc).or_insert_with(|| TwinSceneRef {
-            name: item.name.clone(),
-            rel: item.rel.clone(),
-            synced_generation: Some(cur_gen),
-            overlay_synced_generation: Some(cur_gen),
-        });
+        backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
+        if let Some(scene) = backed.map.get_mut(&doc) {
+            scene.synced_generation = Some(cur_gen);
+            scene.overlay_synced_generation = Some(cur_gen);
+        }
         info!("[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed");
         commands.trigger(LoadScene {
             path: twin_path,
@@ -448,7 +588,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             Some(h) => h.document().generation(),
             None => {
                 world.resource::<TwinRoots>().clear_overlay(&name, &rel);
-                world.resource_mut::<DocBackedTwinScenes>().map.remove(&doc);
+                world
+                    .resource_mut::<DocBackedTwinScenes>()
+                    .forget_document(doc);
                 continue;
             }
         };
@@ -507,12 +649,17 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // recorded op is already reflected — just reconcile restored runtime
             // spawns idempotently (never replay ops → double-author). This is the
             // only consumer of the whole-stage recompose.
-            let composed = {
-                let reg = world.resource::<DocumentRegistry<UsdDocument>>();
-                reg.host(doc)
-                    .expect("doc host present: generation read above, exclusive system")
-                    .document()
-                    .composed_arc()
+            let Some(composed) = world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .map(|host| host.document().composed_arc())
+            else {
+                warn!("[usd-e1b] document {doc} disappeared before initial projection");
+                world.resource::<TwinRoots>().clear_overlay(&name, &rel);
+                world
+                    .resource_mut::<DocBackedTwinScenes>()
+                    .forget_document(doc);
+                continue;
             };
             reconcile_full_to_composed(world, scene_id, &composed);
         } else {
@@ -1755,6 +1902,75 @@ mod tests {
             registry.doc_for_file(std::path::Path::new("/twins/x.usda")),
             None
         );
+    }
+
+    #[test]
+    fn twin_scene_lease_closes_only_unclaimed_documents() {
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let root = PathBuf::from("/twins/moonbase");
+        let (scene_only, _) = registry.open_file(root.join("scene.usda"), TINY.to_string());
+        let (user_owned, _) = registry.open_file(root.join("edited.usda"), TINY.to_string());
+        let mut backed = DocBackedTwinScenes::default();
+        backed.track(
+            scene_only,
+            root.clone(),
+            "moonbase".into(),
+            "scene.usda".into(),
+        );
+        backed.track(
+            user_owned,
+            root.clone(),
+            "moonbase".into(),
+            "edited.usda".into(),
+        );
+        assert!(backed.claim_user(user_owned));
+
+        let released = backed.release_root(&root);
+        for doc in released {
+            registry.remove(doc);
+        }
+
+        assert_eq!(backed.coords_of(scene_only), None);
+        assert_eq!(backed.coords_of(user_owned), None);
+        assert!(!registry.contains(scene_only));
+        assert!(
+            registry.contains(user_owned),
+            "an explicitly user-owned document survives Twin replacement"
+        );
+    }
+
+    #[test]
+    fn closing_one_of_multiple_twin_leases_keeps_the_document_backed() {
+        let root_a = PathBuf::from("/twins/a");
+        let root_b = PathBuf::from("/twins/b");
+        let doc = DocumentId::new(1);
+        let mut backed = DocBackedTwinScenes::default();
+        backed.track(doc, root_a.clone(), "shared".into(), "scene.usda".into());
+        backed.track(doc, root_b.clone(), "shared".into(), "scene.usda".into());
+
+        assert!(backed.release_root(&root_a).is_empty());
+        assert!(backed.coords_of(doc).is_some());
+        assert_eq!(backed.release_root(&root_b), vec![doc]);
+        assert!(backed.coords_of(doc).is_none());
+    }
+
+    #[test]
+    fn scene_teardown_preserves_incoming_twin_admission() {
+        let mut app = App::new();
+        app.init_resource::<PendingTwinDocs>()
+            .init_resource::<PendingRefSpawns>()
+            .add_systems(lunco_core::SceneTeardown, reset_scene_projection_state);
+        app.world_mut().resource_mut::<PendingTwinDocs>().push(
+            Handle::default(),
+            "incoming".into(),
+            "scene.usda".into(),
+            PathBuf::from("/twins/incoming/scene.usda"),
+            PathBuf::from("/twins/incoming"),
+        );
+
+        lunco_core::run_scene_teardown(app.world_mut());
+
+        assert_eq!(app.world().resource::<PendingTwinDocs>().items.len(), 1);
     }
 
     /// The bytes pushed into the overlay are the document's *composed* source —

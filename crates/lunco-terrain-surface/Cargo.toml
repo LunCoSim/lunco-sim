@@ -80,6 +80,9 @@ lunco-assets = { path = "../lunco-assets" }
 # bake (`DerivedBake`) is a `lunco_precompute::Bake`; the crate owns the
 # load/store/rebake orchestration + the FNV-1a key fold (re-exported `Fnv1a`).
 lunco-precompute = { path = "../lunco-precompute" }
+# The virtual simulation clock may be paused during Twin loading. Liveness of
+# scene-owned terrain work must use a real cross-platform wall clock instead.
+web-time = { workspace = true }
 # `ApiQueryProvider` speaks `serde_json::Value` for params/response.
 serde_json = { workspace = true }
 
@@ -90,4 +93,3 @@ wasm-bindgen-futures = { workspace = true }
 
 [lints]
 workspace = true
-
