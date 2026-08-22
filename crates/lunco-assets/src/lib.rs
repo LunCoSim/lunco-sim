@@ -684,6 +684,9 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     if has_scheme(rel) {
         return None; // another scheme's root — not in the shipped library
     }
+    if !asset_path::is_safe_relative_path(rel) {
+        return None;
+    }
     let authored = assets_dir_abs().join(rel);
     if authored.exists() {
         return Some(authored);
@@ -844,5 +847,21 @@ mod tests {
         let twin = std::path::Path::new("/tmp/some_twin");
         assert_eq!(twin_cache_dir(twin), twin.join(".cache"));
         assert!(!twin_cache_dir(twin).starts_with(cache_dir()));
+    }
+
+    #[test]
+    fn engine_local_paths_reject_root_escape() {
+        for reference in [
+            "../outside.usda",
+            "terrain/../../outside.usda",
+            "lunco://../outside.usda",
+            "lunco://terrain/../../outside.usda",
+        ] {
+            assert_eq!(
+                engine_asset_local_path(reference),
+                None,
+                "unsafe engine reference must be rejected: {reference}"
+            );
+        }
     }
 }
