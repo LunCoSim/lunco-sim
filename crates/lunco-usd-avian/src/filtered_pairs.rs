@@ -36,15 +36,17 @@
 //! Filtering is symmetric (the USD docs say so, and a one-sided contact filter is
 //! meaningless), so authoring it on either prim filters the pair.
 
-use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
+use avian3d::{
+    collider_tree::{ColliderTreeProxyFlags, ColliderTreeProxyKey, ColliderTrees},
+    math::{Scalar, Vector},
+};
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_usd_bevy::{instance_key, StageView, UsdInstanceRoot, UsdPrimPath, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.
 ///
 /// The rel names prims; the pair is only expressible once both ends exist as
@@ -108,12 +110,26 @@ pub fn filter_pair(commands: &mut Commands, a: Entity, b: Entity) {
             .and_modify(move |mut pairs| {
                 pairs.0.insert(to);
             });
-        // `FILTER_PAIRS` is what raises the broad phase's `CUSTOM_FILTER` flag;
-        // the hook is not consulted for a collider that lacks it.
-        commands
-            .entity(from)
-            .try_insert(ActiveCollisionHooks::FILTER_PAIRS);
+        enable_collision_hook(commands, from, ActiveCollisionHooks::FILTER_PAIRS);
     }
+}
+
+/// Add one Avian collision hook without erasing another hook already authored
+/// or installed on the same collider.
+///
+/// `ActiveCollisionHooks` is an immutable bitset component, so a plain insert
+/// is a replacement, not a union.  Filtering and contact modification are
+/// independent contracts and frequently coexist on one body; queue the union
+/// at command-application time so deferred USD extraction and joint admission
+/// see the current component value.
+pub fn enable_collision_hook(commands: &mut Commands, entity: Entity, hook: ActiveCollisionHooks) {
+    commands.queue(move |world: &mut World| {
+        let current = world
+            .get::<ActiveCollisionHooks>(entity)
+            .copied()
+            .unwrap_or_default();
+        world.entity_mut(entity).insert(current | hook);
+    });
 }
 
 /// Physics ticks a pending pair may scan at full rate before it is reported.
@@ -200,6 +216,7 @@ pub(crate) fn resolve_filtered_pairs(
     q_pending: Query<(Entity, &PendingFilteredPairs, &UsdPrimPath)>,
     q_colliders: Query<(Entity, &UsdPrimPath), With<Collider>>,
     q_filtered: Query<&FilteredPairs>,
+    q_hooks: Query<&ActiveCollisionHooks>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -311,11 +328,12 @@ pub(crate) fn resolve_filtered_pairs(
             .map(|f| f.0.clone())
             .unwrap_or_default();
         set.extend(added);
-        // `FILTER_PAIRS` is what raises the broad phase's `CUSTOM_FILTER` flag; the
-        // hook is not consulted for a collider that lacks it.
+        let hooks =
+            q_hooks.get(entity).copied().unwrap_or_default() | ActiveCollisionHooks::FILTER_PAIRS;
         commands
             .entity(entity)
-            .try_insert((FilteredPairs(set), ActiveCollisionHooks::FILTER_PAIRS));
+            .try_insert(FilteredPairs(set))
+            .try_insert(hooks);
     }
 }
 
@@ -339,13 +357,10 @@ pub struct UsdCollisionFilter<'w, 's> {
 /// filter that may already be present on the same collider.
 pub fn enable_shared_tire_contact_hooks(
     mut commands: Commands,
-    q_added: Query<(Entity, Option<&ActiveCollisionHooks>), Added<SharedTireContact>>,
+    q_added: Query<Entity, Added<SharedTireContact>>,
 ) {
-    for (entity, hooks) in &q_added {
-        let current = hooks.copied().unwrap_or_default();
-        commands
-            .entity(entity)
-            .try_insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
+    for entity in &q_added {
+        enable_collision_hook(&mut commands, entity, ActiveCollisionHooks::MODIFY_CONTACTS);
     }
 }
 
@@ -357,16 +372,57 @@ pub fn enable_shared_tire_contact_hooks(
 /// the authored static branch without classifying bodies by path or vehicle.
 pub fn enable_static_friction_contact_hooks(
     mut commands: Commands,
-    q_changed: Query<(Entity, &Friction, Option<&ActiveCollisionHooks>), Changed<Friction>>,
+    q_changed: Query<(Entity, &Friction), Changed<Friction>>,
 ) {
-    for (entity, friction, hooks) in &q_changed {
+    for (entity, friction) in &q_changed {
         if (friction.static_coefficient - friction.dynamic_coefficient).abs() <= Scalar::EPSILON {
             continue;
         }
-        let current = hooks.copied().unwrap_or_default();
-        commands
-            .entity(entity)
-            .insert(current | ActiveCollisionHooks::MODIFY_CONTACTS);
+        enable_collision_hook(&mut commands, entity, ActiveCollisionHooks::MODIFY_CONTACTS);
+    }
+}
+
+/// Keep Avian's broad-phase proxy flags in sync with the public hook component.
+///
+/// Avian 0.7 updates only its custom-filter bit from the `ActiveCollisionHooks`
+/// insert observer.  A USD material can legitimately arm contact modification
+/// after the collider proxy exists (for example when a streamed material is
+/// resolved), so relying on that observer leaves `MODIFY_CONTACTS` absent from
+/// the proxy and silently skips [`CollisionHooks::modify_contacts`].  The USD
+/// bridge owns the hook component it adds; synchronize the corresponding proxy
+/// flags here, without changing any contact or body state.
+pub fn synchronize_collision_hook_flags(
+    mut trees: ResMut<ColliderTrees>,
+    query: Query<(
+        &ColliderTreeProxyKey,
+        &ActiveCollisionHooks,
+        Option<&UsdPrimPath>,
+    )>,
+) {
+    for (key, hooks, prim) in &query {
+        if *key == ColliderTreeProxyKey::PLACEHOLDER {
+            continue;
+        }
+        let Some(proxy) = trees.get_proxy_mut(*key) else {
+            // The component may arrive before Avian creates the proxy.  In that
+            // case the proxy constructor reads the complete component later.
+            continue;
+        };
+        let desired_modify = hooks.contains(ActiveCollisionHooks::MODIFY_CONTACTS);
+        let was_modify = proxy.has_contact_modification();
+        proxy.flags.set(
+            ColliderTreeProxyFlags::CUSTOM_FILTER,
+            hooks.contains(ActiveCollisionHooks::FILTER_PAIRS),
+        );
+        proxy
+            .flags
+            .set(ColliderTreeProxyFlags::MODIFY_CONTACTS, desired_modify);
+        if was_modify != desired_modify {
+            info!(
+                "[usd-avian] synchronized contact hooks for proxy key={key:?} prim={}: hooks={hooks:?} modify={desired_modify}",
+                prim.map_or("<non-usd>", |p| p.path.as_str()),
+            );
+        }
     }
 }
 

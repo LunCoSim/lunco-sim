@@ -211,6 +211,7 @@ pub fn compute_local_gravity(
         gravity.is_changed() || active_frame.as_ref().is_some_and(Res::is_changed);
     let frame_rotation = active_frame.as_deref().and_then(|frame| {
         lunco_core::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
+            .ok()
             .map(|(_, rotation)| rotation.0)
     });
     for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
@@ -233,7 +234,7 @@ pub fn compute_local_gravity(
                     continue;
                 };
                 let Some((entity_world, _)) =
-                    lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                    lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
                 else {
                     continue;
                 };
@@ -242,7 +243,8 @@ pub fn compute_local_gravity(
                     &q_parents,
                     &q_grids,
                     &q_spatial,
-                ) else {
+                )
+                .ok() else {
                     continue;
                 };
                 let relative_body = body_rotation.0.inverse() * (entity_world - body_world);

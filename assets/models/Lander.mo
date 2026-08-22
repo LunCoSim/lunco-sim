@@ -97,7 +97,7 @@ model Lander
     "Measured navigation-frame vertical velocity (m/s)";
   input Real navigation_velocity_z = 0.0
     "Measured navigation-frame Z velocity (m/s)";
-  input Real touchdown_ground_speed_mps = 0.05
+  input Real touchdown_ground_speed_mps = 0.15
     "Ground speed below which contact may become settled touchdown (m/s)";
   input Real touchdown_descent_speed_mps = 0.05
     "Vertical speed below which contact may become settled touchdown (m/s)";
@@ -185,6 +185,8 @@ model Lander
   Real maximum_leg_speed;
   Real suspension_rate_gate;
   Real settled_touchdown_target;
+  Real engine_cutoff_latch(start = 0.0);
+  Real propulsion_cutoff;
 
 initial equation
   // `authority_initial` is part of the live USD input surface, so it has
@@ -204,6 +206,19 @@ equation
     / noEvent(max(minimum_time_constant_s, spool_tau));
   der(filter_yaw) = (yaw - filter_yaw)
     / noEvent(max(minimum_time_constant_s, spool_tau));
+  // The mission-qualified cutoff is a physical actuation phase transition.
+  // Native low-speed contact remains a measurement for the flight computer,
+  // but it is not by itself permission to close the engine: a vehicle can touch
+  // four pads away from its marked site and must still be able to go around.
+  // The target-qualified event is latched locally with a short continuous state
+  // so a rebound cannot reopen the valves. A new mission reload creates a fresh
+  // zero state.
+  der(engine_cutoff_latch) = max(0.0,
+    (1.0 - engine_cutoff_latch) * landing_engine_cutoff
+      / max(0.001, spool_tau));
+  propulsion_cutoff = max(
+    noEvent(if engine_cutoff_latch >= 0.5 then 1.0 else 0.0),
+    noEvent(if landing_engine_cutoff >= 0.5 then 1.0 else 0.0));
 
   // The possession flag selects the command source; it is not an attitude
   // authority gate. Guidance and pilot commands therefore use the same law.
@@ -216,8 +231,12 @@ equation
   cmd_yaw = piloted * filter_yaw
     + (1.0 - piloted) * guidance_yaw;
 
+  // A qualified native contact is a hard propulsion boundary. It is applied
+  // at the airframe command interface, so a stale filtered command cannot keep
+  // either tank flowing for another spool time or after a suspension rebound.
   throttle = noEvent(max(command_lower_bound,
-    min(command_upper_bound, cmd_throttle)));
+    min(command_upper_bound, cmd_throttle
+      * max(0.0, min(1.0, 1.0 - propulsion_cutoff)))));
   // Pitch and roll are ATTITUDE requests, not direct torques.  The old
   // boundary multiplied the normalized guidance value by inertia and applied
   // it as a constant torque while the upright hold loop applied a competing
@@ -262,9 +281,9 @@ equation
   // cannot lean a grounded vehicle. Cutoff is accepted only after that rate is
   // quiet, so no residual yaw is frozen into the passive landing phase.
   attitude_authority = attitude_hold * max(0.0, min(1.0,
-    1.0 - max(landing_handoff, landing_engine_cutoff)));
+    1.0 - max(landing_handoff, propulsion_cutoff)));
   attitude_position_authority = max(0.0, min(1.0,
-    1.0 - max(landing_engine_cutoff, pad_contact_phase)));
+    1.0 - max(propulsion_cutoff, pad_contact_phase)));
   // Bound the requested torque at the controller/actuator boundary. Without
   // this, a large measured attitude error becomes an impossible torque request
   // that the downstream valve clamp silently clips, invalidating the loop's

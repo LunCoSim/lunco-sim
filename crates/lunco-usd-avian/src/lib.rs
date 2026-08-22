@@ -218,11 +218,101 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     }
 }
 
+/// Express a USD prismatic-drive target in the velocity basis used by Avian's
+/// native motor.
+///
+/// USD joint velocity is the relative velocity of the two joint anchors:
+/// `((v₂ + ω₂×r₂) - (v₁ + ω₁×r₁)) · axis`. Avian 0.7's prismatic motor uses
+/// only `(v₂ - v₁) · axis`. For an offset or raked landing leg those are not
+/// the same quantity, so feeding the authored target directly into Avian makes
+/// body rotation look like slider motion and the native motor injects energy.
+///
+/// The component stores the authored target; this system changes only Avian's
+/// transient motor target and recomputes it from the current native state every
+/// physics tick. It therefore remains bounded, non-accumulating, and leaves
+/// Avian's native joint/drive/XPBD realization as the sole constraint owner.
+fn native_prismatic_target_velocity(
+    authored_target: f64,
+    axis: DVec3,
+    angular_velocity1: DVec3,
+    anchor_offset1: DVec3,
+    angular_velocity2: DVec3,
+    anchor_offset2: DVec3,
+) -> Option<f64> {
+    if !authored_target.is_finite() || !axis.is_finite() || axis == DVec3::ZERO {
+        return None;
+    }
+    let anchor_rotation_rate = (angular_velocity2.cross(anchor_offset2)
+        - angular_velocity1.cross(anchor_offset1))
+    .dot(axis.normalize());
+    let native_target = authored_target - anchor_rotation_rate;
+    native_target.is_finite().then_some(native_target)
+}
+
+fn correct_prismatic_drive_target_velocity(
+    mut joints: Query<(
+        &mut PrismaticJoint,
+        &lunco_physics::PrismaticDriveTargetVelocity,
+    )>,
+    rotations: Query<&Rotation>,
+    angular_velocities: Query<&AngularVelocity>,
+    centers_of_mass: Query<&ComputedCenterOfMass>,
+) {
+    for (mut joint, authored) in &mut joints {
+        let Some(local_anchor1) = joint.local_anchor1() else {
+            continue;
+        };
+        let Some(local_anchor2) = joint.local_anchor2() else {
+            continue;
+        };
+        let Some(local_basis1) = joint.local_basis1() else {
+            continue;
+        };
+        let Ok(rotation1) = rotations.get(joint.body1) else {
+            continue;
+        };
+        let Ok(rotation2) = rotations.get(joint.body2) else {
+            continue;
+        };
+        let com1 = centers_of_mass
+            .get(joint.body1)
+            .map_or(DVec3::ZERO, |com| com.0);
+        let com2 = centers_of_mass
+            .get(joint.body2)
+            .map_or(DVec3::ZERO, |com| com.0);
+        let r1 = rotation1.0 * (local_anchor1 - com1);
+        let r2 = rotation2.0 * (local_anchor2 - com2);
+        let omega1 = angular_velocities
+            .get(joint.body1)
+            .map_or(DVec3::ZERO, |velocity| velocity.0);
+        let omega2 = angular_velocities
+            .get(joint.body2)
+            .map_or(DVec3::ZERO, |velocity| velocity.0);
+        let Some(native_target_velocity) = native_prismatic_target_velocity(
+            authored.0,
+            rotation1.0 * local_basis1 * joint.slider_axis,
+            omega1,
+            r1,
+            omega2,
+            r2,
+        ) else {
+            continue;
+        };
+        joint.motor.target_velocity = native_target_velocity;
+    }
+}
+
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(JointAttachPlugin);
+        app.add_systems(
+            avian3d::schedule::PhysicsSchedule,
+            correct_prismatic_drive_target_velocity
+                .in_set(avian3d::dynamics::solver::schedule::SolverSystems::PrepareJoints)
+                .before(avian3d::dynamics::solver::xpbd::prepare_xpbd_joint::<PrismaticJoint>),
+        );
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
@@ -257,6 +347,7 @@ impl Plugin for UsdAvianPlugin {
 
         app.register_type::<ShouldBeDynamic>()
             .register_type::<filtered_pairs::SharedTireContact>()
+            .register_type::<lunco_physics::PrismaticDriveTargetVelocity>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
@@ -295,6 +386,8 @@ impl Plugin for UsdAvianPlugin {
                     enforce_kinematic_on_animated,
                     filtered_pairs::enable_shared_tire_contact_hooks,
                     filtered_pairs::enable_static_friction_contact_hooks,
+                    filtered_pairs::synchronize_collision_hook_flags
+                        .after(filtered_pairs::enable_static_friction_contact_hooks),
                     project_mobility_to_rigid_body,
                 ),
             );
@@ -329,6 +422,31 @@ fn project_mobility_to_rigid_body(
 #[cfg(test)]
 mod mobility_tests {
     use super::*;
+
+    #[test]
+    fn prismatic_drive_target_uses_anchor_velocity_basis() {
+        let native = native_prismatic_target_velocity(
+            0.0,
+            DVec3::Y,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            DVec3::Z,
+            DVec3::X,
+        )
+        .expect("valid drive basis");
+        assert!((native + 1.0).abs() < 1.0e-12);
+
+        let unchanged = native_prismatic_target_velocity(
+            0.25,
+            DVec3::Y,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            DVec3::Z,
+            DVec3::ZERO,
+        )
+        .expect("valid drive basis");
+        assert!((unchanged - 0.25).abs() < 1.0e-12);
+    }
 
     #[test]
     fn projects_declared_mobility_but_never_overrides_a_managed_body() {
@@ -1964,6 +2082,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         return None;
     };
 
+    // A passive suspension and a USD drive are two different owners of the
     // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
     // wheel body); skip them here to avoid double-up/race.
     if let Ok(b1_path) = SdfPath::new(&spec.body1_path) {
@@ -2479,7 +2598,7 @@ fn build_usd_physics_joints(
 
         debug!(
             "Built USD joint {} -> {} <-> {}",
-            pending.joint_type, pending.body0_path, pending.body1_path
+            pending.joint_type, pending.body0_path, pending.body1_path,
         );
 
         // Seat the joint at its authored anchors before the solver sees it.
@@ -2693,6 +2812,14 @@ fn build_usd_physics_joints(
                     };
                 }
                 attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
+                commands.entity(joint_entity).try_insert(
+                    lunco_physics::PrismaticDriveTargetVelocity(
+                        pending
+                            .drive
+                            .and_then(|drive| drive.target_velocity)
+                            .unwrap_or(0.0),
+                    ),
+                );
                 true
             }
             "PhysicsRevoluteJoint" => {
@@ -3288,7 +3415,7 @@ fn apply_physics_material(
     if let Some(pm) = read_physics_material(reader, sdf_path) {
         if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
             let d = Friction::default();
-            commands.entity(entity).try_insert(Friction {
+            let friction = Friction {
                 dynamic_coefficient: pm
                     .dynamic_friction
                     .map_or(d.dynamic_coefficient, |f| f.into()),
@@ -3296,7 +3423,25 @@ fn apply_physics_material(
                     .static_friction
                     .map_or(d.static_coefficient, |f| f.into()),
                 combine_rule: pm.friction_combine.unwrap_or(d.combine_rule),
-            });
+            };
+            commands.entity(entity).try_insert(friction);
+
+            // Avian snapshots `ActiveCollisionHooks` when it creates the
+            // collider-tree proxy.  Adding MODIFY_CONTACTS later through a
+            // Changed<Friction> system updates only the broad-phase filter bit
+            // in Avian 0.7, not the contact-modification bit.  Arm this hook at
+            // the same load-time boundary as the material, before the collider
+            // is admitted, so authored static friction is actually part of the
+            // contact contract for compound and standalone surfaces alike.
+            if (friction.static_coefficient - friction.dynamic_coefficient).abs()
+                > avian3d::math::Scalar::EPSILON
+            {
+                filtered_pairs::enable_collision_hook(
+                    commands,
+                    entity,
+                    ActiveCollisionHooks::MODIFY_CONTACTS,
+                );
+            }
         }
         if let Some(r) = pm.restitution {
             let d = Restitution::default();

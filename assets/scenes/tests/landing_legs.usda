@@ -9,10 +9,9 @@
 #
 # No guidance, no rover, no mission — a lander dropped from 3 m so the legs take
 # the vehicle's weight within the first two seconds and the run observes the full
-# eight-second ring-down. What
-# it pins down is the LEG MECHANISM: that the raked prismatic joints and the pad
-# child-pad colliders start satisfied, that the struts stroke and settle instead of diverging,
-# and that the hull ends the drop level and at ride height.
+# eight-second ring-down. What it pins down is the LEG MECHANISM: that the raked
+# prismatic joints start satisfied, that the compound leg bodies stroke and settle
+# instead of diverging, and that the hull ends the drop level and at ride height.
 #
 #   target/debug/luncosim test --scene assets/scenes/tests/landing_legs.usda
 
@@ -38,7 +37,6 @@ def Xform "LandingLegsTest" (
     )
     {
     }
-
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

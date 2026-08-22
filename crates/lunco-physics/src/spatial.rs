@@ -33,8 +33,8 @@
 //! and name the source grid explicitly.
 //!
 //! When your origin is ALREADY in the physics frame (e.g. an avian `Position`, as
-//! the wheel drive uses via `wheel_hub_pose`), use [`GridSpatialQuery::raw`] — the
-//! unwrapped `SpatialQuery` — so you don't double-shift.
+//! the wheel drive uses via `wheel_hub_pose`), use [`GridSpatialQuery::cast_ray_grid`]
+//! so the frame contract remains visible at the call site.
 
 use avian3d::prelude::*;
 use bevy::ecs::system::SystemParam;
@@ -121,12 +121,6 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             .cast_ray(origin, direction, max_distance, solid, filter)
     }
 
-    /// Cast a ray whose origin is ALREADY grid-absolute (an avian `Position`,
-    /// a composed [`lunco_core::coords::world_position`]). The typed
-    /// counterpart of [`Self::cast_ray_render`]; together they retire most
-    /// [`Self::raw`] call sites, each of which was an untyped assertion
-    /// "trust me, this is already the physics frame".
-    #[inline]
     /// A non-finite origin yields `None`, for the same hard reason as
     /// [`Self::cast_ray_render`] — and this is the likelier path into it, since a
     /// grid-absolute origin usually IS an avian `Position`, which is exactly what
@@ -193,14 +187,5 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             solid,
             filter,
         )
-    }
-
-    /// The wrapped [`SpatialQuery`], for shapecasts and query shapes the typed
-    /// wrappers don't cover. For plain rays use [`Self::cast_ray_grid`],
-    /// [`Self::cast_ray_in_grid`], or [`Self::cast_ray_render`], which make the
-    /// source frame explicit.
-    #[inline]
-    pub fn raw(&self) -> &SpatialQuery<'w, 's> {
-        &self.spatial
     }
 }

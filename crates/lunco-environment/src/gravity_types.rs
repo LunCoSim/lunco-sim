@@ -99,9 +99,10 @@ pub enum Gravity {
 }
 
 /// The composed USD `UsdPhysicsScene` gravity fact currently active in the
-/// world.  A site-anchored celestial scene uses `Gravity::Surface` when this
-/// resource is absent; an authored physics scene remains the stronger scene
-/// opinion and keeps its explicit flat gravity.
+/// world. Its direction is expressed in the USD stage frame. A site-anchored
+/// celestial scene may still retain this resource for authoring diagnostics,
+/// but uses `Gravity::Surface` for the live force because site migration changes
+/// the stage-to-body-fixed orientation.
 #[derive(Resource, Clone, Debug)]
 pub struct PhysicsSceneGravity {
     /// Composed path of the prim that authored the setting.

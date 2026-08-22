@@ -1049,7 +1049,6 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // frame-rate-independent integration. Falls back to the canonical
     // SECS_PER_TICK if no `Time<Fixed>` is in scope (e.g. a bare test world).
     engine.register_fn("dt", || -> f64 { bridge_core::dt() });
-
     // elapsed_seconds() -> f64 — monotonic simulation seconds since startup, for
     // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
     // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if

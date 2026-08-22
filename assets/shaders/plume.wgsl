@@ -143,10 +143,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // the tip from popping as throttle changes, while a full-throttle command
     // still fills the complete authored envelope.
     var cutoff = 1.0;
-    if (len < 0.999) {
+    if len < 0.999 {
         cutoff = 1.0 - smoothstep(len, min(len + 0.12, 1.0), a);
     }
-    if (cutoff <= 0.0) {
+    if cutoff <= 0.0 {
         return vec4<f32>(0.0);
     }
 

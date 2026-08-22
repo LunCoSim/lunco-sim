@@ -192,8 +192,9 @@ pub struct SynthesisPlan {
 ///
 /// The seam doc 37 §8 asks for. What ships is the acausal-network synthesizer
 /// below; a `thermal`, `harness` or `comms-link` synthesizer is a registration,
-/// not an edit to [`project_domain_islands`]. A scope selects one with
-/// `uniform token lunco:synthesizer`; absent means the default.
+/// not an edit to [`project_domain_islands`]. A generic scope may select one
+/// through `LunCoDomainSynthesisAPI`; otherwise the projector derives the
+/// built-in owner from the typed member role schemas.
 ///
 /// Hook-backed entries use the existing `lunco_hooks` substrate: Rust supplies
 /// the composed facts and Rhai returns the Modelica source, merge units, and
@@ -231,10 +232,51 @@ pub struct SynthContext<'a> {
     pub classes: &'a MemberClasses,
 }
 
-/// The synthesizer a scope names with `lunco:synthesizer`, or the default.
+/// The default for a collection of `LunCoProgramAPI` members.
 pub const DEFAULT_SYNTHESIZER: &str = "acausal-network";
 /// The generic force-actuator allocator used by the shipped lander.
 pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = "actuator-wrench";
+
+/// Derive the domain owner from the composed USD role schemas.
+///
+/// A physical actuator collection is not a Modelica network: its members carry
+/// `LunCoForceActuatorAPI`, while a Modelica network's members carry
+/// `LunCoProgramAPI`. This is a structural classification, not a name or
+/// filename heuristic. A mixed collection is rejected because choosing either
+/// owner would hide an authoring error.
+pub fn derive_synthesizer_name(
+    view: &lunco_usd_bevy::StageView<'_>,
+    root: &SdfPath,
+) -> Result<String, String> {
+    let members = view
+        .collection_members(root, "components")
+        .map_err(|error| format!("could not read component collection: {error}"))?;
+    let mut force_actuators = 0usize;
+    let mut modelica_programs = 0usize;
+    let mut unclassified = Vec::new();
+    for member in members.iter().filter(|path| !path.is_property_path()) {
+        let is_force = view.has_api_schema(member, "LunCoForceActuatorAPI");
+        let is_program = view.has_api_schema(member, "LunCoProgramAPI");
+        match (is_force, is_program) {
+            (true, false) => force_actuators += 1,
+            (false, true) => modelica_programs += 1,
+            _ => unclassified.push(member.to_string()),
+        }
+    }
+    if force_actuators > 0 && modelica_programs == 0 && unclassified.is_empty() {
+        return Ok(ACTUATOR_WRENCH_SYNTHESIZER.to_string());
+    }
+    if modelica_programs > 0 && force_actuators == 0 && unclassified.is_empty() {
+        return Ok(DEFAULT_SYNTHESIZER.to_string());
+    }
+    if force_actuators > 0 || modelica_programs > 0 || !unclassified.is_empty() {
+        return Err(format!(
+            "component collection has incompatible member roles: force_actuators={force_actuators}, \
+             modelica_programs={modelica_programs}, unclassified={unclassified:?}"
+        ));
+    }
+    Ok(DEFAULT_SYNTHESIZER.to_string())
+}
 
 /// Open registry of synthesizers, by name. No enum: a new domain is a
 /// registration from any plugin.
@@ -1065,7 +1107,6 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message: "actuator-wrench collection contains no force actuators".into(),
             }]);
         }
-
         let inputs: BTreeSet<String> = view
             .attr_names(root)
             .into_iter()
@@ -1098,12 +1139,13 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         }
 
         let columns: Vec<_> = actuators.values().map(|(_, actuator)| *actuator).collect();
-        let allocation = actuator_torque_pseudoinverse(&columns).map_err(|message| {
-            vec![DomainProjectionError {
-                path: root_string.clone(),
-                message,
-            }]
-        })?;
+        let (wrench_matrix, allocation_step) =
+            actuator_wrench_matrix(&columns).map_err(|message| {
+                vec![DomainProjectionError {
+                    path: root_string.clone(),
+                    message,
+                }]
+            })?;
         let component_paths = actuators
             .values()
             .map(|(path, _)| path.to_string())
@@ -1112,7 +1154,8 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             model_name,
             &inputs,
             &outputs,
-            &allocation,
+            &wrench_matrix,
+            allocation_step,
             &component_paths,
         );
         let unit = SynthesisUnit {
@@ -1137,79 +1180,45 @@ fn strip_connection_suffix(name: &str) -> String {
     name.strip_suffix(".connect").unwrap_or(name).to_string()
 }
 
-/// Return `Bᵀ (B Bᵀ)⁻¹`, where each column of `B` is one actuator's maximum
-/// body torque. The three torque axes are intentionally the only requested
-/// wrench dimensions; force dimensions remain zero in the six-column
-/// `WrenchAllocator` contract.
-fn actuator_torque_pseudoinverse(
+/// Return the authored six-component wrench matrix and a stable projected-
+/// gradient step for the bounded actuator solve. Each column is one actuator's
+/// maximum body force and torque, so the Modelica allocator solves the actual
+/// one-sided least-squares problem instead of clamping a signed pseudo-inverse.
+fn actuator_wrench_matrix(
     actuators: &[lunco_cosim::ForceActuator],
-) -> Result<Vec<[f64; 3]>, String> {
-    let columns: Vec<[f64; 3]> = actuators
+) -> Result<(Vec<[f64; 6]>, f64), String> {
+    let columns: Vec<[f64; 6]> = actuators
         .iter()
         .map(|actuator| {
             let direction = actuator.direction_local.normalize_or_zero().as_dvec3();
+            let force = direction * actuator.max_force_n;
             let torque = actuator.local_position.as_dvec3().cross(direction) * actuator.max_force_n;
-            [torque.x, torque.y, torque.z]
+            [force.x, force.y, force.z, torque.x, torque.y, torque.z]
         })
         .collect();
     if columns.iter().flatten().any(|value| !value.is_finite()) {
         return Err("actuator-wrench geometry produced a non-finite torque column".into());
     }
 
-    let mut gram = [[0.0; 3]; 3];
-    for column in &columns {
-        for row in 0..3 {
-            for col in 0..3 {
-                gram[row][col] += column[row] * column[col];
-            }
-        }
-    }
-    let a = gram[0][0];
-    let b = gram[0][1];
-    let c = gram[0][2];
-    let d = gram[1][0];
-    let e = gram[1][1];
-    let f = gram[1][2];
-    let g = gram[2][0];
-    let h = gram[2][1];
-    let i = gram[2][2];
-    let cofactors = [
-        [e * i - f * h, c * h - b * i, b * f - c * e],
-        [f * g - d * i, a * i - c * g, c * d - a * f],
-        [d * h - e * g, b * g - a * h, a * e - b * d],
-    ];
-    let determinant = a * cofactors[0][0] + b * cofactors[0][1] + c * cofactors[0][2];
-    let scale = gram
+    let gram_trace = columns
         .iter()
         .flatten()
-        .map(|value| value.abs())
-        .fold(0.0, f64::max);
-    if !determinant.is_finite() || scale == 0.0 || determinant.abs() <= scale.powi(3) * 1.0e-12 {
-        return Err(
-            "actuator-wrench geometry cannot produce all three body torque axes; \
-             the authored force arrangement is rank deficient"
-                .into(),
-        );
+        .map(|value| value * value)
+        .sum::<f64>();
+    if !gram_trace.is_finite() || gram_trace <= f64::EPSILON {
+        return Err("actuator-wrench geometry has no finite physical wrench authority".into());
     }
-    let inverse: [[f64; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| cofactors[col][row] / determinant));
-    Ok(columns
-        .iter()
-        .map(|column| {
-            std::array::from_fn(|col| {
-                (0..3)
-                    .map(|row| column[row] * inverse[row][col])
-                    .sum::<f64>()
-            })
-        })
-        .collect())
+    // `||B||_F²` bounds the largest eigenvalue of BᵀB. A 0.9 margin keeps the
+    // fixed projected-gradient solve stable for every authored arrangement.
+    Ok((columns, 0.9 / gram_trace))
 }
 
 fn emit_actuator_wrench_model(
     model_name: &str,
     inputs: &BTreeSet<String>,
     outputs: &BTreeSet<String>,
-    allocation: &[[f64; 3]],
+    wrench_matrix: &[[f64; 6]],
+    allocation_step: f64,
     actuator_paths: &[String],
 ) -> String {
     let mut source = format!("model {model_name}\n");
@@ -1220,23 +1229,25 @@ fn emit_actuator_wrench_model(
         writeln!(source, "  output Real {output};").expect("String write");
     }
     source.push_str("  LunCo.Actuation.WrenchAllocator allocator(\n");
-    writeln!(source, "    actuator_count = {},", allocation.len()).expect("String write");
-    source.push_str("    allocation_pinv = [");
-    for (index, row) in allocation.iter().enumerate() {
-        if index > 0 {
+    writeln!(source, "    actuator_count = {},", wrench_matrix.len()).expect("String write");
+    writeln!(source, "    allocation_iterations = 64,").expect("String write");
+    writeln!(source, "    allocation_step = {:.16},", allocation_step).expect("String write");
+    source.push_str("    wrench_matrix = [");
+    for row in 0..6 {
+        if row > 0 {
             source.push_str("; ");
         }
-        write!(
-            source,
-            "0.0, 0.0, 0.0, {:.12}, {:.12}, {:.12}",
-            row[0], row[1], row[2]
-        )
-        .expect("String write");
+        for (index, column) in wrench_matrix.iter().enumerate() {
+            if index > 0 {
+                source.push_str(", ");
+            }
+            write!(source, "{:.12}", column[row]).expect("String write");
+        }
     }
     source.push_str("],\n    lower_command = {");
-    source.push_str(&vec!["0.0"; allocation.len()].join(", "));
+    source.push_str(&vec!["0.0"; wrench_matrix.len()].join(", "));
     source.push_str("},\n    upper_command = {");
-    source.push_str(&vec!["1.0"; allocation.len()].join(", "));
+    source.push_str(&vec!["1.0"; wrench_matrix.len()].join(", "));
     source.push_str(
         "}) annotation(Placement(transformation(origin = {0, 0}, extent = {{-55, -35}, {55, 35}})));\n\nequation\n",
     );
@@ -2217,14 +2228,24 @@ pub fn project_domain_islands(
         if view.type_name(&root_path).as_deref() != Some("Scope") {
             continue;
         }
-        // WHICH synthesizer turns this scope into a model is authored, not
-        // hardcoded: `lunco:synthesizer` names one from the open registry, and
-        // absent means the acausal-network default. An unknown name is an
-        // authoring error, not a silent fallback to some other domain's rules.
-        let requested = view
-            .text(&root_path, "lunco:synthesizer")
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string());
+        // Domain ownership is derived from the typed member role schemas. A
+        // domain API may still explicitly select a registered non-default
+        // policy for a generic Modelica collection; physical actuator
+        // collections have no exposed selector and are classified from their
+        // `LunCoForceActuatorAPI` members.
+        let requested = if view.has_api_schema(&root_path, "LunCoDomainSynthesisAPI") {
+            view.text(&root_path, "lunco:synthesizer")
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string())
+        } else {
+            match derive_synthesizer_name(&view, &root_path) {
+                Ok(name) => name,
+                Err(message) => {
+                    error!("[domain-projection] `{}` rejected: {message}", prim.path);
+                    continue;
+                }
+            }
+        };
         let Some(synthesizer) = registry.get(&requested).cloned() else {
             let known = registry.names().join(", ");
             error!(
@@ -4018,36 +4039,24 @@ mod tests {
             },
         ];
 
-        let allocation = actuator_torque_pseudoinverse(&actuators).unwrap();
-        assert_eq!(allocation.len(), 3);
-        for (row, expected_axis) in
-            allocation
-                .iter()
-                .zip([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-        {
-            for (actual, expected) in row.iter().zip(expected_axis) {
-                assert!((actual - expected).abs() < 1.0e-12);
-            }
-        }
+        let (matrix, step) = actuator_wrench_matrix(&actuators).unwrap();
+        assert_eq!(matrix.len(), 3);
+        assert!(step > 0.0 && step.is_finite());
+        assert_eq!(matrix[0], [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(matrix[1], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(matrix[2], [0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
-    fn actuator_wrench_rejects_rank_deficient_geometry() {
-        let actuators = [
-            lunco_cosim::ForceActuator {
-                local_position: Vec3::Y,
-                direction_local: Vec3::Z,
-                max_force_n: 1.0,
-            },
-            lunco_cosim::ForceActuator {
-                local_position: Vec3::Y * 2.0,
-                direction_local: Vec3::Z,
-                max_force_n: 1.0,
-            },
-        ];
+    fn actuator_wrench_rejects_zero_authority_geometry() {
+        let actuators = [lunco_cosim::ForceActuator {
+            local_position: Vec3::ZERO,
+            direction_local: Vec3::ZERO,
+            max_force_n: 1.0,
+        }];
 
-        let error = actuator_torque_pseudoinverse(&actuators).unwrap_err();
-        assert!(error.contains("rank deficient"));
+        let error = actuator_wrench_matrix(&actuators).unwrap_err();
+        assert!(error.contains("no finite physical wrench authority"));
     }
 
     #[test]
@@ -4056,10 +4065,13 @@ mod tests {
             "AttitudeActuation",
             &BTreeSet::from(["desired_torque_z".into()]),
             &BTreeSet::from(["valve".into()]),
-            &[[0.0, 0.0, 1.0]],
-            &[],
+            &[[0.0, 0.0, 0.0, 0.0, 0.0, 1.0]],
+            0.1,
+            &["/Lander/Thruster".into()],
         );
         assert!(source.contains("LunCo.Actuation.WrenchAllocator"));
+        assert!(source.contains("wrench_matrix = ["));
+        assert!(source.contains("allocation_step = 0.1000000000000000"));
         assert!(source.contains("allocator.desired_torque_z = desired_torque_z;"));
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));

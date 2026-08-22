@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use avian3d::prelude::{
     Collider, ColliderAabb, ColliderOf, Position, RayHits, RigidBody, Rotation, SimpleCollider,
-    SpatialQuery, SpatialQueryFilter,
+    SpatialQueryFilter,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
@@ -1456,7 +1456,7 @@ pub fn settle_grounded_assemblies(
         )>,
         Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
         Query<&avian3d::prelude::Rotation>,
-        SpatialQuery,
+        lunco_physics::GridSpatialQuery,
     )>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
@@ -1620,8 +1620,8 @@ pub fn settle_grounded_assemblies(
                 // bilinear surface can differ from the oracle between lattice
                 // points. A search ray is used only for this one-time placement;
                 // its target remains the authored probe rest distance.
-                let hit = avian.p3().cast_ray(
-                    origin,
+                let hit = avian.p3().cast_ray_grid(
+                    GridPos(origin),
                     direction,
                     (2.0 * half).max(contact.probe_length),
                     true,

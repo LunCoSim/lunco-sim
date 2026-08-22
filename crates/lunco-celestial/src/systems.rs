@@ -395,8 +395,16 @@ pub fn celestial_visuals_system(
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else {
         return;
     };
-    let cam_abs =
-        world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
+    let Ok(cam_abs) = world_position_seeded(
+        cam_ent,
+        Some(cam_cell),
+        cam_tf,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        return;
+    };
 
     // The blueprint grid is an EDITOR affordance, and a scene with a site anchor is
     // not being edited from orbit — it is being stood on. Suppress the ramp there and
@@ -434,9 +442,16 @@ pub fn celestial_visuals_system(
     let end_transition_alt = 10_000.0;
     let mut per_body: std::collections::HashMap<Entity, f32> = std::collections::HashMap::new();
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
-        let body_abs = world_position_seeded(
-            body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial,
-        );
+        let Ok(body_abs) = world_position_seeded(
+            body_ent,
+            Some(body_cell),
+            body_tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            continue;
+        };
         let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
         let transition = if site_anchored {
             0.0

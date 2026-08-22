@@ -18,7 +18,7 @@ model FilteredSignal
 
   Real state;
   Real validity;
-  Real acquisition(start = 0.0)
+  output Real acquisition(start = 0.0)
     "Continuous confidence that the first live sample is acquired";
 
 equation

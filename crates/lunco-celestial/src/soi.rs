@@ -56,7 +56,7 @@ pub fn soi_transition_system(
             let Some((local_position, _)) = lunco_core::coords::pose_in_grid_seeded(
                 entity,
                 candidate_grid,
-                cell,
+                Some(cell),
                 transform,
                 &q_parents,
                 &q_grids,
@@ -98,7 +98,7 @@ pub fn soi_transition_system(
         let Some((target_position, target_rotation)) = lunco_core::coords::pose_in_grid_seeded(
             entity,
             target_grid_entity,
-            cell,
+            Some(cell),
             transform,
             &q_parents,
             &q_grids,

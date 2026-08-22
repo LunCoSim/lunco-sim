@@ -1,21 +1,20 @@
 // ── Landing-gear test — the sprung legs take the vehicle's weight ───────────
 //
 // TEST-ONLY. Runs against `scenes/tests/landing_legs.usda`: one airframe,
-// four raked prismatic legs with ball-jointed footpads, flat ground, 3 m drop. No
-// guidance, no rover, no mission — so anything this test sees is the LEG
-// MECHANISM and nothing else.
+// four raked prismatic legs with rigid child footpad colliders, and flat ground.
+// There is no guidance, rover, or mission: anything this test sees is the leg
+// mechanism and its physical load path.
 //
 // WHAT IT GUARDS. Each landing leg has one prismatic degree of freedom along its
-// authored rake.
-// Both halves of each prismatic joint frame (`physics:localRot0` on the hull,
-// `localRot1` on the leg) use the same 180° basis, so travel points hull→ground
-// while the rotational lock keeps the primary strut straight. Each pad is a
-// separate body on a spherical joint, matching the flight-hardware ball fitting
-// without adding a bending DOF to the strut.
+// authored rake. Each joint's two frames (`physics:localRot0` on the hull and
+// `localRot1` on the leg) define that leg's raked local Y axis; the X and Z
+// bases are authored for their respective planes. Negative displacement is
+// compression along the hull-to-foot axis. Each flat pad is a child collider of
+// its leg body, so it cannot rotate independently or turn onto its rim.
 //
 // So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
 // bodies at finite, bounded positions, the hull level and at rest, all four
-// struts sharing the load, and the ball mounts letting every pad settle level. A
+// struts sharing the load, and the rigid leg bodies keeping every pad level. A
 // silent frame regression fails every one of them.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
@@ -30,9 +29,10 @@
 
 /// One log row. Built by successive `+=`: rhai caps EXPRESSION complexity and a
 /// single multi-value concatenation chain trips it at compile time.
-fn row(t, y, tilt, f, x) {
+fn row(t, pos, y, tilt, f, x) {
     let s = "[legs] t=" + r2(t) + "s";
     s += "  hull_y=" + r4(y);
+    if pos != () { s += "  hull_xyz=[" + r4(pos[0]) + " " + r4(pos[1]) + " " + r4(pos[2]) + "]"; }
     s += "  tilt=" + r2(tilt) + "deg";
     s += "  strut_N=[" + r2(f[0]) + " " + r2(f[1]) + " " + r2(f[2]) + " " + r2(f[3]) + "]";
     s += "  stroke_m=[" + r4(x[0]) + " " + r4(x[1]) + " " + r4(x[2]) + " " + r4(x[3]) + "]";
@@ -54,14 +54,23 @@ fn ys(ids) {
 
 fn on_start(me) {
     this.t = 0.0;
-    this.settle_s = 8.0;    // drop + crush + planted-gear ring-down
+    this.settle_s = 30.0;   // drop + crush + planted-gear ring-down
     this.sample_s = 0.5;
     this.next_sample = 0.0;
-    this.ring_start_s = 6.0;
+    this.ring_start_s = 24.0;
     this.stroke_min = [1000000.0, 1000000.0, 1000000.0, 1000000.0];
     this.stroke_max = [-1000000.0, -1000000.0, -1000000.0, -1000000.0];
 
     this.hull = find("/LandingLegsTest/Lander");
+    this.rcs = find("/LandingLegsTest/Lander/AttitudePropulsion");
+    this.ground = find("/LandingLegsTest/Ground");
+    this.site = find("/LandingLegsTest");
+    this.moon = find("/LandingLegsTest/SolarSystem/Moon");
+    this.environment = find("/LandingLegsTest/Lander/Environment");
+    // Site placement rotates the whole scene to the Moon's local tangent.
+    // Capture the authored hull up-vector once; comparing against global +Y
+    // would report the latitude frame as a lander tilt.
+    this.surface_up = world_up(this.hull);
     this.legs = [
         find("/LandingLegsTest/Lander/LegPX"),
         find("/LandingLegsTest/Lander/LegNX"),
@@ -87,6 +96,11 @@ fn on_start(me) {
 
     print("[legs] ── landing gear test ──────────────────────────────────");
     print("[legs] hull gid=" + this.hull + " legs=" + this.legs + " springs=" + this.springs);
+    print("[legs] ground gid=" + this.ground + " ground_pos=" + world_pos(this.ground));
+    print("[legs] surface_up=" + this.surface_up);
+    print("[legs] site_pos=" + world_pos(this.site) + " site_up=" + world_up(this.site));
+    print("[legs] moon_pos=" + world_pos(this.moon) + " moon_up=" + world_up(this.moon));
+    print("[legs] gravity probe will be sampled after the first physics tick");
     print("[legs] dropping from 3 m; settling for " + this.settle_s + "s");
 }
 
@@ -108,6 +122,27 @@ fn strut_strokes(springs) {
     let out = [];
     for s in springs {
         if s == () || s < 0 { out.push(()); } else { out.push(get(s, "displacement")); }
+    }
+    out
+}
+
+/// Native contact measurements from each leg's compound body. Each compound
+/// has one enabled shape—the child footpad—so these are per-foot facts without
+/// pretending that the child shape is a separate runtime entity.
+fn leg_contact_forces(legs) {
+    let out = [];
+    for leg in legs {
+        let v = get(leg, "contact_force");
+        if v == () { out.push(()); } else { out.push(v); }
+    }
+    out
+}
+
+fn leg_contact_state(legs) {
+    let out = [];
+    for leg in legs {
+        let v = get(leg, "contact");
+        if v == () { out.push(()); } else { out.push(v); }
     }
     out
 }
@@ -134,11 +169,20 @@ fn frame_errors(hull, legs) {
     out
 }
 
-/// Each footpad's tilt from level, in degrees. On this flat test surface a
-/// working ball mount should let the contact disc settle level.
-fn pad_tilts(pads) {
+/// Tilt from the local terrain normal, in degrees. The test scene is site
+/// anchored on the Moon, so global +Y is not the local ground normal.
+fn local_tilt(id, surface_up) {
+    let u = world_up(id);
+    if u == () || surface_up == () { return -1.0; }
+    let deg = angle_deg(u, surface_up);
+    if deg == () { return -1.0; }
+    deg
+}
+
+/// Each footpad's tilt from the local terrain normal, in degrees.
+fn pad_tilts(pads, surface_up) {
     let out = [];
-    for i in pads { out.push(r2(tilt_deg(i))); }
+    for i in pads { out.push(r2(local_tilt(i, surface_up))); }
     out
 }
 
@@ -156,7 +200,7 @@ fn on_tick(me) {
 
     this.t += dt();
     let pos = world_pos(this.hull);
-    let tilt = tilt_deg(this.hull);
+    let tilt = local_tilt(this.hull, this.surface_up);
     let f = strut_forces(this.springs);
     let x = strut_strokes(this.springs);
 
@@ -175,6 +219,20 @@ fn on_tick(me) {
     let y = ();
     if pos != () { y = pos[1]; }
 
+    if this.t < 0.03 {
+        print("[legs] physics_pos=[" + get(this.hull, "position_x") + ", "
+            + get(this.hull, "position_y") + ", " + get(this.hull, "position_z") + "]");
+        print("[legs] hull_local_gravity=" + get(this.hull, "LocalGravity")
+            + " ground_up=" + world_up(this.ground));
+        print("[legs] world_pos=" + world_pos(this.hull)
+            + " hull_up=" + world_up(this.hull)
+            + " ground_pos=" + world_pos(this.ground));
+        print("[legs] hull_tf=" + get(this.hull, "Transform")
+            + " hull_parent=" + get(this.hull, "ChildOf"));
+        print("[legs] gravity=[" + get(this.environment, "gravity_x") + ", "
+            + get(this.environment, "gravity_y") + ", " + get(this.environment, "gravity_z") + "]");
+    }
+
     for v in f {
         if v != () && v > this.peak_force { this.peak_force = v; }
     }
@@ -184,10 +242,30 @@ fn on_tick(me) {
         for v in f { if v == () { fr.push(0.0); } else { fr.push(v); } }
         let xr = [];
         for v in x { if v == () { xr.push(0.0); } else { xr.push(v); } }
-        row(this.t, y, tilt, fr, xr);
+        row(this.t, pos, y, tilt, fr, xr);
+        print("[legs]     hull_vel=[" + get(this.hull, "velocity_x") + ", "
+            + get(this.hull, "velocity_y") + ", " + get(this.hull, "velocity_z") + "]");
+        print("[legs]     hull_angvel=[" + get(this.hull, "angvel_x") + ", "
+            + get(this.hull, "angvel_y") + ", " + get(this.hull, "angvel_z") + "]");
+        print("[legs]     commands=[throttle " + get(this.hull, "throttle")
+            + " torque " + get(this.hull, "torque_x") + ","
+            + get(this.hull, "torque_y") + "," + get(this.hull, "torque_z")
+            + "] rcs_activity=[" + get(this.rcs, "pitch_pos_a_activity") + ","
+            + get(this.rcs, "pitch_neg_a_activity") + ","
+            + get(this.rcs, "roll_pos_a_activity") + ","
+            + get(this.rcs, "roll_neg_a_activity") + ","
+            + get(this.rcs, "yaw_pos_a_activity") + ","
+            + get(this.rcs, "yaw_neg_a_activity") + "]");
+        print("[legs]     physics_pos=[" + get(this.hull, "position_x") + ", "
+            + get(this.hull, "position_y") + ", " + get(this.hull, "position_z") + "]"
+            + " gravity=[" + get(this.environment, "gravity_x") + ", "
+            + get(this.environment, "gravity_y") + ", " + get(this.environment, "gravity_z") + "]");
         print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
+        print("[legs]     ground_pos=" + world_pos(this.ground));
         print("[legs]     frame_err_deg=" + frame_errors(this.hull, this.legs));
-        print("[legs]     pad_tilt_deg=" + pad_tilts(this.pads));
+        print("[legs]     pad_tilt_deg=" + pad_tilts(this.pads, this.surface_up));
+        print("[legs]     leg_contact_N=" + leg_contact_forces(this.legs)
+            + "  contact=" + leg_contact_state(this.legs));
         this.next_sample = this.t + this.sample_s;
     }
 
@@ -211,7 +289,18 @@ fn on_tick(me) {
                 world_pos(this.legs[2]), world_pos(this.legs[3]),
             ],
             frame_err: frame_errors(this.hull, this.legs),
-            pad_tilt: pad_tilts(this.pads),
+            pad_tilt: pad_tilts(this.pads, this.surface_up),
+            leg_contact_force: leg_contact_forces(this.legs),
+            leg_contact: leg_contact_state(this.legs),
+            hull_mass: get(this.hull, "mass"),
+            hull_inertia: [
+                get(this.hull, "inertia_xx"), get(this.hull, "inertia_yy"),
+                get(this.hull, "inertia_zz"),
+            ],
+            leg_mass: [
+                get(this.legs[0], "mass"), get(this.legs[1], "mass"),
+                get(this.legs[2], "mass"), get(this.legs[3], "mass"),
+            ],
             hull_velocity: [
                 get(this.hull, "velocity_x"), get(this.hull, "velocity_y"),
                 get(this.hull, "velocity_z"),
@@ -330,14 +419,14 @@ fn verdict(s) {
     // assertions above already test the half that carries the information.
     // Asserting an angle here would be asserting the load, in the wrong units.
 
-    // The pads are separate bodies on spherical joints. On flat ground
-    // their contact faces should settle level; a missing joint or wrong anchor
-    // leaves a tilted, drifting pad even while the hull itself looks plausible.
+    // The pads are fixed colliders on the prismatic leg bodies. On flat ground
+    // their contact faces must remain level; a separate shoe joint would add a
+    // second dynamic body and an unnecessary rotational state.
     for i in 0..4 {
         let a = s.pad_tilt[i];
         if a >= 0.0 {
             f.push(t_range(a, 0.0, 0.75,
-                "pad " + names[i] + " tilt (deg) — ball-jointed pad did not settle"));
+                "pad " + names[i] + " tilt (deg) — rigid leg collider did not hold"));
         }
     }
 
@@ -375,6 +464,10 @@ fn verdict(s) {
     print("[legs]   strut rate  " + s.strut_velocity + " m/s");
     print("[legs]   stroke span " + stroke_span + " m over final 2 s");
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
+    print("[legs]   hull mass   " + s.hull_mass + " kg");
+    print("[legs]   hull inertia " + s.hull_inertia + " kg m2");
+    print("[legs]   leg masses  " + s.leg_mass + " kg");
+    print("[legs]   contacts    " + s.leg_contact_force + " N / " + s.leg_contact);
 
     report_verdict(f, "LANDING LEGS", "LANDING_LEGS");
 }

@@ -24,5 +24,8 @@ lunco-hooks = { path = "../lunco-hooks" }
 default = ["3d"]
 3d = []
 
+[dev-dependencies]
+lunco-cosim = { path = "../lunco-cosim" }
+
 [lints]
 workspace = true

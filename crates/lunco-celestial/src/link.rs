@@ -416,7 +416,7 @@ pub(crate) fn update_links(
     let terrains: Vec<(DVec3, DQuat, Arc<SurfaceOracle>)> = q_terrain
         .iter()
         .filter_map(|(e, hf)| {
-            let (p, r) = world_pose(e, &q_parents, &q_grids, &q_spatial)?;
+            let (p, r) = world_pose(e, &q_parents, &q_grids, &q_spatial).ok()?;
             Some((p.0, r.0, hf.0.clone()))
         })
         .collect();

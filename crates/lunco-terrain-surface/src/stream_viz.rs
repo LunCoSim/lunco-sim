@@ -246,7 +246,7 @@ pub(crate) fn collect_terrain_detail_demands(
                 // later resolves the precision-safe camera-to-terrain transform
                 // through their nearest shared Grid.
                 let (position, rotation) =
-                    lunco_core::coords::world_pose(entity, &parents, &grids, &spatial)?;
+                    lunco_core::coords::world_pose(entity, &parents, &grids, &spatial).ok()?;
                 Some(VisualDemand {
                     entity,
                     position: position.0,

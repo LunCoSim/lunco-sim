@@ -9,8 +9,12 @@ model RCSJet
   parameter Real g0 = 9.80665 "Standard gravity acceleration (m/s2)";
   parameter Real minimum_isp_g0 = 1.0e-6
     "Smallest specific-impulse/gravity product used for flow";
-  parameter Real plume_width_m = 0.18 "Full-throttle plume radius (m)";
-  parameter Real plume_length_m = 0.72 "Full-throttle plume length (m)";
+  // A 1.25 kN attitude jet is short compared with the main engine, but its
+  // exhaust is still a metre-scale plume. These defaults are shared by every
+  // authored nozzle so the rendered envelope and photometric equations
+  // describe the same physical jet.
+  parameter Real plume_width_m = 0.28 "Full-throttle plume radius (m)";
+  parameter Real plume_length_m = 1.20 "Full-throttle plume length (m)";
   parameter Real plume_luminance = 5.475
     "Rec.709 luma of the RCS plume's emissive colour";
   parameter Real plume_exitance = 44200.0
@@ -21,7 +25,7 @@ model RCSJet
     "Visible throttle response exponent, matching the shader";
   parameter Real plume_radius_idle = 0.06
     "Visible plume source radius at zero valve opening (m)";
-  parameter Real plume_radius_gain = 0.6
+  parameter Real plume_radius_gain = 0.8
     "Visible plume source-radius growth at full valve opening (m)";
 
   input Real valve_opening "RCS valve opening, 0..1";

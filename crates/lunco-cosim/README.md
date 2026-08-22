@@ -20,7 +20,6 @@ registers the built-in backends (`ports::register_builtin_port_backends`):
 | **Avian rigid body** (`RIGID_BODY_GROUP`) | **out:** `position_{x,y,z}`, `velocity_{x,y,z}`, `quat_{w,x,y,z}`, `yaw`/`pitch`/`roll`, `angvel_{x,y,z}` · **in:** `force_{x,y,z}` (world), `force_local_{x,y,z}` (body-frame), `torque_{x,y,z}`, `mass`, `inertia_{xx,yy,zz}`, `com_{x,y,z}` |
 | **Avian revolute joint** (`REVOLUTE_JOINT_GROUP`) | `angle` — out (measured twist) + in (drives the `AngularMotor`) |
 | **Avian prismatic actuator** (`PRISMATIC_JOINT_GROUP`) | `displacement` — out (slider offset) + in (drives the `LinearMotor`) |
-| **Passive prismatic suspension** (`PASSIVE_PRISMATIC_SUSPENSION_GROUP`) | `displacement`, `velocity`, `force` — outputs only; USD-authored compression load, never a commandable motor |
 | **Avian observations** | Native rigid-body/contact facts plus RaycastObservation → ray_distance, ray_hit_valid, hit point/normal, and sample time |
 | **Modelica sensor conversions** | IMU, altimeter, attitude, and touchdown semantics are ordinary Modelica inputs/outputs wired in USD |
 | **Hardware** (`Port`) | `value` (f64) |

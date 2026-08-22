@@ -296,8 +296,7 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let dt = world
         .get_resource::<Time<Physics>>()
         .map(|t| t.delta_secs_f64())
-        .unwrap_or(0.0)
-        .max(1e-9);
+        .unwrap_or(0.0);
     contact_of_filtered(graph, dt, entity, |candidate| {
         world.get::<Sensor>(candidate).is_some()
     })

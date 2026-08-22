@@ -482,7 +482,7 @@ fn resolve_driven(
     let pose = match surface_pose.site_count() {
         0 => {
             let (position, rotation) =
-                lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
+                lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial).ok()?;
             DrivenVesselPose::World { position, rotation }
         }
         1 => DrivenVesselPose::Surface(surface_pose.get(vessel)?),
@@ -1351,9 +1351,10 @@ fn authored_target_positions(
         return None;
     }
 
-    let root_position = lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial)?;
+    let root_position =
+        lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial).ok()?;
     let target_position =
-        lunco_core::coords::world_position(target_entity, q_parents, q_grids, q_spatial)?;
+        lunco_core::coords::world_position(target_entity, q_parents, q_grids, q_spatial).ok()?;
     Some((root_position, target_position))
 }
 
@@ -1566,9 +1567,9 @@ fn publish_selected_control_exposure(
             || "—".to_owned(),
             |(_, _, speed)| {
                 if speed < -0.01 {
-                    "DESCENDING".to_owned()
+                    "DOWN".to_owned()
                 } else if speed > 0.01 {
-                    "CLIMBING".to_owned()
+                    "UP".to_owned()
                 } else {
                     "HOLD".to_owned()
                 }

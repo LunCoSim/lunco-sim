@@ -14,6 +14,49 @@ use big_space::prelude::*;
 use crate::markers::GridAnchor;
 use crate::world::WorldGrid;
 
+/// Failure while resolving a BigSpace coordinate chain.
+///
+/// A missing intermediate spatial component is not a valid "best effort"
+/// result: returning the prefix of a chain produces a plausible but wrong
+/// astronomical pose.  Callers at interactive boundaries may turn this into
+/// an explicit unavailable result, while simulation/physics boundaries should
+/// surface it as an integration error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoordinateError {
+    MissingSpatial { entity: Entity },
+    MissingAncestorSpatial { entity: Entity, parent: Entity },
+    CellCoordWithoutGrid { entity: Entity, parent: Entity },
+    Cycle { entity: Entity },
+    DepthExceeded { entity: Entity, limit: usize },
+}
+
+impl core::fmt::Display for CoordinateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MissingSpatial { entity } => {
+                write!(f, "entity {entity:?} has no spatial component")
+            }
+            Self::MissingAncestorSpatial { entity, parent } => write!(
+                f,
+                "entity {entity:?} has an ancestor {parent:?} without a spatial component"
+            ),
+            Self::CellCoordWithoutGrid { entity, parent } => write!(
+                f,
+                "entity {entity:?} carries a CellCoord but its parent {parent:?} is not a Grid"
+            ),
+            Self::Cycle { entity } => {
+                write!(f, "coordinate hierarchy contains a cycle at {entity:?}")
+            }
+            Self::DepthExceeded { entity, limit } => write!(
+                f,
+                "coordinate hierarchy for {entity:?} exceeds the {limit}-node limit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CoordinateError {}
+
 // ─────────────────────────────────────────────────────────────────────
 // Frame newtypes — grid-absolute vs floating-origin render
 // ─────────────────────────────────────────────────────────────────────
@@ -548,13 +591,14 @@ mod common_grid_tests {
 /// accumulator. Plain-`Transform` ancestors compose their `Transform`
 /// onto the running pose.
 ///
-/// Returns `None` if `entity` has no spatial component at all.
+/// Returns a topology error if the entity or any required ancestor is not
+/// spatial. A missing parent is the explicit root boundary and is valid.
 pub fn world_position(
     entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-) -> Option<GridPos> {
+) -> Result<GridPos, CoordinateError> {
     world_pose(entity, q_parents, q_grids, q_spatial).map(|(p, _)| p)
 }
 
@@ -568,24 +612,41 @@ pub fn world_pose<F: QueryFilter>(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> Option<(GridPos, GridRot)> {
+) -> Result<(GridPos, GridRot), CoordinateError> {
     // Collect the chain entity → root. Each step records the entity's local
     // offset in its PARENT's frame (cell×edge + translation; edge comes from
     // the parent grid if any) and its local rotation.
-    let (first_cell, first_tf) = match q_spatial.get(entity) {
-        Ok((c, t)) => (c.copied().unwrap_or_default(), *t),
-        Err(_) => return None,
-    };
+    let (first_cell, first_tf) = q_spatial
+        .get(entity)
+        .map(|(c, t)| (c.copied(), *t))
+        .map_err(|_| CoordinateError::MissingSpatial { entity })?;
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
+    let mut visited = Vec::with_capacity(32);
     let mut current = entity;
     let mut cur_cell = first_cell;
     let mut cur_tf = first_tf;
     for _ in 0..32 {
+        if visited.contains(&current) {
+            return Err(CoordinateError::Cycle { entity: current });
+        }
+        visited.push(current);
         let local_position = match q_parents.get(current) {
-            Ok(child_of) => q_grids
-                .get(child_of.parent())
-                .map(|grid| grid.grid_position_double(&cur_cell, &cur_tf))
-                .unwrap_or_else(|_| cur_tf.translation.as_dvec3()),
+            Ok(child_of) => match (cur_cell.as_ref(), q_grids.get(child_of.parent())) {
+                (Some(cell), Ok(grid)) => grid.grid_position_double(cell, &cur_tf),
+                (Some(_), Err(_)) => {
+                    if q_spatial.get(child_of.parent()).is_err() {
+                        return Err(CoordinateError::MissingAncestorSpatial {
+                            entity,
+                            parent: child_of.parent(),
+                        });
+                    }
+                    return Err(CoordinateError::CellCoordWithoutGrid {
+                        entity: current,
+                        parent: child_of.parent(),
+                    });
+                }
+                (None, _) => cur_tf.translation.as_dvec3(),
+            },
             Err(_) => cur_tf.translation.as_dvec3(),
         };
         chain.push((local_position, cur_tf.rotation));
@@ -595,12 +656,16 @@ pub fn world_pose<F: QueryFilter>(
         };
         match q_spatial.get(parent) {
             Ok((c, t)) => {
-                cur_cell = c.copied().unwrap_or_default();
+                cur_cell = c.copied();
                 cur_tf = *t;
             }
-            Err(_) => break,
+            Err(_) if q_parents.get(parent).is_err() => break,
+            Err(_) => return Err(CoordinateError::MissingAncestorSpatial { entity, parent }),
         }
         current = parent;
+    }
+    if visited.len() == 32 && q_parents.get(current).is_ok() {
+        return Err(CoordinateError::DepthExceeded { entity, limit: 32 });
     }
     // Compose top-down (root first): world = parent_world × local at each level,
     // so each ancestor's rotation IS applied to its descendants' offsets. The
@@ -613,7 +678,7 @@ pub fn world_pose<F: QueryFilter>(
         pos += rot * off;
         rot *= local_rot.as_dquat();
     }
-    Some((GridPos(pos), GridRot(rot)))
+    Ok((GridPos(pos), GridRot(rot)))
 }
 
 /// Compose `entity`'s pose in the coordinate frame of its ancestor `target_grid`.
@@ -644,15 +709,16 @@ pub fn grid_relative_pose<F: QueryFilter>(
     let (cell, transform) = q_spatial.get(entity).ok()?;
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
     let mut current = entity;
-    let mut current_cell = cell.copied().unwrap_or_default();
+    let mut current_cell = cell.copied();
     let mut current_transform = *transform;
 
     for _ in 0..32 {
         let parent = q_parents.get(current).ok()?.parent();
-        let local_position = q_grids
-            .get(parent)
-            .map(|grid| grid.grid_position_double(&current_cell, &current_transform))
-            .unwrap_or_else(|_| current_transform.translation.as_dvec3());
+        let local_position = match (current_cell.as_ref(), q_grids.get(parent)) {
+            (Some(cell), Ok(grid)) => grid.grid_position_double(cell, &current_transform),
+            (Some(_), Err(_)) => return None,
+            (None, _) => current_transform.translation.as_dvec3(),
+        };
         chain.push((local_position, current_transform.rotation));
 
         if parent == target_grid {
@@ -667,7 +733,7 @@ pub fn grid_relative_pose<F: QueryFilter>(
 
         current = parent;
         let (next_cell, next_transform) = q_spatial.get(current).ok()?;
-        current_cell = next_cell.copied().unwrap_or_default();
+        current_cell = next_cell.copied();
         current_transform = *next_transform;
     }
 
@@ -843,7 +909,7 @@ pub fn grid_transform_between_grids<F: QueryFilter>(
 pub fn pose_in_grid_seeded<F: QueryFilter>(
     entity: Entity,
     target_grid: Entity,
-    initial_cell: &CellCoord,
+    initial_cell: Option<&CellCoord>,
     initial_transform: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -861,10 +927,10 @@ pub fn pose_in_grid_seeded<F: QueryFilter>(
     )?;
     let (target_position, target_rotation) =
         grid_relative_pose(target_grid, common, q_parents, q_grids, q_spatial)?;
-    let inverse = target_rotation.inverse();
+    let inverse = target_rotation.normalize().inverse();
     Some((
         inverse * (entity_position - target_position),
-        inverse * entity_rotation,
+        (inverse * entity_rotation.normalize()).normalize(),
     ))
 }
 
@@ -878,7 +944,7 @@ pub fn pose_in_grid_seeded<F: QueryFilter>(
 pub fn grid_relative_pose_seeded<F: QueryFilter>(
     entity: Entity,
     target_grid: Entity,
-    initial_cell: &CellCoord,
+    initial_cell: Option<&CellCoord>,
     initial_transform: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -890,15 +956,16 @@ pub fn grid_relative_pose_seeded<F: QueryFilter>(
 
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
     let mut current = entity;
-    let mut current_cell = *initial_cell;
+    let mut current_cell = initial_cell.copied();
     let mut current_transform = *initial_transform;
 
     for _ in 0..32 {
         let parent = q_parents.get(current).ok()?.parent();
-        let local_position = q_grids
-            .get(parent)
-            .map(|grid| grid.grid_position_double(&current_cell, &current_transform))
-            .unwrap_or_else(|_| current_transform.translation.as_dvec3());
+        let local_position = match (current_cell.as_ref(), q_grids.get(parent)) {
+            (Some(cell), Ok(grid)) => grid.grid_position_double(cell, &current_transform),
+            (Some(_), Err(_)) => return None,
+            (None, _) => current_transform.translation.as_dvec3(),
+        };
         chain.push((local_position, current_transform.rotation));
 
         if parent == target_grid {
@@ -913,7 +980,7 @@ pub fn grid_relative_pose_seeded<F: QueryFilter>(
 
         current = parent;
         let (next_cell, next_transform) = q_spatial.get(current).ok()?;
-        current_cell = next_cell.copied().unwrap_or_default();
+        current_cell = next_cell.copied();
         current_transform = *next_transform;
     }
 
@@ -942,34 +1009,30 @@ pub fn grid_absolute<F: QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<GridPos> {
     let (cell, tf) = q_spatial.get(entity).ok()?;
-    Some(grid_absolute_seeded(
-        entity,
-        &cell.copied().unwrap_or_default(),
-        tf,
-        q_parents,
-        q_grids,
-    ))
+    grid_absolute_seeded(entity, cell, tf, q_parents, q_grids)
 }
 
-/// [`grid_absolute`] seeded with an explicit `(cell, tf)` — for callers whose
+/// [`grid_absolute`] seeded with an explicit optional `(cell, tf)` — for callers whose
 /// `Transform` access is `&mut` (a second `&Transform` query would collide) or
 /// whose entity is filtered out of their spatial query.
 pub fn grid_absolute_seeded(
     entity: Entity,
-    cell: &CellCoord,
+    cell: Option<&CellCoord>,
     tf: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-) -> GridPos {
-    parent_grid(entity, q_parents, q_grids)
-        .map(|grid| GridPos(grid.grid_position_double(cell, tf)))
-        .unwrap_or_else(|| GridPos(tf.translation.as_dvec3()))
+) -> Option<GridPos> {
+    match (cell, parent_grid(entity, q_parents, q_grids)) {
+        (Some(cell), Some(grid)) => Some(GridPos(grid.grid_position_double(cell, tf))),
+        (Some(_), None) => None,
+        (None, _) => Some(GridPos(tf.translation.as_dvec3())),
+    }
 }
 
 /// Reassemble BigSpace's stored cell/local split in the parent grid frame.
 ///
 /// `edge == None` means the entity is not grid-direct, so its Transform is an
-/// ordinary parent-local point and the optional cell has no spatial meaning.
+/// ordinary parent-local point and `cell` must also be absent.
 pub fn compose_cell_local(
     cell: Option<&CellCoord>,
     edge: Option<f64>,
@@ -984,7 +1047,10 @@ pub fn compose_cell_local(
                 cell.z as f64 * edge,
             ) + local,
         ),
-        _ => GridPos(local),
+        (None, _) => GridPos(local),
+        (Some(_), None) => {
+            panic!("CellCoord cannot be composed without a direct parent Grid")
+        }
     }
 }
 
@@ -1029,7 +1095,7 @@ pub fn grid_local_remainder(
 ) -> DVec3 {
     parent_grid(entity, q_parents, q_grids)
         .map(|grid| abs.0 - grid.grid_position_double(cell, &Transform::default()))
-        .unwrap_or(abs.0)
+        .unwrap_or_else(|| panic!("grid-direct entity {entity:?} has no parent Grid"))
 }
 
 /// The `Grid` this entity is a direct child of, if any.
@@ -1049,8 +1115,8 @@ pub fn world_vector(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<DVec3> {
-    let a = world_position(from, q_parents, q_grids, q_spatial)?;
-    let b = world_position(to, q_parents, q_grids, q_spatial)?;
+    let a = world_position(from, q_parents, q_grids, q_spatial).ok()?;
+    let b = world_position(to, q_parents, q_grids, q_spatial).ok()?;
     Some(b - a)
 }
 
@@ -1063,6 +1129,35 @@ pub fn world_to_grid_local(
     target_grid: &Grid,
 ) -> (CellCoord, Vec3) {
     target_grid.translation_to_grid(world_pos - target_grid_world)
+}
+
+/// Convert a complete pose in the BigSpace root frame into the cell/local pose
+/// stored by an entity whose parent is `target_grid`.
+///
+/// The target grid's world pose is resolved through the same typed hierarchy as
+/// every other coordinate conversion. This is the canonical boundary for
+/// camera/path or other authored pose writers; callers must not subtract a
+/// grid translation in the root axes and then bin the result, because a
+/// body-fixed grid can also be rotated.
+pub fn world_pose_to_grid_local<F: QueryFilter>(
+    position: GridPos,
+    rotation: GridRot,
+    target_grid: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<(CellCoord, Transform)> {
+    let (target_position, target_rotation) =
+        world_pose(target_grid, q_parents, q_grids, q_spatial).ok()?;
+    let grid = q_grids.get(target_grid).ok()?;
+    let inverse = target_rotation.0.inverse();
+    let target_local_position = inverse * (position - target_position);
+    let (cell, translation) = grid.translation_to_grid(target_local_position);
+    let local_rotation = (inverse * rotation.0).normalize();
+    Some((
+        cell,
+        Transform::from_translation(translation).with_rotation(local_rotation.as_quat()),
+    ))
 }
 
 /// Convert a `GlobalTransform`-space point (the floating-origin-relative
@@ -1088,12 +1183,12 @@ pub fn render_to_grid_absolute(grid: &Grid, render_point: RenderPos) -> GridPos 
 /// pose); this returns the position only.
 pub fn world_position_seeded<F: QueryFilter>(
     entity: Entity,
-    initial_cell: &CellCoord,
+    initial_cell: Option<&CellCoord>,
     initial_tf: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> GridPos {
+) -> Result<GridPos, CoordinateError> {
     world_pose_seeded(
         entity,
         initial_cell,
@@ -1102,37 +1197,38 @@ pub fn world_position_seeded<F: QueryFilter>(
         q_grids,
         q_spatial,
     )
-    .0
+    .map(|(position, _)| position)
 }
 
 /// Absolute world pose (position + rotation), seeded — the disjoint-query
 /// variant of [`world_pose`], for entities not present in `q_spatial`.
 pub fn world_pose_seeded<F: QueryFilter>(
     entity: Entity,
-    initial_cell: &CellCoord,
+    initial_cell: Option<&CellCoord>,
     initial_tf: &Transform,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
-) -> (GridPos, GridRot) {
+) -> Result<(GridPos, GridRot), CoordinateError> {
     // Same rotation-aware chain composition as [`world_position`], but seeded
     // with an explicit (cell, transform) for entities not present in
     // `q_spatial` (disjoint-query / `Without<…>` cases).
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
-    let edge0 = match q_parents.get(entity) {
-        Ok(co) => q_grids
+    let cell_off0 = match (initial_cell, q_parents.get(entity)) {
+        (Some(cell), Ok(co)) => q_grids
             .get(co.parent())
-            .ok()
-            .map(|g| g.cell_edge_length() as f64),
-        Err(_) => None,
-    };
-    let cell_off0 = match edge0 {
-        Some(e) => DVec3::new(
-            initial_cell.x as f64 * e,
-            initial_cell.y as f64 * e,
-            initial_cell.z as f64 * e,
-        ),
-        None => DVec3::ZERO,
+            .map(|grid| grid.cell_to_float(cell))
+            .map_err(|_| CoordinateError::CellCoordWithoutGrid {
+                entity,
+                parent: co.parent(),
+            })?,
+        (Some(_), Err(_)) => {
+            return Err(CoordinateError::CellCoordWithoutGrid {
+                entity,
+                parent: entity,
+            });
+        }
+        (None, _) => DVec3::ZERO,
     };
     chain.push((
         cell_off0 + initial_tf.translation.as_dvec3(),
@@ -1140,28 +1236,42 @@ pub fn world_pose_seeded<F: QueryFilter>(
     ));
 
     let mut current = entity;
+    let mut visited = vec![entity];
     for _ in 0..32 {
         let parent = match q_parents.get(current) {
             Ok(co) => co.parent(),
             Err(_) => break,
         };
         let (cell, tf) = match q_spatial.get(parent) {
-            Ok((c, t)) => (c.copied().unwrap_or_default(), *t),
-            Err(_) => break,
+            Ok((c, t)) => (c.copied(), *t),
+            Err(_) if q_parents.get(parent).is_err() => break,
+            Err(_) => return Err(CoordinateError::MissingAncestorSpatial { entity, parent }),
         };
-        let edge = match q_parents.get(parent) {
-            Ok(co) => q_grids
+        if visited.contains(&parent) {
+            return Err(CoordinateError::Cycle { entity: parent });
+        };
+        visited.push(parent);
+        let local_position = match (cell.as_ref(), q_parents.get(parent)) {
+            (Some(cell), Ok(co)) => q_grids
                 .get(co.parent())
-                .ok()
-                .map(|g| g.cell_edge_length() as f64),
-            Err(_) => None,
+                .map(|grid| grid.grid_position_double(cell, &tf))
+                .map_err(|_| CoordinateError::CellCoordWithoutGrid {
+                    entity: parent,
+                    parent: co.parent(),
+                })?,
+            (Some(_), Err(_)) => {
+                return Err(CoordinateError::CellCoordWithoutGrid {
+                    entity: parent,
+                    parent,
+                });
+            }
+            (None, _) => tf.translation.as_dvec3(),
         };
-        let cell_off = match edge {
-            Some(e) => DVec3::new(cell.x as f64 * e, cell.y as f64 * e, cell.z as f64 * e),
-            None => DVec3::ZERO,
-        };
-        chain.push((cell_off + tf.translation.as_dvec3(), tf.rotation));
+        chain.push((local_position, tf.rotation));
         current = parent;
+    }
+    if visited.len() == 32 && q_parents.get(current).is_ok() {
+        return Err(CoordinateError::DepthExceeded { entity, limit: 32 });
     }
 
     let mut pos = bevy::math::DVec3::ZERO;
@@ -1170,7 +1280,7 @@ pub fn world_pose_seeded<F: QueryFilter>(
         pos += rot * off;
         rot *= local_rot.as_dquat();
     }
-    (GridPos(pos), GridRot(rot))
+    Ok((GridPos(pos), GridRot(rot)))
 }
 
 #[cfg(test)]
@@ -1436,6 +1546,80 @@ mod tests {
             (pos.0 - expected).length() < 1e-3,
             "world_position ignored parent grid rotation: got {pos:?}, expected {expected:?} \
              (90° +Y should map child +X(100) to -Z(100))"
+        );
+    }
+
+    #[test]
+    fn world_position_rejects_a_partial_spatial_chain() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let missing_spatial = world.spawn(ChildOf(root)).id();
+        let child = world
+            .spawn((
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(missing_spatial),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
+        assert_eq!(
+            world_position(child, &q_parents, &q_grids, &q_spatial),
+            Err(CoordinateError::MissingAncestorSpatial {
+                entity: child,
+                parent: missing_spatial,
+            })
+        );
+    }
+
+    #[test]
+    fn world_position_rejects_cell_coord_without_parent_grid() {
+        let mut world = World::new();
+        let parent = world
+            .spawn((
+                Transform::from_translation(Vec3::new(10.0, 20.0, 30.0)),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let child = world
+            .spawn((
+                CellCoord::new(4, -2, 1),
+                Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)),
+                GlobalTransform::default(),
+                ChildOf(parent),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
+
+        assert_eq!(
+            world_position(child, &q_parents, &q_grids, &q_spatial),
+            Err(CoordinateError::CellCoordWithoutGrid {
+                entity: child,
+                parent
+            })
         );
     }
 

@@ -23,6 +23,7 @@ model Altimeter
   input Real ray_distance_m = 0.0 "Raw Avian hit distance (m)";
   input Real ray_hit_valid = 0.0 "Raw Avian hit validity (1 = hit)";
   input Real ray_hit_position_x = 0.0 "Raw hit point world X (m)";
+  input Real ray_hit_position_y = 0.0 "Raw hit point world Y (m)";
   input Real ray_hit_position_z = 0.0 "Raw hit point world Z (m)";
   input Real ray_sample_time = 0.0 "Raw Avian physics sample time (s)";
   input Real mount_local_x = 0.0 "Sensor mount position in vehicle X (m)";
@@ -47,6 +48,8 @@ model Altimeter
   output Real range_rate_valid "1 when range rate is meaningful";
   output Real vehicle_position_x
     "Measured vehicle X from ray origin and authored sensor mount (m)";
+  output Real vehicle_position_y
+    "Measured vehicle Y from ray origin and authored sensor mount (m)";
   output Real vehicle_position_z
     "Measured vehicle Z from ray origin and authored sensor mount (m)";
   output Real sample_time_s "Physics sample time carried with the reading (s)";
@@ -164,6 +167,9 @@ equation
   vehicle_position_x = ray_hit_valid * (ray_hit_position_x
     - max(0.0, ray_distance_m) * ray_direction_nav_x
     - mount_transform.world_frame_x);
+  vehicle_position_y = ray_hit_valid * (ray_hit_position_y
+    - max(0.0, ray_distance_m) * ray_direction_nav_y
+    - mount_transform.world_frame_y);
   vehicle_position_z = ray_hit_valid * (ray_hit_position_z
     - max(0.0, ray_distance_m) * ray_direction_nav_z
     - mount_transform.world_frame_z);

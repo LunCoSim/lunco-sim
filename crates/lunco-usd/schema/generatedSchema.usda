@@ -784,56 +784,6 @@ class "LunCoSuspensionAPI" (
     )
 }
 
-class "LunCoPrismaticSuspensionAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """A passive, crushable suspension on a PhysicsPrismaticJoint.
-    This API is intentionally distinct from UsdPhysicsDriveAPI: a drive is a
-    commanded bilateral actuator, while a landing strut has a deployed elastic
-    lock whose unloaded reference yields permanently at the authored yield
-    force. The prismatic joint still owns travel limits and rotational locking;
-    this API owns only the substep-solved axial material law. Yield and solver
-    capacity are separate properties: conflating them can make a load-bearing
-    strut too weak merely because it is designed to crush."""
-)
-{
-    float lunco:prismaticSuspension:restPosition = 0.0 (
-        doc = """Zero-load displacement in the joint's signed slider coordinate,
-        metres. The default is the authored joint-frame coincidence."""
-    )
-    float lunco:prismaticSuspension:stiffness (
-        customData = {
-            double min = 0
-            double max = 100000
-            string unit = "N/m"
-        }
-        doc = "Elastic stiffness before plastic yielding. Required; no implicit physical spring is invented when it is absent."
-    )
-    float lunco:prismaticSuspension:damping (
-        customData = {
-            double min = 0
-            double max = 20000
-            string unit = "N*s/m"
-        }
-        doc = "Axial damping coefficient evaluated by the native prismatic solver. Required; the total reaction is bounded by maxForce."
-    )
-    float lunco:prismaticSuspension:yieldForce (
-        customData = {
-            double min = 0
-            string unit = "N"
-        }
-        doc = "Elastic yield force. Compression beyond this load permanently advances the unloaded reference; required for an explicitly crushable suspension."
-    )
-    float lunco:prismaticSuspension:maxForce (
-        customData = {
-            double min = 0
-            string unit = "N"
-        }
-        doc = "Symmetric axial reaction capacity of the native joint constraint. Must be at least yieldForce and is independent of the material's yield point."
-    )
-}
-
 class "LunCoJointDampingAPI" (
     customData = {
         token apiSchemaType = "singleApply"
@@ -1804,8 +1754,12 @@ class "LunCoCameraPathAPI" (
         doc = "Aim key times, seconds along the shot. Parallel to `aim:modes`."
     )
     token[] lunco:path:aim:modes = [] (
-        doc = """Aim mode per key — `tangent` (look along the track) or `target`
-        (consume the next `aim:targets` entry)."""
+        doc = """Aim mode per key — `tangent` (look along the track), `target`
+        (consume the next `aim:targets` entry), or `manual` (position only)."""
+    )
+    double lunco:path:aim:blendDuration = 0.0 (
+        doc = """Seconds before each aim key over which the previous and current
+        look directions are slerped. Zero preserves authored cuts."""
     )
     rel lunco:path:aim:targets (
         doc = """Aim-target prims, in order, one per `target` entry in

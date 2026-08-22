@@ -17,6 +17,14 @@ projections of one composed USD design.
 | Flame and RCS visuals | USD render wiring | Flame throttle/activity is connected to the corresponding Modelica output; no script mirrors actuator state |
 | Mission sequencing | Rhai | Scenario orchestration and event policy only; no continuous controller and no `on_tick` control loop |
 
+Built-in network ownership is derived from typed USD roles. A collection whose
+members apply `LunCoProgramAPI` is an acausal Modelica network; a collection
+whose members apply `LunCoForceActuatorAPI` is the geometry-derived wrench
+allocator. The lander therefore does not repeat `lunco:synthesizer` beside its
+actuator list. `LunCoDomainSynthesisAPI` remains available only when an asset
+deliberately selects a registered non-default policy. Mixed or unclassified
+member roles are rejected as authoring errors.
+
 ## Signal and fluid paths
 
 The main engine is a generated `CollectionAPI:components` network. USD connects:

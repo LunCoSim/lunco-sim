@@ -397,10 +397,11 @@ pub(crate) struct RuntimeUiSurface {
     gate: Option<String>,
     interactive: bool,
     mounted: bool,
-    /// Set only after the retained tree has a camera target, a computed
-    /// non-zero render target, a computed layout, and the current exposure
-    /// revision projected into HUI. This is a presentation lifecycle state,
-    /// not a frame counter.
+    /// Set after the retained tree has a camera target, a computed non-zero
+    /// render target, a computed layout, and an exposure snapshot projected
+    /// into HUI. This is a presentation lifecycle state, not a frame counter:
+    /// later exposure revisions update the mounted tree in place and must not
+    /// hide it while live values change.
     presentation_ready: bool,
     placement: RuntimeUiPlacement,
     applied_revision: u64,
@@ -490,17 +491,18 @@ pub(crate) fn report_runtime_ui_readiness(
                 && node.size.x > 0.0
                 && node.size.y > 0.0
         });
-        let surface_ready = surface.mounted
+        let initial_presentation_ready = surface.mounted
             && surface.applied_placement.is_some()
-            && matches!(*visibility, Visibility::Visible)
             && properties.is_some()
             && surface.applied_revision == exposures.revision
             && target_ready
             && layout_ready;
+        surface.presentation_ready |= initial_presentation_ready;
+        let surface_ready =
+            surface.presentation_ready && matches!(*visibility, Visibility::Visible);
         if surface_ready {
             ready += 1;
         }
-        surface.presentation_ready = surface_ready;
     }
 
     let render_ready = required == 0
@@ -944,11 +946,12 @@ pub(crate) fn apply_runtime_ui_exposures(
             && perspective_visible
             && gate_visible
             && placement.is_some();
+        let presentation_visible = should_be_visible && surface.presentation_ready;
         // Scene teardown and HUI template rebuilds can reset the root's Bevy
         // visibility without changing the engine exposure revision. The
         // revision remains the property/style fast path, but visibility is a
         // presentation lifecycle invariant and must be repaired independently.
-        let visibility_matches = if should_be_visible {
+        let visibility_matches = if presentation_visible {
             matches!(*visibility, Visibility::Visible)
         } else {
             matches!(*visibility, Visibility::Hidden)
@@ -996,7 +999,7 @@ pub(crate) fn apply_runtime_ui_exposures(
             continue;
         };
 
-        *visibility = if should_be_visible {
+        *visibility = if presentation_visible {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -1349,6 +1352,69 @@ mod tests {
         manifest
             .validate()
             .expect("shipped runtime UI manifest should validate");
+    }
+
+    #[test]
+    fn live_exposure_revision_does_not_hide_ready_surface() {
+        let mut app = App::new();
+        let mut exposures = EngineExposures::default();
+        {
+            let mut control = exposures.writer("control-hud");
+            control.visible(true);
+            control.property("value", "initial");
+        }
+        let initial_revision = exposures.revision;
+        app.insert_resource(exposures)
+            .insert_resource(RuntimeUiManifestState {
+                handle: Handle::default(),
+                applied: Some(AssetId::default()),
+                rebuild_pending: false,
+            });
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                HtmlNode(Handle::default()),
+                Styled::Inherited,
+                InlineStyle::default(),
+                TemplateProperties::default().with("value", "initial"),
+                RuntimeUiSurface {
+                    namespace: "control-hud".to_owned(),
+                    required_for_recording: false,
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    interactive: false,
+                    mounted: true,
+                    presentation_ready: true,
+                    placement: RuntimeUiPlacement::Viewport,
+                    applied_revision: initial_revision,
+                    applied_placement: None,
+                    input_rect: None,
+                },
+                Visibility::Visible,
+            ))
+            .id();
+
+        app.add_systems(Update, apply_runtime_ui_exposures);
+        app.update();
+        assert!(matches!(
+            app.world().get::<Visibility>(root),
+            Some(Visibility::Visible)
+        ));
+
+        app.world_mut()
+            .resource_mut::<EngineExposures>()
+            .writer("control-hud")
+            .property("value", "updated");
+        app.update();
+        assert!(matches!(
+            app.world().get::<Visibility>(root),
+            Some(Visibility::Visible)
+        ));
     }
 
     #[test]

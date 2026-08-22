@@ -8081,6 +8081,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
+ "lunco-cosim",
  "lunco-environment",
  "lunco-hooks",
  "lunco-lint",

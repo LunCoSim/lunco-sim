@@ -14,10 +14,14 @@ model PositionPID3D
   // Flight-software sensor inputs. These are wired to USD-authoritative sensor
   // ports, never to the rigid body's ground-truth position/velocity ports.
   input Real altimeter_range = 0.0 "Altimeter range to terrain (m)";
-  input Real altimeter_range_rate = 0.0 "Altimeter range rate (m/s)";
-  input Real altimeter_valid = 0.0 "1 when the raw ray has a valid return";
+  input Real altimeter_position_valid = 0.0
+    "1 when the raw ray provides a valid vehicle X/Z observation";
+  input Real altimeter_altitude_confidence = 0.0
+    "0..1 confidence that the raw ray provides vertical altitude evidence";
   input Real altimeter_vehicle_position_x = 0.0
     "Altimeter-derived vehicle X position (m)";
+  input Real altimeter_vehicle_position_y = 0.0
+    "Altimeter-derived vehicle Y position (m)";
   input Real altimeter_vehicle_position_z = 0.0
     "Altimeter-derived vehicle Z position (m)";
   input Real imu_coordinate_accel_local_x = 0.0 "IMU local coordinate acceleration X (m/s²)";
@@ -33,11 +37,12 @@ model PositionPID3D
   parameter Real initial_vel_x = 0.0 "Mission-initialized X velocity (m/s)";
   parameter Real initial_vel_y = 0.0 "Mission-initialized Y velocity (m/s)";
   parameter Real initial_vel_z = 0.0 "Mission-initialized Z velocity (m/s)";
-  input Real altimeter_mount_offset = 3.3 "Altimeter-to-COM offset (m)";
-  input Real vertical_velocity_correction_gain = 2.0
-    "Range-rate correction gain for the vertical estimator (1/s)";
-  input Real lateral_position_correction_gain = 0.8
-    "Terrain-hit lateral correction bandwidth (1/s)";
+  input Real altitude_velocity_correction_gain = 4.0
+    "Geometric-altitude velocity observer gain (1/s2)";
+  input Real lateral_position_correction_gain = 2.0
+    "Terrain-hit lateral position observer gain (1/s)";
+  input Real lateral_velocity_correction_gain = 1.0
+    "Terrain-hit lateral velocity observer gain (1/s2)";
 
   // Mission landing target. Its position comes from a kinematic USD target
   // body's live output ports; target velocity is optional and defaults to zero.
@@ -168,6 +173,7 @@ model PositionPID3D
   Real bounded_lateral_accel_x;
   Real bounded_lateral_accel_z;
   Real thrust_vertical_projection;
+  Real requested_thrust_accel;
   Real engine_alignment_gate;
   Real engine_full_alignment;
   Real pid_y_command;
@@ -194,9 +200,10 @@ model PositionPID3D
 equation
   // Sensor -> navigation block.
   navigation.altimeter_range = altimeter_range;
-  navigation.altimeter_range_rate = altimeter_range_rate;
-  navigation.altimeter_valid = altimeter_valid;
+  navigation.altimeter_position_valid = altimeter_position_valid;
+  navigation.altimeter_altitude_confidence = altimeter_altitude_confidence;
   navigation.altimeter_vehicle_position_x = altimeter_vehicle_position_x;
+  navigation.altimeter_vehicle_position_y = altimeter_vehicle_position_y;
   navigation.altimeter_vehicle_position_z = altimeter_vehicle_position_z;
   navigation.imu_coordinate_accel_local_x = imu_coordinate_accel_local_x;
   navigation.imu_coordinate_accel_local_y = imu_coordinate_accel_local_y;
@@ -208,14 +215,19 @@ equation
   navigation.gravity_nav_x = 0.0;
   navigation.gravity_nav_y = -g;
   navigation.gravity_nav_z = 0.0;
-  navigation.altimeter_mount_offset = altimeter_mount_offset;
-  navigation.vertical_velocity_correction_gain = vertical_velocity_correction_gain;
+  navigation.altitude_velocity_correction_gain = altitude_velocity_correction_gain;
   navigation.lateral_position_correction_gain = lateral_position_correction_gain;
+  navigation.lateral_velocity_correction_gain = lateral_velocity_correction_gain;
 
   // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
   // its own live gains; no axis is a copied or hidden special case.
   pid_x.setpoint = target_x;
   pid_x.measurement = navigation.nav_pos_x;
+  // The outer lateral loop is a standard position/velocity PD controller. The
+  // navigation observer supplies both terms from the IMU and terrain-return
+  // correction; it never reads the rigid-body truth pose. A zero target rate is
+  // deliberate: the derivative term brakes the measured cross-range velocity
+  // while the proportional term brings the vehicle to the marked pad.
   pid_x.setpoint_rate = target_vel_x;
   pid_x.measurement_rate = navigation.nav_vel_x;
   pid_x.kp = kp_x;
@@ -227,8 +239,16 @@ equation
 
   pid_y.setpoint = target_y;
   pid_y.measurement = navigation.nav_pos_y;
-  // Schedule the vertical rate from the measured navigation altitude.  A
-  // position-only loop would coast until the target is already below the
+  // Schedule the vertical rate from the measured navigation altitude.  This
+  // is a terminal-descent profile, not a touchdown-speed assertion: it permits
+  // about 3 m/s downward above the final approach, then tapers toward about
+  // 1 m/s around 10 m above the target. NASA describes the same broad IM-2
+  // pattern, while Apollo contact data shows that horizontal speed should be
+  // below about 0.73 m/s at first footpad contact. A mission may begin with a
+  // larger horizontal disturbance, but the separate lateral PID must remove
+  // it before contact.
+  //
+  // A position-only loop would coast until the target is already below the
   // vehicle, then discover its descent speed too late to brake.  The square
   // root is the physical stopping-distance law v = sqrt(2 a h): it permits a
   // bounded descent high above the pad and automatically reduces the commanded
@@ -254,10 +274,9 @@ equation
   landing_handoff_position_gate = noEvent(if horizontal_target_error
       <= max(0.0, landing_handoff_position_radius_m) then 1.0 else 0.0);
   // The continuous flight law publishes a measured transition REQUEST. The
-  // event supervisor qualifies that exact predicate for contiguous time and
-  // writes the accepted mode back through the typed latch input. Keeping the
-  // request separate from the accepted mode prevents one quiet solver sample
-  // from permanently releasing flight control.
+  // event supervisor qualifies it for mission scripts and writes the accepted
+  // mode through the typed latch input. That keeps this controller acyclic:
+  // contact is a sensor input, while mode ownership remains an event boundary.
   landing_handoff_request = noEvent(if max(landing_handoff_position_gate,
       landing_engine_cutoff_latched) >= 0.5
     and landing_contact >= 0.5 then 1.0 else 0.0);
@@ -286,11 +305,10 @@ equation
       * (1.0 - landing_handoff_position_gate) * contact_recovery_gate));
   target_recovery_gate = missed_target_recovery_gate;
   recovery_vertical_command = missed_target_recovery_gate * 2.5 * g;
-  // Target-qualified low-speed four-pad contact requests engine cutoff so the
-  // vehicle's weight can transfer from propulsion into the shock absorbers.
-  // The event layer requires this exact predicate to remain true continuously;
-  // a one-frame contact is not accepted. Flight handoff remains a later phase,
-  // after four-pad contact and measured suspension rates prove the gear has settled.
+  // Target-qualified low-speed pad contact requests engine cutoff so the
+  // event supervisor can transfer the vehicle's weight into the shock
+  // absorbers. The event boundary is kept separate from the airframe's own
+  // native contact cutoff, which prevents a feedback loop through the solver.
   landing_engine_cutoff_request = noEvent(if landing_handoff_position_gate >= 0.5
     and engine_cutoff_contact >= 0.5 then 1.0 else 0.0);
   landing_engine_cutoff = max(0.0, min(1.0, landing_engine_cutoff_latched));
@@ -346,7 +364,7 @@ equation
   // It must be keyed to the same target-relative altitude as the stopping law.
   // Using raw altimeter range here mixes the sensor mount/beam geometry with
   // the COM landing datum and can hold a vehicle above its own pad forever.
-  landing_flare_gate = max(0.0, min(1.0, altimeter_valid))
+  landing_flare_gate = max(0.0, min(1.0, altimeter_altitude_confidence))
     * max(0.0, min(1.0,
       altitude_above_target
         / max(1.0e-9, landing_flare_range_m)));
@@ -365,10 +383,21 @@ equation
   // vertical flight law asks for positive thrust.
   thrust_authority = vertical_limiter_output
     / max(minimum_vertical_accel_mps2, vertical_limiter_output);
-  thrust_accel = thrust_authority * sqrt(
+  requested_thrust_accel = thrust_authority * sqrt(
     bounded_lateral_accel_x * bounded_lateral_accel_x
       + vertical_limiter_output * vertical_limiter_output
       + bounded_lateral_accel_z * bounded_lateral_accel_z);
+  // The commanded vector assumes the body +Y axis has already reached the
+  // requested attitude.  During a real RCS transient it has not: the IMU
+  // reports a smaller upward projection, so the same throttle would deliver
+  // less vertical acceleration.  Compensate that measured loss when the
+  // engine is inside its safe alignment envelope.  This is the ordinary
+  // thrust-vector guidance relationship F_y = |F| cos(theta), not a
+  // presentation correction or a per-vehicle override.  The throttle limit
+  // still bounds the result when the vehicle cannot make the requested force.
+  thrust_accel = max(requested_thrust_accel,
+    vertical_limiter_output
+      / max(minimum_engine_alignment, thrust_vertical_projection));
   unsaturated_throttle = thrust_accel
     / max(minimum_thrust_accel_mps2, max_thrust_accel);
 

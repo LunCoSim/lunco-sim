@@ -89,14 +89,13 @@ def Xform "DescentLander" (
             # per unit vertical load. This scene's terrain is an impenetrable
             # plane, so the contact coefficient must include the pad resistance
             # that real regolith supplies through penetration and ploughing.
-            # NASA TN D-6850 gives a 0.4..1.0 lunar-surface design range and
-            # reports that penetration plus sliding absorbed about 60 percent of
-            # touchdown energy. 0.60 dynamic / 0.65 static stays inside that
-            # measured design envelope while leaving finite braking authority
-            # after the raked-strut side load; it is still Coulomb contact, not a
-            # velocity clamp or post-landing stabilizer.
-            float physics:dynamicFriction = 0.60
-            float physics:staticFriction = 0.65
+            # This is a finite Coulomb contact pair, not a post-touchdown
+            # velocity clamp. The lower dynamic coefficient represents sliding
+            # after the pad breaks static contact; the small static margin lets
+            # a planted pad resist the raked-strut side load without turning the
+            # ground into a kinematic lock.
+            float physics:dynamicFriction = 0.25
+            float physics:staticFriction = 0.30
             float physics:restitution = 0.0
             token physxMaterial:frictionCombineMode = "min"
         }
@@ -114,7 +113,7 @@ def Xform "DescentLander" (
     # actuator prims and their authored transforms whenever this composition
     # changes.
     def Scope "MainPropulsion" (
-        prepend apiSchemas = ["CollectionAPI:components", "LunCoDomainSynthesisAPI", "LunCoUiSchemaAPI"]
+        prepend apiSchemas = ["CollectionAPI:components", "LunCoUiSchemaAPI"]
     )
     {
         bool lunco:ui:schemaNode = true
@@ -343,10 +342,9 @@ def Xform "DescentLander" (
         int lunco:ui:schemaColumn = 2
         int lunco:ui:schemaRow = 0
         string lunco:ui:schemaRole = "Torque request · valve pulses"
-        # The allocator is derived from the authored force-actuator geometry
-        # below.  The selected synthesizer is explicit so a future projection
-        # cannot silently reinterpret this scope as an acausal component graph.
-        uniform token lunco:synthesizer = "actuator-wrench"
+        # This collection is classified from its typed
+        # `LunCoForceActuatorAPI` members below. There is no second selector to
+        # keep in sync with the physical actuator topology.
         float inputs:desired_torque_x.connect = </DescentLander.outputs:torque_x>
         float inputs:desired_torque_y.connect = </DescentLander.outputs:torque_y>
         float inputs:desired_torque_z.connect = </DescentLander.outputs:torque_z>
@@ -1162,19 +1160,21 @@ def Xform "DescentLander" (
     float inputs:hold_torque_limit_nm = 6000.0
     # Touchdown is a flight-software contact measurement, not the spring drive's
     # commanded reaction. The spring force remains available on each joint for
-    # strut-load visualization; the controller reads the actual pad/terrain
-    # contact force from the collider that carries the load.
-    # Each ball-jointed pad is now the rigid body that owns the contact shape,
-    # so touchdown reads the pad endpoints directly. The strut bodies publish
-    # only their prismatic state and cannot report a contact they do not own.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
-    float inputs:leg_contact_px.connect = </DescentLander/LegPX/PadPX.outputs:contact>
-    float inputs:leg_contact_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact>
-    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact>
-    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact>
+    # strut-load visualization; the controller reads the actual native contact
+    # force from the Avian compound body that carries the welded pad shape.
+    #
+    # PadPX/PadNX/PadPZ/PadNZ are child shapes, not independent rigid bodies.
+    # USD composition therefore projects each enabled child shape into the
+    # parent Leg* compound collider. The native contact API is owned by that
+    # Leg* body; reading a child shape would silently miss the contact graph.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
+    float inputs:leg_contact_px.connect = </DescentLander/LegPX.outputs:contact>
+    float inputs:leg_contact_nx.connect = </DescentLander/LegNX.outputs:contact>
+    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ.outputs:contact>
+    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ.outputs:contact>
     float inputs:leg_displacement_px.connect = </DescentLander/LegPX_Spring.outputs:displacement>
     float inputs:leg_displacement_nx.connect = </DescentLander/LegNX_Spring.outputs:displacement>
     float inputs:leg_displacement_pz.connect = </DescentLander/LegPZ_Spring.outputs:displacement>
@@ -1813,7 +1813,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadPXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 0, 1.8)
+        double3 xformOp:translate = (1.8, 2.2, 1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1823,7 +1823,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXPZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 0, 1.8)
+        double3 xformOp:translate = (-1.8, 2.2, 1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1833,7 +1833,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadPXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (1.8, 0, -1.8)
+        double3 xformOp:translate = (1.8, 2.2, -1.8)
         double3 xformOp:rotateXYZ = (0, -45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1843,7 +1843,7 @@ def Xform "DescentLander" (
     def Cube "RcsQuadNXNZ"
     {
         double size = 1.0
-        double3 xformOp:translate = (-1.8, 0, -1.8)
+        double3 xformOp:translate = (-1.8, 2.2, -1.8)
         double3 xformOp:rotateXYZ = (0, 45.0, 0)
         double3 xformOp:scale = (0.3, 0.22, 0.3)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1862,7 +1862,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:translate = (0, 2.4, 2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1894,7 +1894,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:translate = (0, 2.4, 2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1912,7 +1912,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:translate = (0, 2.4, -2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1944,7 +1944,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:translate = (0, 2.4, -2.4)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1962,7 +1962,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -1971,7 +1971,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        # At +X, body +Y produces the positive body-Z moment. The authored
+        # 180-degree mount turns local -Y into that body direction.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_pos_a_thrust_n>
@@ -1994,7 +1996,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2012,7 +2014,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2021,7 +2023,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 1, 0)
+        # At -X, body +Y produces the negative body-Z moment. The authored
+        # 180-degree mount turns local -Y into that body direction.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "roll_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:roll_neg_a_thrust_n>
@@ -2044,7 +2048,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2062,7 +2066,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2071,7 +2075,8 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 0, -1)
+        # Local -Y becomes body -Z under the authored +90° visual rotation.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_pos_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_a_thrust_n>
@@ -2094,7 +2099,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2112,7 +2117,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2121,7 +2126,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 0, -1)
+        # Local -Y becomes body -Z under the authored +90-degree visual
+        # rotation; at -X that is the negative yaw moment.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_neg_a_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_a_thrust_n>
@@ -2144,7 +2151,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2167,7 +2174,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:translate = (0, 2.4, -2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2199,7 +2206,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, -2.4)
+        double3 xformOp:translate = (0, 2.4, -2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2217,7 +2224,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:translate = (0, 2.4, 2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2249,7 +2256,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, 0, 2.4)
+        double3 xformOp:translate = (0, 2.4, 2.4)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2267,7 +2274,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2299,7 +2306,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2317,7 +2324,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.18, 0.72, 0.18)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2349,7 +2356,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (0, 0, 0)
         double3 xformOp:scale = (0.09, 0.45, 0.09)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2367,7 +2374,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2376,7 +2383,8 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 0, 1)
+        # Local -Y becomes body +Z under the authored -90° visual rotation.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_pos_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_pos_b_thrust_n>
@@ -2399,7 +2407,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (-2.4, 0, 0)
+        double3 xformOp:translate = (-2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2417,7 +2425,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.16, 0.62, 0.16)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2426,7 +2434,9 @@ def Xform "DescentLander" (
         bool lunco:surface:additive = true
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
-        custom float3 lunco:forceActuator:direction = (0, 0, 1)
+        # Local -Y becomes body -Z under the authored -90-degree visual
+        # rotation; at +X that is the negative yaw moment.
+        custom float3 lunco:forceActuator:direction = (0, -1, 0)
         custom double lunco:forceActuator:maxForce = 1250.0
         custom string lunco:forceActuator:commandOutput = "yaw_neg_b_valve"
         float inputs:force_command.connect = </DescentLander/AttitudePropulsion.outputs:yaw_neg_b_thrust_n>
@@ -2449,7 +2459,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (2.4, 0, 0)
+        double3 xformOp:translate = (2.4, 2.4, 0)
         double3 xformOp:rotateXYZ = (-90.0, 0, 0)
         double3 xformOp:scale = (0.08, 0.38, 0.08)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
@@ -2484,23 +2494,21 @@ def Xform "DescentLander" (
     # still has exactly one DOF: translation along its own axis. The joint frame
     # carries that rake; it is not a hidden revolute or a free visual rotation.
     # The primary strut itself has only the prismatic DOF. The footpad is a
-    # separate 10 kg body on the ball joint used by the flight hardware; its
-    # inverse-rake rest pose starts level and the spherical mount lets the pad
-    # conform to the surface without twisting the whole airframe through a flat,
-    # rigidly mounted contact disc.
+    # welded child collider of that same leg body: it cannot rotate freely and
+    # it cannot introduce a second contact body's unconstrained motion. Its
+    # authored inverse-rake keeps the landing face level while the prismatic
+    # joint supplies the only suspension travel.
     #
-    # The SHOCK ABSORBER is the typed `LunCoPrismaticSuspensionAPI` material law
-    # on the prismatic joint. Its implicit-Euler Kelvin-Voigt material solve runs
-    # inside each Avian substep on the joint's actual anchor coordinate.
-    # It has an elastic deployed lock, viscous damping, and a monotonic plastic
-    # reference once the reaction reaches its authored limit. Impact therefore
-    # shortens the strut without storing enough energy to launch it back out.
+    # The SHOCK ABSORBER is the standard USD `PhysicsDriveAPI:linear` on the
+    # prismatic joint. The USD loader derives a native Avian implicit
+    # spring-damper motor from its authored force coefficients; the joint still
+    # owns the geometric constraint, rotation lock, limits, and reaction force.
     # There is no Modelica equation, Rhai command, transform write, external
     # force pass, or lander-specific branch. Two layers remain:
     #   the joint            — the geometric constraint and rotation lock; the
-    #                          typed material receives k = 1800000 N/m,
-    #                          c = 90000 N·s/m, yield = 20000 N, capacity = 42000 N,
-    #                          and stroke -0.8..0 m (negative IS compression).
+    #                          standard drive receives k = 20000 N/m,
+    #                          c = 18000 N·s/m, capacity = 30000 N, and stroke
+    #                          -0.8..0 m (negative IS compression).
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
     #
@@ -2523,7 +2531,7 @@ def Xform "DescentLander" (
         # that can drift from the first.
         #
         # The child pad is placed at the strut tip in the leg frame. Its local
-        # inverse-rake rotation gives the ball-jointed body a level rest pose
+        # inverse-rake rotation gives the welded pad a level rest pose
         # while the parent leg translates through the suspension joint.
         #
         # The body carries NO scale. A prim that is both the rigid body and the
@@ -2536,12 +2544,11 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # The primary strut body only. The separately jointed footpad carries its
-        # own 10 kg mass, so the complete moving assembly remains 40 kg without
-        # assigning one mass to two independently moving parts.
-        float physics:mass = 30.0
-        float3 physics:centerOfMass = (0, -3.525, 0)
-        float3 physics:diagonalInertia = (124.30, 0.0844, 124.30)
+        # The leg and its welded footpad are one rigid assembly. The combined
+        # mass properties keep the pad from becoming a second free body.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2587,21 +2594,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadPX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        def Cube "PadPX" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            # The Apollo-class 0.91 m footpad pivots on a ball fitting at the
-            # inner strut end. It is axisymmetric, so free twist is physically
-            # harmless and visually invisible; free swing lets the contact face
-            # follow terrain without giving the strut a bending DOF.
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, -20)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2682,10 +2683,10 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, -20)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Primary-strut mass properties — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:centerOfMass = (0, -3.525, 0)
-        float3 physics:diagonalInertia = (124.30, 0.0844, 124.30)
+        # Combined strut and welded pad mass properties — see LegPX.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2716,17 +2717,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadNX" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        def Cube "PadNX" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (0, 0, 20)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2745,10 +2744,10 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (-20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Primary-strut mass properties — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:centerOfMass = (0, -3.525, 0)
-        float3 physics:diagonalInertia = (124.30, 0.0844, 124.30)
+        # Combined strut and welded pad mass properties — see LegPX.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2779,17 +2778,15 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadPZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        def Cube "PadPZ" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (20, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
@@ -2808,10 +2805,10 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (20, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Primary-strut mass properties — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:centerOfMass = (0, -3.525, 0)
-        float3 physics:diagonalInertia = (124.30, 0.0844, 124.30)
+        # Combined strut and welded pad mass properties — see LegPX.
+        float physics:mass = 40.0
+        float3 physics:centerOfMass = (0, -4.44375, 0)
+        float3 physics:diagonalInertia = (226.3688, 1.46454, 226.3688)
 
         # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
         # far end IS the leg's reach and the pad below is placed against it.
@@ -2842,75 +2839,20 @@ def Xform "DescentLander" (
             custom float lunco:factor:load_frac = 0.00066667
         }
 
-        def Cylinder "PadNZ" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        def Cube "PadNZ" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            uniform token axis = "Y"
-            double radius = 0.455
-            double height = 0.10
+            double size = 1.0
             double3 xformOp:translate = (0, -7.2, 0)
             double3 xformOp:rotateXYZ = (-20, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float physics:mass = 10.0
+            double3 xformOp:scale = (0.91, 0.10, 0.91)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
             bool physics:collisionEnabled = true
         }
 
-    }
-
-    # ── Footpad ball joints ────────────────────────────────────────────────
-    # NASA's LM primary strut terminates in a ball-joint fitting, not a rigid
-    # foot weld. Each anchor is at the top centre of the 0.10 m pad. The body0
-    # coordinates include the pad's inverse-rake rest rotation, so both anchors
-    # coincide exactly at spawn. The flight documentation specifies a ball-joint
-    # fitting and no angular stop, so all three rotational DOFs remain free. The
-    # circular pad has no heading to expose, and terrain contact orients its face
-    # at touchdown without an invented airborne centering torque.
-    def PhysicsSphericalJoint "PadPX_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegPX>
-        rel physics:body1 = </DescentLander/LegPX/PadPX>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0.017101, -7.153015, 0)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadNX_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegNX>
-        rel physics:body1 = </DescentLander/LegNX/PadNX>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (-0.017101, -7.153015, 0)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadPZ_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegPZ>
-        rel physics:body1 = </DescentLander/LegPZ/PadPZ>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0, -7.153015, 0.017101)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
-    }
-    def PhysicsSphericalJoint "PadNZ_BallJoint" (
-        prepend apiSchemas = ["LunCoJointDampingAPI"]
-    )
-    {
-        rel physics:body0 = </DescentLander/LegNZ>
-        rel physics:body1 = </DescentLander/LegNZ/PadNZ>
-        uniform token physics:axis = "Y"
-        float3 physics:localPos0 = (0, -7.153015, -0.017101)
-        float3 physics:localPos1 = (0, 0.05, 0)
-        float lunco:jointDamping:angular = 2.5
     }
 
     # ── Landing-gear suspension ──
@@ -2922,26 +2864,13 @@ def Xform "DescentLander" (
     # No `der()` restates this law in Modelica and no script animates it: a second
     # spelling of one shock absorber would put two writers on one fact.
     #
-    # Tuning, per leg: this is an energy-absorbing honeycomb strut, not a soft
-    # automotive spring. Full-scale LM landing tests measured approximately
-    # 20 kN and 42 kN primary-strut crush stages; those are the material-scale
-    # yield and reaction-capacity values used here. k = 1.8 MN/m carries one
-    # quarter of the 4000 kg vehicle's lunar weight with under 1 mm of elastic
-    # strain, while the 20 kN yield point retains only 11 mm elastically before
-    # permanent impact crush. Normal powered-flight inertia therefore cannot
-    # consume the landing stroke before touchdown.
-    # The substep solve uses the joint's full generalized effective mass (both
-    # body masses, COM lever arms, and angular inertias) and the true anchor
-    # velocity including omega cross r. Damping is sized for the PLANTED gear
-    # mode, not the free 40 kg leg: four feet on the surface carry the 4000 kg
-    # vehicle through axes raked 20 degrees from vertical. With k = 1.8 MN/m,
-    # c_critical = sqrt(m_vehicle * k) / cos(20 deg) is about 90 kN.s/m per
-    # strut. Using the free-leg mass here underdamps the landed vehicle by about
-    # five times and lets contact energy ring between the hull and four pads.
-    # The material retains 42 kN reaction capacity independently of the 20 kN
-    # yield load.
-    # Source: NASA TN D-6850, Apollo Experience Report: Lunar Module Landing
-    # Gear Subsystem, figure 7 and the full-scale dynamic-test discussion.
+    # Tuning, per leg: this is an energy-absorbing spring-damper, not a
+    # commandable actuator. The authored force coefficients give the 4000 kg
+    # vehicle a visible, finite landing stroke at lunar gravity while keeping
+    # the reaction bounded during asymmetric first-foot contact. The native
+    # Avian motor uses the joint's effective mass and true anchor velocity,
+    # including the angular contribution omega × r, in the same substep as the
+    # geometric and contact constraints.
     # SIGN, and it is the physically natural one: a suspension reaction is POSITIVE
     # when the spring is COMPRESSED. Compression therefore reads as NEGATIVE
     # displacement along the hull→foot axis, the direction the strut EXTENDS.
@@ -2969,15 +2898,15 @@ def Xform "DescentLander" (
     # drift from the airframe.
     #
     # Each primary strut is a prismatic body: it cannot rotate independently of
-    # the hull. Only the pad pivots at its authored ball fitting; suspension
-    # travel remains the prismatic stroke above.
+    # the hull. The pad is part of that rigid body, so suspension travel remains
+    # the prismatic stroke above and no free pad rotation can inject energy.
     #
     # The strut reaction and the strut/pad contact force remain separate facts.
     # The former drives the load glow; the latter
     # feeds touchdown guidance from the collider that actually meets the terrain.
 
     def PhysicsPrismaticJoint "LegPX_Spring" (
-        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -2995,14 +2924,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        float lunco:prismaticSuspension:restPosition = 0.0
-        float lunco:prismaticSuspension:stiffness = 1800000.0
-        float lunco:prismaticSuspension:damping = 90000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
-        float lunco:prismaticSuspension:maxForce = 42000.0
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 20000.0
+        float drive:linear:physics:damping = 18000.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegNX_Spring" (
-        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3017,14 +2946,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        float lunco:prismaticSuspension:restPosition = 0.0
-        float lunco:prismaticSuspension:stiffness = 1800000.0
-        float lunco:prismaticSuspension:damping = 90000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
-        float lunco:prismaticSuspension:maxForce = 42000.0
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 20000.0
+        float drive:linear:physics:damping = 18000.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegPZ_Spring" (
-        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3035,14 +2964,14 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        float lunco:prismaticSuspension:restPosition = 0.0
-        float lunco:prismaticSuspension:stiffness = 1800000.0
-        float lunco:prismaticSuspension:damping = 90000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
-        float lunco:prismaticSuspension:maxForce = 42000.0
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 20000.0
+        float drive:linear:physics:damping = 18000.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 30000.0
     }
     def PhysicsPrismaticJoint "LegNZ_Spring" (
-        prepend apiSchemas = ["LunCoPrismaticSuspensionAPI"]
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
     )
     {
         rel physics:body0 = </DescentLander>
@@ -3053,11 +2982,11 @@ def Xform "DescentLander" (
         quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
-        float lunco:prismaticSuspension:restPosition = 0.0
-        float lunco:prismaticSuspension:stiffness = 1800000.0
-        float lunco:prismaticSuspension:damping = 90000.0
-        float lunco:prismaticSuspension:yieldForce = 20000.0
-        float lunco:prismaticSuspension:maxForce = 42000.0
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 20000.0
+        float drive:linear:physics:damping = 18000.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 30000.0
     }
 
 }

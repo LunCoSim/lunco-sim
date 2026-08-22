@@ -72,6 +72,7 @@ fn make_app() -> App {
         10_000,
     )));
     app.insert_resource(Gravity(Vector::ZERO));
+    app.insert_resource(SubstepCount(64));
     app.finish();
     app.cleanup();
     app

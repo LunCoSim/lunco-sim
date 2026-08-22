@@ -40,9 +40,10 @@ def Xform "PositionPIDGuidance" (
         # guess where a mounted sensor lives: the vehicle or mission layer
         # authors every USD connection to its own IMU and raw-ray conversion.
         float inputs:altimeter_range = 0.0
-        float inputs:altimeter_range_rate = 0.0
-        float inputs:altimeter_valid = 0.0
+        float inputs:altimeter_position_valid = 0.0
+        float inputs:altimeter_altitude_confidence = 0.0
         float inputs:altimeter_vehicle_position_x = 0.0
+        float inputs:altimeter_vehicle_position_y = 0.0
         float inputs:altimeter_vehicle_position_z = 0.0
         float inputs:imu_coordinate_accel_local_x = 0.0
         float inputs:imu_coordinate_accel_local_y = 0.0
@@ -66,13 +67,10 @@ def Xform "PositionPIDGuidance" (
         float inputs:initial_vel_x = 0.0
         float inputs:initial_vel_y = 0.0
         float inputs:initial_vel_z = 0.0
-        float inputs:altimeter_mount_offset = 3.3 (
-            customData = { double min = 0.0 double max = 10.0 string unit = "m" }
+        float inputs:altitude_velocity_correction_gain = 4.0 (
+            customData = { double min = 0.0 double max = 20.0 string unit = "1/s2" }
         )
-        float inputs:vertical_velocity_correction_gain = 2.0 (
-            customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
-        )
-        float inputs:lateral_position_correction_gain = 0.8 (
+        float inputs:lateral_position_correction_gain = 2.0 (
             customData = { double min = 0.0 double max = 20.0 string unit = "1/s" }
         )
 

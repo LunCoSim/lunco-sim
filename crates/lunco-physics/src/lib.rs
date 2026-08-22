@@ -38,6 +38,7 @@ use avian3d::prelude::{
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use std::time::Duration;
 
 pub mod escape;
 pub mod pose;
@@ -49,6 +50,18 @@ pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
 pub use support::{PhysicsSupportContact, PhysicsSupportFootprint};
+
+/// The authored target velocity of a native Avian prismatic drive.
+///
+/// Avian 0.7's native prismatic motor currently compares body-centre relative
+/// velocity with a drive target, while USD joint state semantics measure the
+/// relative velocity of the two joint anchors. The USD bridge keeps the
+/// authored value here and derives Avian's per-step motor target from it before
+/// the native XPBD joint is prepared. It is runtime state, not a USD schema or
+/// a second constraint.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Debug)]
+pub struct PrismaticDriveTargetVelocity(pub f64);
 
 /// Avian runs one biased contact solve and one relaxation solve per substep.
 /// `ContactPoint::normal_impulse` accumulates the full clamped normal impulse
@@ -320,12 +333,15 @@ pub fn apply_physics_holds(
     let held = holds.is_held()
         || coupling.is_some_and(|state| state.held)
         || faults.is_some_and(|state| state.active());
-    if held != physics_time.is_paused() {
-        if held {
-            physics_time.pause();
-        } else {
-            physics_time.unpause();
-        }
+    if held {
+        // `pause()` changes Avian's flag but leaves the previous generic
+        // `Time<Physics>` delta intact. Its nested driver would then execute
+        // one stale solver pass on the first held FixedPostUpdate. A hold is
+        // therefore a paused *and zero-delta* boundary.
+        physics_time.pause();
+        physics_time.advance_by(Duration::ZERO);
+    } else if physics_time.is_paused() {
+        physics_time.unpause();
     }
 }
 
@@ -349,6 +365,7 @@ pub fn grant_physics_step(
     if faults.is_some_and(|state| state.active()) {
         steps.clear();
         physics_time.pause();
+        physics_time.advance_by(Duration::ZERO);
         return;
     }
     if coupling.is_some_and(|state| state.held) {
@@ -357,6 +374,7 @@ pub fn grant_physics_step(
         // the barrier; dropping them makes a deterministic recorder capture the
         // same pose repeatedly while its Rhai frame index continues advancing.
         physics_time.pause();
+        physics_time.advance_by(Duration::ZERO);
         return;
     }
     if !holds.is_held() {
@@ -375,6 +393,7 @@ pub fn grant_physics_step(
         }
     } else if !physics_time.is_paused() {
         physics_time.pause();
+        physics_time.advance_by(Duration::ZERO);
     }
 }
 
@@ -604,8 +623,12 @@ mod tests {
         world
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::TERRAIN_READY, true);
+        world
+            .resource_mut::<Time<Physics>>()
+            .advance_by(Duration::from_millis(16));
         world.run_system_once(apply_physics_holds).unwrap();
         assert!(world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
         // The virtual clock — and so the tick, the epoch and the celestial chain —
         // is untouched by a physics hold.
         assert!(!world.resource::<Time<Virtual>>().is_paused());

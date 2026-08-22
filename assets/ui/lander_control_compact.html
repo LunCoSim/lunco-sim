@@ -36,8 +36,14 @@
     </node>
 
     <node id="compact-control-motion-grid">
-      <node id="compact-ground"><text id="compact-ground-label">HORIZ</text><text id="compact-ground-value">{ground_speed}</text></node>
-      <node id="compact-altitude"><text id="compact-altitude-label">ALT</text><text id="compact-altitude-value">{altitude}</text></node>
+      <node id="compact-ground"><text id="compact-ground-label">SIDE</text><text id="compact-ground-value">{ground_speed}</text></node>
+      <node id="compact-altitude"><text id="compact-altitude-label">HEIGHT</text><text id="compact-altitude-value">{altitude}</text></node>
+    </node>
+
+    <node id="compact-fuel-row">
+      <text id="compact-fuel-label">FUEL</text>
+      <node id="compact-fuel-meter"><node id="compact-fuel-fill" /></node>
+      <text id="compact-fuel-value">{propellant}</text>
     </node>
 
     <node id="compact-control-bottom">

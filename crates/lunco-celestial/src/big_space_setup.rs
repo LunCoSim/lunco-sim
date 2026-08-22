@@ -83,7 +83,7 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_environment::{Gravity, GravityProvider, PhysicsSceneGravity};
+use lunco_environment::{Gravity, GravityProvider};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 
@@ -792,25 +792,31 @@ pub fn setup_big_space_hierarchy(
 }
 
 /// Select the celestial gravity model for a site scene after the hierarchy is
-/// present. An explicit composed `UsdPhysicsScene` is authoritative and is
-/// recorded by the USD physics projection, so it is never overwritten by this
-/// site default. The host's flat sandbox gravity remains the baseline for
-/// scenes without a celestial site.
+/// present.
+///
+/// `UsdPhysicsScene:gravityDirection` is expressed in the stage frame. A site
+/// scene is subsequently migrated under a body-fixed surface grid, whose
+/// rotation is derived from the geodetic anchor. A stage-frame flat vector
+/// therefore cannot remain the physical gravity vector after that migration:
+/// it would pull a level pad sideways. Site scenes use the body's typed
+/// surface-gravity model, which derives the direction and magnitude in the
+/// same body-fixed frame as the terrain and rigid bodies. The authored physics
+/// scene remains the flat-world default for scenes without a site anchor.
 pub fn sync_site_gravity(
     q_site: Query<(), With<crate::geo::SiteAnchor>>,
-    authored: Option<Res<PhysicsSceneGravity>>,
     mut gravity: ResMut<Gravity>,
 ) {
-    if q_site.is_empty() || authored.is_some() || *gravity == Gravity::Surface {
+    if q_site.is_empty() || *gravity == Gravity::Surface {
         return;
     }
     *gravity = Gravity::Surface;
-    info!("celestial takeover: site scene selected body-fixed surface gravity");
+    info!("celestial takeover: site scene selected body-fixed surface gravity; stage-frame PhysicsScene gravity is not valid after site alignment");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::DVec3;
 
     #[test]
     fn celestial_picking_geometry_is_queryable_but_not_physical() {
@@ -821,5 +827,16 @@ mod tests {
         assert_eq!(CELESTIAL_PICKING_LAYERS.filters.0, 0);
         let physical_geometry = CollisionLayers::from_bits(1, u32::MAX);
         assert!(!CELESTIAL_PICKING_LAYERS.interacts_with(physical_geometry));
+    }
+
+    #[test]
+    fn site_gravity_uses_body_frame_after_stage_gravity_is_authored() {
+        let mut app = App::new();
+        app.insert_resource(Gravity::flat(1.62, DVec3::NEG_Y));
+        app.world_mut().spawn(crate::geo::SiteAnchor);
+        app.add_systems(PostUpdate, sync_site_gravity);
+        app.update();
+
+        assert_eq!(app.world().resource::<Gravity>(), &Gravity::Surface);
     }
 }

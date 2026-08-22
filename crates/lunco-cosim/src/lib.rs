@@ -151,11 +151,9 @@ impl Plugin for CoSimPlugin {
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
             .register_type::<PendingActuatorCommand>()
-            .register_type::<joint::PassivePrismaticSuspension>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
             .register_type::<avian_queries::RaycastObservation>();
-        joint::install_passive_prismatic_solver(app);
 
         // The shared port substrate (in `lunco-core`, below every participant).
         // The cosim engine owns the avian/joint/Modelica/hardware backends and
