@@ -2087,7 +2087,7 @@ type and literal, journals the edit, and re-composes the live stage.
  so a mission is authorable/storable/shippable without writing rhai. The
  handler lowers it to the generic task executor and attaches it via the same
  path as `RunScenario` — so hot-reload, per-entity state, and
- `STEP_COMPLETE`/`SEQUENCE_COMPLETE` telemetry all come for free.
+ `TASK_COMPLETE`/`TASK_FAILED` telemetry come from the native task driver.
 
  Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
  `{cmd,params}`, `{emit,value}`, `{wait}`, `{wait_event}`.

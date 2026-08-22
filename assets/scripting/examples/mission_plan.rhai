@@ -7,9 +7,9 @@
 // over SubscribeTelemetry. The native task kernel owns progression; there is no
 // hand-written on_tick loop.
 
-fn waypoint(wp, index, speed, radius) {
+fn waypoint(wp, index, drive_speed, radius) {
     seq([
-        step(|m| nav_to(m, wp, speed, radius),
+        step(|m| nav_to(m, wp, drive_speed, radius),
              |m| arrived(m, wp, radius)),
         once(|m| emit("OBJECTIVE_COMPLETE", index)),
     ])

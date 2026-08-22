@@ -42,8 +42,9 @@ pub mod rhai_math;
 /// numbers, both planes. Call sites keep using `crate::rhai_limits::apply`.
 #[cfg(feature = "rhai")]
 pub use lunco_hooks_rhai::rhai_limits;
-/// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
-/// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
+/// Language-neutral scenario lifecycle driver (native task/mission policy plus
+/// `on_start`/`on_tick`/`on_event`/`on_stop`, hot-reload, pause, teardown).
+/// Backends implement `ScenarioRuntime`.
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub mod scenario;
 pub mod source_asset;

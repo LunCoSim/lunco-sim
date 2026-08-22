@@ -8,7 +8,7 @@
 //!   `target` gid resolved back to the host `Entity`.
 //! - P3: `world_pos`/`world_forward` reads fed the pure-rhai `nav_to`
 //!   steering, and `emit(...)` produced a `TelemetryEvent`.
-//! - P4: the declarative `run_plan` executor advanced objectives and emitted
+//! - P4: a native task-tree mission advanced its objective and emitted
 //!   `OBJECTIVE_COMPLETE` / `PLAN_COMPLETE`.
 //!
 //! Spy `#[on_command]` handlers stand in for the real mobility/physics stack
@@ -292,7 +292,7 @@ fn rhai_scenario_drives_real_rover() {
     let drives = &app.world().resource::<DriveLog>().0;
     assert!(
         !drives.is_empty(),
-        "scenario on_tick should have issued a SetPorts drive command"
+        "native task should have issued a SetPorts drive command"
     );
     let (forward, steer) = drives[0];
     assert!(
@@ -306,14 +306,19 @@ fn rhai_scenario_drives_real_rover() {
 }
 
 #[test]
-fn rhai_plan_arrives_brakes_and_emits() {
+fn rhai_task_arrives_brakes_and_emits() {
     // Single objective placed AT the rover's position → arrived immediately →
     // brake + OBJECTIVE_COMPLETE + PLAN_COMPLETE, no forward drive.
     let source = r#"
-        const PLAN = [ [0.0, 0.0, 0.0] ];
-        fn on_start(me) { this.idx = 0; }
-        fn on_tick(me) {
-            this.idx = run_plan(me, PLAN, this.idx, 1.0, 5.0);
+        fn task(me) {
+            seq([
+                once(|m| {
+                    if nav_to(m, [0.0, 0.0, 0.0], 1.0, 5.0) {
+                        emit("OBJECTIVE_COMPLETE", 0);
+                        emit("PLAN_COMPLETE", true);
+                    }
+                })
+            ])
         }
     "#;
     let (mut app, _rover) = setup(source);
@@ -1045,8 +1050,8 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
 #[test]
 fn run_timeline_arrives_advances_and_brakes() {
     // A move_to step placed AT the rover (large radius) arrives immediately: nav_to
-    // brakes, the step completes (STEP_COMPLETE), and the next `cmd` step fires
-    // its brake SetPorts. Proves data-step lowering + advancement + the cmd step.
+    // brakes, then the explicit emit step fires. Proves data-step lowering,
+    // native task advancement, and event delivery.
     use lunco_api::executor::ApiCommandEvent;
 
     let mut app = build_app();
@@ -1073,8 +1078,8 @@ fn run_timeline_arrives_advances_and_brakes() {
     );
     let events = &app.world().resource::<EventLog>().0;
     assert!(
-        events.iter().any(|n| n == "STEP_COMPLETE"),
-        "completing the move_to step should emit STEP_COMPLETE; got {events:?}"
+        events.iter().any(|n| n == "ARRIVED_A"),
+        "the explicit emit step should run after move_to; got {events:?}"
     );
 }
 

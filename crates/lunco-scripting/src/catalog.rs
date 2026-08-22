@@ -8,7 +8,8 @@
 //! The catalog is the data layer; wiring it into the editor's autocomplete is a
 //! separate (UI) step. Returns:
 //!   - `verbs`   — the world-bridge built-ins (`cmd`/`get`/`query`/…) + signatures.
-//!   - `hooks`   — the lifecycle functions a scenario *defines* (`on_tick`, …).
+//!   - `hooks`   — the lifecycle and policy entrypoints a scenario *defines*
+//!     (`task`, `mission`, `on_event`, …).
 //!   - `prelude` — ergonomic helpers authored in `prelude.rhai` (name + params).
 //!   - `tools`   — registered `name::fn` tool libraries (incl. file-loaded ones).
 //!   - `commands`— every reflected `#[Command]` (the `cmd("…")` targets) + fields.
@@ -197,10 +198,21 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
 /// Lifecycle hooks a persistent scenario *defines* (not verbs it calls).
 const HOOKS: &[(&str, &str)] = &[
     (
+        "task",
+        "fn task(self) — returns the native task tree; the behavior kernel advances it every fixed step.",
+    ),
+    (
+        "mission",
+        "fn mission(self) — returns declarative objectives evaluated alongside the task tree.",
+    ),
+    (
         "on_start",
         "fn on_start(self) — called once after (re)compile; `self` is the host entity id.",
     ),
-    ("on_tick", "fn on_tick(self) — called every FixedUpdate."),
+    (
+        "on_tick",
+        "fn on_tick(self) — test-only bounded observer; production progression belongs in task(self).",
+    ),
     (
         "on_stop",
         "fn on_stop(self) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here.",
@@ -334,12 +346,25 @@ mod tests {
         }
 
         // Hooks present.
-        assert!(data["hooks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|h| h["name"].as_str())
-            .any(|name| name == "on_tick"));
+        assert!(
+            data["hooks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|h| h["name"].as_str())
+                .any(|name| name == "on_tick")
+        );
+        for entry in ["task", "mission"] {
+            assert!(
+                data["hooks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|hook| hook["name"].as_str())
+                    .any(|name| name == entry),
+                "missing policy entrypoint {entry}"
+            );
+        }
 
         // Prelude introspected (the embedded prelude defines helpers).
         assert!(

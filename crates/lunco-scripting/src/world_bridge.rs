@@ -54,7 +54,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
+use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
@@ -1117,8 +1117,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 // ── Persistent per-entity scenario runtime (rhai backend) ──────────────────
 //
 // A `ScriptedModel { language: Rhai }` runs its `ScriptDocument` as a persistent
-// program with lifecycle hooks (`on_start`/`on_tick`/`on_event`/`on_stop`), NOT
-// a one-shot snippet. The lifecycle POLICY (scheduling, hot-reload, pause,
+// program with a native `task(me)`/`mission(me)` policy plus lifecycle hooks,
+// not a one-shot snippet. The lifecycle POLICY (scheduling, hot-reload, pause,
 // teardown, diagnostics) is language-neutral and lives in
 // [`crate::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
 // [`crate::scenario::ScenarioRuntime`], supplying only the mechanics — compile
@@ -1134,6 +1134,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 /// cheap bool test, not an AST walk + a wasted `call_fn`.
 #[derive(Clone, Copy, Debug, Default)]
 struct ProgramMask {
+    task: bool,
+    mission: bool,
     start: bool,
     tick: bool,
     stop: bool,
@@ -1145,6 +1147,8 @@ impl ProgramMask {
         let mut m = ProgramMask::default();
         for f in ast.iter_functions() {
             match (f.name, f.params.len()) {
+                ("task", 1) => m.task = true,
+                ("mission", 1) => m.mission = true,
                 ("on_start", 1) => m.start = true,
                 ("on_tick", 1) => m.tick = true,
                 ("on_stop", 1) => m.stop = true,
@@ -1164,9 +1168,16 @@ impl ProgramMask {
         }
     }
 
-    /// The hook names present, in the driver's dispatch order — for `ScriptInspect`.
+    /// The policy/lifecycle entrypoints present, in the driver's dispatch order
+    /// — for `ScriptInspect`.
     fn hook_names(&self) -> Vec<String> {
         let mut v = Vec::new();
+        if self.task {
+            v.push("task".into());
+        }
+        if self.mission {
+            v.push("mission".into());
+        }
         if self.start {
             v.push("on_start".into());
         }
@@ -2579,68 +2590,6 @@ mod tests {
         "#;
         let out = super::eval_with_world(&mut world, code).unwrap();
         assert_eq!(out.trim(), "[true, true, false, true, true]", "got {out}");
-    }
-
-    #[test]
-    fn sequencer_advances_through_steps() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // No fixed clock → elapsed_seconds() is 0.0 every call, so wait(0.0)
-        // completes immediately and the cursor walks step 0→1→2→len, then no-ops.
-        // me=0 is a dummy id the predicate closures ignore.
-        let code = r#"
-            let steps = [ wait_until(|m| true), wait(0.0), wait_until(|m| true) ];
-            let cur = seq_init();
-            cur = run_steps(0, steps, cur); let a = cur.step;   // step0 done -> 1
-            cur = run_steps(0, steps, cur); let b = cur.step;   // step1 dwell -> 2
-            cur = run_steps(0, steps, cur); let c = cur.step;   // step2 done -> 3 (==len)
-            cur = run_steps(0, steps, cur); let d = cur.step;   // past end -> no-op
-            [a, b, c, d]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[1, 2, 3, 3]", "got {out}");
-    }
-
-    #[test]
-    fn wait_for_event_completes_via_seq_note_event() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // A wait_for("PING") step holds until seq_note_event feeds a matching
-        // event; an unrelated event must NOT advance it.
-        let code = r#"
-            let steps = [ wait_for("PING") ];
-            let cur = seq_init();
-            cur = run_steps(0, steps, cur); let before = cur.step;        // still 0
-            cur = seq_note_event(cur, #{ name: "OTHER" });
-            cur = run_steps(0, steps, cur); let after_other = cur.step;   // still 0
-            cur = seq_note_event(cur, #{ name: "PING" });
-            cur = run_steps(0, steps, cur); let after_ping = cur.step;    // now 1 (==len)
-            [before, after_other, after_ping]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[0, 0, 1]", "got {out}");
-    }
-
-    #[test]
-    fn data_timeline_compiles_and_runs_on_layer1() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // A pure-DATA timeline (the Layer-2 shape RunTimeline embeds): an emit
-        // one-shot, a 0s dwell, then wait-for-event. compile_timeline lowers it
-        // to Layer-1 steps run by run_steps; seq_note_event unblocks the wait.
-        let code = r#"
-            let data = [ #{ emit: "GO_MARK", value: 1 }, #{ wait: 0.0 }, #{ wait_event: "GO" } ];
-            let steps = compile_timeline(data);
-            let cur = seq_init();
-            cur = run_steps(0, steps, cur); let a = cur.step;   // emit once -> 1
-            cur = run_steps(0, steps, cur); let b = cur.step;   // dwell 0s   -> 2
-            cur = run_steps(0, steps, cur); let c = cur.step;   // wait_event -> still 2
-            cur = seq_note_event(cur, #{ name: "GO" });
-            cur = run_steps(0, steps, cur); let d = cur.step;   // event seen -> 3 (==len)
-            [steps.len(), a, b, c, d]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[3, 1, 2, 2, 3]", "got {out}");
     }
 
     #[test]

@@ -58,25 +58,3 @@ fn nav_to(entity, target, speed, radius) {
     drive(entity, fwd, steer);
     false
 }
-
-// ── Declarative plan / objectives (PURE rhai — objectives live here, not core) ─
-//
-// A "plan" is just data: an array of world waypoints `[[x,y,z], ...]`. New
-// missions should lower that data into a native task tree; `run_plan` remains a
-// low-level stateless adapter for focused tests and data consumers. Richer
-// objectives (sample, dwell, wait-for-event) compose directly as task nodes.
-
-/// Advance a waypoint plan by one tick. `idx` is the current objective index;
-/// returns the next index (incremented when the current waypoint is reached).
-/// When `idx >= plan.len()` the plan is complete. Prefer `task(me)` with
-/// `seq`/`step` for new mission authoring.
-fn run_plan(entity, plan, idx, speed, radius) {
-    if idx >= plan.len() { return idx; }
-    let wp = plan[idx];
-    if nav_to(entity, wp, speed, radius) {
-        emit("OBJECTIVE_COMPLETE", idx);
-        idx += 1;
-        if idx >= plan.len() { emit("PLAN_COMPLETE", true); }
-    }
-    idx
-}

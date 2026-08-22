@@ -4,7 +4,7 @@ The **rhai adapter** for the runtime-agnostic `lunco-tools` registry.
 
 Provides the two concrete `Tool` impls scenarios use today and binds every
 registered tool into a rhai engine so it is callable as `name::fn(...)` from
-anywhere — including inside pure hook functions like `on_tick`.
+anywhere — including task closures and event/lifecycle hooks.
 
 ## Key API
 

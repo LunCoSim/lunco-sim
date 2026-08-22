@@ -1,7 +1,8 @@
 //! Language-neutral scenario lifecycle — the runtime-agnostic driver.
 //!
-//! A *scenario* is a persistent per-entity program with lifecycle hooks
-//! (`on_start` / `on_tick` / `on_event` / `on_stop`). EVERYTHING about *when*
+//! A *scenario* is a persistent per-entity program with native task/mission
+//! policy plus lifecycle hooks (`on_start` / `on_tick` / `on_event` /
+//! `on_stop`). EVERYTHING about *when*
 //! those fire — scheduling, hot-reload on a generation bump, `on_event`
 //! frame-delayed delivery, pause, despawn/detach teardown, diagnostics
 //! reporting — is identical across languages. That orchestration lives here, in
@@ -14,7 +15,8 @@
 //!
 //! TODO(python scenarios): give Python lifecycle parity by implementing
 //! `ScenarioRuntime` for a `PythonScenarioRuntime` (compile a module per entity;
-//! map hooks to module-level `on_start`/`on_tick`/`on_stop`/`on_event(evt)`
+//! map policy/lifecycle functions to module-level `task`/`mission` and
+//! `on_start`/`on_tick`/`on_stop`/`on_event(evt)`
 //! functions via pyo3) and registering a `ScenarioDriver<PythonScenarioRuntime>`
 //! + a `tick_python_scenarios` exclusive system. Python then gets hot-reload,
 //! pause, on_stop teardown, and diagnostics FOR FREE from this driver — only the
@@ -33,9 +35,9 @@ use lunco_core::{SessionId, TelemetryEvent};
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
+use crate::ScriptRegistry;
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::{ScriptLanguage, ScriptedModel};
-use crate::ScriptRegistry;
 
 /// Controls whether persistent scenario programs are allowed to execute their
 /// lifecycle hooks.
@@ -314,8 +316,8 @@ pub struct ScenarioSnapshot<V> {
     /// The scenario's per-entity state object (rhai `this`, future Python state),
     /// built into `V` by the caller's builder. The builder's `unit` if none.
     pub state: V,
-    /// Which lifecycle hooks the compiled program actually defines
-    /// (`on_start` / `on_tick` / `on_event` / `on_stop`).
+    /// Which policy/lifecycle entrypoints the compiled program actually defines
+    /// (`task` / `mission` / `on_start` / `on_tick` / `on_event` / `on_stop`).
     pub hooks: Vec<String>,
 }
 
@@ -335,7 +337,7 @@ pub struct ScenarioIntrospection<V> {
     /// The scenario's live state object as a native value `V` (the builder's
     /// `unit` if none).
     pub state: V,
-    /// Lifecycle hooks the program defines.
+    /// Policy/lifecycle entrypoints the program defines.
     pub hooks: Vec<String>,
 }
 

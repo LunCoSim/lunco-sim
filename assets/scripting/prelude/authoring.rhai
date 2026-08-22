@@ -190,19 +190,16 @@ fn modelica_set_parameter(class, component, param, value) {
 // ── Durable mission checkpoints ────────────────────────────────────────────
 
 // Scenario scripts are attached to host entities, so checkpoint state is
-// authored on that host prim. The active-document command is intentional here:
-// it is the existing no-rebuild USD authoring seam and does not require a
-// workspace document-list query that older installed binaries do not expose.
+// authored on that host prim. The mission supplies its USD document explicitly
+// through `fn mission_document(me)`. This keeps writes correct for referenced
+// prims and works with the existing typed command surface without a Rust rebuild.
 // Empty string is the logical tombstone used by mission_checkpoint_clear.
-fn mission_checkpoint(me, key, value) {
+fn mission_checkpoint(me, doc, key, value) {
     let path = name(me);
-    if path == () { return false; }
-    let result = cmd("SetUsdAttribute", #{
-        path: path,
-        name: "lunco:mission:checkpoint:" + key,
-        type_name: "string",
-        value: value,
-    });
+    if path == () || doc == () { return false; }
+    let result = usd_set_attribute(
+        doc, path, "lunco:mission:checkpoint:" + key, "string", value
+    );
     result.ok == true
 }
 
@@ -216,6 +213,6 @@ fn mission_checkpoint_read(me, key) {
     result.attrs[attr]
 }
 
-fn mission_checkpoint_clear(me, key) {
-    mission_checkpoint(me, key, "")
+fn mission_checkpoint_clear(me, doc, key) {
+    mission_checkpoint(me, doc, key, "")
 }

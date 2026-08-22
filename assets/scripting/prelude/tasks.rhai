@@ -1,82 +1,46 @@
-// ── Low-level sequence data — PURE rhai policy ──────────────────────────────
-//
-// A general step sequencer over the same "thread state through `this`" rule as
-// run_plan (the engine binds `this` ONLY inside the hook, not in called fns), so
-// every primitive is STATELESS: it takes a cursor and returns the next cursor.
-// The hook owns the cursor on `this`.
-//
-// A STEP is a map; a SEQUENCE is an array of steps. Step shapes (use the
-// constructors below, or write the map literal directly):
-//   #{ act: |m| ..., done: |m| ... }   run `act` every tick; advance when `done`
-//   #{ act: |m| ... }                  one-shot: run `act` once, then advance
-//   #{ secs: 5.0 }                     dwell N seconds, then advance
-//   #{ done: |m| ... }                 wait until predicate true (no action)
-//   #{ event: "NAME" }                 wait until a matching event arrives
-// (`act`/`done`/`secs`/`event` avoid rhai's reserved `do`/`until`.)
-//
-// New mission scripts should use the task-tree constructors below or
-// `RunTimeline`. These cursor functions remain a low-level data adapter for
-// generated timelines and focused tests; they are not the authoring path for a
-// hand-written fixed-tick loop.
-//
-// Progress is observable on the telemetry bus: STEP_COMPLETE(idx) per step and
-// SEQUENCE_COMPLETE(len) at the end (mirrors run_plan's OBJECTIVE/PLAN emits).
-
-/// Fresh sequencer cursor. `entered_at` is () until the first tick stamps it
-/// (so dwell timing works regardless of when the sequence starts).
-fn seq_init() { #{ step: 0, entered_at: (), events: [] } }
-
-/// Step constructors (sugar over the map literals; all optional to use).
-fn step(act, done) { #{ act: act, done: done } }   // closed-loop: act until done
-fn once(act)       { #{ act: act } }               // run once, then advance
-fn wait(secs)      { #{ secs: secs } }             // dwell `secs` seconds
-fn wait_until(done){ #{ done: done } }             // hold until predicate true
-fn wait_for(event) { #{ event: event } }           // hold until event `name` fires (any source)
-fn wait_for_from(event, src) { #{ event: event, src: src } } // ...from a SPECIFIC emitter gid
-
-/// True when the current step `s` is complete. Precedence: explicit `done`
-/// predicate, else `secs` dwell, else `event` match, else one-shot (advance now).
-fn step_done(me, s, cur, now) {
-    if s.done != ()  { return s.done.call(me); }
-    if s.secs != ()  { return (now - cur.entered_at) >= s.secs; }
-    if s.event != () { return cur.events.some(|n| n == s.event); }
-    true
-}
-
-/// Advance a step sequence by one tick. Runs the current step's `act` (if any),
-/// then advances when the step is done. Returns the next cursor; when
-/// `cur.step >= steps.len()` the sequence is complete (subsequent calls no-op).
-/// Low-level cursor adapter. New scripts should return a task tree from
-/// `fn task(me)` instead of calling this from a fixed-tick hook.
-fn run_steps(me, steps, cur) {
-    if cur.step >= steps.len() { return cur; }
-    let now = elapsed_seconds();
-    if cur.entered_at == () { cur.entered_at = now; }   // lazy stamp on entry
-    let s = steps[cur.step];
-    if s.act != () { s.act.call(me); }
-    if step_done(me, s, cur, now) {
-        emit("STEP_COMPLETE", cur.step);
-        cur.step += 1;
-        cur.entered_at = now;     // stamp the next step's entry time
-        cur.events = [];          // events are per-step; clear on advance
-        if cur.step >= steps.len() { emit("SEQUENCE_COMPLETE", cur.step); }
-    }
-    cur
-}
-
-/// Feed an on_event payload into the cursor's per-step event buffer so that
-/// `wait_for(name)` steps can complete. Call from on_event. Returns the cursor.
-fn seq_note_event(cur, evt) {
-    if evt.name != () { cur.events.push(evt.name); }
-    cur
-}
-
 // ── Tasks: the canonical auto-advanced mission policy ───────────────────────
 //
-// A task removes the manual cursor plumbing: return it from `task(me)` or
-// assign it once in `on_start`; the NATIVE kernel advances it every tick and
-// feeds it events automatically. This is the built-in "do X, wait until Y,
-// then Z" capability available to every script:
+// A task is pure Rhai data. The native `lunco-behavior` kernel owns the cursor,
+// dwell timing, event delivery, and fixed-step progression. Return the tree
+// from `task(me)`; do not implement a second cursor in `on_tick`.
+
+// These are the only script-side spellings of the task schema discriminators.
+// They are data tags at the Rhai-to-Rust boundary, not user-facing mission
+// text; `lunco-scripting/src/task_tree.rs` parses them immediately into its
+// typed runtime enum.
+const TASK_KIND_SEQ = "seq";
+const TASK_KIND_ALL = "all";
+const TASK_KIND_RACE = "race";
+const TASK_KIND_REPEAT = "repeat";
+const TASK_KIND_FOREVER = "forever";
+const TASK_KIND_SEL = "sel";
+const TASK_KIND_RETRY = "retry";
+const TASK_KIND_INVERT = "invert";
+const TASK_KIND_FORCE_OK = "force_ok";
+const TASK_KIND_FORCE_FAIL = "force_fail";
+const TASK_KIND_REACTIVE_SEQ = "reactive_seq";
+const TASK_KIND_REACTIVE_SEL = "reactive_sel";
+const TASK_KIND_STEP = "step";
+const TASK_KIND_ONCE = "once";
+const TASK_KIND_ACT_FOR = "act_for";
+const TASK_KIND_WAIT = "wait";
+const TASK_KIND_WAIT_UNTIL = "wait_until";
+const TASK_KIND_WAIT_FOR = "wait_for";
+const TASK_KIND_WAIT_FOR_FROM = "wait_for_from";
+const TASK_KIND_CHECK = "check";
+
+/// Step constructors (sugar over the map literals; all optional to use).
+fn step(act, done) { #{ kind: TASK_KIND_STEP, act: act, done: done } }
+fn once(act)       { #{ kind: TASK_KIND_ONCE, act: act } }
+fn act_for(act, secs) { #{ kind: TASK_KIND_ACT_FOR, act: act, secs: secs } }
+fn wait(secs)      { #{ kind: TASK_KIND_WAIT, secs: secs } }
+fn wait_until(done){ #{ kind: TASK_KIND_WAIT_UNTIL, done: done } }
+fn wait_for(event) { #{ kind: TASK_KIND_WAIT_FOR, event: event } }
+fn wait_for_from(event, src) {
+    #{ kind: TASK_KIND_WAIT_FOR_FROM, event: event, src: src }
+}
+// This is the built-in "do X, wait until Y, then Z" capability available to
+// every script:
 //
 //   fn task(me) {
 //       seq([
@@ -87,17 +51,17 @@ fn seq_note_event(cur, evt) {
 //           once(|m| drive_to(m, CP2)),
 //       ]);
 //   }
-//   // no fixed-tick hook or event plumbing — the task drives itself. Step closures take the
-//   // host gid `m` (the cursor calls them as `act.call(me)`).
+//   // no fixed-tick hook or event plumbing — the task drives itself. Step
+//   // closures take the host gid `m`.
 //
 // rhai has no real coroutines (and wasm can't stack-switch), so a task is a
 // COOPERATIVE cursor advanced once per tick, not a suspended call stack — the
 // right model for a deterministic, replicated sim. Steps reuse the Layer-1
-// vocabulary (once/wait/wait_until/wait_for/step). A user on_tick/on_event still
-// runs if defined (for logic beyond the task).
+// vocabulary (once/wait/wait_until/wait_for/step). `on_event` remains available
+// for external event policy; task event waits are delivered by the kernel.
 
-// A task is a TREE of nodes. Leaves are the Layer-1 step maps (once/wait/
-// wait_until/wait_for/step); composites nest other nodes:
+// A task is a TREE of nodes. Leaves are the Layer-1 step maps (once/step/
+// act_for/wait/wait_until/wait_for); composites nest other nodes:
 //   seq([a, b, c])      run in order, advance when each is done
 //   par_all([a, b])     run concurrently, done when ALL are done
 //   par_race([a, b])    run concurrently, done when ANY is done
@@ -116,7 +80,7 @@ fn seq_note_event(cur, evt) {
 // policy stays here. Emits TASK_COMPLETE once when the root finishes (and
 // TASK_FAILED if a failing node — see below — ends the tree).
 //
-// Failure-aware nodes (kernel vocabulary the old rhai engine didn't have):
+// Failure-aware nodes (native kernel vocabulary):
 //   check(|m| pred)     Success/Failure immediately — the leaf that can fail
 //   sel([a, b, c])      fallback: first child to SUCCEED wins; fails if all fail
 //   retry(n, node)      re-attempt `node` on Failure, up to n times
@@ -125,22 +89,26 @@ fn seq_note_event(cur, evt) {
 //   reactive_seq([g,a]) re-tick from the FIRST child every tick (live guards):
 //                       "do a WHILE g holds"; reactive_sel = priority arbiter
 
-/// Node constructors (assign the root to `this.task` in on_start).
-fn seq(items)      { #{ k: "seq",  items: items } }
-fn par_all(items)  { #{ k: "all",  items: items } }
-fn par_race(items) { #{ k: "race", items: items } }
-fn repeat(n, body) { #{ k: "repeat", n: n, body: body } }
-fn forever(body)   { #{ k: "forever", body: body } }
-fn sel(items)      { #{ k: "sel",  items: items } }
-fn retry(n, body)  { #{ k: "retry", n: n, body: body } }
-fn invert(body)    { #{ k: "invert", body: body } }
-fn force_ok(body)  { #{ k: "force_ok", body: body } }
-fn force_fail(body){ #{ k: "force_fail", body: body } }
-fn reactive_seq(items) { #{ k: "reactive_seq", items: items } }
-fn reactive_sel(items) { #{ k: "reactive_sel", items: items } }
+fn __task_composite(kind, items) { #{ kind: kind, items: items } }
+fn __task_decorator(kind, body) { #{ kind: kind, body: body } }
+
+/// Node constructors (return the root from `task(me)`, or assign it once in
+/// `on_start` when setup needs to happen first).
+fn seq(items)      { __task_composite(TASK_KIND_SEQ, items) }
+fn par_all(items)  { __task_composite(TASK_KIND_ALL, items) }
+fn par_race(items) { __task_composite(TASK_KIND_RACE, items) }
+fn repeat(n, body) { let out = __task_decorator(TASK_KIND_REPEAT, body); out.n = n; out }
+fn forever(body)   { __task_decorator(TASK_KIND_FOREVER, body) }
+fn sel(items)      { __task_composite(TASK_KIND_SEL, items) }
+fn retry(n, body)  { let out = __task_decorator(TASK_KIND_RETRY, body); out.n = n; out }
+fn invert(body)    { __task_decorator(TASK_KIND_INVERT, body) }
+fn force_ok(body)  { __task_decorator(TASK_KIND_FORCE_OK, body) }
+fn force_fail(body){ __task_decorator(TASK_KIND_FORCE_FAIL, body) }
+fn reactive_seq(items) { __task_composite(TASK_KIND_REACTIVE_SEQ, items) }
+fn reactive_sel(items) { __task_composite(TASK_KIND_REACTIVE_SEL, items) }
 /// Predicate leaf that can FAIL (for sel/retry/invert): Success when the
 /// predicate is true, Failure when false — unlike wait_until, which waits.
-fn check(pred)     { #{ check: pred } }
+fn check(pred)     { #{ kind: TASK_KIND_CHECK, check: pred } }
 
 /// Engine driver — buffer an event for a declarative `mission(me)`'s
 /// `requires_event` objectives. (The task tree's `wait_for` leaves are fed
@@ -149,7 +117,8 @@ fn __note_task_event(me, evt) {
     if evt.name == () { return; }
     if this.mission != () {
         if this.__mevents == () { this.__mevents = []; }
-        this.__mevents.push(#{ name: evt.name, source: evt.source });
+        let source = if evt.source == () { 0 } else { evt.source };
+        this.__mevents.push(#{ name: evt.name, source: source });
     }
 }
 
@@ -160,8 +129,8 @@ fn __note_task_event(me, evt) {
 ///       seq([ once(|m| drive_to(m, CP1)), wait_until(|m| arrived(m, CP1)), wait(3.0) ])
 ///   }
 ///
-/// Engine driver — called once after on_start; seeds `this.task` from a user
-/// `task(me)` if defined and not already set (an explicit `this.task =` wins).
+/// Engine driver — called once after `on_start`; seeds `this.task` from a user
+/// `task(me)` if defined and not already set (an explicit assignment wins).
 fn __init_task(me) {
     if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
 }

@@ -2,7 +2,7 @@
 name: author-scenario
 description: >
   How to write a scenario in LunCoSim — a rhai program attached to an entity
-  that senses the world and drives it every tick. USE THIS SKILL whenever the
+  that senses the world and supplies task/mission policy. USE THIS SKILL whenever the
   user asks, in plain words, things like: "make the rover patrol these
   waypoints", "drive it to X then Y", "have it react when it reaches / enters /
   sees something", "coordinate these two vehicles", "run this mission /
@@ -10,8 +10,8 @@ description: >
   have them survey the area", or "why isn't my script doing anything / holding
   its state?". Any request to orchestrate behaviour, missions, waypoints,
   reactions, or multi-entity coordination belongs here — the user will NOT say
-  "scenario" or "rhai". (For the agent mid-code, it also covers: an `on_tick` /
-  `on_event` / `on_start` hook, `RunScenario`, `nav_to` / `run_plan` / a
+  "scenario" or "rhai". (For the agent mid-code, it also covers: a `task` /
+  `mission` / `on_event` / `on_start` hook, `RunScenario`, `nav_to` / a
   sequencer step, `emit` / a `TelemetryEvent`, `this`-state that resets or
   reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgramAPI` prim.) These
   rules are project-specific: rhai `fn`s are pure (they can't see top-level
@@ -69,10 +69,14 @@ authoritative callable surface in one place: the `ScriptingCatalog` query.
 
 ## 1. Lifecycle hooks — the shape of every scenario
 
-Define any subset. First param (`me`) is the host entity id; per-tick mutable
-state lives on the implicit `this` map.
+Define any subset. First param (`me`) is the host entity id. Production
+progression is returned by `task(me)` and advanced by the native behavior
+kernel; `mission(me)` supplies durable objective tracking. Lifecycle/event hooks
+remain available for setup, reactions, and teardown.
 
 ```rhai
+fn task(me)           { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
+fn mission(me)        { [objective("survey", #{})]; }       // optional
 fn on_start(me)       { this.i = 0; }                       // once, after (re)compile
 fn on_event(me, evt)  { if evt.name == "GO" { /* … */ } } // event-driven policy
 fn on_stop(me)        { brake(me); }                       // hot-reload / detach / despawn
@@ -83,9 +87,10 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 **The state rule that trips up everyone (get this right first):**
 - rhai `fn`s are **pure** — they CANNOT see top-level `let`s. Thread all
   persistent state through **`this`**.
-- `this` is bound **ONLY** inside the hook the engine calls directly — **NOT**
-  in prelude/helper functions it calls. So helpers must be stateless: take state
-  in, return it out. Never read `this` from a helper.
+- `this` is bound **ONLY** inside directly-called lifecycle/mission drivers —
+  **NOT** in task closures or prelude/helper functions. Task closures receive
+  the host gid as `m`; pass configuration explicitly and let the native kernel
+  own task cursor/dwell/event state.
 - `this` resets on hot-reload (re-`RunScenario` recompiles in place; the old
   program's `on_stop` runs first).
 
@@ -112,10 +117,10 @@ reflect — no JSON round-trip.
 
 `assets/scripting/prelude/*.rhai`, one file per topic. Read them for the full
 list. Highlights:
-- **Nav:** `drive(rover,fwd,steer)`, `brake(rover)`, `nav_to(entity,target,speed,radius)` (returns true on arrival), `run_plan`. **`goto` is a reserved word — use `nav_to`.**
+- **Nav:** `drive(rover,fwd,steer)`, `brake(rover)`, `nav_to(entity,target,speed,radius)` (returns true on arrival). New missions return task trees. **`goto` is a reserved word — use `nav_to`.**
 - **Sensing:** `distance`, `arrived`, `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
-- **Sequencer:** `seq([steps])`, `step`/`once`/`wait`/`wait_until`/`wait_for`; feed events with `seq_note_event` in `on_event`.
+- **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me)`; the kernel owns event delivery and there is one task progression path.
 - **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `seg` `find_or_none` `r2`/`r4`.
 
 Add helpers freely — edit the prelude, no rebuild.
@@ -178,7 +183,7 @@ commands consume that exact build; they do not use `cargo run`.
 
 ### Keep test hooks below Rhai's expression-complexity ceiling
 
-Treat `on_tick` as a dispatcher, not as the whole mission:
+Test-only `on_tick` is a bounded observer, not a production mission driver:
 
 - one helper per phase;
 - one sampler and one accumulator;
@@ -187,10 +192,10 @@ Treat `on_tick` as a dispatcher, not as the whole mission:
 
 Hook-bound `this` is not available inside helpers. In the production host,
 ordinary map arguments are passed by value and script-defined map helpers do not
-resolve as mutable methods. Therefore phase helpers should be reducers: accept
-an explicit state map, return the updated map, and let `on_tick` copy the
-returned keys into `this`. This both controls parser complexity and makes phase
-logic independently testable.
+resolve as mutable methods. Therefore test phase helpers should be reducers:
+accept an explicit state map, return the updated map, and let the test observer
+copy the returned keys into `this`. This both controls parser complexity and
+makes phase logic independently testable.
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
 
@@ -279,16 +284,21 @@ the very authoring the test exists to check.
   watching a camera they cannot steer — give every `wait_until` a bound, or a
   beat that cuts back.
 
-## 4. Missions & sequencing (two layers, both pure rhai)
+## 4. Missions & sequencing (task policy, both pure rhai)
 
-- **Layer 1 — imperative steps** (`examples/sequence.rhai`): build a step array
-  with `step`/`wait`/`wait_for` and run with `run_steps`.
+- **Layer 1 — task tree** (`examples/sequence.rhai`): build a tree with
+  `step`/`wait`/`wait_for` and return it from `task(me)`. The native kernel owns
+  progression and event delivery.
 - **Layer 2 — declarative timeline** (`examples/timeline.rhai`): a mission as
-  **pure data** (`{move_to|cmd|emit|wait|wait_event}` steps) lowered by
-  `compile_timeline`. Serialisable — run inline with `RunTimeline`, or persist.
+  **pure data**. Each step has exactly one operation word (`move_to`,
+  `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`)
+  and only that operation's fields; `compile_timeline` lowers it inside
+  `task(me)`. It is serialisable and can also be run through
+  `RunTimeline`/`RunStoredTimeline`.
 
-Progress is observable on the bus: `STEP_COMPLETE(idx)`, `SEQUENCE_COMPLETE(len)`,
-`OBJECTIVE_COMPLETE`/`PLAN_COMPLETE`.
+Progress is observable on the bus: `TASK_COMPLETE`/`TASK_FAILED` for the native
+task root and `OBJECTIVE_COMPLETE`/`PLAN_COMPLETE` when mission policy emits
+those application events.
 
 For **complex reactive AI** (obstacle avoidance, interception) prefer the
 Autopilot Behavior Tree (`cmd("SetAutopilotBehavior", #{vessel, spec_json})`,
@@ -340,8 +350,12 @@ libraries → `<twin>/tools/*.rhai`.
 
 ## The recipe (checklist)
 
-1. Decide the shape: reactive (`on_event`) vs sequenced (timeline/sequencer). Use a Behavior Tree for reactive AI. Use `on_tick` only for a bounded test observer in `assets/scenarios/tests/`; rover control/dynamics belong to native fixed-step systems or Modelica.
-2. Write hooks; keep ALL state on `this`; keep helpers stateless.
+1. Decide the shape: sequenced (`task`), objective-tracked (`mission`), or
+   reactive (`on_event`). Use a Behavior Tree for reactive AI. Use `on_tick`
+   only for a bounded test observer in `assets/scenarios/tests/`; rover
+   control/dynamics belong to native fixed-step systems or Modelica.
+2. Return a task tree; pass task configuration into closures. Keep lifecycle
+   state on `this` only where a hook genuinely needs it.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
 5. `RunScenario` on the target gid through the live API; verify with `ScriptInspect`; iterate by re-running (in-place hot-reload, no app restart).

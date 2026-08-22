@@ -4,9 +4,9 @@
 // `RunTimeline { target, timeline }` with NO rhai authored at all; this file
 // just shows the equivalent in-scenario form.
 //
-// compile_timeline lowers the data steps to Layer-1 steps once when `task(me)`
-// is initialized; the native task kernel owns fixed-tick progression and event
-// delivery.
+// compile_timeline lowers the data steps to explicit task leaves once when
+// `task(me)` is initialized; the native task kernel owns fixed-step progression
+// and event delivery.
 
 fn task(me) {
     // Keep the data in the directly-called task function. Rhai does not

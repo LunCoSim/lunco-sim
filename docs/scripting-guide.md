@@ -265,8 +265,12 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
-- **Task trees (`task(me)`):** step leaves `step`/`once`/`wait`/`wait_until`/`wait_for`, composites `seq`/`par_all`/`par_race`/`repeat`/`forever`, and failure-aware nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and ticked natively on the `lunco-behavior` kernel. Use `wait`/`wait_until`/`wait_for` as suspension points. The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
-- **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
+- **Task trees (`task(me)`):** every constructor emits a node with an explicit `kind`; there is no field-presence inference. Leaves are `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`/`check`, composites are `seq`/`par_all`/`par_race`/`sel`/`reactive_seq`/`reactive_sel`, and decorators are `repeat`/`forever`/`retry`/`invert`/`force_ok`/`force_fail`. The adapter rejects missing/unknown kinds and cross-kind fields, then compiles once onto the existing `lunco-behavior` kernel. See [`rhai-task-tree.md`](architecture/rhai-task-tree.md). The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
+- **Timeline (Layer 2):** `compile_timeline`, `timeline_step`. A timeline step
+  must contain exactly one explicit operation word (`move_to`,
+  `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`);
+  common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
+  `value` are validated against that operation at the command boundary.
 - **Script-first authoring:** explicit-document `usd_apply` / `usd_apply_ops` /
   `usd_add_prim`, `attach_fixed` / `attach_revolute`, `modelica_apply`, and
   typed Modelica op constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
@@ -275,9 +279,11 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   authority. Obtain document ids from `ListOpenDocuments` before authoring.
 - **Mission durability:** `mission_checkpoint` and
   `mission_checkpoint_read` author phase state on the host prim as USD string
-  attributes through the active-document USD command. Use them at
-  objective/phase boundaries so a task can resume after a hot reload or
-  restart without a second persistence mechanism.
+  attributes through the explicit document command path. Define
+  `fn mission_document(me) { <usd-document-id> }` and use the returned document
+  id at objective/phase boundaries so a task can resume after a hot reload or
+  restart without a second persistence mechanism. `ListOpenDocuments` supplies
+  the id in editor sessions.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
@@ -310,11 +316,11 @@ fn task(me) {
 Two script-first layers, both pure rhai (no engine rebuild):
 
 - **Layer 1 — task tree** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step tree with `step`/`once`/`wait`/`wait_until`/`wait_for`; return it from `task(me)`. The native kernel feeds events and owns the cursor.
-- **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data** (an array of `{move_to|cmd|emit|wait|wait_event}` steps), lowered onto a task tree by `compile_timeline`. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (see [§I](#i-persistence)).
+- **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data**. Each step has exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`) and only that operation's fields; `compile_timeline` lowers it onto a task tree. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (see [§I](#i-persistence)).
 
-Progress is observable on the telemetry bus: `STEP_COMPLETE(idx)` per step,
-`SEQUENCE_COMPLETE(len)` at the end, plus the mission/objective events emitted by
-your task leaves and `mission(me)` declaration.
+Progress is observable on the telemetry bus: `TASK_COMPLETE` or `TASK_FAILED`
+for the native task root, plus the mission/objective events emitted by your task
+leaves and `mission(me)` declaration.
 
 ## E. Tools (shared libraries)
 
@@ -500,7 +506,7 @@ produces the same sequence — no explicit seeding needed.
 | [`patrol.rhai`](../assets/scripting/examples/patrol.rhai) | a looping waypoint patrol |
 | [`mission.rhai`](../assets/scripting/examples/mission.rhai) | event-channel coordination between scripts |
 | [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via the task kernel |
-| [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | the Layer-1 step sequencer |
+| [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | a linear task-tree sequence |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
 | [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and no `on_tick` loop |
 | [`script_first_robot.rhai`](../assets/scripting/examples/script_first_robot.rhai) | USD component assembly plus a Modelica control graph batch |

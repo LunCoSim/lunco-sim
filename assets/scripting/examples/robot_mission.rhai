@@ -10,10 +10,16 @@ const BASE   = [ 0.0, 0.0,  0.0];
 const SPEED  = 1.0;
 const RADIUS = 2.0;
 
+// Supply the USD document that owns the rover prim. The default scene in the
+// headless/API example is DocumentId 1; editor scripts should use the id from
+// ListOpenDocuments instead.
+fn mission_document(me) { 1 }
+
 // The checkpoint is written only when a phase completes. On hot reload or
 // restart, task(me) resumes from the last authored phase rather than replaying
 // already-completed work.
 fn task(me) {
+    let doc = mission_document(me);
     let phase = mission_checkpoint_read(me, "phase");
 
     if phase == "site_b" {
@@ -21,7 +27,7 @@ fn task(me) {
             step(|m| nav_to(m, BASE, SPEED, RADIUS),
                  |m| arrived(m, BASE, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, "phase", "complete");
+                mission_checkpoint(m, doc, "phase", "complete");
                 emit("ROBOT_MISSION_COMPLETE", true);
             }),
         ]);
@@ -32,13 +38,13 @@ fn task(me) {
             step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
                  |m| arrived(m, SITE_B, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, "phase", "site_b");
+                mission_checkpoint(m, doc, "phase", "site_b");
                 emit("ROBOT_SITE_B_REACHED", true);
             }),
             step(|m| nav_to(m, BASE, SPEED, RADIUS),
                  |m| arrived(m, BASE, RADIUS)),
             once(|m| {
-                mission_checkpoint(m, "phase", "complete");
+                mission_checkpoint(m, doc, "phase", "complete");
                 emit("ROBOT_MISSION_COMPLETE", true);
             }),
         ]);
@@ -48,19 +54,19 @@ fn task(me) {
         step(|m| nav_to(m, SITE_A, SPEED, RADIUS),
              |m| arrived(m, SITE_A, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, "phase", "site_a");
+            mission_checkpoint(m, doc, "phase", "site_a");
             emit("ROBOT_SITE_A_REACHED", true);
         }),
         step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
              |m| arrived(m, SITE_B, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, "phase", "site_b");
+            mission_checkpoint(m, doc, "phase", "site_b");
             emit("ROBOT_SITE_B_REACHED", true);
         }),
         step(|m| nav_to(m, BASE, SPEED, RADIUS),
              |m| arrived(m, BASE, RADIUS)),
         once(|m| {
-            mission_checkpoint(m, "phase", "complete");
+            mission_checkpoint(m, doc, "phase", "complete");
             emit("ROBOT_MISSION_COMPLETE", true);
         }),
     ])

@@ -18,7 +18,7 @@ JSON/rhai `BehaviorSpec` an autopilot compiles and can hot-swap at runtime).
     closures as `Action`-style leaves (`TaskCtx`). One tick engine serves both;
     the prelude's former rhai `__tick*` recursion is retired.
 - **Related:** [scripting-guide.md](./scripting-guide.md) (the task-tree verbs +
-  the Layer-1 linear sequencer), spec
+  linear task sequences), spec
   [034-control-authority-arbiter](../specs/034-control-authority-arbiter).
 - **Also built on this kernel:** [offline-recording.md](./offline-recording.md) — the
   shot sequencer (`assets/scripting/lib/shots.rhai`) is an episode expressed as a `seq`

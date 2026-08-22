@@ -56,7 +56,7 @@ the timeline as data.
 | Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | one viewport authority |
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |
 | Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
-| Declarative timeline data | JSON steps (`{wait}`,`{emit}`,`{cmd,params}`,`{move_to}`) persisted `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
+| Declarative timeline data | JSON steps with exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`) persisted in `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
 | 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`luncosim-edit/src/ui/inspector.rs:588`) | |
 | Reactive multi-instance panel host | `VizPanel` / `Panel2DCtx` read-only ctx + `defer` write (`lunco-viz/src/panel.rs,view.rs`) | pattern to copy |
 | Pannable/zoomable 2D paint plane | `lunco-canvas` — Scene/Viewport/Selection/Tool/Layer/Overlay, `click_and_drag`, layered painters | track-canvas base |

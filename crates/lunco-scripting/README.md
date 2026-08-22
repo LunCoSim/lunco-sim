@@ -39,11 +39,13 @@ New mission scripts should not hand-write a fixed-tick `on_tick` loop. The
 task tree supplies deterministic fixed-tick progression without putting the
 cursor, event delivery, or dwell timing in user policy.
 
+Every task node has an explicit `kind` discriminator; missing/unknown kinds and
+fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).
+
 The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
 `world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /
 `list_entities` / `emit` / `sim_tick` / `dt` / `elapsed_seconds`. Everything
 ergonomic (navigation, sensing, sequencing, selection) is **policy** authored in
-Everything ergonomic (navigation, sequencing, selection) is **policy** authored in
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 

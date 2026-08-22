@@ -63,10 +63,10 @@ fn __obj_ready(m, requires) {
 /// Advance one ACTIVE objective: fail check → completion (with optional dwell).
 /// Completion requires the `done` closure (if any) AND the `requires_event`
 /// latch (if any); an objective with neither completes immediately (narration).
-fn __advance_objective(me, o, now) {
+fn __advance_objective(me, o, now, doc) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
-        mission_checkpoint(me, "objective:" + o.id, "failed");
+        mission_checkpoint(me, doc, "objective:" + o.id, "failed");
         emit("OBJECTIVE_FAILED", o.id);
         return o;
     }
@@ -78,7 +78,7 @@ fn __advance_objective(me, o, now) {
         if (now - o.t0) < o.dwell { return o; }
     }
     o.state = "complete";
-    mission_checkpoint(me, "objective:" + o.id, "complete");
+    mission_checkpoint(me, doc, "objective:" + o.id, "complete");
     emit("OBJECTIVE_COMPLETE", o.id);
     if o.on_complete != () { o.on_complete.call(me); }
     o
@@ -86,14 +86,14 @@ fn __advance_objective(me, o, now) {
 
 /// Tick one objective: latch any matching event, unlock from pending when its
 /// requires are met, then advance if active. Returns the updated objective.
-fn __tick_objective(me, o, m, now, evs) {
+fn __tick_objective(me, o, m, now, evs, doc) {
     if o.state == "complete" || o.state == "failed" { return o; }
     if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
     // Events only belong to an objective after its prerequisites unlock. An
     // early global event must not be latched and replayed as a later success.
     if o.state == "active" {
         if o.requires_event != () && __obj_saw_event(evs, o.requires_event) { o.__evfired = true; }
-        o = __advance_objective(me, o, now);
+        o = __advance_objective(me, o, now, doc);
     }
     o
 }
@@ -119,8 +119,9 @@ fn __run_mission(me) {
     let now = elapsed_seconds();
     let evs = if this.__mevents == () { [] } else { this.__mevents };
     let m = this.mission;
+    let doc = if this.__mission_doc == () { () } else { this.__mission_doc };
     for i in 0..m.len() {
-        m[i] = __tick_objective(me, m[i], m, now, evs);
+        m[i] = __tick_objective(me, m[i], m, now, evs, doc);
     }
     this.mission = m;
     this.__mevents = [];   // events live one tick (actor-model cadence)
@@ -157,10 +158,14 @@ fn __restore_mission(me, m) {
     m
 }
 
-/// Engine driver — called once after on_start; seeds `this.mission` from a user
-/// `mission(me)` if defined and not already set.
+/// Engine driver — called once after setup; seeds `this.mission` from a user
+/// `mission(me)` if defined and not already set. A mission may define
+/// `mission_document(me)` to identify the USD document used for checkpoints.
 fn __init_mission(me) {
     if this.__mission_restored == true { return; }
+    this.__mission_doc = if is_def_fn("mission_document", 1) {
+        mission_document(me)
+    } else { () };
     if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
     if this.mission != () {
         this.mission = __restore_mission(me, this.mission);
@@ -175,10 +180,13 @@ fn __init_mission(me) {
 // Layer 1 steps carry rhai CLOSURES; a TIMELINE step is pure DATA (a map of
 // fields), so a whole mission is serialisable — authorable as a `const`, stored
 // in the Twin, or driven over the API by `RunTimeline` (which generates the
-// generic executor below). `compile_timeline` lowers data steps to Layer-1
-// steps ONCE in the task declaration; the native task kernel owns progression.
+// generic task tree below). `compile_timeline` lowers data steps to explicit
+// task leaves once in the task declaration; the native task kernel owns
+// progression.
 //
-// Data step vocabulary (first matching field wins):
+// Data step vocabulary. The command boundary requires exactly one of these
+// operation words per step; that operation word is the discriminator, not an
+// inferred combination of optional fields:
 //   #{ move_to: [x,y,z], speed: 1.0, radius: 2.0 }  drive until arrived (speed/radius optional)
 //   #{ move_to_entity: "/path", speed, radius }   drive to another entity, tracked live
 //   #{ possess: "/path" }                         take control of a vessel (PossessVessel)
@@ -203,7 +211,7 @@ fn timeline_subject(m, s) {
     ()
 }
 
-/// Lower ONE data step to a Layer-1 step (closures capturing the step's fields).
+/// Lower ONE data step to an explicit task leaf (closures capture its fields).
 fn timeline_step(s) {
     if s.move_to != () {
         let wp  = s.move_to;
@@ -235,7 +243,10 @@ fn timeline_step(s) {
     }
     if s.brake != () {
         let secs = if s.secs != () { s.secs } else { 1.0 };
-        return #{ act: |m| { let subject = timeline_subject(m, s); if subject != () { brake(subject); } }, secs: secs };
+        return act_for(
+            |m| { let subject = timeline_subject(m, s); if subject != () { brake(subject); } },
+            secs
+        );
     }
     if s.cmd != () {
         let name = s.cmd;
@@ -252,6 +263,6 @@ fn timeline_step(s) {
     once(|m| { emit("TIMELINE_INVALID_STEP", 1); })
 }
 
-/// Lower a whole data timeline (array of data steps) to Layer-1 steps. Call ONCE
-/// in `task(me)` and return it to the native task kernel.
+/// Lower a whole data timeline (array of data steps) to task leaves. Call ONCE
+/// in `task(me)` and return the tree to the native task kernel.
 fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }

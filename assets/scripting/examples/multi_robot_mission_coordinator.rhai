@@ -18,6 +18,11 @@ const SITES = [
     [  0.0, 0.0,  0.0],
 ];
 
+// Supply the USD document that owns the coordinator prim. The default scene in
+// the headless/API example is DocumentId 1; editor scripts should use the id
+// from ListOpenDocuments instead.
+fn mission_document(me) { 1 }
+
 fn robot_key(robot) { robot.to_string() }
 
 fn robot_is_assigned(assigned, robot) {
@@ -63,7 +68,7 @@ fn on_event(me, evt) {
         this.completed += 1;
         emit("SITE_COMPLETE", this.completed);
         if this.completed >= SITES.len() {
-            mission_checkpoint(me, "phase", "complete");
+            mission_checkpoint(me, mission_document(me), "phase", "complete");
             emit("MISSION_COMPLETE", true);
             print("coordinator: mission complete");
         }

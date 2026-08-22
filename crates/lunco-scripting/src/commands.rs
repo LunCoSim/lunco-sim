@@ -25,18 +25,18 @@ use crate::doc::ScriptLanguage;
 use crate::world_bridge::PendingWorldScripts;
 #[cfg(feature = "rhai")]
 use crate::{
-    doc::{ScriptDocument, ScriptedModel},
     ScriptRegistry,
+    doc::{ScriptDocument, ScriptedModel},
 };
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use lunco_api::executor::PendingApiRequest;
-use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
+use lunco_core::register_commands;
 #[cfg(any(feature = "rhai", feature = "python"))]
-use lunco_core::{on_command, Ack, Command, OpId};
+use lunco_core::{Ack, Command, OpId, on_command};
 #[cfg(feature = "rhai")]
 use lunco_doc::DocumentId;
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
@@ -114,7 +114,8 @@ fn on_run_rhai(
 /// Attach a persistent rhai scenario to an entity — the scenario-loading entry
 /// point for the API / MCP / UI / ROS2. Registers the source as a
 /// `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`, so the
-/// per-entity runtime starts calling its `on_start`/`on_tick`/`on_event` hooks.
+/// per-entity runtime can build a native `task(me)` tree and run optional
+/// lifecycle/event hooks.
 ///
 /// Idempotent + HOT-RELOAD: re-running on an entity that already has a scenario
 /// reuses its document id and bumps the generation, so `tick_rhai_models`
@@ -503,13 +504,16 @@ fn on_register_tool_library(
 /// sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
 /// `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
 /// authorable/storable/shippable without writing rhai. The handler lowers it to
-/// the generic executor (a `const TIMELINE` + the three hooks that call the
-/// prelude's `compile_timeline`/`run_steps`/`seq_note_event`) and attaches it via
+/// a generated `task(me)` source that calls the prelude's `compile_timeline`
+/// and hands the resulting tree to the native behavior kernel. It attaches via
 /// the same path as `RunScenario` — so hot-reload, per-entity state, and
-/// `STEP_COMPLETE`/`SEQUENCE_COMPLETE` telemetry all come for free.
+/// `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
 ///
 /// Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
-/// `{cmd,params}`, `{emit,value}`, `{wait}`, `{wait_event}`.
+/// `{move_to_entity,speed,radius}`, `{possess}`, `{brake,secs}`,
+/// `{cmd,params}`, `{emit,value}`, `{wait}`, `{wait_event}`. Each step must
+/// contain exactly one operation field; the operation word is the timeline
+/// discriminator and common fields are validated separately below.
 #[cfg(feature = "rhai")]
 #[Command]
 pub struct RunTimeline {
@@ -591,24 +595,13 @@ fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), St
     let steps_array = steps
         .as_array()
         .ok_or_else(|| "`steps` must be an array".to_string())?;
-    const OPERATIONS: &[&str] = &[
-        "move_to",
-        "move_to_entity",
-        "possess",
-        "brake",
-        "cmd",
-        "emit",
-        "wait",
-        "wait_event",
-    ];
-    const COMMON: &[&str] = &["speed", "radius", "secs", "params", "value", "subject"];
     for (index, step) in steps_array.iter().enumerate() {
         let object = step
             .as_object()
             .ok_or_else(|| format!("step {index} must be an object"))?;
-        let active: Vec<&str> = OPERATIONS
+        let active: Vec<&str> = TimelineOperation::ALL
             .iter()
-            .copied()
+            .map(|operation| operation.name())
             .filter(|name| object.contains_key(*name))
             .collect();
         if active.is_empty() {
@@ -620,8 +613,11 @@ fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), St
                 active.join(", ")
             ));
         }
+        let operation = TimelineOperation::parse(active[0])
+            .expect("active timeline operation must be in TimelineOperation::ALL");
+        let allowed = operation.allowed_fields();
         for key in object.keys() {
-            if !OPERATIONS.contains(&key.as_str()) && !COMMON.contains(&key.as_str()) {
+            if key != operation.name() && !allowed.contains(&key.as_str()) {
                 return Err(format!("step {index} has unknown field `{key}`"));
             }
         }
@@ -630,20 +626,84 @@ fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), St
     Ok((steps, count))
 }
 
-/// Lower a timeline `steps` array into the generic rhai executor source — a
-/// `const TIMELINE` plus the three hooks that call the prelude's
-/// `compile_timeline` / `run_steps` / `seq_note_event`. Attaching the result via
+#[cfg(feature = "rhai")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineOperation {
+    MoveTo,
+    MoveToEntity,
+    Possess,
+    Brake,
+    Command,
+    Emit,
+    Wait,
+    WaitEvent,
+}
+
+#[cfg(feature = "rhai")]
+impl TimelineOperation {
+    const ALL: &[Self] = &[
+        Self::MoveTo,
+        Self::MoveToEntity,
+        Self::Possess,
+        Self::Brake,
+        Self::Command,
+        Self::Emit,
+        Self::Wait,
+        Self::WaitEvent,
+    ];
+
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "move_to" => Self::MoveTo,
+            "move_to_entity" => Self::MoveToEntity,
+            "possess" => Self::Possess,
+            "brake" => Self::Brake,
+            "cmd" => Self::Command,
+            "emit" => Self::Emit,
+            "wait" => Self::Wait,
+            "wait_event" => Self::WaitEvent,
+            _ => return None,
+        })
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::MoveTo => "move_to",
+            Self::MoveToEntity => "move_to_entity",
+            Self::Possess => "possess",
+            Self::Brake => "brake",
+            Self::Command => "cmd",
+            Self::Emit => "emit",
+            Self::Wait => "wait",
+            Self::WaitEvent => "wait_event",
+        }
+    }
+
+    fn allowed_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::MoveTo | Self::MoveToEntity => &["speed", "radius", "subject"],
+            Self::Possess | Self::Wait | Self::WaitEvent => &[],
+            Self::Brake => &["secs", "subject"],
+            Self::Command => &["params"],
+            Self::Emit => &["value"],
+        }
+    }
+}
+
+/// Lower a timeline `steps` array into a generated `task(me)` source. The task
+/// function owns the data-to-tree lowering; the native behavior kernel owns
+/// fixed-tick progression and event delivery. Attaching the result via
 /// `attach_rhai_scenario` gives the timeline hot-reload, per-entity state, and
-/// `STEP_COMPLETE`/`SEQUENCE_COMPLETE` telemetry for free.
+/// `TASK_COMPLETE`/`TASK_FAILED` telemetry for free.
 #[cfg(feature = "rhai")]
 fn timeline_executor_source(steps: &serde_json::Value) -> String {
     let mut steps_lit = String::new();
     json_to_rhai_literal(steps, &mut steps_lit);
     format!(
-        "const TIMELINE = #{{ steps: {steps_lit} }};\n\
-         fn on_start(me) {{ this.cur = seq_init(); this.steps = compile_timeline(TIMELINE.steps); }}\n\
-         fn on_tick(me) {{ this.cur = run_steps(me, this.steps, this.cur); }}\n\
-         fn on_event(me, evt) {{ this.cur = seq_note_event(this.cur, evt); }}\n"
+        "fn task(me) {{\n\
+             let timeline = {steps_lit};\n\
+             seq(compile_timeline(timeline))\n\
+         }}\n"
     )
 }
 
@@ -808,9 +868,9 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
 }
 
 /// Pause or resume the scenario attached to `target` (sets `ScriptedModel.paused`).
-/// Paused scenarios skip `on_tick` (rhai) / execution (python) but keep their
-/// state — resume continues where they left off. The clean API form of toggling
-/// the `paused` field; language-agnostic.
+/// Paused scenarios skip fixed-step task/lifecycle execution (rhai) or backend
+/// execution (python) but keep their state — resume continues where they left
+/// off. The clean API form of toggling the `paused` field; language-agnostic.
 #[cfg(any(feature = "rhai", feature = "python"))]
 #[Command]
 pub struct SetScenarioPaused {
@@ -1006,20 +1066,29 @@ mod tests {
 
     #[test]
     fn generated_timeline_literal_parses_as_rhai() {
-        // The serialised steps array, dropped into the executor template, must
-        // compile (proves the literal + template are syntactically valid rhai).
+        // The serialized data dropped into the native task executor must
+        // compile (proves the literal + generated task template are valid).
         let steps = serde_json::json!([
             { "move_to": [12.0, 0.0, 0.0], "speed": 1.0, "radius": 2.0 },
             { "wait": 5.0 },
+            { "brake": true, "secs": 1.0 },
             { "cmd": "SetPorts", "params": {} },
             { "wait_event": "GO" },
         ]);
-        let mut steps_lit = String::new();
-        super::json_to_rhai_literal(&steps, &mut steps_lit);
-        let source = format!("const TIMELINE = #{{ steps: {steps_lit} }};");
+        let source = super::timeline_executor_source(&steps);
         rhai::Engine::new()
             .compile(&source)
-            .expect("generated timeline literal must be valid rhai");
+            .expect("generated timeline task source must be valid rhai");
+    }
+
+    #[test]
+    fn generated_timeline_uses_native_task_entrypoint() {
+        let steps = serde_json::json!([{ "wait": 1.0 }, { "wait_event": "GO" }]);
+        let source = super::timeline_executor_source(&steps);
+        assert!(source.contains("fn task(me)"), "{source}");
+        assert!(source.contains("compile_timeline"), "{source}");
+        assert!(!source.contains("fn on_tick"), "{source}");
+        assert!(!source.contains("seq_note_event"), "{source}");
     }
 
     #[test]
@@ -1031,6 +1100,11 @@ mod tests {
         let ambiguous = r#"[{"wait":1,"emit":"DONE"}]"#;
         let err = super::parse_timeline_steps(ambiguous).expect_err("ambiguous step must fail");
         assert!(err.contains("multiple operations"), "{err}");
+
+        let cross_operation = r#"[{"wait":1,"params":{}}]"#;
+        let err = super::parse_timeline_steps(cross_operation)
+            .expect_err("cross-operation fields must fail");
+        assert!(err.contains("unknown field `params`"), "{err}");
     }
 
     #[test]

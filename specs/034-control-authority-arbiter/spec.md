@@ -17,7 +17,7 @@ A rover jitters when a script and a human drive it at the same time.
 Post-merge, control is the **one generic command** `SetPorts` (`crates/lunco-cosim/src/lib.rs:255`): a batch of named input-port writes on a vessel's `InputPorts` surface (`throttle`/`steer`/`brake`). A static `DriveMix` + kernel then projects that surface onto actuator ports in `apply_drive_mix` (`crates/lunco-mobility/src/lib.rs:1115`, a `FixedUpdate` system). Two emitters write that same input surface every fixed tick:
 
 - **Human keyboard** — `drive_from_bindings` (`crates/lunco-controller/src/lib.rs:86`) emits one `SetPorts` per fixed tick per `ControllerLink`, writing *every* bound port (0 when idle).
-- **Rhai autopilot** — the prelude `drive()` / `nav_to()` verbs (`assets/scripting/prelude/control.rhai`, `nav.rhai`) emit `SetPorts` every `on_tick`.
+- **Rhai autopilot** — the prelude `drive()` / `nav_to()` verbs (`assets/scripting/prelude/control.rhai`, `nav.rhai`) are called by native task leaves while the task is active; production mission policy does not use an `on_tick` control loop.
 
 Both land through `on_set_ports` (`lunco-cosim/src/lib.rs:300`) into the same FSW input ports. `apply_drive_mix` then reads whatever value is currently in those ports. When the two disagree, the last write of the tick wins and the setpoint flips tick-to-tick → the wheels oscillate.
 

@@ -66,16 +66,17 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 ### Lifecycle hooks (per-entity runtime, `world_bridge.rs` `tick_rhai_models`)
 
 ```rhai
-fn on_start(me) { ... }        // once after (re)compile; `me` = host entity gid
-fn on_tick(me)  { ... }        // every FixedUpdate
-fn on_event(me, evt) { ... }   // evt = #{name, value, severity, timestamp}; frame-delayed
+fn task(me) { ... }            // builds the native task tree once
+fn mission(me) { ... }         // optional objective declaration
+fn on_start(me) { ... }        // optional setup after (re)compile
+fn on_event(me, evt) { ... }   // optional frame-delayed event reaction
+fn on_stop(me) { ... }         // optional teardown
 ```
 
-State rule (rhai-specific, important): script `fn`s are **pure** — they cannot
-see top-level `let`s; only `const` globals are visible. Persistent per-tick state
-lives on **`this`** (a per-entity object map: `this.idx = 0`). `this` is bound
-ONLY in the hook the engine calls directly — **NOT** in helper functions it
-calls, so prelude/library helpers must be stateless (take+return state).
+State rule (rhai-specific, important): script `fn`s are **pure** — an indirect
+task helper must receive its configuration as arguments. The native task kernel
+owns the cursor, dwell timing, and event waits; user policy does not maintain a
+second fixed-tick loop or cursor map.
 
 ### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
 
@@ -91,8 +92,8 @@ calls, so prelude/library helpers must be stateless (take+return state).
 
 Everything else is **policy in rhai** — see the prelude
 `assets/scripting/prelude/` (one file per topic): vector math, `distance`/`arrived`,
-`steer_to`/`nav_to` (closed-loop steering), `run_plan` (declarative waypoint/
-objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is loaded
+`steer_to`/`nav_to` (closed-loop steering), task-tree mission constructors,
+`drive`/`brake`/`load_scene` wrappers. The prelude is loaded
 FROM DISK at startup on native (edit → restart, no rebuild), with the
 `include_dir!`-embedded copy when no editable asset directory exists and the
 wasm source of truth (wasm-safe, no IO). Once a native disk source set is
@@ -113,7 +114,9 @@ is bus-only (isolated VMs); see §7f.
 
 `assets/scripting/examples/`: `patrol.rhai` (waypoint loop, emits
 checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
-`mission_plan.rhai` (declarative `run_plan` mission).
+`mission_plan.rhai` (declarative task-tree mission), `robot_mission.rhai`
+(durable phase checkpoints), and `script_first_robot.rhai` (USD + Modelica
+authoring through explicit document ids).
 
 ### Build notes / gotchas
 
@@ -177,10 +180,10 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | rhai → World access | `ScenarioRuntime` exposes host functions to rhai engine |
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
 | Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting/src/task_tree.rs`) |
-| Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, `run_plan` in `prelude/nav.rhai` |
+| Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, task trees in `prelude/nav.rhai` and `prelude/tasks.rhai` |
 | By-name entity lookup | `find(name)` verb |
-| Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in sequencer |
-| Telemetry subscribe (events to script) | `on_event` hook, `seq_note_event` delivery |
+| Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in the native task tree |
+| Telemetry subscribe (events to script) | `on_event` hook and task `wait_for` delivery |
 
 ---
 
@@ -190,7 +193,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer B — Scenario Runtime (temporal: checkpoints, goals)    │
 │   persistent per-scenario rhai (AST+Scope), host lifecycle   │
-│   hooks: on_start / on_tick / on_event                       │
+│   task(me) / mission(me) + lifecycle and event hooks           │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer A — Universal Bridge (manipulate everything, one-shot) │
 │   cmd(name, #{params})  query(name, #{params})  find(name)   │
@@ -245,47 +248,37 @@ entire capability surface — nothing reachable that isn't a vetted command.
 
 ## 4. Layer B — scenario runtime (the checkpoints/goals problem)
 
-### 4.1 Why a plain script won't work
-rhai is synchronous with **no async/await** (Rune has it; rhai doesn't), there is
-**no coroutine/yield/wait**, and `SetPorts` carries no persistent setpoint — it
-must be re-emitted every tick. So *"drive to checkpoint, wait until arrived, then
-next goal"* cannot be a blocking script. Two valid models:
+### 4.1 The task-tree contract
+rhai is synchronous and `SetPorts` carries no persistent setpoint, so a mission
+must re-emit actuator commands while it is active. The canonical script surface
+is a cooperative task tree: `task(me)` returns pure data once, and the native
+behavior kernel advances one deterministic step per fixed tick.
 
-**(A) Declarative plan** — script runs ONCE, returns a mission (data); a native
-runtime executes it over time. Same op-graph/recipe shape used elsewhere.
 ```rhai
-fn mission() {
-  [ goto(WP1), wait_arrive(2.0), goto(WP2), dwell(10.0), goto(BASE) ]
+fn task(me) {
+    let goals = [[12.0, 0.0, 0.0], [12.0, 0.0, 25.0]];
+    let steps = [];
+    for i in 0..goals.len() {
+        let goal = goals[i];
+        steps.push(step(|m| nav_to(m, goal, 1.0, 2.0),
+                        |m| arrived(m, goal, 2.0)));
+    }
+    steps.push(wait_for("MISSION_RELEASE"));
+    seq(steps)
 }
 ```
-Fast, deterministic, trivially serializable/replicated. Best for fixed routes.
 
-**(B) Event/tick callbacks** — a **persistent per-scenario rhai instance**
-(compiled `AST` + `Scope` that survive across ticks) stored on a
-`ScenarioRuntime` component. The host calls rhai functions when things happen:
-```rhai
-let goals = [WP1, WP2, BASE];
-let i = 0;
-fn on_tick(ctx) {
-  let r = ctx.rover;
-  if arrived(r, goals[i], 2.0) { i += 1; if i >= goals.len() { return done(); } }
-  steer_toward(r, goals[i]);           // emits SetPorts(throttle/steer) this tick
-}
-fn on_event(name, data) { if name == "obstacle" { /* replan */ } }
-```
-One cheap `call_fn` per scenario per tick (sparse — not per-vertex), so interpreter
-cost is negligible. Best for conditional/reactive logic. **This is the KSP-grade path.**
+Task leaves provide drive-until, one-shot, dwell, predicate, and event waits;
+composites provide sequence, parallel, repeat, race, retry, and reactive policy.
+`mission(me)` separately declares objective state and completion conditions.
+Both are hot-reloadable Rhai policy; Rust supplies only the generic runtime,
+command/query bridge, and behavior-kernel mechanism.
 
-Recommend supporting **both**: declarative for routes, callbacks for logic. They
-compose — a declarative plan can contain script-condition steps.
-
-### 4.2 Required upgrade over today's runtime
-Both current paths are one-shot/recompile-every-tick. Layer B needs
-**compile-once + persistent Scope**:
-- `Engine::compile(src) -> AST` once (on doc load / hot-reload).
-- `ScenarioRuntime { ast, scope }` component; `engine.call_fn(&mut scope, &ast, "on_tick", (ctx,))` each FixedUpdate.
-- Hot-reload = recompile AST on `ScriptOp::SetSource` (reuse `ScriptDocument` +
-  `DocumentHost` versioning already in `doc.rs`).
+The exact node contract is documented in
+[`rhai-task-tree.md`](rhai-task-tree.md): every node has an explicit `kind`,
+including leaves, and the adapter rejects missing, unknown, or cross-kind
+fields. The task map is an authoring boundary; runtime execution uses the
+typed task-kind parser and the existing `lunco-behavior` composites.
 
 ---
 
@@ -330,7 +323,8 @@ The system is organized into four layers, each building on the one below:
 1. **World bridge + `cmd()`/`query()`/`find()`** — exclusive-system context,
    reflect-dispatch, RBAC gate; `prelude.rhai` provides the core verb table.
 2. **Persistent scenario runtime** — `ScenarioRuntime` AST+Scope,
-   `on_start`/`on_tick`/`on_event`, hot-reload via `ScriptDocument`.
+   native task/mission drivers plus `on_start`/`on_event`, hot-reload via
+   `ScriptDocument`.
 3. **Navigation primitives** — `distance`/`arrived`/`steer_toward` +
    `PathFollower`; the checkpoint/goal scenario runs end to end.
 4. **Authoring polish** — declarative-plan executor, scenario examples,
@@ -342,8 +336,8 @@ The system is organized into four layers, each building on the one below:
 
 The command bus is the right channel for **writes that must be authoritative,
 replicated, RBAC-gated, undoable, and audited**. It is the wrong channel for
-**reads** and **fine-grained state** — which a per-tick `on_tick` callback needs
-constantly. Commands that need a result use the original deferred response
+**reads** and **fine-grained state** — which task closures need synchronously.
+Commands that need a result use the original deferred response
 (`executor.rs`); read providers own their result shape and coordinate-frame
 semantics — no generic component dump, no guessed render-frame position, and no
 implicit compatibility blob. Reflect-dispatch JSON-(de)serializes per call. And the
@@ -387,7 +381,7 @@ reads + command writes) is unusual vs Unity/Godot/Unreal (which read+write objec
 directly), but correct for our *category*: a **deterministic networked sim**
 (Factorio / RTS lockstep), where mutations must flow through a replicated ordered
 command stream and reads are local. Reads-via-reflection and a lifecycle callback
-(`on_tick`) are universally standard.
+(`task(me)` plus event hooks) are the production mission surface.
 
 **Scenario layer: implemented.** The current runtime is event-first and keeps
 policy out of the Rust engine core:
@@ -415,7 +409,7 @@ policy out of the Rust engine core:
 │ Prelude command wrappers                                               │
 └───────────────────────────────────────────────────────────────────────┘
 ══════════════ CORE BOUNDARY (mechanism only) ══════════════════════════
-  Scenario VM (AST+Scope, hot-reload) · on_start/on_tick/on_event
+  Scenario VM (AST+Scope, hot-reload) · task/mission/on_start/on_event
   Ch.1 cmd() → reflect+RBAC · Ch.2 reflection reads · world_pos()
   Event bus (emit + deliver; ROS2 bridge seam) · sim_time() · log
   Events/Triggers from Avian sensors (volumes, not distance polling)
@@ -437,8 +431,8 @@ planned. Resulting split:
 **Core exposes only (irreducible mechanism):**
 - Persistent scenario VM — `rhai::AST` + `Scope` per scenario, recompiled on
   `ScriptDocument` source change (hot-reload).
-- Host→script hooks: `on_start()`, `on_tick(ctx)` (sim-time, transport-gated via `TimeTransport`),
-  `on_event(evt)`.
+- Host→script hooks: native `task(me)`/`mission(me)` drivers, `on_start()`, and
+  `on_event(evt)` (sim-time, transport-gated via `TimeTransport`).
 - Ch.1 write — `cmd(name, #{…})` → `ReflectEvent::trigger`, behind RBAC.
 - Ch.2 read — reflection bridge (`get(entity,"Comp.field")`, `query()`, `list`,
   `find`) + `world_pos(entity)` (float-origin/big_space correct — the ONE nav read
@@ -548,7 +542,7 @@ subset for UI (`SyncChannel::Local` vs `ControlStream`). No client-side divergen
 **Attach a script to an entity:** reuse `ScriptedModel` (`doc.rs:100`) — the
 per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Rhai
 scenarios use `RhaiScenarioRuntime`; Python `ScriptedModel`s use the separate
-cached Python executor. The script's `on_tick(self)` identity IS the host entity.
+cached Python executor. The script's `task(self)` identity IS the host entity.
 
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source
@@ -584,8 +578,8 @@ behavior) vs *centralized* (one scenario `cmd()`s many entities).
 ## 8. Design decisions
 
 ### Resolved
-- Sequencing model → **callbacks first** (persistent rhai, `on_tick`/`on_event`),
-  declarative plans added later.
+- Sequencing model → **task trees first** (persistent Rhai policy with native
+  progression); `on_event` remains the event reaction seam.
 - Bridge scope → **all commands, behind RBAC** (generic `cmd()`).
 - Integration depth → **two-channel** (commands for writes + reflection bridge for
   reads); finish the `EntityProxy` stub as the read plane.

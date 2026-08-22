@@ -1,11 +1,9 @@
-// Example: a step SEQUENCE (Layer 1 sequencer). Where mission_plan.rhai is a
+// Example: a linear task sequence. Where mission_plan.rhai is a
 // pure waypoint list, this mixes step kinds — drive-until-arrived, a timed
 // dwell, and wait-for-event — to show real mission sequencing in pure rhai.
 //
-// Attach to a rover via ScriptedModel { language: Rhai }. Each step emits
-// STEP_COMPLETE(idx); the last emits SEQUENCE_COMPLETE(len). External clients
-// see those over SubscribeTelemetry. The native task kernel handles both the
-// cursor and event waits.
+// Attach to a rover via ScriptedModel { language: Rhai }. The native task
+// kernel handles both the cursor and event waits.
 
 const SITE_A = [12.0, 0.0,  0.0];
 const SITE_B = [12.0, 0.0, 25.0];
