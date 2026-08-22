@@ -95,12 +95,12 @@ file-backed script, read the file into the request body; this keeps the command
 contract identical for HTTP, MCP, and the in-app editor:
 
 ```bash
-jq -Rs --argjson target 4869542932533563 \
-  '{type:"ExecuteCommand",command:"RunScenario",params:{target:$target,source:.,params:""}}' \
-  assets/scenarios/my_rover_mission.rhai |
-  curl -sS http://127.0.0.1:4101/api/commands \
-    -H 'content-type: application/json' --data-binary @-
+./scripts/api/run_scenario.sh 4869542932533563 \
+  assets/scenarios/my_rover_mission.rhai 4101 '{}'
 ```
+
+The wrapper is optional; it is equivalent to reading the file with `jq -Rs`
+and posting the tagged request directly.
 
 ```json
 {
