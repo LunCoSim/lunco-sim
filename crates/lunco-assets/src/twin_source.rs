@@ -162,6 +162,11 @@ impl TwinRoots {
     /// world; pass the same `(name, rel)` to [`clear_overlay`](Self::clear_overlay)
     /// to fall back to disk.
     pub fn set_overlay(&self, name: &str, rel: &str, bytes: Arc<Vec<u8>>) {
+        if !crate::asset_path::is_safe_relative_path(name)
+            || !crate::asset_path::is_safe_relative_path(rel)
+        {
+            return;
+        }
         if let Ok(mut m) = self.overlays.write() {
             m.insert(overlay_key(name, rel), bytes);
         }
@@ -323,6 +328,9 @@ impl TwinReader {
 
 impl AssetReader for TwinReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         // In-memory overlay wins over the on-disk file (E1b: a scene document's
         // composed source projected into the live world). Keyed by the exact
         // reader-facing `<name>/<rel>` path.
@@ -406,6 +414,20 @@ mod tests {
                 .is_none(),
             "cleared overlay falls back to disk"
         );
+    }
+
+    #[test]
+    fn unsafe_overlay_paths_are_not_stored_or_read() {
+        let roots = TwinRoots::default();
+        roots.set_overlay("moonbase", "../outside.usda", Arc::new(b"secret".to_vec()));
+        roots.set_overlay("../outside", "scene.usda", Arc::new(b"secret".to_vec()));
+
+        assert!(roots
+            .overlay_for(Path::new("moonbase/../outside.usda"))
+            .is_none());
+        assert!(roots
+            .overlay_for(Path::new("../outside/scene.usda"))
+            .is_none());
     }
 
     /// Two unrelated folders can carry the same name (`twin.toml` name, or a
