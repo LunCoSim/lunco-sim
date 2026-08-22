@@ -3,9 +3,9 @@
 fn steps() {
     [
         #{ anchor: "",                            focus: (),                       title: "Experiments",       body: "How to explore a design space without touching the model source. ◀ ▶ or arrow keys." },
-        #{ anchor: "panel.modelica_experiments",  focus: "modelica_experiments",   title: "Override parameters", body: "Set any parameter to a new value here — no source edit. A one-shot Fast Run applies the overrides once and plots the result." },
-        #{ anchor: "panel.modelica_experiments",  focus: "modelica_experiments",   title: "Sweeps",            body: "A scheduled run sweeps a LIST of overrides (e.g. R = 100, 200, 400) and collects every result, so you compare curves side by side." },
-        #{ anchor: "panel.modelica_plot",         focus: (),          title: "Compare runs",      body: "Snapshot a run in Graphs to freeze its curves, then run again with new overrides and overlay — the fast feedback loop of design." },
+        #{ anchor: "panel.modelica_experiments",  focus: "modelica_experiments",   title: "Override parameters", body: "Choose a parameter, enter a new value, and start a one-shot Fast Run. The source stays unchanged and the result is recorded as an experiment." },
+        #{ anchor: "panel.modelica_experiments",  focus: "modelica_experiments",   title: "Sweeps",            body: "Define a list of values, such as R = 100, 200, 400, and start the sweep. Compare the resulting trajectories rather than judging one run by eye." },
+        #{ anchor: "panel.modelica_plot",         focus: (),          title: "Compare runs",      body: "Snapshot a run in Graphs, change the override, run again, and overlay the new result. Record which parameter change caused the difference." },
         #{ anchor: "",                            focus: (),                       title: "Reproducible",      body: "An experiment captures model + overrides + solver settings, so a run is repeatable and shareable. Next: “Plots & Results”." },
     ]
 }

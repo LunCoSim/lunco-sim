@@ -8,8 +8,8 @@ fn steps() {
         #{ anchor: "",                      title: "Inspect the Simulation", body: "A running sim is fully observable — pose, telemetry ports, and Modelica variables, all live. Let's find them. Next / Back below." },
         #{ anchor: "panel.center",          title: "Select to inspect",      body: "Click any object in the viewport to select it. Everything about it becomes readable." },
         #{ anchor: "panel.right_inspector", title: "The Inspector",          body: "Pose, components, and editable properties for the selection show here — a live view that updates every frame." },
-        #{ anchor: "panel.bottom",          title: "Telemetry & plots",      body: "Named ports (throttle, altitude, battery…) stream to the plots and console below. This is the same telemetry a ground station would read." },
-        #{ anchor: "",                      title: "Read it from code",      body: "Over the API: use `ListPorts` to find an api_id, `ReadPorts` for values, `CosimStatus` for the Modelica→physics graph, and `GetBrokenConnections` for wiring faults. Read typed state — never poll the log." },
+        #{ anchor: "panel.side_browser",    title: "Telemetry & plots",      body: "Named ports (throttle, altitude, battery…) are readable in the left dock's Telemetry panel and can feed the plots. This is the same telemetry a ground station would read." },
+        #{ anchor: "",                      title: "Read it from code",      body: "Over the API: call `ListEntities` first to obtain an entity's `api_id`, then use `ListPorts` to enumerate that entity's ports and `ReadPorts` to read values. Use `CosimStatus` for the Modelica→physics graph and `GetBrokenConnections` for wiring faults. Read typed state — never poll the log." },
         #{ anchor: "",                      title: "You can see everything", body: "Selection + ports + a screenshot answer 'is it working?' without guessing. See the inspect-simulation skill for the full read surface." },
     ]
 }

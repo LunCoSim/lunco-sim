@@ -28,7 +28,7 @@ model Hover
   input Real climb_rate = 0.0;         // body velocity_y (wired)
   input Real piloted = 0.0;            // authority gate (wired, Step 4)
   input Real external_throttle = 0.0;  // pilot stick
-  output Real force_y, throttle;
+  output Real force_local_y, throttle;
   Real gnc, cmd, filt(start = 0.0);
 equation
   // GNC law: feed-forward hover + PD to the set-point. DIRECT (no spool).
@@ -36,7 +36,7 @@ equation
                / max_thrust, 0.0), 1.0);
   der(filt) = (external_throttle - filt) / 0.3;      // spool the pilot stick (keeps it live)
   cmd = piloted*filt + (1.0 - piloted)*gnc;          // yield-to-pilot gate, branch-free
-  force_y = cmd * max_thrust;
+  force_local_y = cmd * max_thrust;
   throttle = cmd;
 end Hover;
 ```
@@ -52,9 +52,14 @@ Create `assets/scenarios/hover_super.rhai`. **No control loop** — just react t
 
 ```rhai
 fn on_event(me, evt) {
-    if evt.name == "low_fuel" { notify_kind("Hover: low fuel", "warn"); }
+    if evt.name == "hover_low_fuel" { notify_kind("Hover: low fuel", "warn"); }
 }
 ```
+
+The handler becomes live only when the vessel also declares a `LunCoEvent` whose
+`lunco:event:name` is `hover_low_fuel` and whose `inputs:trigger` is wired to a
+Modelica output. The example shows the policy side of that boundary; it does not
+invent a fuel signal for `Hover`.
 
 (A real controller sequences phases here with `wait_for`/`wait_until` or reacts to
 events raised by connected `LunCoEvent` prims. Never write command ports every tick from rhai.)
@@ -65,16 +70,16 @@ On your vessel prim, mount a referenced altimeter and wire sensors → model inp
 model force → body. Mass comes from the body's own port (no magic number):
 
 ```usda
-def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>)
+def "Altimeter" (prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>)
 { double3 xformOp:translate = (0, -1, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
 # on the vessel prim — its flight-control system is inseparable from the airframe, so
 # name the model in place, on the prim itself:
-uniform asset info:sourceAsset = @models/Hover.mo@
+uniform asset info:sourceAsset = @lunco://models/Hover.mo@
 uniform bool  lunco:program:realtimeSafe = true      # it drives a force on a predicted body
 
 # a wire is a native USD connection, authored on the consumer:
-float inputs:force_y.connect      = </Vessel.outputs:force_y>
+float inputs:force_local_y.connect = </Vessel.outputs:force_local_y>
 float inputs:climb_rate.connect   = </Vessel.outputs:velocity_y>
 float inputs:vehicle_mass.connect = </Vessel.outputs:mass>
 float inputs:piloted.connect      = </Vessel.outputs:piloted>
@@ -82,13 +87,21 @@ float inputs:throttle.connect     = </Vessel.outputs:throttle>
 
 # the supervisor is bolted on, so it is a child program prim:
 def Scope "Supervisor" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-    uniform asset info:sourceAsset = @scenarios/hover_super.rhai@
+    uniform asset info:sourceAsset = @lunco://scenarios/hover_super.rhai@
 }
 ```
 
 Feed `altitude` from the altimeter with a cross-prim connection — the same form, the
 target path just names another prim:
 `float inputs:altitude.connect = </Vessel/Altimeter.outputs:range>`.
+
+This section is a complete controller-and-wiring pattern, not a standalone scene
+file: `Vessel` must be a dynamic rigid body in a scene with gravity, and the
+altimeter must have a clear downward ray to a collider. Put the vessel in a scene
+using the placement pattern from [Tutorial 01, Step 3](01-lander-rover-mission.md),
+then verify the resulting entity and live ports with `CosimStatus` and `ReadPorts`.
+That check distinguishes a compiled model from a model that is actually connected
+to physics.
 
 ## Step 4 — control authority (already done!)
 
@@ -100,7 +113,7 @@ reaches `external_throttle` when possessed:
 
 ```usda
 # on the vessel prim:
-def "Controls" (prepend references = @../../vessels/control_profiles.usda@</LanderControls>) {}
+def "Controls" (prepend references = @lunco://vessels/control_profiles.usda@</LanderControls>) {}
 ```
 
 (Deliver it as this child `references` arc, not root `subLayers` + `inherits` — only the

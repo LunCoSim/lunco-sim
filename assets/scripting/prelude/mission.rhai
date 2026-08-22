@@ -22,16 +22,17 @@
 /// `requires_event`): `text` (human label for the HUD, defaults to `id`), `done`
 /// (|m| bool completion), `requires_event` (event NAME whose arrival completes
 /// the objective — e.g. `"cmd:PossessVessel"` to advance when the user possesses
-/// a vessel; latched, so it may combine with `done`), `dwell` (secs the
-/// condition must hold), `fail` (|m| bool failure), `requires` (array of
-/// objective ids that must complete first), `on_complete` (|m| side-effect when
-/// it completes).
+/// a vessel; latched, so it may combine with `done`), `requires_event_source`
+/// (optional entity path that must emit the event), `dwell` (secs the condition
+/// must hold), `fail` (|m| bool failure), `requires` (array of objective ids that
+/// must complete first), `on_complete` (|m| side-effect when it completes).
 fn objective(id, spec) {
     #{
         id: id,
         text: if spec.text != () { spec.text } else { id },
         done: spec.done,
         requires_event: spec.requires_event,
+        requires_event_source: spec.requires_event_source,
         dwell: spec.dwell,
         fail: spec.fail,
         requires: if spec.requires != () { spec.requires } else { [] },
@@ -42,9 +43,13 @@ fn objective(id, spec) {
     }
 }
 
-/// True if any buffered event this tick has name `want`.
-fn __obj_saw_event(evs, want) {
-    for e in evs { if e.name == want { return true; } }
+/// True if any buffered event this tick has name `want` and, when supplied, was
+/// emitted by the entity at `source_path`.
+fn __obj_saw_event(evs, want, source_path) {
+    let source = if source_path != () { find(source_path) } else { () };
+    for e in evs {
+        if e.name == want && (source_path == () || e.source == source) { return true; }
+    }
     false
 }
 
@@ -90,7 +95,7 @@ fn __tick_objective(me, o, m, now, evs) {
     // Events only belong to an objective after its prerequisites unlock. An
     // early global event must not be latched and replayed as a later success.
     if o.state == "active" {
-        if o.requires_event != () && __obj_saw_event(evs, o.requires_event) { o.__evfired = true; }
+        if o.requires_event != () && __obj_saw_event(evs, o.requires_event, o.requires_event_source) { o.__evfired = true; }
         o = __advance_objective(me, o, now);
     }
     o

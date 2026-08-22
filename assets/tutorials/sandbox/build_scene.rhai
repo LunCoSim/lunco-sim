@@ -7,10 +7,10 @@
 fn steps() {
     [
         #{ anchor: "",                      title: "Build a Scene",       body: "LunCoSim scenes are OpenUSD — the same format Omniverse and Blender use. Let's see how you compose one. Next / Back below, Skip anytime." },
-        #{ anchor: "panel.bottom",          title: "The spawn palette",   body: "The palette (bottom dock) lists catalogued objects — rovers, props, primitives. Click one to drop it into the scene." },
+        #{ anchor: "panel.right_inspector", title: "The spawn palette",   body: "The right dock's Spawn panel lists catalogued objects — rovers, props, primitives. Click one to drop it into the scene." },
         #{ anchor: "panel.center",          title: "Place with the gizmo",body: "Click an object in the viewport to select it; the transform gizmo appears. Drag to move, rotate, or scale it in the world." },
-        #{ anchor: "panel.right_inspector", title: "Tune properties",     body: "The Inspector shows the selected object's properties — colour, mass, material. Edits write straight back to the USD." },
-        #{ anchor: "panel.side_browser",    title: "It's all USD",        body: "Scenes live under assets/scenes as .usda files. Save your edits there to make them permanent — or drive all of this over the API (SpawnEntity / MoveEntity / SetObjectProperty)." },
+        #{ anchor: "panel.right_inspector", title: "Tune properties",     body: "The Inspector shows the selected object's authored properties — colour, mass, material. Editing it creates a USD-backed authoring operation; the runtime ECS is only the projection." },
+        #{ anchor: "panel.side_browser",    title: "It's all USD",        body: "The shipped assets under assets/scenes are a read-only library. Save authored changes through the active Twin/document Save workflow; the same authoring surface is available through SpawnEntity, MoveEntity and SetObjectProperty." },
         #{ anchor: "",                      title: "That's scene authoring", body: "You compose the world from parts, then attach behaviour and simulation. Next stop: scripting." },
     ]
 }

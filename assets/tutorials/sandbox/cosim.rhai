@@ -6,9 +6,9 @@
 //! velocity back in. This tour walks that loop — the one pattern behind every
 //! LunCoSim vessel that "thinks" in Modelica and "moves" in physics.
 //!
-//! Coach-mark tour (advances on Next / Back / Skip). Loads the lander scene so the
-//! ideas have a live example to point at. It does NOT re-fly the mission — see the
-//! *Lander & Rover Mission* lesson for that. For the prose version, see
+//! Coach-mark tour (advances on Next / Back / Skip). Its curriculum payload mounts
+//! the lander scene so the ideas have a live example to point at. It does NOT
+//! re-fly the mission — see the *Lander & Rover Mission* lesson for that. For the prose version, see
 //! `docs/tutorials/03-cosim.md`.
 
 fn steps() {
@@ -19,19 +19,19 @@ fn steps() {
 
         #{ anchor: "",
            title: "Two engines, one loop",
-           body: "Every fixed step the same round-trip runs (the FMI master algorithm): (1) the Modelica model emits outputs — forces, throttle; (2) a SimConnection pipes them to the physics body; (3) Avian integrates the body; (4) altitude & velocity feed back into the model. All of it in FixedUpdate, at one shared dt." },
+           body: "The world advances on fixed master ticks, while each Modelica participant publishes at its declared communication points. At a point: (1) model outputs propagate through SimConnections; (2) Avian applies the resulting forces; (3) physics state feeds the next model input sample. Outputs are held between points, and only a state-affecting causal path must wait for its model result." },
 
         #{ anchor: "",
            title: "Where the model is attached",
-           body: "A program is an applied capability. The lander's flight-control system is inseparable from the airframe, so the vessel applies `LunCoProgramAPI` and authors `info:sourceAsset = @models/Lander.mo@` in place. Its `inputs:` are the vessel's live control surface. A separable guidance law or supervisor is an ordinary `Scope` child applying the same API, so deleting that scope removes only the bolted-on behaviour." },
+           body: "A program is an applied capability. The lander's flight-control system is inseparable from the airframe, so the vessel applies `LunCoProgramAPI` and authors `info:sourceAsset = @lunco://models/Lander.mo@` in place. Its `inputs:` are the vessel's live control surface. A separable guidance law or supervisor is an ordinary `Scope` child applying the same API, so deleting that scope removes only the bolted-on behaviour." },
 
         #{ anchor: "",
            title: "The wire",
            body: "Native USD `connectionPaths` are derived into a `SimConnection` — a source output port linked to a target input port, the FMI/SSP pattern. Forces land as PendingForces on the body; the model's `piloted` port yields control to whoever possesses the vessel. No script steps the loop — it is pure wiring." },
 
-        #{ anchor: "panel.bottom",
+        #{ anchor: "panel.right_inspector",
            title: "The model speaks in events",
-           body: "Modelica publishes each physical condition as a 0/1 output. A `def LunCoEvent` connects `inputs:trigger` to that output and supplies `lunco:event:name` plus severity. The lander wires `low_fuel` and `depleted` this way, so scripts and the HUD react without polling or duplicating thresholds outside the model. Watch for those events in the Console below as the descent burns fuel." },
+           body: "Modelica publishes each physical condition as a 0/1 output. A `def LunCoEvent` connects `inputs:trigger` to that output and supplies `lunco:event:name` plus severity. The lander wires `low_fuel` and `depleted` this way, so scripts and the HUD react without polling or duplicating thresholds outside the model. Read the resulting events in the status and telemetry surfaces as the descent burns fuel." },
 
         #{ anchor: "",
            title: "Verify it from code",
@@ -44,10 +44,8 @@ fn steps() {
 }
 
 fn on_start(me) {
-    // One source: the tutorial loads its own environment so the ideas have a
-    // live, cosim-flown lander to look at. (Same load as lander_mission.rhai.)
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The curriculum payload is mounted before this script starts, so the tour
+    // points at a live cosim-flown lander without opening a scene itself.
     this.i = 0;
     coach_step(steps(), 0);
     notify_kind("Tutorial: Cosim — Model meets Physics", "info");

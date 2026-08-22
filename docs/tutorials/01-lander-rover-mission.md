@@ -146,6 +146,8 @@ model MyLander
   output Real torque_y;
   output Real torque_z;
   output Real throttle;                   // 0..1, how hard it's firing
+  output Real low_fuel;
+  output Real depleted;
 
   parameter Real torque_gain = 30000.0;    // N.m per unit of stick deflection
 
@@ -179,6 +181,8 @@ equation
   torque_z = piloted * roll * torque_gain;    // roll  about Z
 
   der(m_prop) = -thrust / v_e;
+  low_fuel = noEvent(if m_prop <= 200.0 then 1.0 else 0.0);
+  depleted = noEvent(if m_prop <= 0.5 then 1.0 else 0.0);
 end MyLander;
 ```
 
@@ -213,12 +217,15 @@ an input and rotates body-frame torque into world before emitting it.
 
 Three things will trip you up if nobody warns you, so here they are:
 
-- **Write clamps and mode-switches as flat `if`s, `min`/`max`, or arithmetic —
-  never nested `if/else if`.** The gate above is a multiply-and-add for exactly this
-  reason. Chained `else if` doesn't translate reliably yet.
-- **Don't make decisions inside the model based on a wired-in input.** A line like
-  `when altitude < 0.2` won't see the live altitude. When you need a threshold like
-  that, detect it *outside* the model — Step 6 shows how.
+- **Write bounded behaviour with `min`/`max`, arithmetic, or explicit conditional
+  equations.** The gate above is a multiply-and-add, and the fuel indicators below
+  use `noEvent(if ... then ... else ...)`. Keep physical thresholds and state in
+  Modelica; expose a typed output when another domain needs the result.
+- **Keep threshold state in continuous equations and expose a typed indicator.**
+  The current realtime Modelica profile does not provide root-event/scheduled-event
+  semantics for a tutorial to rely on. For a threshold such as altitude or fuel,
+  compute a 0/1 output in Modelica and connect it to `LunCoEvent` — Step 6 shows
+  the complete pattern.
 - **Never hard-code gravity.** `g` is an input for a reason; wire it, or your lander
   misbehaves the moment it's somewhere else.
 
@@ -258,17 +265,17 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
     # The flight-control system. It is not something bolted onto the airframe — its
     # `inputs:` ARE the vessel's control surface, the ports the stick writes — so the
     # vessel prim IS the program: the `info:*` properties are authored right here.
-    uniform asset info:sourceAsset = @models/MyLander.mo@
+    uniform asset info:sourceAsset = @lunco://models/MyLander.mo@
     uniform bool lunco:program:realtimeSafe = true
 
     # Intent -> port map, so possessing this vessel actually does something.
-    def "Controls" ( prepend references = @../control_profiles.usda@</LanderControls> )
+    def "Controls" ( prepend references = @lunco://vessels/control_profiles.usda@</LanderControls> )
     {
     }
 
     # The altimeter: a downward range-finder that publishes a `range` port.
     # Slung below the rover it will carry, with a clear line to the ground.
-    def "Altimeter" ( prepend references = @../sensors/altimeter.usda@</Altimeter> )
+    def "Altimeter" ( prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter> )
     {
         double3 xformOp:translate = (0.0, -3.3, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -297,8 +304,8 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
         bool physics:collisionEnabled = true
     }
     # ... and the same three more times, mirrored onto -X, +Z and -Z.
-    # (Copy `LegPX`/`PadPX`, flipping the translate and rotate signs. The full set
-    #  is in `assets/vessels/landers/descent_lander.usda` if you'd rather crib it.)
+    # (Copy `LegPX`/`PadPX`, flipping the translate and rotate signs. The complete
+    #  production lander is in `assets/vessels/landers/descent_lander.usda`.)
 
     # The body's own bulk. Once ANY child carries a collider — the footpads above —
     # the rigid body switches to CHILDREN-ONLY compound mode and drops its own
@@ -472,7 +479,7 @@ Now drop it into the scene. Inside the `Mission` prim in `my_mission.usda`:
 
 ```usda
     def Cylinder "Lander" (
-        prepend references = @../../vessels/landers/my_lander.usda@</MyLander>
+        prepend references = @lunco://vessels/landers/my_lander.usda@</MyLander>
     )
     {
         double3 xformOp:translate = (0, 60.0, 0)
@@ -497,8 +504,7 @@ Add these lines to the `MyLander` prim (in `my_lander.usda`, not the scene):
     # The model's thrust becomes a force on the body — along the lander's OWN +Y,
     # not the world's. `force_local_*` is rotated by the body's attitude at apply
     # time, so when you tilt the lander the engine tilts with it and you fly it
-    # like a rocket. Wire it to `force_y` instead and the thrust always points at
-    # the sky, however far over you lean.
+    # like a rocket.
     float inputs:force_local_y.connect = </MyLander.outputs:thrust>
 
     # Attitude, from the pilot's stick. World-frame torques (N.m).
@@ -517,15 +523,13 @@ Add these lines to the `MyLander` prim (in `my_lander.usda`, not the scene):
     # This is the line that makes the gate in Step 2 work.
     float inputs:piloted.connect = </MyLander.outputs:piloted>
 
-    # Publish the model's throttle back onto the entity, so anything downstream
-    # (the plume in Step 5, telemetry, the Inspector) can read it as a port.
-    float inputs:throttle.connect = </MyLander.outputs:throttle>
 ```
 
-Read each one as "this input is fed by that output". The self-referencing ones
-aren't a mistake: a vessel prim publishes its own *physical* state as outputs
-(`velocity_y`, `mass`, `piloted`), and consumes the *model's* outputs as inputs.
-Body → model → body, once per timestep. That round-trip is co-simulation, and
+Read each one as "this input is fed by that output". The vessel prim publishes its
+own *physical* state as outputs (`velocity_y`, `mass`, `piloted`), and consumes the
+model's outputs as inputs. The model's `throttle` is already an output on the same
+program entity; the plume in Step 5 consumes that output directly. Body → model →
+body, at the declared communication points. That round-trip is co-simulation, and
 [tutorial 03](03-cosim.md) takes it apart properly.
 
 Three details that matter:
@@ -679,12 +683,12 @@ dies to nothing the instant the engine cuts.
 
 ## Step 6 — Warn about low fuel, and notice the landing
 
-We want a warning when propellant runs low. The fuel level (`m_prop`) is a signal
-the model already publishes — expose the condition as a 0/1 Modelica output and
-connect that signal to the event bus.
+We want a warning when propellant runs low. The model tracks the fuel level
+(`m_prop`) internally; expose the condition as a 0/1 Modelica output and connect
+that typed signal to the event bus.
 
 Rather than poll fuel or encode physical thresholds in a script/runtime adapter,
-add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
+add the `low_fuel` and `depleted` outputs shown in Step 2, then add to `MyLander`:
 
 ```usda
     def LunCoEvent "LowFuel"
@@ -702,15 +706,15 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
 
     # And the supervisor that reacts to them — bolted on, so a child program prim.
     def Scope "Supervisor" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/my_mission/lander_supervisor.rhai@
     }
 ```
 
 Read `LowFuel` as "when `m_prop` drops below 200, fire `lander_low_fuel`"; `Depleted`
-says the same at near-zero. Each fires once when it crosses, and re-arms if the value
-climbs back. This is exactly the kind of "watch a signal for a moment" job that belongs
-outside the model (remember the warning in Step 2). Every part of the rule is a typed
-property, so nothing is hiding in a string the type system can't see.
+says the same at near-zero. The threshold is defined in Modelica, where the fuel
+state lives; `LunCoEvent` observes the typed 0/1 output and turns its transition
+into a named event. Each event fires once when its signal crosses and re-arms if
+the value climbs back. Nothing is hiding in an untyped script-side threshold.
 
 Now the supervisor. Create `assets/scenarios/my_mission/lander_supervisor.rhai`:
 
@@ -765,13 +769,13 @@ The lander carries a rover down and drops it. Reference a ready-made rover into 
 scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
 
 ```usda
-    def Xform "SkidRover" ( prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover> )
+    def Xform "SkidRover" ( prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover> )
     {
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         def Scope "Autopilot" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-            uniform asset info:sourceAsset = @behaviors/lander_rover_patrol.btxml@
+            uniform asset info:sourceAsset = @lunco://behaviors/my_rover_patrol.btxml@
         }
     }
 
@@ -799,13 +803,14 @@ away. We point it at an autopilot script now and write that in Step 10.
 
 ## Step 8 — Plant the waypoints
 
-The rover's job is to visit three spots. A glowing marker whose visible sphere is
-also its overlap Sensor already exists at `assets/vessels/markers/waypoint.usda`:
+The rover's job is to visit three spots. The reusable waypoint asset at
+`assets/vessels/markers/waypoint.usda` has a visible lifted dome and a separate
+ground-anchored trigger volume:
 
 ```usda
 def Xform "WaypointMarker"
 {
-    def Sphere "Dome" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    def Sphere "Dome"
     {
         double radius = 2.5
         double3 xformOp:translate = (0, 2.5, 0)
@@ -813,32 +818,37 @@ def Xform "WaypointMarker"
         color3f primvars:displayColor = (0.2, 0.95, 0.5)
         color3f primvars:emissiveColor = (0.12, 0.85, 0.42)
         float primvars:displayOpacity = 0.28
+        token visibility = "inherited"
+    }
+    def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    {
+        double radius = 2.5
         bool physics:collisionEnabled = true
+        token visibility = "invisible"
         custom string lunco:triggerZone = "waypoint"
     }
 }
 ```
 
-The standard USD `radius` above is the single size input for both the rendered
-marker and the Avian collider. `lunco:triggerZone` makes that same sphere a
-non-solid Sensor: it emits `enter:waypoint`, and the waypoint projection records
-the composed marker path in `ReachedWaypoints` and emits `waypoint.reached`.
-There is no second invisible volume and no distance-polling fallback. The marker
-stays visible after arrival; the route UI tints only the marker recorded as reached.
+The dome is visual only. The `Trigger` uses standard USD `radius`, collision, and
+`lunco:triggerZone` properties to provide the non-solid Sensor footprint; it emits
+`enter:waypoint`, and the waypoint projection records the composed marker path in
+`ReachedWaypoints` and emits `waypoint.reached`. The marker stays visible after
+arrival; the route UI tints only the marker recorded as reached.
 
 Drop three markers into the scene:
 
 ```usda
-    def Xform "RoverTarget1" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget1" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (14, 0, 9); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget2" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget2" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (-11, 0, 16); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget3" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget3" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (5, 0, -15); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
     # The touchdown target: a landmark for the pilot, not a wire. The GNC descends
     # on its altimeter and never reads this — it just marks the spot to aim at.
-    def Xform "LandingLocation" ( prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker> )
+    def Xform "LandingLocation" ( prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker> )
     { double3 xformOp:translate = (0, 0, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 ```
 
@@ -858,7 +868,7 @@ Add it to `my_mission.usda`:
         custom string lunco:scenario = "my-surface-ops"
 
         def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-            uniform asset info:sourceAsset = @scenarios/my_mission/mission.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/my_mission/mission.rhai@
         }
     }
 ```
@@ -956,6 +966,41 @@ not interpreted each tick by rhai. The mission script has only one job here: whe
 `rover_deployed` arrives, dispatch `EngageAutopilot` for the rover. This keeps mission
 policy event-driven and leaves numerical control in the compiled runtime.
 
+Create `assets/behaviors/my_rover_patrol.btxml` with targets from this tutorial's
+scene. The shipped `lander_rover_patrol.btxml` targets `/LanderTest/...`, so it is
+correct for that test scene but not for the custom `/Mission` hierarchy you just
+authored:
+
+```xml
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Action ID="drive_to" target="/Mission/RoverTarget1" speed="0.7" radius="4.0"/>
+      <Action ID="drive_to" target="/Mission/RoverTarget2" speed="0.7" radius="4.0"/>
+      <Action ID="drive_to" target="/Mission/RoverTarget3" speed="0.7" radius="4.0"/>
+    </Sequence>
+  </BehaviorTree>
+</root>
+```
+
+Add the event-driven handoff to `assets/scenarios/my_mission/mission.rhai`:
+
+```rhai
+fn on_event(me, evt) {
+    if evt.name == "rover_deployed" {
+        let rover = find("/Mission/SkidRover");
+        if rover >= 0 {
+            cmd("EngageAutopilot", #{ vessel: rover });
+        }
+    }
+    // Keep the waypoint event handling from Step 9 here as well.
+}
+```
+
+`EngageAutopilot` loads the BT attached to the rover when no inline specification
+is supplied. The behaviour tree owns the continuous navigation action; the mission
+only decides when the rover becomes autonomous.
+
 Reload one more time. The lander flies down, the rover drops and drives the course
 on its own, the domes light up one by one — and the moment you click it, the rover is
 yours. Click the *lander* instead and you'll fly the lander, with the rover trundling
@@ -976,7 +1021,7 @@ The shape to carry away is the layering. **Vehicles** own their physics, control
 law, and wiring, and know nothing of any mission. **Scenes** place vehicles and own
 the storyline. **Missions** announce what happened; they never reach into a vehicle's
 state. **Authority** is possession, asked and never assumed. Follow those four and
-new missions compose out of old vehicles for free.
+new missions compose out of existing vehicle assets for free.
 
 From here, good next moves: add a battery or thermal model as a second `.mo` on the
 rover and watch its ports; turn "take a photo at the rock" into another trigger zone;
@@ -1011,8 +1056,9 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - A plume never appears at all? Check the `Shader` prim declares `float
   inputs:throttle` — a parameter the shader does not declare is refused, and the
   wire is reported as dangling.
-- A model line with `if … else if …`? Flatten it into separate single `if`s,
-  `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
+- A model threshold behaving unexpectedly? Keep the state and threshold in
+  Modelica, use `min`/`max` or an explicit conditional equation, and expose a
+  0/1 output to `LunCoEvent` instead of polling it from a script.
 - Need a model to *decide* something from a wired-in value? Put the condition and
   hysteresis in Modelica, then connect its 0/1 output to `LunCoEvent` (Step 6).
 - A waypoint never reaches? Check that the referenced marker has its standard
@@ -1022,8 +1068,9 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - Possessed the vehicle, and only Space does anything? Your model has no `pitch` /
   `roll` / `yaw` inputs, so the `Controls` profile is writing ports nobody reads.
   Ports bind by NAME — a typo is silence, not an error.
-- Tilting the vehicle doesn't steer the thrust? You wired `force_y` (world up)
-  instead of `force_local_y` (the vehicle's own up).
+- Tilting the vehicle doesn't steer the thrust? Confirm the actuator consumes
+  `force_local_y`, the vehicle's own-up force port, so body attitude rotates the
+  thrust direction at apply time.
 - Reading the engine's *real* state? Read its output signal (`throttle`), not the
   player's input.
 

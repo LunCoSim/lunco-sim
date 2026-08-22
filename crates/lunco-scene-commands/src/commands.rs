@@ -289,7 +289,13 @@ fn runtime_spawn_ops(
             parent_path,
             name,
             type_name: None,
-            reference: Some(asset_path.to_string()),
+            // The runtime layer is authored under the mounted scene. A bare
+            // library path would therefore resolve relative to that scene
+            // (for example `scenes/tests/structures/...`) instead of the
+            // engine asset source. Keep the USD reference source-qualified at
+            // the ownership boundary; the catalog remains free to expose its
+            // discovery spelling to UI consumers.
+            reference: Some(lunco_assets::engine_asset_uri(asset_path)),
         },
         UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
@@ -4081,7 +4087,7 @@ mod tests {
         // ...rides into the composed view as a resolvable reference...
         let composed = docu.composed_source();
         assert!(
-            composed.contains("@vessels/rovers/test_rover.usda@"),
+            composed.contains("@lunco://vessels/rovers/test_rover.usda@"),
             "composed view must carry the spawn reference:\n{composed}"
         );
         // ...and is excluded from Save (base only).

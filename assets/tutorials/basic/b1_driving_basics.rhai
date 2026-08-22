@@ -2,9 +2,9 @@
 //!
 //! The first lesson: take control of a rover and learn the three inputs
 //! (throttle / steer / brake) and the camera, then climb one gentle ramp so the
-//! feel of wheel slip and a grade is in the hands BEFORE the real borderline wall
-//! of the scored traverse. Objective mission — advances on real actions, never a
-//! timer (see first_drive.rhai for the pattern this follows).
+//! feel of wheel slip and a grade is in the hands. Objective mission — advances
+//! on real actions, never a timer (see first_drive.rhai for the pattern this
+//! follows).
 
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
@@ -13,7 +13,7 @@ fn on_start(me) {
     // layer alone. Ordinals duplicated into scripts are how this track ended up
     // titled "2 ·" while toasting "S3".
     cmd("FocusPanel", #{ id: "command_deck" });
-    spotlight("panel.command_deck", "Use the Command Deck to verify who is driving before you move.");
+    spotlight("panel.right_inspector", "Use the Command Deck to verify who is driving before you move.");
     notify_kind("Tutorial: Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover, then click Possess in the Inspector or Command Deck.");
 }
@@ -21,7 +21,7 @@ fn on_start(me) {
 fn b1_driving_started(me) {
     clear_spotlight();
     cmd("FocusPanel", #{ id: "telemetry_browser" });
-    spotlight("panel.telemetry_browser", "Read speed and wheel signals here while you drive.");
+    spotlight("panel.side_browser", "Read speed and wheel signals in the left dock while you drive.");
     hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Read the telemetry while you roll onto the ramp.");
 }
 
@@ -32,13 +32,13 @@ fn b1_finished(me) {
 
 fn b1_controlled(me) {
     let rover = find("/DrivingBasics/Rover");
-    rover != () && controller(rover) != ()
+    rover >= 0 && controller(rover) != ()
 }
 
 fn b1_at_flag(me) {
     let rover = find("/DrivingBasics/Rover");
     let flag = find("/DrivingBasics/Flag");
-    if rover == () || flag == () { return false; }
+    if rover < 0 || flag < 0 { return false; }
     arrived(rover, world_pos(flag), 2.5)
 }
 

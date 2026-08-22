@@ -19,7 +19,7 @@ fn authority_taken_message(me) {
     cmd("FocusPanel", #{ id: "command_deck" });
     clear_spotlight();
     hint("You own the rover now. Confirm the Command Deck says Driving (you), then release control.");
-    spotlight("panel.command_deck", "Review the live authority state before releasing control.");
+    spotlight("panel.right_inspector", "Review the live authority state before releasing control.");
 }
 
 fn authority_released(me) {
@@ -28,7 +28,8 @@ fn authority_released(me) {
 }
 
 fn authority_is_released(me) {
-    !is_controlled(find("/FirstDrive/Rover"))
+    let rover = find("/FirstDrive/Rover");
+    rover >= 0 && !is_controlled(rover)
 }
 
 fn authority_possess(me) {
@@ -42,7 +43,7 @@ fn authority_release(me) {
 fn on_start(me) {
     cmd("FocusPanel", #{ id: "command_deck" });
     hint("Select the rover, open Command Deck, and take control. Watch the status change before releasing it again.");
-    spotlight("panel.command_deck", "The Command Deck is the authoritative handoff surface.");
+    spotlight("panel.right_inspector", "The Command Deck is the authoritative handoff surface.");
     notify_kind("Tutorial: Authority Handoff", "info");
 }
 

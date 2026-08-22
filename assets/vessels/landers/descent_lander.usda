@@ -68,11 +68,10 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
-    # The USD rigid-body projection aggregates the four foot colliders into one
-    # Avian compound body. Bind the landing surface at that body boundary so
-    # the solver receives the authored friction for the compound, rather than
-    # silently falling back to Avian's default because child-only bindings are
-    # not separate rigid bodies.
+    # The USD rigid-body projection owns the four leg frames and their explicit
+    # pad bodies. Bind the landing surface at the pad body boundary so the
+    # solver receives the authored friction for the collider that actually
+    # meets the ground.
     rel material:binding:physics = </DescentLander/PhysicsMaterials/LandingPadSlide>
 
     # The feet are a load-bearing landing interface. Their prismatic joints
@@ -1163,18 +1162,19 @@ def Xform "DescentLander" (
     # strut-load visualization; the controller reads the actual native contact
     # force from the Avian compound body that carries the welded pad shape.
     #
-    # PadPX/PadNX/PadPZ/PadNZ are child shapes, not independent rigid bodies.
-    # USD composition therefore projects each enabled child shape into the
-    # parent Leg* compound collider. The native contact API is owned by that
-    # Leg* body; reading a child shape would silently miss the contact graph.
-    float inputs:leg_force_px.connect = </DescentLander/LegPX.outputs:contact_force>
-    float inputs:leg_force_nx.connect = </DescentLander/LegNX.outputs:contact_force>
-    float inputs:leg_force_pz.connect = </DescentLander/LegPZ.outputs:contact_force>
-    float inputs:leg_force_nz.connect = </DescentLander/LegNZ.outputs:contact_force>
-    float inputs:leg_contact_px.connect = </DescentLander/LegPX.outputs:contact>
-    float inputs:leg_contact_nx.connect = </DescentLander/LegNX.outputs:contact>
-    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ.outputs:contact>
-    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ.outputs:contact>
+    # Each Pad* is a separate rigid body connected to its Leg* frame by an
+    # explicit spherical joint. The pad body owns the actual terrain collider,
+    # so its native contact ports are the touchdown source. Reading the parent
+    # Leg* body would report the strut frame rather than the loaded foot and
+    # would leave the four-pad touchdown predicate permanently false.
+    float inputs:leg_force_px.connect = </DescentLander/LegPX/PadPX.outputs:contact_force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact_force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact_force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact_force>
+    float inputs:leg_contact_px.connect = </DescentLander/LegPX/PadPX.outputs:contact>
+    float inputs:leg_contact_nx.connect = </DescentLander/LegNX/PadNX.outputs:contact>
+    float inputs:leg_contact_pz.connect = </DescentLander/LegPZ/PadPZ.outputs:contact>
+    float inputs:leg_contact_nz.connect = </DescentLander/LegNZ/PadNZ.outputs:contact>
     float inputs:leg_displacement_px.connect = </DescentLander/LegPX_Spring.outputs:displacement>
     float inputs:leg_displacement_nx.connect = </DescentLander/LegNX_Spring.outputs:displacement>
     float inputs:leg_displacement_pz.connect = </DescentLander/LegPZ_Spring.outputs:displacement>
@@ -1195,12 +1195,43 @@ def Xform "DescentLander" (
         float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:low_fuel>
         uniform token lunco:event:name = "lander_low_fuel"
         uniform token lunco:event:severity = "warning"
+        uniform double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "Depleted"
     {
         float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "warning"
+        uniform double lunco:event:qualificationTime = 0.0
+    }
+
+    # The continuous flight model owns the landing predicates. These bindings
+    # only project their 0/1 transitions onto the shared event bus; the
+    # supervisor reacts to the typed events and latches the corresponding GNC
+    # mode through its authored input ports.
+    def LunCoEvent "EngineCutoffContact"
+    {
+        float inputs:trigger.connect = </DescentLander.outputs:engine_cutoff_contact>
+        uniform token lunco:event:name = "lander_engine_cutoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        uniform double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "LandingContact"
+    {
+        float inputs:trigger.connect = </DescentLander.outputs:landing_contact>
+        uniform token lunco:event:name = "lander_flight_handoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        uniform double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "Touchdown"
+    {
+        float inputs:trigger.connect = </DescentLander.outputs:touchdown>
+        uniform token lunco:event:name = "lander_touchdown"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        uniform double lunco:event:qualificationTime = 0.0
     }
 
     # ── Onboard supervisor ───────────────────────────────────────────────────
@@ -2992,8 +3023,10 @@ def Xform "DescentLander" (
     # drift from the airframe.
     #
     # Each primary strut is a prismatic body: it cannot rotate independently of
-    # the hull. The pad is part of that rigid body, so suspension travel remains
-    # the prismatic stroke above and no free pad rotation can inject energy.
+    # the hull. Its pad is a separate rigid body on the explicit spherical joint
+    # above, so the pad can settle its contact face while suspension travel
+    # remains the prismatic stroke. The joint prevents that internal body from
+    # becoming free or injecting an unbounded degree of freedom.
     #
     # The strut reaction and the strut/pad contact force remain separate facts.
     # The former drives the load glow; the latter

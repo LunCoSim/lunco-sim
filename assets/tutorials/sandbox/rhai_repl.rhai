@@ -15,13 +15,8 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    // One source: the lesson sets up its own environment. Without this the
-    // coach marks landed on top of whatever scene happened to be open, so
-    // "open the tutorial" changed nothing but the overlay. Same rover scene as
-    // the neighbouring script/inspect lessons, so the REPL examples below have
-    // a live entity to talk to.
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The curriculum payload is mounted before this script starts, so the REPL
+    // examples have a live entity to talk to.
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Rhai Editor & REPL", "info");

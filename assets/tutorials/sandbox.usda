@@ -3,16 +3,9 @@
     """
     The curriculum the SANDBOX app offers.
 
-    This layer IS the answer to "which tracks does this app show", and its
-    sublayer order IS the order they appear in. Both facts used to be attributes
-    on each track (`hosts = ["sandbox"]`, `order = 2`), which put an application's
-    configuration inside scene description and gave ordering two mechanisms that
-    could disagree. Composition already answers both, and answers them in the one
-    place a reader looks.
-
-    Note that `basic` is listed here despite not being named after this app —
-    that is the whole reason the old `hosts` field existed. A track is not owned
-    by the app it happens to be named after; it is offered by whoever composes it.
+    This layer is the answer to "which tracks does this app show", and its
+    sublayer order is the order they appear in. A track is offered by whichever
+    app composes it; its name does not determine its owner.
 
     STRONGEST FIRST, as everywhere else in USD. A twin adds its own curriculum on
     the SESSION layer at runtime, so it composes over these without editing them

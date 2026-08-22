@@ -8,8 +8,8 @@
 # ── Tutorial: Build a Lunar Base ─────────────────────────────────────────────
 # An open regolith plot and the spawn palette. The lesson coaches the student to
 # lay out a working surface base from the moonbase Structures kit — power, a
-# crew habitat, comms, ISRU and a landing pad — and, crucially, WHERE each one
-# goes and why (radiation standoff, plume ejecta, line-of-sight, resource reach).
+# crew habitat, comms, ISRU and a landing pad — and discuss the design role of
+# each part. The completion predicate is in the tutorial script.
 #
 # ALL lesson logic is data: this scene just sets the stage (flat ground, a raking
 # polar sun, a fly-cam), and the orchestrator `build_base.rhai` runs the mission
@@ -23,7 +23,7 @@
 # arrive as the student spawns them, so none are referenced in-file.
 def Xform "BuildBase" (
     kind = "assembly"
-    doc = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
+    doc = "Compose a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and identify each part's design role."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
@@ -87,7 +87,6 @@ def Xform "BuildBase" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Environment only. The tutorial ORCHESTRATOR is the standalone
-    # `build_base.rhai` (run by the launcher on a host entity); it `load_scene`s
-    # this file in `on_start`.
+    # Environment only. The curriculum declares this file as the lesson payload;
+    # the launcher mounts it before the tutorial script runs.
 }

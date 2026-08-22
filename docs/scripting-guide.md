@@ -1,7 +1,7 @@
 # LunCo Scripting Guide
 
-How to write **scenarios** — persistent per-entity programs that sense and drive
-the simulation — in LunCoSim.
+How to write **scenarios** — persistent per-entity programs that sense the
+simulation, react to events, and sequence policy — in LunCoSim.
 
 - **Crate:** [`lunco-scripting`](../crates/lunco-scripting) · **Design rationale:** [rhai-integration.md](./architecture/rhai-integration.md)
 - **Examples:** [`assets/scripting/examples/`](../assets/scripting/examples) · **Helper library:** [`assets/scripting/prelude/`](../assets/scripting/prelude)
@@ -20,8 +20,9 @@ This guide has two parts:
 
 The language is **rhai** — a small, sandboxed, pure-Rust language that runs
 everywhere the sim does, including the browser (wasm). A **scenario** is a rhai
-program attached to an entity that runs every fixed simulation tick. It is *not*
-a one-shot snippet.
+program attached to an entity. Its lifecycle hooks react to events, while its
+declarative `task` and `mission` drivers handle progression. Continuous dynamics
+remain in physics or Modelica; production policy does not write a control loop.
 
 > **The host (Rust) is mechanism; the script is policy.** Navigation, objectives,
 > behaviour trees, sequencing — all live in hot-reloadable `.rhai`, never compiled
@@ -43,47 +44,43 @@ target/debug/luncosim --api 4101
 | You write | The engine does |
 |---|---|
 | `fn on_start(me)` | runs once after (re)compile |
-| `fn on_tick(me)`  | runs every `FixedUpdate` step |
+| `fn task(me)` | returns a declarative sequence or task tree that the runtime advances |
+| `fn mission(me)` | returns observable objectives and their completion predicates |
 | `fn on_event(me, evt)` | runs when a `TelemetryEvent` arrives |
 | `fn on_stop(me)`  | runs on hot-reload / detach / despawn |
 
-`me` is the host entity's id. Per-tick mutable state lives on the implicit `this`
-object map (rhai functions are otherwise pure — they can't see top-level `let`s,
-so thread state through `this`). You sense with queries/`get` and act with
-`cmd`/`set`.
+`me` is the host entity's id. Persistent state lives on the implicit `this` object
+map when a hook needs it (rhai functions are otherwise pure — they cannot see
+top-level `let`s). You sense with queries/`get` and act with `cmd`/`set`.
 
 ## 2. Your first script
 
 Create `assets/scenarios/my_rover_mission.rhai`:
 
 ```rhai
-fn on_start(me) {
-    notify("Rover mission initiated!");
-    this.wp_index = 0;
-    this.waypoints = [
-        [10.0, 0.0, 0.0],
-        [20.0, 0.0, 10.0],
-        [0.0, 0.0, 20.0],
-    ];
-}
-
-fn on_tick(me) {
-    if this.wp_index >= this.waypoints.len() {
-        notify("Mission complete! Parking.");
-        brake(me);
-        return;
-    }
-
-    let target = this.waypoints[this.wp_index];
-    if nav_to(me, target, 0.8, 2.0) {
-        notify("Reached waypoint " + this.wp_index);
-        this.wp_index += 1;
-    }
+fn task(me) {
+    seq([
+        once(|m| { possess(m); notify("Rover mission initiated!"); }),
+        step(
+            |m| nav_to(m, [10.0, 0.0, 0.0], 0.8, 2.0),
+            |m| arrived(m, [10.0, 0.0, 0.0], 2.0)
+        ),
+        step(
+            |m| nav_to(m, [20.0, 0.0, 10.0], 0.8, 2.0),
+            |m| arrived(m, [20.0, 0.0, 10.0], 2.0)
+        ),
+        step(
+            |m| nav_to(m, [0.0, 0.0, 20.0], 0.8, 2.0),
+            |m| arrived(m, [0.0, 0.0, 20.0], 2.0)
+        ),
+        once(|m| { brake(m); notify("Mission complete! Parking."); }),
+    ])
 }
 ```
 
-`nav_to` and `brake` are [prelude helpers](#b-prelude-helpers) — high-level
-verbs built on the raw `cmd`/`get` bridge. No control loops to hand-code.
+`nav_to`, `arrived`, `possess`, and `brake` are [prelude helpers](#b-prelude-helpers)
+— high-level verbs built on the raw `cmd`/`get` bridge. The task tree owns the
+progression; there is no control loop to hand-code.
 
 ### Run it
 
@@ -125,7 +122,7 @@ program is a prim, not an attribute — delete the prim and the behaviour goes w
 ```usda
 def Xform "Rover_01" {
     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/my_rover_mission.rhai@
         # …or author the source in place:
         # uniform string info:sourceCode = '''<rhai source>'''
     }
@@ -135,17 +132,19 @@ def Xform "Rover_01" {
 That's the whole loop: **write → run → inspect → persist.** The rest of Part I
 fills in the everyday verbs; Part II is the complete reference.
 
-## 3. Lifecycle hooks (the full set)
+## 3. Lifecycle hooks and declarative drivers
 
 ```rhai
-fn on_start(me)      { this.count = 0; }                 // once, after (re)compile
-fn on_tick(me)       { this.count += 1; }                // every FixedUpdate tick
+fn on_start(me)      { notify("Ready"); }                // once, after (re)compile
+fn task(me)          { seq([wait_for("GO"), once(|m| brake(m))]); }
+fn mission(me)       { [objective("arrive", #{ done: |m| arrived(m, [20.0, 0.0, 0.0], 2.0) })]; }
 fn on_event(me, evt) { if evt.name == "GO" { /* … */ } } // a TelemetryEvent arrived
-fn on_stop(me)       { brake(me); }                      // teardown: hot-reload / detach / despawn
+fn on_stop(me)       { brake(me); }                       // teardown: hot-reload / detach / despawn
 ```
 
 - Define any subset. `on_stop` is where you stop actuators / release claims.
-- `this` persists across ticks for one entity.
+- `task` expresses actions and waits; `mission` expresses what counts as success.
+- `this` persists for one entity while its program is running.
 
 ## 4. The everyday verbs
 
@@ -274,7 +273,13 @@ script reads it as the read-only `params` constant:
 RunScenario { target: <gid>, source: "...", params: "{\"speed\":1.5}" }
 ```
 ```rhai
-fn on_tick(me) { drive(me, params.speed, 0.0); }
+fn task(me) {
+    let speed = params.speed;
+    seq([step(
+        |m| nav_to(m, [20.0, 0.0, 0.0], speed, 2.0),
+        |m| arrived(m, [20.0, 0.0, 0.0], 2.0)
+    )]);
+}
 ```
 
 ## D. Sequencing (missions)
@@ -303,7 +308,7 @@ Distinct from scenarios: a **policy hook** is a small *pure* rhai function —
 `ctx` in → a value out — that a Rust seam consults **by id** at a decision point.
 Authored under [`policy/`](../assets/scripting/policy), registered under a
 `HookId`, and **hot-rewritable** (replace the file, or `SetScriptedPolicy` the
-same id) — so behavior that used to be hardcoded is data, no rebuild.
+same id). Policy remains data at the decision seam, with no engine rebuild.
 
 - [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
   (`control.authority.take`) — may `taker` take a vessel from its current owner?
@@ -379,8 +384,9 @@ Available nodes include:
 
 - **Per-entity scenarios → USD (load):** a script is a `LunCoProgramAPI` child prim, and it
   auto-attaches and runs when the prim is spawned:
-  - `uniform asset info:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
-    like every other asset the scene depends on.
+  - `uniform asset info:sourceAsset = @lunco://scenarios/foo.rhai@` — the shipped
+    file, resolved through the asset boundary (`twin://<root>/...` addresses a
+    Twin-owned file).
   - `uniform string info:sourceCode = '''<rhai>'''` — the source authored in place
     in the USD layer. An edit to it is an ordinary attribute edit, so it journals, undoes
     and replicates like any other.
@@ -408,8 +414,8 @@ Developing scenarios requires quick feedback on compilation and runtime health. 
 ### Standard Output & Logging
 You can print variables and state information directly to standard output/console using the standard print statement:
 ```rhai
-fn on_tick(me) {
-    print("Rover " + name(me) + " position: " + world_pos(me));
+fn on_event(me, evt) {
+    print("Rover event " + evt.name + " at " + name(me));
 }
 ```
 

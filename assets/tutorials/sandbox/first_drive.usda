@@ -93,8 +93,7 @@ def Xform "FirstDrive" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Environment only. The tutorial ORCHESTRATOR is the standalone
-    # `first_drive.rhai` (run by the launcher on a host entity); it `load_scene`s
-    # this file in `on_start`. No embedded program prim — a tutorial is one source
-    # (the .rhai), and the chain lives in the launcher registry, not USD.
+    # Environment only. The tutorial orchestrator is `first_drive.rhai` and the
+    # curriculum declares this file as its payload. No embedded program prim is
+    # needed: the launcher mounts the payload before running the script.
 }

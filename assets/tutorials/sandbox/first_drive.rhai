@@ -8,12 +8,8 @@
 //! and no Rust.
 
 fn on_start(me) {
-    // One source: the tutorial IS this script, and it sets up its own environment.
-    // Load the env-only scene (rover, flag, avatar); the mission below find()s its
-    // entities once they spawn. The scenario runs on an independent host entity, so
-    // it survives the scene mount the launcher performs before this runs.
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The curriculum payload is mounted before this script starts. This script
+    // only teaches and verifies the rover actions in that world.
     hint("Welcome to LunCoSim! Let's drive a rover on the Moon.");
     notify_kind("Tutorial: First Drive", "info");
 }
@@ -28,13 +24,13 @@ fn first_drive_finished(me) {
 
 fn first_drive_controlled(me) {
     let rover = find("/FirstDrive/Rover");
-    rover != () && controller(rover) != ()
+    rover >= 0 && controller(rover) != ()
 }
 
 fn first_drive_at_flag(me) {
     let rover = find("/FirstDrive/Rover");
     let flag = find("/FirstDrive/Flag");
-    if rover == () || flag == () { return false; }
+    if rover < 0 || flag < 0 { return false; }
     arrived(rover, world_pos(flag), 2.5)
 }
 

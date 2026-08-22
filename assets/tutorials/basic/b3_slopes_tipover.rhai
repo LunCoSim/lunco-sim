@@ -3,15 +3,17 @@
 //! The tip-over lesson, on the deliberately top-heavy Hauler. Two truths a driver
 //! must feel: (1) a borderline grade is climbable straight up the fall-line but
 //! (2) steering ACROSS it rolls a high-centre-of-mass rover. The student is
-//! coached to first make it tip on purpose, recover it explicitly, then climb
-//! it properly. Completion is reliable (possess → reach the top marker); the tilt
-//! itself is read with `is_tipped` / `tilt_deg` (prelude, off `world_rotation`).
+//! coached to first make it lean on purpose, use the recovery control if it rolls,
+//! then climb it properly. Completion is possess → feel more than 15 degrees of
+//! tilt → enter the top marker's authored waypoint trigger; recovery is coached
+//! when needed but is not a completion condition. Tilt is read with `is_tipped` /
+//! `tilt_deg` (prelude, off `world_rotation`).
 
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     cmd("FocusPanel", #{ id: "sandbox_inspector" });
-    spotlight("panel.sandbox_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
+    spotlight("panel.right_inspector", "Review the selected Hauler's authored mass and centre-of-mass properties.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it, then click Possess in the Inspector or Command Deck.");
 }
@@ -32,19 +34,13 @@ fn b3_edge_felt(me) {
 }
 
 fn b3_tilted(me) {
-    tilt_deg(find("/SlopeTest/Rover")) > 15.0
+    let rover = find("/SlopeTest/Rover");
+    rover >= 0 && tilt_deg(rover) > 15.0
 }
 
 fn b3_controlled(me) {
     let rover = find("/SlopeTest/Rover");
-    rover != () && controller(rover) != ()
-}
-
-fn b3_at_top(me) {
-    let rover = find("/SlopeTest/Rover");
-    let marker = find("/SlopeTest/Marker");
-    if rover == () || marker == () { return false; }
-    arrived(rover, world_pos(marker), 2.5)
+    rover >= 0 && controller(rover) != ()
 }
 
 fn b3_reached_top(me) {
@@ -61,8 +57,7 @@ fn b3_cross_grade(me) {
 }
 
 fn b3_cross_grade_done(me) {
-    tilt_deg(find("/SlopeTest/Rover")) > 15.0 ||
-        arrived(find("/SlopeTest/Rover"), world_pos(find("/SlopeTest/Marker")), 6.0)
+    tilt_deg(find("/SlopeTest/Rover")) > 15.0
 }
 
 fn b3_climb(me) {
@@ -86,14 +81,9 @@ fn mission(me) {
             done: Fn("b3_controlled"),
             on_complete: Fn("b3_possessed"),
         }),
-        // The experiment the header describes was previously UNSCORED — coached in a
-        // hint, never checked, so the lesson completed for a student who drove
-        // straight up and never felt the hazard the Hauler exists to demonstrate.
-        //
-        // Deliberately keyed on TILT, not on a completed roll: 15° is reachable by
-        // anyone who steers across the grade, while requiring a full tip-over could
-        // dead-end a careful driver (an objective that never completes blocks
-        // MISSION_COMPLETE, and there is no "optional" flag).
+        // Key this on TILT, not on a completed roll: 15° is reachable by steering
+        // across the grade, while requiring a full tip-over would punish a careful
+        // driver and make the objective impossible to complete safely.
         objective("feel_the_edge", #{
             text: "Steer ACROSS the grade until you feel it lean past 15°",
             requires: ["possess"],
@@ -104,7 +94,11 @@ fn mission(me) {
         objective("reach_top", #{
             text: "Now climb straight up the fall-line to the marker at the top",
             requires: ["feel_the_edge"],
-            done: Fn("b3_at_top"),
+            // The marker's USD-authored Trigger Sensor is the arrival authority.
+            // Its overlap accounts for the rover's physical footprint; polling
+            // the chassis origin with a second radius would disagree with it.
+            requires_event: "enter:waypoint",
+            requires_event_source: "/SlopeTest/Marker/Trigger",
             on_complete: Fn("b3_reached_top"),
         }),
     ]
@@ -127,14 +121,12 @@ fn task(me) {
         wait(1.0),
         once(Fn("b3_autopilot_possess")),
         wait(0.5),
-        // Cross the grade first so the debug run also satisfies `feel_the_edge` —
-        // the demo must exercise the same objective chain a student does, or CI
-        // proves a path nobody takes.
+        // Cross the grade first so the debug run satisfies `feel_the_edge` — the
+        // demo must exercise the same objective chain a student does, or CI proves
+        // a path nobody takes.
         step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
-        // The task event is scoped to this lesson's marker. Without `src`, any
-        // waypoint in the scene could complete the unattended climb before the
-        // named objective's position predicate sees the correct target.
-        #{ act: Fn("b3_climb"), event: "enter:waypoint", src: "/SlopeTest/Marker" },
+        // The task event is scoped to this lesson's authored Trigger Sensor.
+        #{ act: Fn("b3_climb"), event: "enter:waypoint", src: "/SlopeTest/Marker/Trigger" },
         once(Fn("b3_report_tip")),
         #{ act: Fn("b3_brake"), secs: 1.5 },
     ])

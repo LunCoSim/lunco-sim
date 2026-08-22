@@ -9,8 +9,8 @@
 fn steps() {
     [
         #{ anchor: "",                        focus: (),                   title: "Automate Lunica",   body: "This tour IS a rhai script running live in the workbench. Anything you can click, a script can do. ◀ ▶ or arrow keys." },
-        #{ anchor: "menu.help",               focus: (),                   title: "One command bus",   body: "Every UI action is a typed #[Command]. In a script: cmd(\"OpenClass\", #{ qualified: \"CascadedRCFilter\" }). The SAME commands back the HTTP API and MCP — one bus, three drivers." },
-        #{ anchor: "menu.help",               focus: (),                   title: "HTTP API & MCP",    body: "POST { \"type\": \"ExecuteCommand\", \"command\": \"...\", \"params\": { ... } } to /api/commands to drive Lunica headless (--no-ui), or let an LLM agent drive it over MCP — no bespoke bindings." },
+        #{ anchor: "",                        focus: (),                   title: "One command bus",   body: "Use the live REPL or open Help in the top menu for the command surface. Dispatch one typed command, for example cmd(\"OpenClass\", #{ qualified: \"CascadedRCFilter\" }). Check the model view afterward; the UI and HTTP/API clients use the same command." },
+        #{ anchor: "",                        focus: (),                   title: "HTTP API & MCP",    body: "Use the API/MCP guidance under Help. Send an ExecuteCommand request to /api/commands with a command and named params, then inspect the response. MCP exposes the same typed operation to an agent; it is not a separate simulation path." },
         #{ anchor: "panel.modelica_journal",  focus: "modelica_journal",   title: "Journal",           body: "Commands are dispatched through one typed bus. The document journal records authored document operations; it is not a universal replay log for every transient UI or runtime command." },
         #{ anchor: "",                        focus: (),                   title: "Make it yours",     body: "These tutorials live in assets/tutorials/lunica/*.rhai. Edit one, re-run from the Tutorials menu, and it hot-reloads. Author your own the same way." },
     ]
