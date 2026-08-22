@@ -439,6 +439,8 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "max_inflight_bakes": profile.terrain_lod_max_inflight_bakes,
                 "tile_budget": profile.terrain_lod_tile_budget,
                 "cover_edits_per_frame": profile.terrain_lod_cover_edits_per_frame,
+                "hysteresis_ratio": profile.terrain_lod_hysteresis_ratio,
+                "morph_start_ratio": profile.terrain_lod_morph_start_ratio,
                 "tile_resolution": profile.terrain_lod_tile_resolution,
                 "cinematic_resolution": profile.terrain_lod_cinematic_resolution,
                 "probe_resolution": profile.terrain_lod_probe_resolution,

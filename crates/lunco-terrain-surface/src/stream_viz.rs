@@ -48,7 +48,7 @@ use lunco_materials::{
     ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 use lunco_obstacle_field::grid_mesh;
-use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
+use lunco_terrain_core::{measure_node_error, HeightSource};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::SurfaceOracle;
@@ -462,6 +462,8 @@ fn wanted_parent_fallbacks(wanted: &HashSet<QuadCoord>, parents: &mut HashSet<Qu
 /// screen until it is replaced is what works.
 #[cfg(test)]
 const TEST_MAX_COVER_EDITS: usize = 64;
+#[cfg(test)]
+const TEST_LOD_HYSTERESIS_RATIO: f64 = 1.30;
 
 /// The up-to-4 same-depth edge-neighbour coords of `c` (clipped at the root square).
 fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
@@ -544,7 +546,7 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 ///
 /// Split priority is `dist / refine_range`, so the budget is spent nearest-first.
 /// Merges run before splits (they free budget) and only past the same
-/// [`REFINE_HYSTERESIS`] band the recursive walk uses, so a camera parked on a
+/// configured hysteresis band the recursive walk uses, so a camera parked on a
 /// threshold cannot flip a quad every frame.
 ///
 /// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
@@ -593,6 +595,7 @@ fn evolve_cover_for_foci(
         node_error,
         budget,
         TEST_MAX_COVER_EDITS,
+        TEST_LOD_HYSTERESIS_RATIO,
         &|_, _| false,
         &mut CoverScratch::default(),
     )
@@ -624,6 +627,7 @@ fn evolve_cover_for_foci_with_retention(
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
     max_cover_edits: usize,
+    hysteresis_ratio: f64,
     retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
     scratch: &mut CoverScratch,
 ) -> (usize, usize) {
@@ -675,13 +679,13 @@ fn evolve_cover_for_foci_with_retention(
             .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
     };
     // Sorting the FULL merge list was one of the two per-frame O(n log n)
-    // passes run to apply ≤MAX_COVER_EDITS edits. Pass 1 only ever consumes
+    // passes run to apply the configured cover-edit budget. Pass 1 only ever consumes
     // the candidates past the hysteresis band, so partition those to the
     // front and order just that (usually empty) prefix; the full ordering is
     // materialised only on the rare over-budget frame (pass 2 below).
     let mut band = 0;
     for i in 0..merges.len() {
-        if merges[i].0 >= REFINE_HYSTERESIS {
+        if merges[i].0 >= hysteresis_ratio {
             merges.swap(band, i);
             band += 1;
         }
@@ -726,7 +730,7 @@ fn evolve_cover_for_foci_with_retention(
     //    old reverse sort put its zero-slack near-camera entries FIRST here, causing
     //    the precise fine → coarse → fine flicker it was meant to prevent. Only if
     //    no far merge can satisfy the hard budget may this pass touch retained tiles.
-    //    Not bounded by `MAX_COVER_EDITS`: being over budget is a frame-rate problem,
+    //    Not bounded by the configured cover-edit budget: being over budget is a frame-rate problem,
     //    and unlike a global metric change this only touches the quads it drops.
     // Forced merges count toward the RETURNED edit total (a pass that shrank
     // the cover is not a fixed point) but not toward the cover-edit setting — being
@@ -990,6 +994,7 @@ fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
 pub struct LodTiles {
     tiles: HashMap<QuadCoord, TileSlot>,
     mode: TerrainShaderMode,
+    morph_ratio: f32,
     gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
     /// focus + eye height + heading — heading drives bake PRIORITY via
@@ -1160,23 +1165,17 @@ fn band_bucket(morph_end: f32) -> u32 {
     (morph_end.max(1.0).ln() * 4.0).floor() as u32
 }
 
-/// The geomorph start/end ratio, read off the core quadtree type so the shader
-/// band cannot drift from the `Quadtree::morph_ratio` the CPU selection uses.
-fn morph_ratio() -> f32 {
-    Quadtree::new(1.0, 0, 1.0, 1.0).morph_ratio as f32
-}
-
 /// Snap a selected morph band to its bucket's representative values, so the tile
 /// and its cached material agree exactly. Snapping DOWN (floor bucket) means a
 /// tile always finishes morphing *before* the selection swaps in its parent — a
 /// slightly early morph, never a pop.
-fn snap_band(morph_end: f32) -> (f32, f32, u32) {
+fn snap_band(morph_end: f32, morph_ratio: f32) -> (f32, f32, u32) {
     let bucket = band_bucket(morph_end);
     if bucket == u32::MAX {
         return (1.0e20, 1.0e21, bucket);
     }
     let end = (bucket as f32 * 0.25).exp();
-    (morph_ratio() * end, end, bucket)
+    (morph_ratio * end, end, bucket)
 }
 
 /// Edit the persisted terrain rendering-quality fields through the same typed
@@ -1194,6 +1193,8 @@ pub struct SetTerrainRenderingQuality {
     pub max_inflight_bakes: Option<usize>,
     pub tile_budget: Option<usize>,
     pub cover_edits_per_frame: Option<usize>,
+    pub hysteresis_ratio: Option<f64>,
+    pub morph_start_ratio: Option<f64>,
 }
 
 #[on_command(SetTerrainRenderingQuality)]
@@ -1229,6 +1230,12 @@ fn on_set_terrain_rendering_quality(
     }
     if let Some(value) = event.cover_edits_per_frame {
         candidate.terrain_lod_cover_edits_per_frame = value;
+    }
+    if let Some(value) = event.hysteresis_ratio {
+        candidate.terrain_lod_hysteresis_ratio = value;
+    }
+    if let Some(value) = event.morph_start_ratio {
+        candidate.terrain_lod_morph_start_ratio = value;
     }
     if let Err(reason) = candidate.validate() {
         bevy::log::error!(target: "terrain", "rejected terrain rendering quality: {reason}");
@@ -1608,6 +1615,7 @@ fn spawn_tile(
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
+    morph_ratio: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
     authored: Option<&TerrainAuthoredMaps>,
@@ -1631,7 +1639,7 @@ fn spawn_tile(
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
-    let (ms, me, _bucket) = snap_band(morph_end);
+    let (ms, me, _bucket) = snap_band(morph_end, morph_ratio);
     let mut tile = commands.spawn((
         Mesh3d(mesh),
         tile_look(mode, depth, ms, me, maps, authored, shadow, overlay),
@@ -2072,7 +2080,8 @@ pub fn update_lod_tiles(
         // rebuilding, which left a one-frame black hole until the tiles re-baked.
         // The binder resolves each new look through its cache, so the swap costs one
         // material per (mode, band) — not one per tile.
-        if tiles.mode != mode {
+        let morph_ratio = profile.terrain_lod_morph_start_ratio as f32;
+        if tiles.mode != mode || tiles.morph_ratio.to_bits() != morph_ratio.to_bits() {
             swaps.clear();
             swaps.extend(
                 tiles
@@ -2082,11 +2091,12 @@ pub fn update_lod_tiles(
             );
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
-                let (ms, me, _) = snap_band(morph_end);
+                let (ms, me, _) = snap_band(morph_end, morph_ratio);
                 let look = tile_look(mode, depth, ms, me, maps, authored, shadow, overlay);
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
+            tiles.morph_ratio = morph_ratio;
         }
 
         // Project every active visual camera into this terrain's local DEM frame.
@@ -2150,6 +2160,7 @@ pub fn update_lod_tiles(
                 screen_height_px,
                 fov_y_rad,
                 px,
+                profile.terrain_lod_morph_start_ratio,
             )
         };
         let pixel_error = profile.terrain_lod_pixel_error;
@@ -2203,6 +2214,8 @@ pub fn update_lod_tiles(
             sig.write_u64(profile.terrain_lod_cinematic_resolution as u64);
             sig.write_u64(profile.terrain_lod_probe_resolution as u64);
             sig.write_u64(profile.terrain_lod_cover_edits_per_frame as u64);
+            sig.write_u64(profile.terrain_lod_hysteresis_ratio.to_bits());
+            sig.write_u64(profile.terrain_lod_morph_start_ratio.to_bits());
             sig.finish()
         };
         {
@@ -2357,6 +2370,7 @@ pub fn update_lod_tiles(
                             &node_error,
                             budget,
                             profile.terrain_lod_cover_edits_per_frame,
+                            profile.terrain_lod_hysteresis_ratio,
                             &|_, region| near_field_retains_refinement(region, visual_foci),
                             cover_scratch,
                         );
@@ -2382,6 +2396,7 @@ pub fn update_lod_tiles(
                         &node_error,
                         budget,
                         profile.terrain_lod_cover_edits_per_frame,
+                        profile.terrain_lod_hysteresis_ratio,
                         &|_, region| near_field_retains_refinement(region, visual_foci),
                         cover_scratch,
                     );
@@ -2575,6 +2590,7 @@ pub fn update_lod_tiles(
                 baked.center,
                 depth,
                 baked.morph_end,
+                morph_ratio,
                 mode,
                 maps,
                 authored,
@@ -2657,6 +2673,7 @@ pub fn update_lod_tiles(
                     s.region.center,
                     depth,
                     morph_end,
+                    morph_ratio,
                     mode,
                     maps,
                     authored,
@@ -3413,6 +3430,7 @@ mod draw_partition_tests {
             1080.0,
             std::f64::consts::FRAC_PI_4,
             terrain_quality().terrain_lod_pixel_error,
+            terrain_quality().terrain_lod_morph_start_ratio,
         );
         let actual = TerrainVisualDemand {
             focus: [0.0, 0.0],
@@ -4079,6 +4097,7 @@ mod draw_partition_tests {
                 &err,
                 64,
                 TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut reused,
             );
@@ -4089,6 +4108,7 @@ mod draw_partition_tests {
                 &err,
                 64,
                 TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut CoverScratch::default(),
             );
@@ -4118,6 +4138,7 @@ mod draw_partition_tests {
                 &err,
                 16,
                 TEST_MAX_COVER_EDITS,
+                TEST_LOD_HYSTERESIS_RATIO,
                 &|_, _| false,
                 &mut scratch,
             )
@@ -4214,6 +4235,7 @@ mod draw_partition_tests {
             &err,
             13,
             TEST_MAX_COVER_EDITS,
+            TEST_LOD_HYSTERESIS_RATIO,
             &|coord, _| coord == retained,
             &mut CoverScratch::default(),
         );

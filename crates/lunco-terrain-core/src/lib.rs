@@ -58,7 +58,7 @@ pub use modifier::{
     BodyCurvature, BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource,
 };
 pub use overzoom::Overzoom;
-pub use quadtree::{QuadCoord, Quadtree, Selected, Square, REFINE_HYSTERESIS};
+pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
 pub use quantize::{quantize, QuantizedHeightSource};
 pub use source::{
     normal_at_bounded, AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource,

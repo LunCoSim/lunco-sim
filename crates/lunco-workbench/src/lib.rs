@@ -5650,6 +5650,18 @@ fn register_graphics_settings_menu(world: &mut World) {
                         .range(1..=4096)
                         .prefix("Cover edits per frame: "),
                 );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_hysteresis_ratio)
+                        .speed(0.01)
+                        .range(1.01..=4.0)
+                        .prefix("LOD hysteresis ratio: "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut settings.terrain_lod_morph_start_ratio)
+                        .speed(0.01)
+                        .range(0.0..=0.99)
+                        .prefix("Geomorph start ratio: "),
+                );
                 ui.label(
                     egui::RichText::new(
                         "These are explicit terrain rendering controls. A custom value is applied as authored; the renderer does not silently choose a lower preset.",

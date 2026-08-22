@@ -93,6 +93,8 @@ impl RenderingQuality {
                 terrain_lod_max_inflight_bakes: 64,
                 terrain_lod_tile_budget: 768,
                 terrain_lod_cover_edits_per_frame: 64,
+                terrain_lod_hysteresis_ratio: 1.30,
+                terrain_lod_morph_start_ratio: 0.55,
                 nurbs_surface_samples_per_control_span: 6,
                 nurbs_surface_minimum_subdivisions: 8,
                 nurbs_surface_maximum_subdivisions: 128,
@@ -158,6 +160,8 @@ impl RenderingQuality {
                 terrain_lod_max_inflight_bakes: 16,
                 terrain_lod_tile_budget: 256,
                 terrain_lod_cover_edits_per_frame: 16,
+                terrain_lod_hysteresis_ratio: 1.20,
+                terrain_lod_morph_start_ratio: 0.45,
                 nurbs_surface_samples_per_control_span: 3,
                 nurbs_surface_minimum_subdivisions: 6,
                 nurbs_surface_maximum_subdivisions: 64,
@@ -223,6 +227,8 @@ impl RenderingQuality {
                 terrain_lod_max_inflight_bakes: 128,
                 terrain_lod_tile_budget: 1536,
                 terrain_lod_cover_edits_per_frame: 128,
+                terrain_lod_hysteresis_ratio: 1.40,
+                terrain_lod_morph_start_ratio: 0.65,
                 nurbs_surface_samples_per_control_span: 10,
                 nurbs_surface_minimum_subdivisions: 12,
                 nurbs_surface_maximum_subdivisions: 256,
@@ -350,6 +356,10 @@ pub struct RenderQualityProfile {
     pub terrain_lod_tile_budget: usize,
     /// Maximum persistent-cover split/merge edits applied per terrain per frame.
     pub terrain_lod_cover_edits_per_frame: usize,
+    /// Coarsening/refinement dead-band multiplier for streamed terrain.
+    pub terrain_lod_hysteresis_ratio: f64,
+    /// Fraction of a tile's morph band at which geomorphing starts.
+    pub terrain_lod_morph_start_ratio: f64,
     /// Samples per control-point span used for untrimmed NURBS surfaces.
     pub nurbs_surface_samples_per_control_span: usize,
     /// Minimum samples per direction used for untrimmed NURBS surfaces.
@@ -524,6 +534,10 @@ pub struct RenderingQualitySettings {
     pub terrain_lod_tile_budget: usize,
     #[serde(default = "default_terrain_lod_cover_edits_per_frame")]
     pub terrain_lod_cover_edits_per_frame: usize,
+    #[serde(default = "default_terrain_lod_hysteresis_ratio")]
+    pub terrain_lod_hysteresis_ratio: f64,
+    #[serde(default = "default_terrain_lod_morph_start_ratio")]
+    pub terrain_lod_morph_start_ratio: f64,
     #[serde(default = "default_nurbs_surface_samples_per_control_span")]
     pub nurbs_surface_samples_per_control_span: usize,
     #[serde(default = "default_nurbs_surface_minimum_subdivisions")]
@@ -766,6 +780,14 @@ const fn default_terrain_lod_cover_edits_per_frame() -> usize {
     balanced_profile().terrain_lod_cover_edits_per_frame
 }
 
+const fn default_terrain_lod_hysteresis_ratio() -> f64 {
+    balanced_profile().terrain_lod_hysteresis_ratio
+}
+
+const fn default_terrain_lod_morph_start_ratio() -> f64 {
+    balanced_profile().terrain_lod_morph_start_ratio
+}
+
 const fn default_nurbs_surface_samples_per_control_span() -> usize {
     balanced_profile().nurbs_surface_samples_per_control_span
 }
@@ -858,6 +880,8 @@ impl RenderingQualitySettings {
             terrain_lod_max_inflight_bakes: self.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: self.terrain_lod_tile_budget,
             terrain_lod_cover_edits_per_frame: self.terrain_lod_cover_edits_per_frame,
+            terrain_lod_hysteresis_ratio: self.terrain_lod_hysteresis_ratio,
+            terrain_lod_morph_start_ratio: self.terrain_lod_morph_start_ratio,
             nurbs_surface_samples_per_control_span: self.nurbs_surface_samples_per_control_span,
             nurbs_surface_minimum_subdivisions: self.nurbs_surface_minimum_subdivisions,
             nurbs_surface_maximum_subdivisions: self.nurbs_surface_maximum_subdivisions,
@@ -944,6 +968,8 @@ impl RenderingQualitySettings {
         self.terrain_lod_max_inflight_bakes = profile.terrain_lod_max_inflight_bakes;
         self.terrain_lod_tile_budget = profile.terrain_lod_tile_budget;
         self.terrain_lod_cover_edits_per_frame = profile.terrain_lod_cover_edits_per_frame;
+        self.terrain_lod_hysteresis_ratio = profile.terrain_lod_hysteresis_ratio;
+        self.terrain_lod_morph_start_ratio = profile.terrain_lod_morph_start_ratio;
         self.nurbs_surface_samples_per_control_span =
             profile.nurbs_surface_samples_per_control_span;
         self.nurbs_surface_minimum_subdivisions = profile.nurbs_surface_minimum_subdivisions;
@@ -1168,6 +1194,17 @@ impl RenderingQualitySettings {
         {
             return Err("terrain LOD cover edits per frame must be between 1 and 4096");
         }
+        if !profile.terrain_lod_hysteresis_ratio.is_finite()
+            || profile.terrain_lod_hysteresis_ratio <= 1.0
+            || profile.terrain_lod_hysteresis_ratio > 4.0
+        {
+            return Err("terrain LOD hysteresis ratio must be finite and in (1, 4]");
+        }
+        if !profile.terrain_lod_morph_start_ratio.is_finite()
+            || !(0.0..1.0).contains(&profile.terrain_lod_morph_start_ratio)
+        {
+            return Err("terrain LOD morph start ratio must be finite and in [0, 1)");
+        }
         if profile.nurbs_surface_samples_per_control_span == 0 {
             return Err("NURBS surface samples per control span must be greater than zero");
         }
@@ -1264,6 +1301,8 @@ impl Default for RenderingQualitySettings {
             terrain_lod_max_inflight_bakes: profile.terrain_lod_max_inflight_bakes,
             terrain_lod_tile_budget: profile.terrain_lod_tile_budget,
             terrain_lod_cover_edits_per_frame: profile.terrain_lod_cover_edits_per_frame,
+            terrain_lod_hysteresis_ratio: profile.terrain_lod_hysteresis_ratio,
+            terrain_lod_morph_start_ratio: profile.terrain_lod_morph_start_ratio,
             nurbs_surface_samples_per_control_span: profile.nurbs_surface_samples_per_control_span,
             nurbs_surface_minimum_subdivisions: profile.nurbs_surface_minimum_subdivisions,
             nurbs_surface_maximum_subdivisions: profile.nurbs_surface_maximum_subdivisions,
@@ -1574,6 +1613,8 @@ mod tests {
                 .terrain_lod_tile_resolution
         );
         assert_eq!(settings.profile().terrain_lod_cover_edits_per_frame, 64);
+        assert_eq!(settings.profile().terrain_lod_hysteresis_ratio, 1.30);
+        assert_eq!(settings.profile().terrain_lod_morph_start_ratio, 0.55);
 
         settings.terrain_lod_tile_resolution = 2;
         assert_eq!(
@@ -1641,6 +1682,20 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err("terrain LOD cover edits per frame must be between 1 and 4096")
+        );
+
+        settings.terrain_lod_cover_edits_per_frame = 64;
+        settings.terrain_lod_hysteresis_ratio = 1.0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain LOD hysteresis ratio must be finite and in (1, 4]")
+        );
+
+        settings.terrain_lod_hysteresis_ratio = 1.30;
+        settings.terrain_lod_morph_start_ratio = 1.0;
+        assert_eq!(
+            settings.validate(),
+            Err("terrain LOD morph start ratio must be finite and in [0, 1)")
         );
     }
 
