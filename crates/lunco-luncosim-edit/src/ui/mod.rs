@@ -22,8 +22,9 @@ pub mod billboard_overlay;
 /// commands (no new journal domain).
 pub mod checkpoint_click;
 /// Cinematic camera authoring — capture the current view as a `def Camera`
-/// prim (doc 50). The transport that replays it is the floating HUD in
-/// `lunco-luncosim`, not a panel: View mode has no dock.
+/// prim. The current camera-path contract is in
+/// `docs/architecture/51-cinematic-camera.md`; capture and transport live in
+/// the docked Cinematic panel.
 pub mod cinematic;
 /// Command Deck panel — the read+control surface for the selected vessel
 /// (possession status, autopilot engage/disengage, checkpoint list). Pure

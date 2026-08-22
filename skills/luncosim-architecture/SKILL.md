@@ -39,7 +39,7 @@ Before creating `LunCo*API` or a `lunco:*` property:
 The mapping and the current keep/remove decisions are recorded in
 [`references/usd-standard-map.md`](references/usd-standard-map.md). The
 authoritative engine architecture is
-[`docs/architecture/60-clean-architecture-and-usd-standards.md`](../../docs/architecture/60-clean-architecture-and-usd-standards.md).
+[`docs/architecture/clean-architecture-and-usd-standards.md`](../../docs/architecture/clean-architecture-and-usd-standards.md).
 
 ## Build a reusable component
 

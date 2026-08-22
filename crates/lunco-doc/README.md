@@ -158,8 +158,8 @@ domain logic. `undo::Edit` puts methods on the command object (hostile
 to serialization); `yrs` / `automerge` operate on JSON-like blobs
 (no typed domain ops like `AddConnection { from, to }`).
 
-Full rationale + triggers to revisit:
-[`docs/architecture/research/undo-redo-libraries.md`](../../docs/architecture/research/undo-redo-libraries.md).
+Revisit only for live document merging or a document type that needs
+CRDT-backed text editing; those are separate from typed document operations.
 
 ## Tests
 

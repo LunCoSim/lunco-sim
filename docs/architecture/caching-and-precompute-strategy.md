@@ -69,45 +69,16 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
 | **One invalidation signal for source-derived memos** | `lunco-modelica/src/icon_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
 
-> **Retired: `lunco-cache`.** An earlier draft of this doc proposed a generic
-> `ResourceCache<L: ResourceLoader>` — a `HashMap<K, Task>` + pending map — as the
-> RAM tier. It was built, never adopted by a single crate, and **deleted on
-> 2026-07-13**. The reason is worth keeping, because the crate's own doc comment
-> asserted it was "the abstraction those [~8 bespoke memos] want" and that claim
-> then propagated into a code review and a remediation plan before anyone checked
-> it:
->
-> - **Almost none of those memos have its shape.** Of ~46 cache-like sites in the
->   workspace, ~17 are *synchronous* memos (content-hash → handle; no task, no
->   in-flight window — `ResourceCache` would only add overhead) and ~20 are plain
->   registries. Only ~9 are true async loads.
-> - **Of those ~9, only two are keyed HashMaps.** The rest are Entity-keyed, so
->   the pending set is a query filter, not a map. A `Resource<HashMap<K, Task>>`
->   has nothing to attach to.
-> - **The one genuine candidate needs strictly more than it offered.** The terrain
->   tile baker (`stream_viz.rs:494`) carries generation-versioning (discard bakes
->   from a superseded terrain gen) and a `MAX_INFLIGHT_BAKES` budget.
->   `ResourceCache::request` has neither — migrating would have been a downgrade.
->
-> If you need async dedup, reach for the ECS idiom in the table above. If you need
-> a *disk* bake, that is `lunco-precompute::bake_or_load` (§2), which shipped.
+> **Non-adoption: no generic `lunco-cache`.** The workspace uses ECS task
+> components for entity-keyed async deduplication, content-addressed
+> `bake_or_load` for disk artifacts, and source-specific invalidation for
+> synchronous memos. A generic `HashMap<K, Task>` would not represent the
+> current entity-keyed tasks, generation guards, or in-flight budgets.
 
-> **The rule both of the above were written to enforce: a cache is defined by its
-> INVALIDATION, not by its lookup.** Every cache bug found in the 2026-07-13 audit
-> was a missing or divergent invalidation, never a wrong hit:
->
-> - `PbrLookCache` and `ShaderLookCache` — same shape, same exposure, one swept and
->   one didn't. Nothing forced them to agree, so they drifted.
-> - The bitmap-texture memo — invalidated by **nothing**, and it cached *negatives*.
->   A missing asset was remembered as missing for the life of the process. On wasm
->   that is every MSL bitmap (the bundle ships no `Resources/`), so shipping them in
->   the bundler would still have rendered blank until restart.
-> - `port_icon_cache` — a cache with no producer and no consumer. Its only caller was
->   its own `invalidate`, wired to an observer clearing a permanently-empty map.
->
-> **Caching a miss is a promise to retry it.** If you cache `Option<V>`, you owe it an
-> invalidation signal, and that signal must be one thing the whole subsystem shares —
-> not a list of caches each new author has to remember to append to.
+**Cache rule:** define a cache by its invalidation as well as its lookup. If a
+cache stores `Option<V>`, including a miss, its owning subsystem must provide a
+shared invalidation signal. Do not add a cache to a new subsystem without
+identifying that signal first.
 
 **Gaps in the foundation:**
 - **No shared hashing util, but now two families in play.** Change-detection

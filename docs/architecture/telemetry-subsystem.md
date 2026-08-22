@@ -50,11 +50,9 @@ each UI surface.
 | Retention | `lunco_signal::SignalRegistry` scalar histories, with per-channel retention and deadband |
 | Unsubscribe | `UnsubscribeTelemetry` owns subscription lifecycle explicitly |
 
-**Phase 0 (landed 2026-07-13):** `LunCoTelemetryPlugin` is now added in `lunco-luncosim`. It
-had never been added, so `SubscribeTelemetry` — whose consumer half (`sampled_param_observer`,
-`TelemetryResponse::from_sampled`, `lunco_core::log`) was fully shipped — advertised parameter
-telemetry that **could never arrive**. Sampling is `run_if`-gated on a `Parameter` existing and
-runs on the fixed clock, so it costs nothing until a channel is authored.
+`LunCoTelemetryPlugin` is registered in `lunco-luncosim`. Sampling is
+`run_if`-gated on a `Parameter` existing and runs on the fixed clock, so it
+costs nothing until a channel is authored.
 
 ---
 

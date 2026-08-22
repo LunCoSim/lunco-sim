@@ -60,7 +60,7 @@ a corner, so the ground beneath it reads ≈ 1 m while the vehicle sits at −19
 Scale hides it elsewhere. Moonbase is a ±4000 m patch, so the same ~1.9 km
 descent is spread over a 1600 m band and reads as a distant rim rather than a wall.
 
-### Historical candidate fixes
+### Rejected alternatives
 
 1. **Chebyshev feather** — drove `f` from `max(|x|, |z|)` so the band followed
    the square boundary, but still replaced measured rows.

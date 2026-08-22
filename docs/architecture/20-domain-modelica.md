@@ -475,7 +475,7 @@ explicitly promotes it ("save as default in model").
 
 ## 7a. Document identity — three tiers, one truth
 
-A Modelica document has three identity caches that historically drift:
+A Modelica document exposes three identity views:
 
 | Tier | Source of truth | Used by |
 |------|-----------------|---------|
@@ -641,9 +641,7 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
 
 ### 9.3 Why our own canvas
 
-The diagram panel originally rode on `egui-snarl` (see git history
-prior to the canvas migration). `lunco-canvas` replaced it because we
-needed:
+The diagram panel uses `lunco-canvas` because it provides:
 
 - **Ports on every side** — schematic-style placement (top, bottom,
   left, right), not just left/right inputs/outputs.

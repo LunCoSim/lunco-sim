@@ -107,7 +107,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Successful fire-and-forget response: `{"data":{"accepted":true}}`. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. Deferred commands return their completed payload or error on the same request; there is no command-id polling endpoint.
 
-### Sandbox: loading a model
+### Loading a scene or model
 
 Two commands, two different argument types, and mixing them up is a silent no-op:
 

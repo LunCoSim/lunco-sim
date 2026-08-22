@@ -127,6 +127,7 @@ Use this to jump to the right one; read the index for the full responsibility.
   then execute `target/debug/luncosim` directly. Bare `cargo run` is also
   ambiguous because the default members are `lunco-luncosim` and `lunco-modelica`.
 - **`lunco-luncosim` produces the `luncosim` binary** (crate name ≠ binary name); `luncosim-server` is a *separate crate* (`lunco-luncosim-server`) that exists only to default to headless.
-- **API port is 4101** everywhere — not 3000 (a stale MCP default) and not 3001.
+- **API port is 4101** by default; always pass an explicit free port when another
+  session owns it.
 - **Don't `pkill`** a running app to restart — use the API `Exit` command (see `test-via-api`).
 - Composition roots: `lunco-luncosim` = `SandboxCorePlugin` (+ optional UI/headless plugin), shared by both `luncosim` and `luncosim-server`. There is **no** `lunco-usd-composer` crate — composition lives in `lunco-usd-bevy` (`flatten_stage`).

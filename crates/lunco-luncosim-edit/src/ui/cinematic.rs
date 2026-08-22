@@ -3,7 +3,8 @@
 //! The lowest-friction authoring gesture there is (Blender's
 //! Ctrl+Alt+Numpad0, Unreal's "Create Camera Here"): fly the free camera until
 //! the framing is right, then press the button — the pose you are looking
-//! through becomes a real prim in the scene. Doc 50 §10.
+//! through becomes a real prim in the scene. See
+//! `docs/architecture/51-cinematic-camera.md`.
 //!
 //! **A command, not a click observer.** The capture needs the grid hierarchy
 //! (`ChildOf`/`Grid`/`CellCoord`) to resolve a grid-absolute pose, which a
@@ -81,7 +82,7 @@ pub struct CinematicViz {
 impl Default for CinematicViz {
     fn default() -> Self {
         // On by default: an authored camera move you cannot see is the exact
-        // thing that made the frozen-camera bug (doc 50 §8a) invisible.
+        // thing that made the frozen-camera failure invisible.
         Self { show_paths: true }
     }
 }
@@ -249,7 +250,7 @@ fn on_add_camera_here(
     // Grid-ABSOLUTE pose. `world_pose` walks the grid hierarchy and returns the
     // authored frame directly — do NOT read the camera's `GlobalTransform`,
     // which is the render/floating-origin frame and would author a pose that
-    // silently drifts with the origin (doc 50 §5; the repo's classic frame bug).
+    // silently drifts with the origin (the camera-path frame contract).
     let Some((pos, rot)) =
         lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
             .ok()

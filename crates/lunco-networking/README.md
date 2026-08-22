@@ -11,11 +11,10 @@ sync format, authority, and protocol translation silently.
 > over **WebTransport** (native host + dedicated server + wasm client), provenance-derived
 > entity identity, server-authoritative state replication, client prediction +
 > input-replay reconciliation + physics-space smoothing, RBAC command/relay gating, and
-> a headless server (`sandbox --no-ui --host`). The original design called for
-> `renet2 + bevy_replicon` with CCSDS/YAMCS/DDS bridges over an 11-phase roadmap; much of
-> the prose below still describes that **aspirational** plan. The
+> a headless server (`target/debug/luncosim-server`). The
 > [Implementation status](#implementation-status) table is the source of truth for
-> shipped-vs-planned, and [Known gaps](#known-gaps-open) lists what is not built.
+> shipped-versus-planned capability, and [Known gaps](#known-gaps-open) lists what is
+> not built.
 
 ---
 
@@ -128,7 +127,7 @@ As-built transport is **WebTransport only** (QUIC/TLS, browsers *and* native):
 | Profile | Build | Transport role |
 |---|---|---|
 | Native host (listen-server) | `networking` (+ `ui`) | full client+server WebTransport |
-| Dedicated server | `networking`, no `ui` (`sandbox --no-ui --host`) | server WebTransport, headless |
+| Dedicated server | `networking`, no `ui` (`target/debug/luncosim-server`) | server WebTransport, headless |
 | Browser (wasm) | `networking`, client-only | client WebTransport — `wt_client` dials a **hostname URL** so a real CA cert validates with no digest (lightyear's built-in IO is IP-only) |
 
 ---
@@ -154,7 +153,10 @@ Domain systems listen to target commands, and the CommandPolicyRegistry checks a
 - Networked commands arrive as serialized payloads (`SyncCommand`), where the server resolves the connection to a `Session` (establishing the `UserId` author metadata) and performs an RBAC check against the command policy registry.
 - Provenance is verified *at the boundary* between the network and the ECS world, so domain observers can attribute edits to a verified, unforgeable session.
 
-**As-built RBAC:** Command and relay gating is implemented via the `CommandPolicyRegistry` (open-by-default, command + relay gates unified, RBAC-ready). The richer aspirational design — `Session`/`Identity`/`Role` enums, per-role command ACLs, `AuthRegistry` with HMAC session secrets, `Certificate`/`PublicKey` identities — is in git history and not all built.
+**Current boundary:** Command and relay gating is implemented via the
+`CommandPolicyRegistry` (open-by-default, with command and relay gates unified).
+Verified session identity and per-role ACLs are outside the current transport
+contract.
 
 ---
 
@@ -182,13 +184,6 @@ pipeline — lives in **[USD_REPLICATION_POLICY.md](./USD_REPLICATION_POLICY.md)
 broader command/op vs state-replication split is in
 **[SYNC_ARCHITECTURE.md](./SYNC_ARCHITECTURE.md)** (M1–M7).
 
-> **PLANNED (replicon-era):** the original model registered replication per component in
-> domain `replication.rs` submodules (`app.replicate::<RoverMobilityState>()` with custom
-> quantizing serializers) and split replicated *state* from locally-reconstructed *topology*
-> (`Wire.source/target`, `ActuatorPorts.ports`, etc., stay `Entity` and are rebuilt per
-> process, never serialized). That state-not-topology principle still holds; the
-> per-component declaration API does not — replication is USD-derived today.
-
 ---
 
 ## Authority & Possession
@@ -207,10 +202,9 @@ a cosim-driven entity still makes it interpolated (opaque), not predicted.
 
 ## Client-Side Prediction (as-built)
 
-**Client-Side Prediction Status:** Client-side prediction is implemented. The detailed design lives in git history
-(`PREDICTION_RECONCILIATION.md`, `PREDICT_AND_SMOOTH_PLAN.md`, `PREDICTION_MEMBERSHIP.md`);
-the mechanism context is [SYNC_ARCHITECTURE.md §4.1](./SYNC_ARCHITECTURE.md) (which points
-back here for the canonical summary). The as-built shape:
+Client-side prediction is implemented. The mechanism context is
+[SYNC_ARCHITECTURE.md §4.1](./SYNC_ARCHITECTURE.md); this section is the
+canonical summary of the shipped shape:
 
 - **Predict-all-vehicles membership** — three disjoint, client-only sets:
   - *Owned, actively driven* (`OwnedLocally`): **input-replay** predicted. The body records
@@ -292,11 +286,6 @@ Domain code uses `Entity` everywhere (queries, `Wire.source`, `ControllerLink.ve
 would force a HashMap lookup into every system iteration — Bevy needs `Entity` for component
 access regardless.
 
-> **PLANNED (replicon-era, superseded):** the original scheme minted random/time-based
-> **ULID-derived `u64`** ids via an `On<Add<Replicated>>` observer and tracked them in a
-> bidirectional `EntityRegistry`. Provenance derivation replaces it; a registry-style local↔global
-> map still exists as an implementation detail, but ids are derived, not random.
-
 ---
 
 ## What Domain Code Sees
@@ -321,9 +310,9 @@ handled by the `lunco-networking` plugin registered at startup.
 
 ## Planned subsystems (not built)
 
-These were part of the original 11-phase roadmap. They are **designed but not implemented**
-(see [Implementation status](#implementation-status)); the full prose is in git history.
-Summaries:
+The following capabilities are designed but not implemented. The status table
+below is authoritative; the entries here record only the current boundary and
+the intended mechanism.
 
 - **Collaborative editing (event sourcing).** Every sandbox edit recorded as a structured
   `EditEvent` (Spawn/Delete/TransformChanged/ParameterChanged/WireConnected/Undo/
@@ -387,10 +376,7 @@ Time, CFDP file delivery.
 
 ## Implementation status
 
-Source of truth for shipped-vs-planned. The original 11-phase roadmap assumed
-`renet2 + bevy_replicon`; what shipped used **lightyear** instead, so the historical per-task
-checklists (kept in git history) are moot at the task level even where the *capability* is
-delivered.
+Current shipped-versus-planned capability status:
 
 | Phase | Status |
 |---|---|
@@ -410,8 +396,7 @@ delivered.
 
 ## Known gaps (open)
 
-Distilled from the now-deleted `DESIGN_GAPS.md` (full A–I analysis + the DONE/RESOLVED items
-are in git history). The model itself — **state replication + client prediction**
+Open gaps in the current model — **state replication + client prediction**
 (Source/Overwatch/Unreal/lightyear), *not* lockstep (avian is not cross-platform
 deterministic) and *not* full physics rollback (global solver) — is settled. Still open:
 

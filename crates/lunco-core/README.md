@@ -61,5 +61,5 @@ Ontology alignment: every `ComponentGraph` concept maps to SysML v2 terms from t
 
 ## See Also
 
-- [Workspace UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — architecture decisions
+- [Workbench architecture](../../docs/architecture/11-workbench.md) — current UI and document-view decisions
 - [Engineering Ontology](../../docs/architecture/01-ontology.md) — engineering terminology source of truth

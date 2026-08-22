@@ -6,8 +6,9 @@
 > `lunco-terrain-surface/tests/precompute_sparse_set.rs` (step 1) and
 > `precompute_bake_time.rs` (step 2).
 
-Target architecture for the streamed terrain. Supersedes the runtime-bake streaming path;
-finding #6 of [terrain-lod-audit.md](terrain-lod-audit.md) is what this replaces.
+Target architecture for the streamed terrain. It replaces the current
+runtime-bake selection path with a coarse resident cover and progressive
+refinement.
 
 ## Constraints this must satisfy
 
@@ -30,7 +31,9 @@ The problem was never the oracle. It is the **runtime bake pipeline layered on t
 
 ## What the industry actually does
 
-Sources in [terrain-lod-audit.md](terrain-lod-audit.md#primary-sources).
+The design is backed by the live sparse-set and bake-time measurements named
+above, plus the terrain streaming implementation and its existing external
+references (Cesium, MSFS, and geometry clipmaps).
 
 - **Cesium `ForbidHoles`** — *"unrefine back to a parent tile when a child isn't done
   loading… never rendered with holes, though the tile rendered instead may have low

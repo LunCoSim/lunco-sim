@@ -67,7 +67,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | Doc | What it covers |
 |---|---|
 | [`30-wasm-web-worker.md`](30-wasm-web-worker.md) | Off-thread Modelica in the browser |
-| [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md) | The replication planes, the wire, AOI, prediction & reconciliation |
+| [`../../crates/lunco-networking/SYNC_ARCHITECTURE.md`](../../crates/lunco-networking/SYNC_ARCHITECTURE.md) | The replication mechanisms, wire, prediction, and convergence contract |
 | [`33-spacecraft-modeling.md`](33-spacecraft-modeling.md) | The lander slice |
 | [`lander-actuation-modelica.md`](lander-actuation-modelica.md) | The powered lander actuation boundary: USD topology, Modelica control/fluids, and Avian force application |
 | [`34-scenario-and-multidomain.md`](34-scenario-and-multidomain.md) | Scenarios, multi-domain vehicles |
@@ -104,21 +104,20 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | Doc | What it covers |
 |---|---|
 | [**`engineering-backlog-and-standards.md`**](engineering-backlog-and-standards.md) | The engineering backlog: adopted standards (ANISE, FMI 3.0, ROS 2, AOUSD conformance), architecture debt, testing debt, the measure-first list, the watch list, and **validated non-adoptions** — recorded so they don't get re-litigated. The deliberate exception to "describes what IS", and un-numbered because it spans every range rather than sitting in one |
+| [`clean-architecture-and-usd-standards.md`](clean-architecture-and-usd-standards.md) | Ownership boundaries and the standard-schema gate for USD, Modelica, Avian, Rhai, and Rust |
 | [`runtime-authored-ui.md`](runtime-authored-ui.md) | The small native HTML/CSS-like surface layer for Twin-facing HUDs, including its generic exposure boundary and reload/performance contract |
 | [**`render-decoupling.md`**](render-decoupling.md) | **The material is the boundary.** Domain crates state appearance *intent* (`PbrLook`, `ShaderLook`, `SceneCamera`, `WorldLabel`); only `lunco-render-bevy` names `bevy_pbr`. This is why `--no-ui` links no wgpu/`bevy_render`/egui/winit — and why the `cargo tree` CI guard exists |
 | [**`shader-layers-and-params.md`**](shader-layers-and-params.md) | Shader looks: WGSL-reflected `dyn_params` and named texture layers. Parameter names, ranges and defaults come from the shader source — **adding a parameter is editing a shader, not editing Rust** |
 | [`command-journal.md`](command-journal.md) | One op log for identity, undo and sync. **Document-domain ops are journaled; command/session replay is not built** |
 | [`terrain-substrate.md`](terrain-substrate.md) · [`terrain-layered-rendering.md`](terrain-layered-rendering.md) | The height oracle (one `HeightSource` from orbit to rover) and the layered Data→Transfer→Blend rendering pipeline |
-| [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | **Design.** Precomputed tiles + monotone progressive refinement — the target streaming architecture, replacing finding #6 of the audit. Its measurement steps are live tests in `lunco-terrain-surface/tests/precompute_*.rs` |
-| [`terrain-lod-audit.md`](terrain-lod-audit.md) | The CDLOD streamer measured against the real moonbase DEM (surface only; the globe is out of scope). Kept because measurement **falsified** the intuitive story — the wrong version will be re-derived by the next reader |
-| [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates and clock binding. **Phases 0–1 landed; 2–5 are proposal** |
+| [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | **Design.** Precomputed coarse tiles + monotone progressive refinement for the streamed surface. Its measurement steps are live tests in `lunco-terrain-surface/tests/precompute_*.rs` |
+| [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates, clock binding, retention, and the shared signal registry |
 | [**`lint-substrate.md`**](lint-substrate.md) | Authoring mistakes that have no runtime symptom. **Facts in Rust, rules in rhai policy** (`lint.<domain>`), one linter per domain, findings in one report. Nothing lints on load — `RunLint` is a verb, and a scenario calling it on a cadence is the realtime linter |
 | [`derive-substrate.md`](derive-substrate.md) | The unified derived-artifact substrate (async compute/bake patterns) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
 | [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | **The North Star + substrates B–E in full**: the one principle, the tier ladder, `lunco-precompute` (B), `Mobility` (C), ports resolve→handle (D), `lunco-hash` (E) |
 | [`usd-source-of-truth.md`](usd-source-of-truth.md) | **USD is the truth; ECS is a projection of it.** The rule every edit path obeys |
 | [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
-| [`command-sequences.md`](command-sequences.md) | Command sequences and the visual sequence editor |
 | [`waypoints-in-usd.md`](waypoints-in-usd.md) | Routes and waypoints as authored USD, not runtime-only state |
 | [`tutorial-autopilot-and-port-contracts.md`](tutorial-autopilot-and-port-contracts.md) | Same control path for human/autopilot tutorial tests; declared cosim topology versus live samples |
 
@@ -126,11 +125,6 @@ the banner pattern). **Draft** = under live review, may be wrong.
 
 - [`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md) — network command/session authorization is enforced; the loopback API remains a trusted local-authoring boundary and must not be exposed publicly
 - [`../reviews/`](../reviews/) — standing issues (`open-*.md`) and dated audit reports
-
-## Research
-
-[`research/`](research/) — historical analysis, inspiration, rejected paths. Nothing
-there describes running code.
 
 ## Numbering
 
@@ -144,7 +138,6 @@ there describes running code.
 | `50`–`59` | Authoring contracts — what a scene, an asset or a vessel may state, and how it resolves |
 | `60`+ | Physical fidelity — planned work on the world model itself |
 | un-numbered | Cross-cutting substrates and boundaries |
-| `research/` | Prior art, inspiration, roads not taken — nothing here describes running code |
 
 A number is an ordering hint, not an identifier: docs are linked by filename, so
 gaps (`32`, `47`, `52`) and the two `55-*` docs are harmless and are **not**

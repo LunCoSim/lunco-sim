@@ -4,7 +4,7 @@ This kit deploys two things on one Ubuntu box:
 
 | Component | What | Port | Process |
 |---|---|---|---|
-| **Sim host** | `sandbox --no-ui --host` — server-authoritative sim + WebTransport host | **UDP 5888** | `lunco-server.service` |
+| **Sim host** | `luncosim-server --api 4101` — server-authoritative sim + WebTransport host | **UDP 5888** | `lunco-server.service` |
 | **Web client** | the wasm bundle browsers load | **TCP 443** | nginx (static files) |
 | Admin API | HTTP command API (loopback only) | TCP 4101 (`127.0.0.1`) | inside the sim host |
 

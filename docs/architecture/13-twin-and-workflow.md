@@ -961,70 +961,25 @@ Three categories:
 
 ## 12. App composition and startup
 
-### Key insight: apps differentiate by plugins, not by hardcoded scenes
+### Shipped app composition and startup
 
-The three binaries — `lunica`, `lunco-luncosim`,
-`luncosim` — share the **same Twin-loading machinery** from
-`lunco-workbench` and `lunco-twin`. They differ only in:
+The shipped entry points share the Twin/document machinery, but their
+composition roots remain distinct:
 
-1. **Which domain plugins they register** (what Document types the app
-   can open and edit).
-2. **Which Workspaces they enable by default**.
-3. **Which examples their Welcome Screen surfaces**.
+| App | Composition | Startup boundary |
+|-----|-------------|------------------|
+| `luncosim` | GUI workbench plus USD, physics, cosim, mobility, and editor plugins | `--scene` loads a scene; GUI boot policy may select onboarding content |
+| `luncosim-server` | headless luncosim core; no window, GPU, or egui | `run_headless()` drives the same simulation schedules through `ScheduleRunnerPlugin` |
+| `lunica` | Modelica workbench plus rumoca compile/simulation plugins | opens Modelica documents and uses the same Twin/document services |
 
-No app hardcodes a scene or a default file. The startup flow in § 6 runs
-uniformly for all of them.
+`luncosim` still owns a small `setup_sandbox` composition step: it creates
+the persistent world shell, consults the GUI boot policy, and loads an
+explicit native scene. Browser startup loads the deployment Twin through its
+page autoload hook. The server does not use the GUI startup path.
 
-### Per-app plugin composition
-
-| App | Default Workspace | Domain plugins registered | Welcome examples shown |
-|-----|-------------------|---------------------------|------------------------|
-| `lunica` | **Analyze** | `ModelicaPlugin` + `ModelicaInspectorPlugin` | Modelica examples only (circuit, spring-mass, thermal, …) |
-| `lunco-luncosim` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
-| `luncosim` | **Build** (or last-used) | All of the above + `CelestialPlugin` + `LuncoUiPlugin` (MissionControl) | All examples, categorized |
-
-A `lunco-workbench` config type (passed to `WorkbenchPlugin`) declares
-which domains + workspaces this app supports. The workbench uses it to:
-
-- Filter Welcome Screen examples
-- Populate File → Open / New menus
-- Enable / disable Workspaces
-- Decide which file extensions are "known types" for the orphan-open path
-
-### What replaces current `setup_sandbox` startup code
-
-Today each binary has a `setup_sandbox` function that hardcodes scene
-setup — spawning a Camera2d, reading a hardcoded `.mo`, inserting
-a specific `ModelicaModel` component, etc. Under the new model, **all of
-that goes away**. Startup belongs to `lunco-workbench`:
-
-```rust
-// lunica (before)
-fn main() {
-    app.add_plugins(DefaultPlugins)
-       .add_plugins(EguiPlugin::default())
-       .add_plugins(bevy_workbench::WorkbenchPlugin { ... })
-       .add_plugins(ModelicaPlugin)
-       .add_systems(Startup, setup_sandbox);   // hardcodes Battery.mo
-}
-
-// lunica (after)
-fn main() {
-    app.add_plugins(DefaultPlugins)
-       .add_plugins(EguiPlugin::default())
-       .add_plugins(lunco_workbench::WorkbenchPlugin::new()
-           .workspace_default(Workspace::Analyze)
-           .examples_dir("examples/modelica/"))
-       .add_plugins(lunco_twin::TwinPlugin)
-       .add_plugins(ModelicaPlugin);
-    // No setup_sandbox. Workbench handles startup.
-}
-```
-
-The old `setup_sandbox` logic — "load Battery.mo and spawn it" — becomes
-a *ship-with-app example Twin* that the user can open from the Welcome
-Screen. Examples live in `examples/modelica/<example_name>/` directories,
-each with a `twin.toml` and its Documents.
+Workbench plugins provide document/session UI and persistence; they do not
+replace scene or simulation composition. New examples should be authored as
+Twins or scenes and opened through the normal document/load commands.
 
 ### Per-app: "New file" menu entries
 

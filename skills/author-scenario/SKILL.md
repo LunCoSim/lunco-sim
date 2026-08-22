@@ -174,8 +174,7 @@ target/debug/luncosim test \
 ```
 
 Build `target/debug/luncosim` in the current worktree before running gates. Test
-commands consume that exact build; they do not use `cargo run` or the former
-`sandbox` executable name.
+commands consume that exact build; they do not use `cargo run`.
 
 ### Keep test hooks below Rhai's expression-complexity ceiling
 

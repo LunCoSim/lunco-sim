@@ -22,7 +22,7 @@ All panels are **entity viewers** — they watch a selected entity and render it
      └── Provides WorldPanel for 3D space panels
 ```
 
-See [`docs/architecture/research/ui-ux-inspiration.md`](../../docs/architecture/research/ui-ux-inspiration.md) for full architecture research.
+See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md) for the current UI architecture.
 
 ### What's Provided
 
@@ -94,4 +94,4 @@ app.register_panel(MyPanel);
 ## See Also
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — detailed mechanisms (WidgetSystem, typed commands, 3D UI)
-- [Workspace UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — professional tool analysis and architecture decisions
+- [Workbench architecture](../../docs/architecture/11-workbench.md) — current layout and interaction decisions

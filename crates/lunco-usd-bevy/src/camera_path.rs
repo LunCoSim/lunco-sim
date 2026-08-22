@@ -196,8 +196,8 @@ impl CameraPath {
 ///
 /// Also the "hands off" flag for `camera_mount`: a path-driven camera authors no
 /// `timeSamples`, so it is not `UsdAnimated` and the mount resolver would happily
-/// claim it and pin it to a snapshot — the exact bug §8a describes, re-entering
-/// through a different door.
+/// claim it and pin it to a snapshot — the camera-mount ownership failure this
+/// contract guards against, re-entering through a different door.
 ///
 /// **The target is GRID-ABSOLUTE (`DVec3`), not a parent-local `Vec3`**, and the
 /// camera is rigged grid-direct exactly like a mounted camera. Writing a big
@@ -1291,7 +1291,8 @@ pub fn apply_camera_paths(
 ///
 /// Uniform in the curve parameter, NOT arc length — so points spaced unevenly
 /// make the camera speed up through sparse stretches. Fine for an even orbit;
-/// a shot with clustered points wants arc-length reparameterisation (doc 50 §9.7).
+/// a shot with clustered points wants arc-length reparameterisation (see the
+/// remaining-work list in `docs/architecture/51-cinematic-camera.md`).
 pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) -> Option<Vec3> {
     eval_curve_with_tangent(points, basis, periodic, u).map(|(position, _)| position)
 }

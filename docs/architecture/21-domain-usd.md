@@ -60,7 +60,7 @@ enum UsdOp {
 **`ApplyUsdOp { doc, op }`** command (`commands.rs`, observer `on_apply_usd_op`),
 which returns a generation-ack; direct source mutation is out. `UsdOp` implements
 both `DocumentOp` and `lunco_twin_journal::OpPayload` — so **authoring an edit *is*
-journaling it *is* syncing it** (see [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md) § Journal plane).
+journaling it *is* syncing it** (see the [networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
 
 Views observing a `UsdDocument`:
 

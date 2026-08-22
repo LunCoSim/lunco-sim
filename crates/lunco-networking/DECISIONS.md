@@ -12,15 +12,12 @@ at the bottom).
 M2 Predicted/Interpolated roles, M6 tick-sync (`lightyear_sync`), proven f64-avian,
 wasm WebTransport, host-client. The `Mutation`/`OpId` envelope remains the M3
 payload regardless of backend, so fallback cost is bounded.
-- The Ph0 spike is **not** an open A/B — it's narrowed to verifying lightyear's one
-  real risk: **host-client robustness under latency**. If that fails → fall back to
-  replicon+renet2 (envelope work carries over). Otherwise lightyear stands.
-- **Ph0 RESULT: host-client risk RETIRED on the native path.** Built
+- **Host-client risk is closed on the native path.** Built
   clean on Bevy 0.18; host-client boots, remote client completes the
   netcode/WebTransport handshake, replication + prediction engage, tick-sync stable
   30 s under the default latency conditioner, zero panics across 3 runs. The only
   anomaly (a single capped 252-tick rollback) was a late-join transient that did not
-  recur on a normal-timing join. (Full Ph0 spike log was in `SPIKE_PH0.md` — git history.)
+  recur on a normal-timing join.
 - **Browser/wasm leg also PASSED:** the wasm client builds, boots
   (WebGL/ANGLE), and **connects over WebTransport + receives replicated server state**
   (verified twice, plus clean reconnect). The only remaining item is the subjective
@@ -30,9 +27,7 @@ payload regardless of backend, so fallback cost is bounded.
   baked-in digest in the example (dev-cert gotchas now captured in `DEPLOY.md` →
   *Appendix — local / self-signed dev cert*), not a backend problem. **Net: D1 (lightyear) fully validated for our topology — native host-client
   AND browser WebTransport.**
-- Supersedes STACK_COMPARISON §2.4 "open" status and DESIGN_GAPS Q4.
-
-## D2 — Reconciliation: **input-replay reconciliation, re-stepping our own avian for the OWNED rover** (REOPENED 2026-05-30)
+## D2 — Reconciliation: **input-replay reconciliation, re-stepping our own avian for the owned rover**
 Predict the owned rover by running real **f64 avian** dynamics locally. On each
 snapshot that acks an input sequence number, snap the owned body's 4 integrator
 components (`Position`/`Rotation`/`LinearVelocity`/`AngularVelocity`) to authoritative
@@ -40,8 +35,7 @@ state and re-step avian over the unacked-input buffer (~3–6 fixed ticks). This
 **state replication + re-anchoring** (NOT deterministic lockstep), so f64 non-determinism
 only matters across the unacked window before the next snapshot snaps back to truth. All
 **remote** bodies stay `Kinematic`-pinned + interpolated, unchanged. As-built summary:
-README → *Client-Side Prediction* (the original design + phased plan
-`PREDICTION_RECONCILIATION.md` is in git history).
+README → *Client-Side Prediction*.
 
 **Why the old D2 was reopened:** continuous smooth-correction toward the latest snapshot is
 an *unfixable rubber-band* — the authoritative echo is always one link-latency behind a
@@ -58,16 +52,13 @@ verified firsthand — `lightyear_avian3d`/`lightyear_replication` 0.26.4 requir
 feature; `.f32()` hardcoded in the correction path). Going native would force downgrading avian
 **and** de-precisioning the whole physics stack to f32 — reversing the f64 double-precision that
 big-space/lunar-orbital coordinates depend on. lightyear release notes (through 0.26.0, 2026-01)
-have **never mentioned f64**. (Full analysis was in `LIGHTYEAR_NATIVE_REVIEW.md` — git history.) **lightyear stays the
+have **never mentioned f64**. **lightyear stays the
 transport/netcode/sync substrate (D1); prediction is hand-rolled over our own f64 avian** — the
 exact Source/Overwatch predict+reconcile algorithm, minus the f64/version wall. Re-open native
 only if a future lightyear targets avian 0.6 **and** ships a `parry-f64` path.
 
-- Rover-rover contact corrections: accept the snap (or disable inter-player rover
-  collision) — deferred, see DESIGN_GAPS.
-- Supersedes DESIGN_GAPS Q1. Reverses original D2 (smooth-correction) on our own terms;
-  keeps D3/D4/D5/D6/D7 intact (the hand-rolled path is D7-clean — no lightyear types in
-  always-on substrate, no avian schedule surgery).
+- Rover-rover contact corrections remain deferred; accept the authoritative snap
+  until a dedicated collision-prediction contract is implemented.
 
 ## D3 — Identity: **deterministic from provenance** (confirmed)
 Network id = pure function of provenance. Content/Derived → deterministic hash
@@ -94,7 +85,6 @@ only for asset fetch/dedupe.
 The Unreal level-actor vs dynamic-actor split. Content-instanced entities are
 spawned locally on each peer (only their *state* replicates); runtime-born entities
 are spawned by the server, which allocates the id and replicates the spawn.
-- Supersedes DESIGN_GAPS Q3.
 
 ## D5 — Time-warp in multiplayer: **host-only, applied to all; forbidden when ROS owns a vessel**
 - MVP: only the host may warp/pause; it applies to the whole shared world (server
@@ -103,7 +93,6 @@ are spawned by the server, which allocates the id and replicates the spawn.
 - When a ROS controller holds authority over a vessel: warp is **forbidden** (a nav
   stack can't be fast-forwarded). Hard rule.
 - Matches KSP (forbids MP warp) / Factorio (speed tied to lockstep, voted).
-- Supersedes DESIGN_GAPS Q2 and ROS2_BRIDGE Q5.
 
 ## D6 — Clock seam: **drive lightyear's `Tick` from our `SimTick`** (one clock)
 The sim owns time; the netcode tick is *derived* from it (same idea as ROS

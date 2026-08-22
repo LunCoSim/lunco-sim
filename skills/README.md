@@ -74,10 +74,10 @@ one directly when doing that kind of task by hand.
 
 - **Use the built production binary**: build in the current worktree, then invoke
   `target/debug/luncosim` directly for validation, tests, and launches. Do not
-  use the former `sandbox` name or substitute `cargo run` for the built binary.
+  substitute `cargo run` for the built binary.
 - **Always launch luncosim with its HTTP API**: `target/debug/luncosim --api 4101` (use
-  another explicit free port when needed). The MCP bridge's old default (3000) is stale;
-  every controllable, visual, realtime, or scene-test luncosim process must carry
+  another explicit free port when needed). Every controllable, visual, realtime,
+  or scene-test luncosim process must carry
   an explicit `--api PORT`. Only parse-only `--validate` invocations are exempt.
 - **Exit the previous session before launching the next**: send the API `Exit` command,
   verify the process and port are gone, then start the replacement. Never overlap luncosim

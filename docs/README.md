@@ -72,7 +72,6 @@ The full catalogue with trigger phrases is in
 | [`reviews/`](reviews/) | Standing known issues (`open-*.md`) and dated audit reports |
 | [`releases/`](releases/README.md) | Commit-derived nightly changelists and release-note snapshots |
 | [`numeric-experiments/`](numeric-experiments/README.md) | Solver/numerics investigations with reproducible setups |
-| [`architecture/research/`](architecture/research/) | Prior art, inspiration, roads not taken |
 | [`../specs/`](../specs/README.md) | Feature contracts, with an Implemented/Partial/Not-built index |
 | `../crates/<crate>/README.md` | Per-crate quick-start — "how do I use this crate now" |
 | [`../scripts/perf/README.md`](../scripts/perf/README.md) | Performance profiling subsystem |
@@ -128,5 +127,3 @@ for the live index.
 **Lifecycle.** A doc that describes shipped work stays Active — it is reference,
 not history. A doc whose only content is *how we got here* (migration plans,
 completed execution checklists, closed audits) is **deleted**; git remembers it.
-Move a doc to `architecture/research/` only when the idea itself is worth
-keeping but the path was not taken.
