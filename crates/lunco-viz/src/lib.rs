@@ -40,13 +40,14 @@ pub use panel::{VizPanel, VIZ_PANEL_KIND};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
 pub use signal::{
-    PersistedSignalRef, ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry,
-    SignalType, TelemetryFocus,
+    compact_channel_label, display_channel_label, humanize_identifier, operator_channel_label,
+    PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure, SignalMeta, SignalRef,
+    SignalRegistry, SignalType, TelemetryFocus,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
     bind_dropped_channel, drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest,
-    SetTelemetryBrowserView, TelemetryBrowserPanel, TelemetryBrowserView,
+    SetTelemetryBrowserView, TelemetryBrowserPanel, TelemetryBrowserView, TelemetryDisplaySettings,
     TELEMETRY_BROWSER_PANEL_ID,
 };
 #[cfg(feature = "ui")]
@@ -56,6 +57,8 @@ pub use viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizId
 
 #[cfg(feature = "ui")]
 use bevy::prelude::*;
+#[cfg(feature = "ui")]
+use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
 use lunco_workbench::WorkbenchAppExt;
 #[cfg(feature = "ui")]
@@ -91,6 +94,7 @@ impl Plugin for LuncoVizPlugin {
         app.insert_resource(SignalRegistry::with_default_capacity(
             DEFAULT_SIGNAL_HISTORY,
         ))
+        .register_settings_section::<telemetry_browser::TelemetryDisplaySettings>()
         .init_resource::<VisualizationRegistry>()
         .init_resource::<telemetry_browser::TelemetryBrowserView>()
         .init_resource::<VizKindCatalog>()

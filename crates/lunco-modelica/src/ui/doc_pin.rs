@@ -156,11 +156,11 @@ pub fn render_pin_header(
     };
     let (icon, hover) = match current_pin {
         Some(_) => (
-            "📌",
+            "Pinned",
             "Pinned to this model. Click to release and follow the active tab.",
         ),
         None => (
-            "📍",
+            "Follow",
             "Following the active tab. Click to pin to the current model.",
         ),
     };

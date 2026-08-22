@@ -65,7 +65,7 @@ impl Panel for ModelsPalette {
         PanelId("rover_models")
     }
     fn title(&self) -> String {
-        "🧩 Models".into()
+        "Models".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser

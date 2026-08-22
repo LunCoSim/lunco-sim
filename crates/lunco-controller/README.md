@@ -6,7 +6,7 @@ Input mapping and controller translation for LunCoSim vessels.
 
 This crate translates raw user input (Keyboard, Gamepad, Mouse) into typed command events that the Flight Software (FSW) can consume.
 
-- **Input Mapping** — Standard WASD + Space mapping for rovers and astronauts via `leafwing-input-manager`.
+- **Input Mapping** — Standard WASD + F/Space mapping for rovers and landers via `leafwing-input-manager`; F is the autopilot action, while Space is interpreted by the authored vessel profile as lander thrust or rover brake.
 - **Intent Translation** — Translates abstract human actions (e.g., `DriveForward`) into the shared `SetPorts` command surface.
 - **Control Latching** — Implements "cruise control" behavior (`Shift + Axis`) to toggle sticky setpoints for hands-free operation.
 - **Context Awareness** — Supports modifier-gated input (e.g., `Ctrl` for free-look camera mode) to prevent command flow during inspection.
@@ -28,7 +28,8 @@ lunco-controller/
 To facilitate long-distance surface travel, the controller supports latched axis setpoints:
 - `Shift + W/S`: Toggles forward/reverse throttle latch.
 - `Shift + A/D`: Toggles steering lock.
-- `Space (Brake)`: Immediately clears all latches for emergency stop.
+- `Space (Thrust)`: Drives the possessed lander's authored engine input; it does not toggle autopilot.
+- `Space (Brake)`: Drives the possessed rover's authored brake input; the lander profile consumes the same key as `Thrust` instead.
 
 ## Usage
 

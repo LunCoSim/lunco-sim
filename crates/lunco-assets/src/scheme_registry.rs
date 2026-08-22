@@ -73,7 +73,9 @@ impl SchemeRegistry {
     /// relative, which would resolve it to a path that does not exist.
     pub fn local_path(&self, reference: &str) -> Option<PathBuf> {
         let Some((scheme, rest)) = crate::asset_path::split_scheme(reference) else {
-            return Some(crate::assets_dir_abs().join(reference));
+            return Some(
+                crate::assets_dir_abs().join(crate::asset_path::relative_path(reference)?),
+            );
         };
         let handler = self.handlers.read().ok()?.get(scheme).cloned()?;
         handler(rest)

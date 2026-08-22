@@ -340,7 +340,7 @@ impl BrowserSection for SceneFilesSection {
                             row.label.clone()
                         };
                         // Only the kinds a dispatcher actually handles are
-                        // clickable: `.usda` (USD load) and `.mo` (model tab,
+                        // clickable: `.usda` (USD document) and `.mo` (model tab,
                         // where the diagram is projected — auto-laid-out when the
                         // source carries no placement annotations). A shader or a
                         // texture is LISTED because it is part of the scene, but

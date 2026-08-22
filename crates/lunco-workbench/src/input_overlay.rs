@@ -265,7 +265,7 @@ pub fn draw_input_overlay(
                         let m_left = buttons.pressed(MouseButton::Left);
                         let m_right = buttons.pressed(MouseButton::Right);
                         let m_middle = buttons.pressed(MouseButton::Middle);
-                        draw_key(ui, "🖱 L", m_left);
+                        draw_key(ui, "L", m_left);
                         draw_key(ui, "M", m_middle);
                         draw_key(ui, "R", m_right);
 

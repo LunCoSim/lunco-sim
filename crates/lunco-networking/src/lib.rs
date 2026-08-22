@@ -62,10 +62,6 @@ pub mod scenario;
 /// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
 #[cfg(feature = "networking")]
 pub mod scenario_sync;
-/// The scripted-policy plane: distribute + activate rhai policies (merge /
-/// authorization / drive-kernel) host→client so every peer runs the identical one.
-#[cfg(feature = "networking")]
-pub mod scripted_policy;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
 #[cfg(feature = "networking")]

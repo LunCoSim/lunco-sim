@@ -46,6 +46,9 @@ fn log_telemetry_events(trigger: On<TelemetryEvent>) {
 
 fn log_sampled_parameter(trigger: On<SampledParameter>) {
     let param = trigger.event();
+    if !param.changed {
+        return;
+    }
     // `debug!`, not `info!`: a SAMPLE is CONTINUOUS telemetry — the engine emits
     // `engine.fps` / `engine.frame_time` (and any watched port) every frame, so at
     // 100 fps an `info!` here floods the log and, redirected to a file, fills the

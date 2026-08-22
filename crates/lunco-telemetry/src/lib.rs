@@ -55,10 +55,11 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortDirection, PortRegistry, ResolvedPort};
+use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
+use lunco_signal::TelemetryDeadband;
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{Deserialize, Serialize};
 
@@ -88,14 +89,18 @@ pub struct TelemetrySettings {
     pub default_retention: usize,
     /// Master switch.
     pub enabled: bool,
+    /// Default numeric visibility policy for channels without an explicit
+    /// `Parameter::deadband`.  This is deliberately separate from Modelica's
+    /// solver tolerances: it governs operator-facing samples, not convergence.
+    pub default_deadband: TelemetryDeadband,
 }
 
 impl Default for TelemetrySettings {
     fn default() -> Self {
         Self {
-            // 5 Hz for 5 minutes — the same window the wholesale co-sim publisher
-            // keeps (`lunco_cosim::telemetry`), so an authored channel and a model
-            // variable plotted side by side show the same span of history.
+            // 5 Hz for 5 minutes — the default window for an explicit telemetry
+            // channel. Model state uses this policy through the Modelica runtime
+            // projection; authored channels use it when they omit their own rate.
             default_rate_hz: 5.0,
             // The Traverse scene currently publishes roughly 1200 channels.
             // Keep a full scene plus headroom in the default so ordinary
@@ -103,6 +108,7 @@ impl Default for TelemetrySettings {
             max_channels: 2048,
             default_retention: 1500,
             enabled: true,
+            default_deadband: TelemetryDeadband::default(),
         }
     }
 }
@@ -147,6 +153,13 @@ pub struct ControlTelemetry {
     pub enabled: Option<bool>,
     pub rate_hz: Option<f64>,
     pub retention: Option<usize>,
+    /// Absolute tolerance for the subsystem default numeric deadband. Applies
+    /// only when `channel` is `None`; a named channel uses `deadband` as its
+    /// explicit absolute override.
+    pub atol: Option<f64>,
+    /// Relative tolerance for the subsystem default numeric deadband. Applies
+    /// only when `channel` is `None`.
+    pub rtol: Option<f64>,
     pub deadband: Option<f64>,
 }
 
@@ -156,7 +169,7 @@ fn on_control_telemetry(
     mut settings: ResMut<TelemetrySettings>,
     // ONE query: a second `Query<&Parameter>` alongside this `&mut` one is a conflicting
     // access and panics at run time (B0001).
-    mut channels: Query<(Entity, &mut Parameter, Option<&mut ChannelClock>)>,
+    mut channels: Query<(Entity, &mut Parameter)>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event().clone();
@@ -171,15 +184,33 @@ fn on_control_telemetry(
             (None, None) => None,
         };
         if let Some(source) = source {
+            let rate_hz = match cmd.rate_hz {
+                Some(rate) => {
+                    let Some(rate) = accepted_command_rate(rate, "new channel") else {
+                        return;
+                    };
+                    Some(rate)
+                }
+                None => None,
+            };
+            let deadband = match cmd.deadband {
+                Some(deadband) => {
+                    let Some(deadband) = accepted_channel_deadband(deadband, "new channel") else {
+                        return;
+                    };
+                    Some(deadband)
+                }
+                None => None,
+            };
             let param = Parameter {
                 name,
                 unit: cmd.unit.clone().unwrap_or_default(),
                 description: None,
                 source,
                 target: Some(entity),
-                rate_hz: cmd.rate_hz,
+                rate_hz,
                 enabled: cmd.enabled.unwrap_or(true),
-                deadband: cmd.deadband,
+                deadband,
                 retention: cmd.retention,
             };
             // A DEDICATED channel entity targeting the measured one. Not a component on the
@@ -191,8 +222,8 @@ fn on_control_telemetry(
             // from the previous source would read the wrong value).
             let existing = channels
                 .iter()
-                .find(|(_, p, _)| p.name == param.name && p.target == Some(entity))
-                .map(|(e, _, _)| e);
+                .find(|(_, p)| p.name == param.name && p.target == Some(entity))
+                .map(|(e, _)| e);
             match existing {
                 Some(chan) => {
                     commands
@@ -214,31 +245,67 @@ fn on_control_telemetry(
             settings.enabled = enabled;
         }
         if let Some(rate) = cmd.rate_hz {
-            settings.default_rate_hz = rate;
+            if let Some(rate) = accepted_command_rate(rate, "subsystem default") {
+                settings.default_rate_hz = rate;
+            }
         }
         if let Some(retention) = cmd.retention {
             settings.default_retention = retention;
         }
+        if let Some(atol) = cmd.atol {
+            if TelemetryDeadband::is_valid_tolerance(atol) {
+                settings.default_deadband.atol = atol;
+            } else {
+                warn!(
+                    atol,
+                    "telemetry: ignoring invalid default absolute tolerance"
+                );
+            }
+        }
+        if let Some(rtol) = cmd.rtol {
+            if TelemetryDeadband::is_valid_tolerance(rtol) {
+                settings.default_deadband.rtol = rtol;
+            } else {
+                warn!(
+                    rtol,
+                    "telemetry: ignoring invalid default relative tolerance"
+                );
+            }
+        }
         return;
     };
 
-    for (_, mut param, clock) in channels.iter_mut().filter(|(_, p, _)| p.name == name) {
+    let deadband = match cmd.deadband {
+        Some(deadband) => {
+            let Some(deadband) = accepted_channel_deadband(deadband, "named channel") else {
+                return;
+            };
+            Some(deadband)
+        }
+        None => None,
+    };
+
+    let rate_hz = match cmd.rate_hz {
+        Some(rate) => {
+            let Some(rate) = accepted_command_rate(rate, "named channel") else {
+                return;
+            };
+            Some(rate)
+        }
+        None => None,
+    };
+
+    for (_, mut param) in channels.iter_mut().filter(|(_, p)| p.name == name) {
         if let Some(enabled) = cmd.enabled {
             param.enabled = enabled;
         }
-        if let Some(rate) = cmd.rate_hz {
+        if let Some(rate) = rate_hz {
             param.rate_hz = Some(rate);
-            // A rate change must take effect NOW, not after the old (possibly very long)
-            // period elapses: dropping a channel from 0.01 Hz to 10 Hz would otherwise
-            // sit silent for 100 s before honouring the new rate.
-            if let Some(mut clock) = clock {
-                clock.next_due_t = f64::NEG_INFINITY;
-            }
         }
         if let Some(retention) = cmd.retention {
             param.retention = Some(retention);
         }
-        if let Some(deadband) = cmd.deadband {
+        if let Some(deadband) = deadband {
             param.deadband = Some(deadband);
         }
     }
@@ -304,7 +371,7 @@ fn spawn_engine_health_channels(
 struct ChannelClock {
     /// Next due time, in the channel's domain seconds.
     next_due_t: f64,
-    /// Value at the last *emitted* sample — the deadband reference.
+    /// Value at the last operator-notification sample — the deadband reference.
     last_emitted: Option<f64>,
     /// Port handle, resolved once. Resolving by name every sample is exactly what
     /// `ResolvedPort` exists to avoid.
@@ -335,45 +402,26 @@ struct SamplingPlan {
 /// retained registry uses that pair as its key; sampling the same key twice
 /// only duplicates work and makes the channel cap lie about useful data.
 ///
-/// Authored/API declarations win over runtime-discovered declarations.  The
-/// latter are only an automatic projection, while an explicit `Parameter` is
-/// the authoritative policy for rate, retention, metadata, and source.
+/// Every channel is an explicit recording declaration. Its `Parameter` owns
+/// rate, retention, metadata, and source policy.
 fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan) -> usize {
-    let mut selected = std::collections::HashMap::<(Entity, String), (bool, u64, Entity)>::new();
+    let mut selected = std::collections::HashMap::<(Entity, String), Entity>::new();
     let mut candidates = 0usize;
 
-    for (entity, parameter, runtime) in world
-        .query::<(Entity, &Parameter, Option<&RuntimePortChannel>)>()
-        .iter(world)
-    {
+    for (entity, parameter) in world.query::<(Entity, &Parameter)>().iter(world) {
         if !parameter.enabled || parameter.name.is_empty() {
             continue;
         }
         candidates += 1;
         let measured = parameter.target.unwrap_or(entity);
         let key = (measured, parameter.name.clone());
-        let candidate = (runtime.is_some(), entity.to_bits(), entity);
-        let replace = selected
-            .get(&key)
-            .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1));
-        if replace {
-            selected.insert(key, candidate);
-        }
+        selected.entry(key).or_insert(entity);
     }
 
-    plan.channels = selected
-        .into_values()
-        .map(|(_, _, entity)| entity)
-        .collect();
+    plan.channels = selected.into_values().collect();
     plan.channels.sort_by_key(|entity| entity.to_bits());
     candidates.saturating_sub(plan.channels.len())
 }
-
-/// Marks a channel generated from a live public output.  It carries no authored
-/// data: the port backend remains the source for existence and value, while the
-/// normal [`Parameter`] sampler supplies cadence, retention, API, and history.
-#[derive(Component, Debug, Clone)]
-struct RuntimePortChannel;
 
 /// Last metadata applied to a retained signal by a telemetry channel.
 ///
@@ -387,125 +435,31 @@ struct RetainedSignalMeta {
     unit: String,
 }
 
-/// Bounded discovery cadence. Port values sample at the fixed telemetry rate;
-/// topology need only be rediscovered shortly after a spawn/despawn, not every
-/// fixed step. At 64 Hz this is a quarter-second maximum attach delay.
-#[derive(Resource, Default)]
-struct RuntimePortDiscovery {
-    ticks_until_scan: u8,
-}
-
-/// Discover every currently readable public output and materialize its sampling
-/// channel.  This is deliberately runtime-only: spawned systems begin exposing
-/// telemetry on the next fixed step and no USD scene needs a telemetry tag.
-///
-/// A dedicated channel entity lets one physical component expose every output
-/// despite `Parameter` itself being a one-per-entity component.  Existing
-/// explicitly-created channels win by `(target, port)` so API users retain a
-/// deliberate rate/retention override without duplicated samples.
-fn discover_runtime_port_channels(world: &mut World) {
-    let due = {
-        let mut discovery = world.resource_mut::<RuntimePortDiscovery>();
-        if discovery.ticks_until_scan > 0 {
-            discovery.ticks_until_scan -= 1;
-            false
-        } else {
-            discovery.ticks_until_scan = 15;
-            true
-        }
-    };
-    if !due {
-        return;
-    }
-    let Some(ports) = world.get_resource::<PortRegistry>().cloned() else {
-        return;
-    };
-    let existing: std::collections::HashSet<(Entity, String)> = world
-        .query::<&Parameter>()
-        .iter(world)
-        .filter_map(|p| match (&p.target, &p.source) {
-            (Some(target), ChannelSource::Port(port)) => Some((*target, port.clone())),
-            _ => None,
-        })
-        .collect();
-    let entities: Vec<Entity> = world.query::<Entity>().iter(world).collect();
-    let mut discovered = Vec::new();
-    for entity in entities {
-        // Streamed terrain tiles, collider rings, and scatter are implementation
-        // detail. Publishing every internal output makes their lifecycle look like
-        // user telemetry and turns LOD churn into a growing sampling plan. An
-        // authored or explicitly-created `Parameter` remains available when a
-        // caller genuinely wants to observe a system-owned entity.
-        if world.get::<lunco_core::SystemManaged>(entity).is_some()
-            // Model outputs are already retained by `lunco-cosim`, which is the
-            // producer that holds their composed USD metadata. Sampling them
-            // again through the generic port surface would produce an ungrouped
-            // duplicate, not another observable.
-            || world
-                .get::<lunco_signal::WholesaleSignalSource>(entity)
-                .is_some()
-        {
-            continue;
-        }
-        for port in ports.entity_ports(world, entity) {
-            if !matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-                || existing.contains(&(entity, port.name.clone()))
-            {
-                continue;
-            }
-            discovered.push((entity, port.name));
-        }
-    }
-    for (target, port) in discovered {
-        // Source lifecycle owns the telemetry lifecycle, regardless of where
-        // this dedicated sampling entity lives.
-        if let Ok(mut source) = world.get_entity_mut(target) {
-            source.insert(lunco_signal::SignalSource);
-        }
-        world.spawn((
-            RuntimePortChannel,
-            Name::new(format!("telemetry:{port}")),
-            Parameter {
-                name: port.clone(),
-                unit: String::new(),
-                description: None,
-                source: ChannelSource::Port(port),
-                target: Some(target),
-                rate_hz: None,
-                enabled: true,
-                deadband: None,
-                retention: None,
-            },
-        ));
-    }
-}
-
-/// Runtime-discovered channels belong to the entity whose port they sample.  Retire those
-/// channel entities at the source lifecycle boundary so a scene reload cannot leave a
-/// channel pointing at a recycled or despawned entity.
-fn despawn_runtime_channels_for_removed_source(
-    trigger: On<Remove, lunco_signal::SignalSource>,
-    channels: Query<(Entity, &Parameter), With<RuntimePortChannel>>,
-    mut commands: Commands,
-) {
-    for (channel, parameter) in &channels {
-        if parameter.target == Some(trigger.entity) {
-            commands.entity(channel).try_despawn();
-        }
-    }
-}
-
 /// Cheap change detector in front of the exclusive sampler: any added/changed/
 /// removed `Parameter` or `TimeBinding` invalidates the plan. Runs on normal
 /// (parallel) system params — the archetype-level `Changed` check and the
 /// removal inboxes are near-free when nothing changed, which is every tick of
 /// steady state.
 fn mark_sampling_plan_dirty(
+    mut clocks: ParamSet<(
+        Query<&mut ChannelClock, Changed<Parameter>>,
+        Query<&mut ChannelClock, (With<Parameter>, Changed<TimeBinding>)>,
+    )>,
     changed: Query<(), Or<(Changed<Parameter>, Changed<TimeBinding>)>>,
     mut removed_params: RemovedComponents<Parameter>,
     mut removed_bindings: RemovedComponents<TimeBinding>,
     mut plan: ResMut<SamplingPlan>,
 ) {
+    // `ChannelClock` caches source resolution, the due time, and the last emitted
+    // value used by deadband. Any authored Parameter or clock-binding change makes
+    // all of that state belong to the old declaration, so reset it before sampling.
+    for mut clock in clocks.p0().iter_mut() {
+        *clock = ChannelClock::default();
+    }
+    for mut clock in clocks.p1().iter_mut() {
+        *clock = ChannelClock::default();
+    }
+
     let removed = removed_params.read().next().is_some() | removed_bindings.read().next().is_some();
     if removed || !changed.is_empty() {
         plan.dirty = true;
@@ -516,6 +470,12 @@ pub struct LunCoTelemetryPlugin;
 
 impl Plugin for LunCoTelemetryPlugin {
     fn build(&self, app: &mut App) {
+        // Telemetry is a simulation subsystem, so it requires the same unified
+        // mission-time spine as every other fixed-clock consumer. Do not let a
+        // missing clock turn into a second, implicit time contract.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         app.register_settings_section::<TelemetrySettings>();
         // The retention plane. `SignalRegistry` is the ring buffer every plot surface
         // already reads — routing samples into it is what makes telemetry both *retained*
@@ -531,9 +491,7 @@ impl Plugin for LunCoTelemetryPlugin {
         // render-free intent, written by whichever app owns selection and read by
         // whatever displays channels. Empty here in a headless run — nothing selects.
         app.init_resource::<lunco_signal::TelemetryFocus>();
-        app.init_resource::<RuntimePortDiscovery>();
         app.add_observer(retain_sample);
-        app.add_observer(despawn_runtime_channels_for_removed_source);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
         register_all_commands(app);
@@ -556,7 +514,6 @@ impl Plugin for LunCoTelemetryPlugin {
             // machine, a flood on an uncapped headless loop) and replay would diverge.
             FixedUpdate,
             (
-                discover_runtime_port_channels,
                 // Change-driven plan maintenance — the sampler itself never scans
                 // the channel set; it walks the cached plan.
                 mark_sampling_plan_dirty,
@@ -630,6 +587,7 @@ fn retain_sample(
                 unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
                 provenance: Some("telemetry".to_string()),
                 group_path: None,
+                exposure: Default::default(),
             },
         );
         commands.entity(s.channel).try_insert(expected_meta);
@@ -651,53 +609,28 @@ fn drop_signal_of_removed_channel(
     signals.deactivate_signal(&lunco_signal::SignalRef::new(measured, param.name.clone()));
 }
 
-/// One sampling pass. Public so a host can drive it directly (tests, a batch runner).
-pub fn sample_parameters(world: &mut World) {
-    let settings = world
-        .get_resource::<TelemetrySettings>()
-        .copied()
-        .unwrap_or_default();
+/// One sampling pass owned by [`LunCoTelemetryPlugin`].
+fn sample_parameters(world: &mut World) {
+    // These resources are installed by the plugin. A missing one is an integration
+    // error, not a reason to invent telemetry settings or a second simulation clock.
+    let settings = *world.resource::<TelemetrySettings>();
     if !settings.enabled {
         return;
     }
 
     // Absolute epoch for wall-clock labelling; the per-channel domain gives the
-    // precise timebase (see `SampledParameter::sim_secs`). Graceful without the time
-    // spine so this plugin is safe in a spine-less app.
-    // The clock. Normally the `lunco-time` spine; without it, fall back to the fixed
-    // schedule's own accumulated time.
-    //
-    // The fallback is NOT cosmetic. `WorldTime::default()` has `sim_secs == 0`, so a
-    // spine-less app would see a clock that never advances — every channel would fire
-    // exactly once and then never come due again. That failure is silent (telemetry
-    // just stops), which is the worst kind.
-    let world_time = world
-        .get_resource::<WorldTime>()
-        .cloned()
-        .unwrap_or_else(|| {
-            let elapsed = world
-                .get_resource::<Time<Fixed>>()
-                .map(|t| t.elapsed_secs_f64())
-                .unwrap_or(0.0);
-            WorldTime {
-                sim_secs: elapsed,
-                ..Default::default()
-            }
-        });
+    // precise timebase (see `SampledParameter::sim_secs`). Both come from the
+    // unified mission-time spine installed above.
+    let world_time = world.resource::<WorldTime>().clone();
     // The sampling plan: which entities to visit. Rebuilt ONLY when the channel
     // set changed (see `mark_sampling_plan_dirty`) — steady state pays a Vec
     // walk, not a query + per-channel `Parameter` clone. The plan is taken OUT
     // of the world for the pass (reinserted below) so the loop can borrow
-    // `&World` freely. A host driving this function directly without the plugin
-    // has no plan resource and gets a fresh scan every call — the old behavior.
-    let taken_plan = world.remove_resource::<SamplingPlan>();
-    // Whether to give the plan back afterwards: only when the plugin owns it —
-    // a plugin-less world has no dirty-marker, so caching there would go stale.
-    let plan_is_owned = taken_plan.is_some();
-    let mut plan = taken_plan.unwrap_or(SamplingPlan {
-        channels: Vec::new(),
-        dirty: true,
-    });
+    // `&World` freely. The plugin owns this cache; a missing plan is an
+    // integration error rather than a reason to rescan under different semantics.
+    let mut plan = world
+        .remove_resource::<SamplingPlan>()
+        .expect("LunCoTelemetryPlugin requires its SamplingPlan resource");
     if plan.dirty {
         let duplicate_count = rebuild_sampling_plan(world, &mut plan);
         if duplicate_count > 0 {
@@ -713,9 +646,10 @@ pub fn sample_parameters(world: &mut World) {
     // pass instead of cloning its HashMap every fixed tick — the loop only reads
     // it, and it is reinserted before any event fires. (The resolver rewrites it
     // every frame anyway, so the remove/insert changes no change-detection story.)
-    let resolved_taken = world.remove_resource::<ResolvedDomains>();
-    let resolved_empty = ResolvedDomains::default();
-    let resolved_domains = resolved_taken.as_ref().unwrap_or(&resolved_empty);
+    let resolved_taken = world
+        .remove_resource::<ResolvedDomains>()
+        .expect("LunCoTelemetryPlugin requires lunco_time::ResolvedDomains");
+    let resolved_domains = &resolved_taken;
 
     if plan.channels.len() > settings.max_channels {
         warn_once!(
@@ -742,6 +676,22 @@ pub fn sample_parameters(world: &mut World) {
         if !param.enabled || param.name.is_empty() {
             continue;
         }
+        if let Some(deadband) = param.deadband {
+            if !TelemetryDeadband::is_valid_tolerance(deadband) {
+                warn_once!(
+                    "telemetry: channel '{}' has invalid explicit deadband {}; sampling is skipped until a finite non-negative value is authored",
+                    param.name,
+                    deadband
+                );
+                continue;
+            }
+        } else if !settings.default_deadband.is_valid() {
+            warn_once!(
+                "telemetry: channel '{}' has no deadband and the subsystem default is invalid; sampling is skipped until the default is corrected",
+                param.name
+            );
+            continue;
+        }
         let binding = entity_ref.get::<TimeBinding>();
 
         // The channel's OWN time. This is the whole clock-binding feature.
@@ -766,7 +716,12 @@ pub fn sample_parameters(world: &mut World) {
                 }
             });
 
-        let rate = effective_rate(param, &settings);
+        let Some(rate) = effective_rate(param, &settings) else {
+            // An explicit invalid rate is an invalid channel declaration. Do not
+            // replace it with the subsystem default: that would hide an authoring
+            // error and silently substitute an implicit rate.
+            continue;
+        };
         let measured = param.target.unwrap_or(entity);
         let Some(value) = read_value(world, measured, param, &mut clock) else {
             // Unreadable (port not resolvable, bad reflect path, unsupported type).
@@ -776,40 +731,43 @@ pub fn sample_parameters(world: &mut World) {
             continue;
         };
 
-        // Deadband: numeric values that haven't moved don't get sent.
+        // An authored absolute deadband is an explicit per-channel override;
+        // otherwise use the subsystem's shared absolute/relative policy.
         let numeric = numeric_of(&value);
-        let suppressed = match (param.deadband, numeric, clock.last_emitted) {
-            (Some(db), Some(v), Some(last)) => (v - last).abs() < db,
-            _ => false,
+        let changed = match (param.deadband, numeric, clock.last_emitted) {
+            (Some(db), Some(v), Some(last)) => (v - last).abs() > db,
+            (None, Some(v), Some(last)) => settings.default_deadband.changed(last, v),
+            _ => true,
         };
 
-        if !suppressed {
+        if changed {
             if let Some(v) = numeric {
                 clock.last_emitted = Some(v);
             }
-            samples.push(SampledParameter {
-                channel: entity,
-                name: param.name.clone(),
-                value,
-                unit: param.unit.clone(),
-                timestamp: world_time.epoch_jd,
-                sim_secs: t,
-                // The MEASURED entity, not the channel entity — "whose value is this" is what
-                // a subscriber needs to tell two rovers' `motor_current` apart.
-                source: measured,
-            });
         }
+
+        // Recording is clock-driven; `changed` is only the operator/API
+        // notification decision. Keeping both on the sample prevents a
+        // deadband from making a time-series appear frozen.
+        samples.push(SampledParameter {
+            channel: entity,
+            name: param.name.clone(),
+            value,
+            unit: param.unit.clone(),
+            timestamp: world_time.epoch_jd,
+            sim_secs: t,
+            // The MEASURED entity, not the channel entity — "whose value is this" is what
+            // a subscriber needs to tell two rovers' `motor_current` apart.
+            source: measured,
+            changed,
+        });
 
         advance(&mut clock, t, rate);
         clock_writes.push((entity, clock));
     }
 
-    if let Some(r) = resolved_taken {
-        world.insert_resource(r);
-    }
-    if plan_is_owned {
-        world.insert_resource(plan);
-    }
+    world.insert_resource(resolved_taken);
+    world.insert_resource(plan);
 
     for (entity, clock) in clock_writes {
         if let Ok(mut e) = world.get_entity_mut(entity) {
@@ -826,10 +784,25 @@ pub fn sample_parameters(world: &mut World) {
 ///
 /// You cannot sample faster than the schedule that does the sampling. Asking for more
 /// doesn't oversample — it aliases, silently, which is worse than being told.
-fn effective_rate(param: &Parameter, settings: &TelemetrySettings) -> f64 {
+fn effective_rate(param: &Parameter, settings: &TelemetrySettings) -> Option<f64> {
     let requested = param.rate_hz.unwrap_or(settings.default_rate_hz);
     if !requested.is_finite() || requested <= 0.0 {
-        return settings.default_rate_hz;
+        if param.rate_hz.is_some() {
+            warn_once!(
+                "telemetry: channel '{}' has invalid explicit rate {} Hz; sampling is skipped \
+                 until a finite positive rate is authored",
+                param.name,
+                requested
+            );
+        } else {
+            warn_once!(
+                "telemetry: channel '{}' has no rate and TelemetrySettings::default_rate_hz \
+                 ({}) is invalid; sampling is skipped until the setting is corrected",
+                param.name,
+                requested
+            );
+        }
+        return None;
     }
     if requested > lunco_core::FIXED_HZ {
         warn_once!(
@@ -839,9 +812,41 @@ fn effective_rate(param: &Parameter, settings: &TelemetrySettings) -> f64 {
             requested,
             lunco_core::FIXED_HZ
         );
-        return lunco_core::FIXED_HZ;
+        return Some(lunco_core::FIXED_HZ);
     }
-    requested
+    Some(requested)
+}
+
+/// Validate a rate arriving through the runtime command surface.
+///
+/// `None` means the command is rejected and the previous setting remains intact.
+/// A rate above the fixed schedule is representable input but cannot be executed,
+/// so it is stored as the authoritative fixed-step ceiling after warning.
+fn accepted_command_rate(rate: f64, subject: &str) -> Option<f64> {
+    if !rate.is_finite() || rate <= 0.0 {
+        warn!("telemetry: rejecting {subject} rate {rate} Hz; it must be finite and positive");
+        return None;
+    }
+    if rate > lunco_core::FIXED_HZ {
+        warn!(
+            "telemetry: {subject} rate {rate} Hz exceeds the fixed-step ceiling of {} Hz; \
+             storing the ceiling",
+            lunco_core::FIXED_HZ
+        );
+        return Some(lunco_core::FIXED_HZ);
+    }
+    Some(rate)
+}
+
+/// Validate an absolute deadband arriving through the runtime command surface.
+fn accepted_channel_deadband(deadband: f64, subject: &str) -> Option<f64> {
+    if !TelemetryDeadband::is_valid_tolerance(deadband) {
+        warn!(
+            "telemetry: rejecting {subject} deadband {deadband}; it must be finite and non-negative"
+        );
+        return None;
+    }
+    Some(deadband)
 }
 
 /// Advance the due time by one period, never into the past.
@@ -1004,6 +1009,7 @@ mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
     use lunco_core::architecture::Port;
+    use lunco_core::ports::PortDirection;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1012,6 +1018,15 @@ mod tests {
 
     #[derive(Component)]
     struct TestDeclaredOutput;
+
+    #[derive(Component)]
+    struct AdvancesPerFixedStep;
+
+    fn advance_test_ports(mut ports: Query<&mut Port, With<AdvancesPerFixedStep>>) {
+        for mut port in &mut ports {
+            port.value += 1.0;
+        }
+    }
 
     fn list_test_output(world: &World, entity: Entity, out: &mut Vec<lunco_core::ports::PortRef>) {
         if let Some(source) = world.get::<TestOutput>(entity) {
@@ -1088,6 +1103,7 @@ mod tests {
         // `~/.lunco/settings.json`. Asserted belt-and-braces: the master-switch test below
         // writes `enabled: false`, and that once escaped into the real config.
         app.insert_resource(TelemetrySettings::default());
+        app.add_systems(FixedUpdate, advance_test_ports);
         app
     }
 
@@ -1107,7 +1123,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
         app.add_observer(move |trigger: On<SampledParameter>| {
-            sink.lock().unwrap().push(trigger.event().clone());
+            if trigger.event().changed {
+                sink.lock().unwrap().push(trigger.event().clone());
+            }
         });
         seen
     }
@@ -1170,10 +1188,33 @@ mod tests {
     }
 
     #[test]
-    fn persisted_settings_use_only_the_current_shape() {
+    fn persisted_settings_require_the_current_shape() {
         let value = serde_json::to_value(TelemetrySettings::default()).unwrap();
         assert!(value.get("schema_version").is_none());
         assert!(serde_json::from_value::<TelemetrySettings>(value).is_ok());
+
+        let missing_current_deadband = serde_json::json!({
+            "default_rate_hz": 5.0,
+            "max_channels": 2048,
+            "default_retention": 1500,
+            "enabled": true
+        });
+        assert!(
+            serde_json::from_value::<TelemetrySettings>(missing_current_deadband).is_err(),
+            "a persisted section missing a current field must be rejected, not migrated"
+        );
+
+        let invalid_deadband = serde_json::json!({
+            "default_rate_hz": 5.0,
+            "max_channels": 2048,
+            "default_retention": 1500,
+            "enabled": true,
+            "default_deadband": { "atol": -1.0, "rtol": 0.001 }
+        });
+        assert!(
+            serde_json::from_value::<TelemetrySettings>(invalid_deadband).is_err(),
+            "a persisted deadband with an invalid tolerance must be rejected"
+        );
     }
 
     #[test]
@@ -1186,27 +1227,6 @@ mod tests {
             "schema_version": 1
         });
         assert!(serde_json::from_value::<TelemetrySettings>(value).is_err());
-    }
-
-    #[test]
-    fn a_live_port_is_discovered_without_a_usd_channel_declaration() {
-        let mut app = app();
-        app.init_resource::<PortRegistry>();
-        app.world_mut()
-            .resource_mut::<PortRegistry>()
-            .register(TEST_OUTPUT_BACKEND);
-        let source = app.world_mut().spawn(TestOutput(7.5)).id();
-        // Discovery runs before the normal cached sampler in the same fixed
-        // schedule; a plain runtime port becomes observable without Parameter
-        // or USD telemetry data on the source entity.
-        step_fixed(&mut app, 2);
-        let signal = lunco_signal::SignalRef::new(source, "value".to_string());
-        let history = app
-            .world()
-            .resource::<lunco_signal::SignalRegistry>()
-            .scalar_history(&signal)
-            .expect("runtime port telemetry must exist");
-        assert_eq!(history.samples.back().unwrap().value, 7.5);
     }
 
     #[test]
@@ -1253,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn discovered_port_channels_follow_source_lifecycle() {
+    fn no_implicit_port_is_recorded() {
         let mut app = app();
         app.init_resource::<PortRegistry>();
         app.world_mut()
@@ -1263,73 +1283,31 @@ mod tests {
 
         step_fixed(&mut app, 2);
 
-        let channel = {
-            let mut channels = app
-                .world_mut()
-                .query::<(Entity, &Parameter, &RuntimePortChannel)>();
-            channels
-                .iter(app.world())
-                .find(|(_, parameter, _)| parameter.target == Some(source))
-                .map(|(entity, _, _)| entity)
-                .expect("runtime discovery must create a channel for the source")
-        };
-        assert!(app.world().get_entity(channel).is_ok());
-
-        app.world_mut().despawn(source);
-        app.update();
-
+        let signal = lunco_signal::SignalRef::new(source, "value");
         assert!(
-            app.world().get_entity(channel).is_err(),
-            "a scene source must not leave its runtime channel behind"
-        );
-    }
-
-    /// Runtime discovery is for the user-facing simulation surface, not the
-    /// thousands of transient terrain/collider implementation entities. Those
-    /// entities remain observable when an author deliberately adds a
-    /// `Parameter`, but must not silently grow the global sampling plan.
-    #[test]
-    fn system_managed_ports_are_not_auto_discovered_as_telemetry() {
-        let mut app = app();
-        app.init_resource::<PortRegistry>();
-        app.world_mut()
-            .resource_mut::<PortRegistry>()
-            .register(TEST_OUTPUT_BACKEND);
-        app.world_mut()
-            .spawn((TestOutput(7.5), lunco_core::SystemManaged));
-
-        step_fixed(&mut app, 2);
-
-        let mut channels = app.world_mut().query::<&RuntimePortChannel>();
-        assert_eq!(
-            channels.iter(app.world()).count(),
-            0,
-            "system-managed entities must not become implicit telemetry channels"
+            app.world()
+                .resource::<lunco_signal::SignalRegistry>()
+                .scalar_history(&signal)
+                .is_none(),
+            "a port becomes telemetry only after an explicit channel is requested"
         );
     }
 
     #[test]
-    fn duplicate_declarations_for_one_model_signal_use_the_explicit_channel() {
+    fn duplicate_channel_declarations_are_collapsed() {
         let mut world = World::new();
         let model = world.spawn_empty().id();
-        let runtime = world
-            .spawn((
-                RuntimePortChannel,
-                Parameter {
-                    name: "soc".into(),
-                    target: Some(model),
-                    ..Default::default()
-                },
-            ))
-            .id();
-        let authored = world
-            .spawn(Parameter {
-                name: "soc".into(),
-                target: Some(model),
-                rate_hz: Some(2.0),
-                ..Default::default()
-            })
-            .id();
+        world.spawn(Parameter {
+            name: "soc".into(),
+            target: Some(model),
+            ..Default::default()
+        });
+        world.spawn(Parameter {
+            name: "soc".into(),
+            target: Some(model),
+            rate_hz: Some(2.0),
+            ..Default::default()
+        });
         let mut plan = SamplingPlan {
             dirty: true,
             ..Default::default()
@@ -1338,8 +1316,7 @@ mod tests {
         let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
 
         assert_eq!(duplicates, 1);
-        assert_eq!(plan.channels, vec![authored]);
-        assert_ne!(plan.channels, vec![runtime]);
+        assert_eq!(plan.channels.len(), 1);
     }
 
     #[test]
@@ -1425,9 +1402,8 @@ mod tests {
         );
     }
 
-    /// THE PHASE-1 PROPERTY: rate is PER CHANNEL. A 60 Hz channel and a 10 Hz channel in
-    /// the same world must produce different sample counts. Before this, every channel
-    /// sampled at FIXED_HZ and there was no rate field at all.
+    /// Rate is per channel: a fixed-step channel and a slower channel in the same
+    /// world must produce different sample counts.
     #[test]
     fn each_channel_samples_at_its_own_rate() {
         let mut app = app();
@@ -1435,6 +1411,7 @@ mod tests {
 
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..reflect_channel("fast")
@@ -1442,6 +1419,7 @@ mod tests {
         ));
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(6.0),
                 ..reflect_channel("slow")
@@ -1477,25 +1455,121 @@ mod tests {
             ..reflect_channel("greedy")
         };
         let rate = effective_rate(&p, &TelemetrySettings::default());
-        assert_eq!(rate, lunco_core::FIXED_HZ);
+        assert_eq!(rate, Some(lunco_core::FIXED_HZ));
     }
 
-    /// A non-positive or non-finite rate falls back to the default rather than dividing
-    /// by zero into an infinite due-time.
+    /// A non-positive or non-finite explicit rate is rejected rather than silently
+    /// replacing an authored value with the subsystem default.
     #[test]
-    fn a_nonsense_rate_falls_back_to_the_default() {
+    fn a_nonsense_rate_is_rejected() {
         let s = TelemetrySettings::default();
         for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
             let p = Parameter {
                 rate_hz: Some(bad),
                 ..reflect_channel("bad")
             };
-            assert_eq!(
-                effective_rate(&p, &s),
-                s.default_rate_hz,
-                "rate {bad} must fall back"
-            );
+            assert_eq!(effective_rate(&p, &s), None, "rate {bad} must be rejected");
         }
+    }
+
+    #[test]
+    fn invalid_authored_rate_produces_no_samples() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        app.world_mut().spawn((
+            Port { value: 1.0 },
+            Parameter {
+                rate_hz: Some(0.0),
+                ..reflect_channel("invalid")
+            },
+        ));
+
+        step_fixed(&mut app, 4);
+
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "an invalid explicit rate must not be replaced by the subsystem default"
+        );
+    }
+
+    #[test]
+    fn invalid_command_rate_does_not_replace_the_existing_setting() {
+        let mut app = app();
+        app.world_mut().trigger(ControlTelemetry {
+            channel: None,
+            rate_hz: Some(0.0),
+            ..Default::default()
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<TelemetrySettings>().default_rate_hz,
+            TelemetrySettings::default().default_rate_hz
+        );
+    }
+
+    #[test]
+    fn invalid_command_rate_does_not_create_a_channel() {
+        let mut app = app();
+        let entity = app.world_mut().spawn(Port { value: 1.0 }).id();
+        app.world_mut().trigger(ControlTelemetry {
+            channel: Some("invalid".to_string()),
+            entity: Some(entity),
+            reflect: Some("Port.value".to_string()),
+            rate_hz: Some(f64::NAN),
+            ..Default::default()
+        });
+        app.update();
+
+        let mut channels = app.world_mut().query::<&Parameter>();
+        assert!(
+            channels
+                .iter(app.world())
+                .all(|parameter| parameter.name != "invalid"),
+            "an invalid explicit rate must reject channel creation"
+        );
+    }
+
+    #[test]
+    fn invalid_authored_deadband_produces_no_samples() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        app.world_mut().spawn((
+            Port { value: 1.0 },
+            Parameter {
+                deadband: Some(-1.0),
+                ..reflect_channel("invalid_deadband")
+            },
+        ));
+
+        step_fixed(&mut app, 4);
+
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "an invalid explicit deadband must not be treated as an implicit policy"
+        );
+    }
+
+    #[test]
+    fn invalid_command_deadband_does_not_create_a_channel() {
+        let mut app = app();
+        let entity = app.world_mut().spawn(Port { value: 1.0 }).id();
+        app.world_mut().trigger(ControlTelemetry {
+            channel: Some("invalid_deadband".to_string()),
+            entity: Some(entity),
+            reflect: Some("Port.value".to_string()),
+            deadband: Some(f64::NAN),
+            ..Default::default()
+        });
+        app.update();
+
+        let mut channels = app.world_mut().query::<&Parameter>();
+        assert!(
+            channels
+                .iter(app.world())
+                .all(|parameter| parameter.name != "invalid_deadband"),
+            "an invalid explicit deadband must reject channel creation"
+        );
     }
 
     /// Deadband: a value that isn't moving costs nothing.
@@ -1569,6 +1643,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_default_deadband_suppresses_small_numeric_jitter() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let e = app
+            .world_mut()
+            .spawn((
+                Port { value: 100.0 },
+                Parameter {
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..reflect_channel("acceleration")
+                },
+            ))
+            .id();
+
+        step_fixed(&mut app, 4);
+        let baseline = seen.lock().unwrap().len();
+
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 100.05;
+        step_fixed(&mut app, 4);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            baseline,
+            "the shared default must suppress sub-threshold jitter"
+        );
+
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 100.2;
+        step_fixed(&mut app, 4);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            baseline + 1,
+            "the shared default must retain a meaningful change"
+        );
+    }
+
     /// PHASE 2: samples land in the `SignalRegistry` ring buffer — the same store every
     /// plot surface already reads. Retention and plotting come from one wire-up.
     #[test]
@@ -1578,6 +1695,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 3.0 },
+                AdvancesPerFixedStep,
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     ..reflect_channel("retained")
@@ -1596,7 +1714,10 @@ mod tests {
             hist.len() >= 2,
             "several fixed steps ⇒ several retained samples"
         );
-        assert_eq!(hist.iter().next().unwrap().value, 3.0);
+        assert!(
+            hist.iter().next().unwrap().value >= 3.0,
+            "the advancing test source must retain its initial value range"
+        );
         // Unit metadata rides along so a plot can label its axis.
         assert_eq!(signals.meta(&sig).unwrap().unit.as_deref(), Some("A"));
     }
@@ -1610,6 +1731,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 1.0 },
+                AdvancesPerFixedStep,
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     retention: Some(3),
@@ -1715,6 +1837,22 @@ mod tests {
         let s = app.world().resource::<TelemetrySettings>();
         assert!(!s.enabled);
         assert_eq!(s.default_rate_hz, 4.0);
+    }
+
+    #[test]
+    fn control_telemetry_can_set_the_shared_deadband_defaults() {
+        let mut app = app();
+        app.world_mut().trigger(ControlTelemetry {
+            channel: None,
+            atol: Some(0.01),
+            rtol: Some(0.02),
+            ..Default::default()
+        });
+        app.update();
+
+        let settings = app.world().resource::<TelemetrySettings>();
+        assert_eq!(settings.default_deadband.atol, 0.01);
+        assert_eq!(settings.default_deadband.rtol, 0.02);
     }
 
     /// The master switch actually stops sampling — not just a flag nobody reads.
@@ -1838,6 +1976,53 @@ mod tests {
             app.world().entity(chan).get::<Parameter>().unwrap().source,
             ChannelSource::Port(_)
         ));
+    }
+
+    #[test]
+    fn direct_parameter_changes_reset_sampling_state() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let channel = app
+            .world_mut()
+            .spawn((
+                Port { value: 1.0 },
+                Parameter {
+                    deadband: Some(1.0),
+                    ..reflect_channel("old_name")
+                },
+            ))
+            .id();
+
+        step_fixed(&mut app, 2);
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .any(|sample| sample.name == "old_name"),
+            "the original declaration must sample"
+        );
+
+        app.world_mut()
+            .entity_mut(channel)
+            .get_mut::<Parameter>()
+            .expect("channel parameter")
+            .name = "new_name".to_string();
+
+        step_fixed(&mut app, 1);
+
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .any(|sample| sample.name == "new_name"),
+            "a changed declaration must not inherit the old deadband reference"
+        );
+        let clock = app
+            .world()
+            .entity(channel)
+            .get::<ChannelClock>()
+            .expect("the changed channel must receive fresh sampling state");
+        assert!(clock.last_emitted.is_some());
     }
 
     /// THE REASON A CHANNEL CAN TARGET ANOTHER ENTITY. `Parameter` is a Component, so an
@@ -2003,6 +2188,7 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn((
             Port { value: 1.0 },
+            AdvancesPerFixedStep,
             Parameter {
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..reflect_channel("t")

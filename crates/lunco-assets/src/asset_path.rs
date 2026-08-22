@@ -70,6 +70,40 @@ pub fn slashed(p: impl AsRef<Path>) -> String {
     p.as_ref().to_string_lossy().replace('\\', "/")
 }
 
+/// Turn a URI-relative path into a native relative path, or reject it.
+///
+/// Asset identities always use `/`, but authors may have created a document on
+/// Windows and written `\\`. Normalize that legacy input *before* creating a
+/// native [`Path`], so the same asset identity names the same file on Windows,
+/// macOS, and Linux. URI paths never name a volume or an absolute path; refusing
+/// those forms here also prevents a source-relative asset from escaping its
+/// registered root.
+pub fn relative_path(reference: &str) -> Option<PathBuf> {
+    let reference = slashed(reference);
+    if reference.is_empty()
+        || reference.starts_with('/')
+        || reference
+            .as_bytes()
+            .get(1)
+            .is_some_and(|colon| *colon == b':')
+    {
+        return None;
+    }
+
+    let mut path = PathBuf::new();
+    for segment in reference.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => return None,
+            // `:` is a volume separator on Windows. Refusing it in a logical
+            // URI component keeps the identity portable to every supported OS.
+            segment if segment.contains(':') || segment.contains('\0') => return None,
+            segment => path.push(segment),
+        }
+    }
+    (!path.as_os_str().is_empty()).then_some(path)
+}
+
 /// Resolve `asset_path`, as named inside the document at `anchor`, to a stable
 /// asset-source-relative identifier.
 ///
@@ -245,6 +279,22 @@ mod tests {
             PathBuf::from("../../a/b")
         );
         assert_eq!(normalize(Path::new("a/./b/../c")), PathBuf::from("a/c"));
+    }
+
+    #[test]
+    fn uri_relative_paths_are_separator_neutral_and_cannot_escape_a_root() {
+        assert_eq!(
+            relative_path(r"sim\scenes\traverse.usda"),
+            Some(PathBuf::from("sim").join("scenes").join("traverse.usda"))
+        );
+        for invalid in [
+            "../scene.usda",
+            "/scene.usda",
+            r"C:\scene.usda",
+            "a/../../b",
+        ] {
+            assert_eq!(relative_path(invalid), None, "{invalid} must be rejected");
+        }
     }
 
     /// The regression the terrain copies had: only `http` was recognised, so every

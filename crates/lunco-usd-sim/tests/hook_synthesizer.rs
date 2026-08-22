@@ -29,6 +29,23 @@ fn emit(net) {
 }
 "#;
 
+const POLICY_WITH_PLAN: &str = r#"
+fn emit(net) {
+    let layout = #{ units: [], members: [] };
+    for unit in net.layout.units {
+        layout.units.push(#{ name: unit.name, x: unit.x + 25, y: unit.y });
+    }
+    for member in net.layout.members {
+        layout.members.push(#{ path: member.path, x: member.x + 40, y: member.y });
+    }
+    #{
+        source: "model " + net.model_name + "\nequation\nend " + net.model_name + ";\n",
+        units: net.units,
+        layout: layout,
+    }
+}
+"#;
+
 fn stage(fixture: &str) -> lunco_usd_bevy::CanonicalStage {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -89,6 +106,40 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     assert!(synthesized.source.contains("input Real drive_left;"));
     assert!(synthesized.inputs.contains("drive_left"));
     assert!(synthesized.outputs.contains("soc"));
+}
+
+#[test]
+fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
+    lunco_hooks_rhai::register_rhai_hook("synth.test-plan", "emit", POLICY_WITH_PLAN, true)
+        .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "test-plan");
+    let synthesizer = registry.get("test-plan").expect("registered").clone();
+
+    let stage = stage("electrical_network.usda");
+    let view = stage.view();
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let classes = fixture_classes();
+    let ctx = SynthContext { classes: &classes };
+
+    let outcome = synthesizer
+        .synthesize(&view, &root, "Rig_Electrical_System", &ctx)
+        .expect("the policy result is valid");
+    let SynthOutcome::Ready(synthesized) = outcome else {
+        panic!("the fixture is a network and its classes resolve");
+    };
+
+    assert_eq!(synthesized.units.len(), 1);
+    assert_eq!(
+        synthesized.units[0].component_paths,
+        vec!["/Rig/Battery", "/Rig/Motor"]
+    );
+    assert_eq!(
+        synthesized.layout.member_positions["/Rig/Battery"].0, -60,
+        "the policy-owned placement is applied rather than recomputed"
+    );
+    assert!(synthesized.source.contains("model Rig_Electrical_System"));
 }
 
 #[test]

@@ -578,7 +578,7 @@ impl Panel for ExperimentsPanel {
                 .num_columns(7)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.weak("👁").on_hover_text(
+                    ui.weak("View").on_hover_text(
                         "Visibility in the currently focused plot tab. \
                          Each Plot Window keeps its own checked-runs set, \
                          so a checkbox here only affects the active plot. \
@@ -683,12 +683,12 @@ impl Panel for ExperimentsPanel {
                                             rerun = Some(row.id);
                                             ui.close();
                                         }
-                                        if ui.button("📋 Duplicate into Setup").on_hover_text("Load this run's setup into the draft so you can tweak it").clicked() {
+                                        if ui.button("Duplicate into Setup").on_hover_text("Load this run's setup into the draft so you can tweak it").clicked() {
                                             load_into_draft = Some(row.id);
                                             ui.close();
                                         }
                                         if ui
-                                            .button("💾 Export CSV…")
+                                            .button("Export CSV…")
                                             .on_hover_text(
                                                 "Save this run's full trajectory \
                                                  (time + every recorded variable) \
@@ -1887,7 +1887,7 @@ fn render_experiments_plot_inner(
             .tokens
             .text_subdued;
         ui.label(
-            egui::RichText::new("📈 (no model)  ·  0 vars")
+            egui::RichText::new("(no model)  ·  0 vars")
                 .color(col_muted)
                 .small(),
         );
@@ -2095,7 +2095,7 @@ fn render_experiments_plot_inner(
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "📈 {doc_label}  ·  {var_count} var{}",
+                    "{doc_label}  ·  {var_count} var{}",
                     if var_count == 1 { "" } else { "s" }
                 ))
                 .color(col_muted)
@@ -2115,7 +2115,7 @@ fn render_experiments_plot_inner(
                     |ui| {
                         ui.set_min_width(240.0);
                         ui.horizontal(|ui| {
-                            ui.label("🔍");
+                            ui.label("Search");
                             ui.add(
                                 egui::TextEdit::singleline(&mut var_filter)
                                     .hint_text("filter…")

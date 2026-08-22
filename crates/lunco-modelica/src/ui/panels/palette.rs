@@ -234,7 +234,7 @@ impl Panel for ComponentPalettePanel {
     }
 
     fn title(&self) -> String {
-        "🧩 Components".into()
+        "Components".into()
     }
 
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
@@ -272,7 +272,7 @@ impl Panel for ComponentPalettePanel {
         let mut clear_all = false;
 
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label("Search");
             let response = ui.add(
                 egui::TextEdit::singleline(&mut new_query)
                     .hint_text("Search components…")

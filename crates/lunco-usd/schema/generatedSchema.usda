@@ -30,8 +30,8 @@ class LunCoEnvironment "LunCoEnvironment" (
     the stage's default prim instead of being smuggled onto a UsdLux light."""
 )
 {
-    float lunco:env:exposureEv100 = 15 (
-        doc = """Camera exposure in EV100. The lunar default (~15) is full
+    float lunco:env:exposureEv100 = 16 (
+        doc = """Camera exposure in EV100. The lunar default (16) is full
         daylight; grazing polar light needs a much lower value (~12.5), and the
         difference between them is the difference between a lit scene and a black
         one."""
@@ -928,18 +928,6 @@ class "LunCoMotorAPI" (
         225 kg·m² of reflected inertia to the wheel — far more than the wheel's own.
         That reflected term is what makes a geared rover feel heavy to accelerate and
         is why this is authored rather than assumed zero."""
-    )
-    float lunco:motor:ratedVoltage (
-        customData = {
-            double min = 0
-            double max = 1000
-            string unit = "V"
-        }
-        doc = """Bus voltage the stall torque and no-load speed are quoted at. The curve
-        scales with it, so a motor on a sagging battery is the same motor with a lower
-        `noLoadSpeed` — which is a thing a power program can compute and a constant
-        cannot. Carried here so the electrical model and the mechanical curve agree on
-        what "full demand" meant."""
     )
     rel lunco:motor:drivenWheel (
         doc = """The WHEEL this motor turns — not the joint.

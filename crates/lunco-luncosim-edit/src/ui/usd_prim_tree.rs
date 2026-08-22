@@ -202,7 +202,7 @@ impl Panel for UsdPrimTreePanel {
         USD_PRIM_TREE_PANEL_ID
     }
     fn title(&self) -> String {
-        "🌲 Prims".into()
+        "Prims".into()
     }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
@@ -222,7 +222,7 @@ impl Panel for UsdPrimTreePanel {
 }
 
 fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    ui.label("The scene's USD structure. Expand ▸ to reach sub-parts; click a part to select it.");
+    ui.label("The scene's USD structure. Expand > to reach sub-parts; click a part to select it.");
     ui.separator();
 
     let selected = ctx
@@ -322,10 +322,10 @@ fn prim_select_label(
     }
 }
 
-/// `<glyph> <name>` — a wrench for a rigid body, else a folder/dot.
+/// `<marker> <name>` — a body marker for a rigid body, else a folder/dot.
 fn prim_label(node: &PrimTreeNode) -> String {
     let glyph = if node.is_body {
-        "🔩"
+        "[body]"
     } else if node.children.is_empty() {
         "·"
     } else {

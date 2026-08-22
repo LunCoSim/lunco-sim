@@ -13,12 +13,53 @@ fn model(path: &str) -> String {
 fn battery_discharge_current_reduces_soc() {
     let source = model("Electrical/Battery.mo");
     assert!(
-        source.contains("der(soc) = p.i / (capacity * 3600.0);"),
+        source.contains("soc_rate = p.i / (capacity * 3600.0);"),
         "Battery Pin.i is negative while supplying positive-current loads, so discharge must reduce SoC"
+    );
+    assert!(
+        source.contains("der(soc) = max(-soc, min(1.0 - soc, soc_rate));"),
+        "finite storage must keep the battery state inside the physical [0, 1] interval"
     );
     assert!(
         source.contains("+ p.i * R_internal"),
         "negative discharge current must lower, not raise, terminal voltage"
+    );
+}
+
+#[test]
+fn electrical_observables_follow_the_physical_power_chain() {
+    let solar = model("Electrical/SolarPanel.mo");
+    assert!(
+        solar.contains("available_power_w = area * efficiency * irradiance * cos_incidence;"),
+        "available PV power must come from sunlight and incidence, before bus loading"
+    );
+    assert!(
+        solar.contains("power_out = -p.i * p.v;"),
+        "delivered PV power must be the solved terminal current times bus voltage"
+    );
+
+    let battery = model("Electrical/Battery.mo");
+    assert!(
+        battery.contains("net_power_w = p.v * p.i;"),
+        "battery net power must use the signed terminal convention"
+    );
+    assert!(
+        battery.contains("charge_power_w = max(0.0, net_power_w);"),
+        "positive battery power must be exposed as charging"
+    );
+    assert!(
+        battery.contains("discharge_power_w = max(0.0, -net_power_w);"),
+        "negative battery power must be exposed as positive discharge"
+    );
+
+    let motor = model("Electrical/DCMotor.mo");
+    assert!(
+        motor.contains("electrical_power = p.i * p.v;"),
+        "motor electrical draw must be solved from its terminal current and voltage"
+    );
+    assert!(
+        motor.contains("heat = max(0.0, electrical_power) * (1.0 - efficiency);"),
+        "motor heat must be the electrical loss, not a second synthetic load"
     );
 }
 

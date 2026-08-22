@@ -17,7 +17,7 @@
 # never on a timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/build_base.usda
-# or start it from the 🎓 Tutorials panel.
+# or start it from the Tutorials panel.
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place. The models
 # arrive as the student spawns them, so none are referenced in-file.

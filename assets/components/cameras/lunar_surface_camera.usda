@@ -18,9 +18,10 @@ def Camera "LunarSurfaceCamera" (
     # 50 mm default is a narrow photographic lens, not a navigation camera.
     float focalLength = 18
 
-    # EV100 = log2(fStop² / time) at ISO 100. f/16 for 44.19 ms is EV12.5.
+    # EV100 = log2(fStop² / time) at ISO 100. f/16 for 3.90625 ms is EV16,
+    # paired with the calibrated 128 klx lunar sun.
     float exposure:fStop = 16
     float exposure:iso = 100
     float exposure:responsivity = 1
-    float exposure:time = 0.04419417
+    float exposure:time = 0.00390625
 }

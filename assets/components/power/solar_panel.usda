@@ -48,8 +48,14 @@ def Xform "SolarPanel" (
     float inputs:panel_normal_x = 0.0
     float inputs:panel_normal_y = 1.0
     float inputs:panel_normal_z = 0.0
+    # `available_power_w` is the sunlight/nameplate production before the
+    # connected bus loads it. `power_out` is the power actually delivered at
+    # the panel terminals, so bus voltage sag belongs in the latter only.
+    float outputs:available_power_w
     float outputs:power_out
     float outputs:cos_incidence
+    float outputs:terminal_voltage_v
+    float outputs:generated_current_a
     custom token connectors:p
 
     float physics:mass = 15.0

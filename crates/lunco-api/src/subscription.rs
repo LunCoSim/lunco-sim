@@ -221,6 +221,12 @@ pub fn sampled_param_observer(
     mut commands: Commands,
 ) {
     let sample = trigger.event();
+    // Histories and graphs retain every due sample. The subscription lane is
+    // intentionally delta-filtered so a quiet channel does not become a
+    // packet stream merely because a plot is open.
+    if !sample.changed {
+        return;
+    }
     // Name/severity filter AND the per-subscription rate cap.
     if !subscriptions.should_send_sample(&sample.name, sample.source.to_bits(), sample.sim_secs) {
         return;

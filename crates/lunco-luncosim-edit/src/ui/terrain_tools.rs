@@ -52,7 +52,7 @@ impl Panel for ToolsPanel {
         PanelId("tools_palette")
     }
     fn title(&self) -> String {
-        "🛠 Tools".into()
+        "Tools".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser

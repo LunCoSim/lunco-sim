@@ -134,7 +134,14 @@
       "template": "ui/rover_hud.html",
       "stylesheet": "ui/rover_hud.css",
       "namespace": "driven-vessel",
+      "bindings": {
+        "autopilot_color": { "source": "autopilot_color" }
+      },
+      "actions": [
+        { "callback": "runtime_toggle_autopilot", "action": "autopilot.toggle" }
+      ],
       "visible_in_perspective": "sandbox_view",
+      "interactive": true,
       "placement": { "mode": "viewport" }
     },
     {

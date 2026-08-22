@@ -916,35 +916,34 @@ fn get_waypoint_positions(
     xml: &str,
     bindings: &TargetBindings,
     poses: &lunco_physics::SimulationPoseQuery,
-) -> Vec<(String, DVec3)> {
-    let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(xml) else {
-        return Vec::new();
-    };
+) -> Option<Vec<(String, DVec3)>> {
+    let value = lunco_autopilot::btcpp_xml::xml_to_value(xml).ok()?;
     let mut targets = Vec::new();
     collect_targets(&value, &mut targets);
 
     let mut positions = Vec::new();
     for t in targets {
-        // 1. Try to parse as "x;y;z" coordinate triple
-        let parts: Vec<&str> = t.split(';').collect();
-        if parts.len() == 3 {
-            if let (Ok(x), Ok(y), Ok(z)) = (
-                parts[0].trim().parse::<f64>(),
-                parts[1].trim().parse::<f64>(),
-                parts[2].trim().parse::<f64>(),
-            ) {
-                positions.push((t, DVec3::new(x, y, z)));
-                continue;
-            }
+        if let Some(position) = parse_coordinate_target(&t) {
+            positions.push((t, position));
+            continue;
         }
-        // 2. Try to resolve as USD prim path
-        if let Some(&entity) = bindings.0.get(&t) {
-            if let Some(pos) = poses.position(entity) {
-                positions.push((t, pos.0));
-            }
-        }
+        let entity = bindings.0.get(&t).copied()?;
+        let position = poses.position(entity)?.0;
+        positions.push((t, position));
     }
-    positions
+    Some(positions)
+}
+
+fn parse_coordinate_target(target: &str) -> Option<DVec3> {
+    let parts: Vec<&str> = target.split(';').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some(DVec3::new(
+        parts[0].trim().parse::<f64>().ok()?,
+        parts[1].trim().parse::<f64>().ok()?,
+        parts[2].trim().parse::<f64>().ok()?,
+    ))
 }
 
 fn get_runtime_waypoint_positions(spec: &lunco_autopilot::AutopilotBehaviorSpec) -> Vec<DVec3> {
@@ -965,9 +964,9 @@ fn route_targets(
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
-        if !targets.is_empty() {
-            return targets;
-        }
+        // Authored XML owns the route whenever it exists. An empty or malformed
+        // authored tree must not silently fall through to a stale runtime spec.
+        return targets;
     }
     spec.and_then(|spec| spec.patrol_waypoints())
         .map(|waypoints| (0..waypoints.len()).map(runtime_waypoint_key).collect())
@@ -1208,17 +1207,26 @@ pub fn draw_waypoint_overlay(
         let label_color = theme.tokens.text;
 
         let targets = route_targets(xml, spec);
-        let authored_route = xml.is_some() && !targets.is_empty();
         let looping = route_loops(xml, spec);
-        let wp_positions = if authored_route {
-            get_waypoint_positions(&xml.expect("authored route has XML").0, bindings, &poses)
+        let Some(wp_positions) = (if let Some(xml) = xml {
+            if targets.is_empty() {
+                continue;
+            }
+            get_waypoint_positions(&xml.0, bindings, &poses)
         } else {
-            spec.map(get_runtime_waypoint_positions)
-                .unwrap_or_default()
-                .into_iter()
-                .enumerate()
-                .map(|(index, position)| (runtime_waypoint_key(index), position))
-                .collect()
+            Some(
+                spec.map(get_runtime_waypoint_positions)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, position)| (runtime_waypoint_key(index), position))
+                    .collect(),
+            )
+        }) else {
+            // Do not label or draw a partial route while a composed target is
+            // unresolved. The USD resolver will make the complete route visible
+            // when its authoritative binding is ready.
+            continue;
         };
         let (cursor, completed) = route_execution(vessel, &q_autopilots);
         let progress = route_visual_state(&targets, reached, cursor, completed, looping);
@@ -1517,7 +1525,9 @@ fn composed_prim_exists(
 /// yields and the player's input is silently swallowed — the rover just keeps driving
 /// its route while you press the keys. Taking the wheel is the universal expectation
 /// for an autopilot, so it is an implicit disengage rather than a separate hotkey
-/// (the canonical Action intent still toggles explicitly).
+/// (the canonical Action intent still toggles explicitly). Thrust is included
+/// because it is the lander's manual engine command; pressing it must also
+/// reclaim a vessel from an autopilot.
 ///
 /// Keyed off the vessel's `ActionState<UserIntent>` — the DATA keymap
 /// (`assets/config/keybindings.json`) — not hardcoded WASD, so a rebound control
@@ -1537,13 +1547,14 @@ pub fn manual_input_disengages_autopilot(
         return; // typing in a panel is not driving
     }
     use lunco_core::UserIntent::*;
-    const DRIVE: [lunco_core::UserIntent; 6] = [
+    const DRIVE: [lunco_core::UserIntent; 7] = [
         MoveForward,
         MoveBackward,
         MoveLeft,
         MoveRight,
         MoveUp,
         MoveDown,
+        Thrust,
     ];
 
     for (link, intents) in q_ctrl.iter() {
@@ -1567,8 +1578,9 @@ pub fn manual_input_disengages_autopilot(
 }
 
 /// Toggle autopilot for the possessed vessel through the canonical Action
-/// intent. The configured F and Space defaults therefore behave identically,
-/// and rebinding `action` requires no editor-side code change.
+/// intent. The default F key is the only autopilot shortcut; vehicle-specific
+/// commands such as the rover brake use their own authored intent and never
+/// reach this handler.
 pub fn handle_autopilot_toggle_intent(
     egui_focus: Res<EguiFocus>,
     avatars: Query<(Entity, &IntentState), With<Avatar>>,
@@ -1605,7 +1617,7 @@ fn on_start_autopilot(
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
     q_route: Query<(
-        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     )>,
     mut registry: ResMut<SessionRegistry>,
@@ -1617,7 +1629,7 @@ fn on_start_autopilot(
     if !autopilot_engaged {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
                 "[autopilot] start ignored for vessel {:?}: no authored movement route",
@@ -1665,7 +1677,7 @@ fn on_toggle_autopilot(
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
     q_route: Query<(
-        Has<lunco_autopilot::usd_tree::BehaviorXml>,
+        Option<&lunco_autopilot::usd_tree::BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
     )>,
     q_gid: Query<&GlobalEntityId>,
@@ -1685,7 +1697,7 @@ fn on_toggle_autopilot(
     } else {
         let has_route = q_route
             .get(vessel)
-            .is_ok_and(|(has_xml, spec)| has_authored_movement_route(has_xml, spec));
+            .is_ok_and(|(xml, spec)| has_authored_movement_route(xml, spec));
         if !has_route {
             info!(
                 "[autopilot] F ignored for vessel {:?}: no authored movement route",
@@ -1725,10 +1737,18 @@ fn on_toggle_autopilot(
 /// not get a false "no route" warning; once a spec exists, its actual movement
 /// content is authoritative and an empty/holding tree is still rejected.
 fn has_authored_movement_route(
-    has_xml: bool,
+    xml: Option<&lunco_autopilot::usd_tree::BehaviorXml>,
     spec: Option<&lunco_autopilot::AutopilotBehaviorSpec>,
 ) -> bool {
-    spec.map_or(has_xml, |spec| spec.0.has_motion())
+    if let Some(xml) = xml {
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            return false;
+        };
+        let mut targets = Vec::new();
+        collect_targets(&value, &mut targets);
+        return !targets.is_empty();
+    }
+    spec.is_some_and(|spec| spec.0.has_motion())
 }
 
 register_commands!(
@@ -1779,6 +1799,7 @@ pub enum PathPart {
 /// the rover pose used as the live start of the remaining leg.
 fn route_signature(
     targets: &[String],
+    points: &[(DVec3, bool)],
     smooth: bool,
     progress: &RouteVisualState,
     rover_pos: Option<DVec3>,
@@ -1794,6 +1815,16 @@ fn route_signature(
             .copied()
             .unwrap_or(false)
             .hash(&mut h);
+    }
+    // The target list is the route identity; the resolved positions are the
+    // route geometry. Both belong in the revision so a newly projected marker
+    // or a moved marker rebuilds the ribbon even when the mission XML is
+    // unchanged.
+    for (point, visible) in points {
+        for component in [point.x, point.y, point.z] {
+            component.to_bits().hash(&mut h);
+        }
+        visible.hash(&mut h);
     }
     progress.active_index.hash(&mut h);
     // The live endpoint is physics state, not a cache bucket. Quantising this
@@ -2034,29 +2065,15 @@ pub fn sync_waypoint_path_mesh(
             };
             let mut targets = Vec::new();
             collect_targets(&value, &mut targets);
-            if !targets.is_empty() {
-                (
-                    targets,
-                    None,
-                    route_is_smooth(&xml.0),
-                    route_loops(Some(xml), spec),
-                )
-            } else if let Some(spec) = spec {
-                let Some(waypoints) = spec.patrol_waypoints() else {
-                    continue;
-                };
-                let points = waypoints
-                    .iter()
-                    .map(|waypoint| DVec3::new(waypoint.pos[0], waypoint.pos[1], waypoint.pos[2]))
-                    .collect::<Vec<_>>();
-                let targets = (0..points.len())
-                    .map(runtime_waypoint_key)
-                    .collect::<Vec<_>>();
-                let closed = route_loops(None, Some(spec));
-                (targets, Some(points), false, closed)
-            } else {
+            if targets.is_empty() {
                 continue;
             }
+            (
+                targets,
+                None,
+                route_is_smooth(&xml.0),
+                route_loops(Some(xml), spec),
+            )
         } else if let Some(spec) = spec {
             let Some(waypoints) = spec.patrol_waypoints() else {
                 continue;
@@ -2100,28 +2117,37 @@ pub fn sync_waypoint_path_mesh(
                 })
                 .collect()
         } else {
-            targets
+            let Some(bindings) = bindings else {
+                continue;
+            };
+            let Some(points) = targets
                 .iter()
-                .filter_map(|t| {
-                    let pos = bindings.and_then(|b| b.0.get(t)).and_then(|&entity| {
-                        lunco_core::coords::grid_relative_pose(
-                            entity,
-                            grid_entity,
-                            &q_parents,
-                            &q_grids_only,
-                            &q_spatial,
-                        )
-                        .map(|(position, _)| position)
-                    });
-                    let index = targets.iter().position(|target| target == t);
-                    pos.map(|p| {
-                        (
-                            p,
-                            index
-                                .and_then(|index| progress.visited.get(index).copied())
-                                .unwrap_or(false),
-                        )
+                .map(|target| {
+                    parse_coordinate_target(target).or_else(|| {
+                        bindings.0.get(target).and_then(|&entity| {
+                            lunco_core::coords::grid_relative_pose(
+                                entity,
+                                grid_entity,
+                                &q_parents,
+                                &q_grids_only,
+                                &q_spatial,
+                            )
+                            .map(|(position, _)| position)
+                        })
                     })
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                // A route is atomic: do not draw a partial ribbon from a partial
+                // binding map. The resolver will rebuild it once every composed
+                // target has a live entity and pose.
+                continue;
+            };
+            points
+                .into_iter()
+                .enumerate()
+                .map(|(index, point)| {
+                    (point, progress.visited.get(index).copied().unwrap_or(false))
                 })
                 .collect()
         };
@@ -2135,7 +2161,7 @@ pub fn sync_waypoint_path_mesh(
             // The complete route is independent of rover motion. Only the live
             // blue leg includes the exact solved rover pose in its revision.
             let live_start = (part == PathPart::Remaining).then_some(rover_pos).flatten();
-            let signature = route_signature(&targets, smooth, &progress, live_start)
+            let signature = route_signature(&targets, &pts, smooth, &progress, live_start)
                 ^ (focused as u64)
                 ^ ((surface.has_terrain() as u64) << 1);
             let slice: Vec<DVec3> = match part {
@@ -2487,13 +2513,20 @@ mod tests {
 
     #[test]
     fn pending_authored_xml_is_a_route_until_its_spec_is_derived() {
-        assert!(has_authored_movement_route(true, None));
+        let xml = BehaviorXml(
+            value_to_xml(&serde_json::json!({
+                "kind": "sequence",
+                "children": [{"kind": "drive_to", "target": "/Route/W0"}]
+            }))
+            .unwrap(),
+        );
+        assert!(has_authored_movement_route(Some(&xml), None));
         assert!(!has_authored_movement_route(
-            false,
+            None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::Brake))
         ));
         assert!(has_authored_movement_route(
-            false,
+            None,
             Some(&AutopilotBehaviorSpec::new(BehaviorSpec::DriveTo {
                 target: [1.0, 0.0, 0.0],
                 speed: 0.5,
@@ -2540,12 +2573,14 @@ mod tests {
         let state = route_visual_state(&targets, None, Some(0), false, false);
         let first = route_signature(
             &targets,
+            &[(DVec3::new(1.0, -1_900.0, 0.0), false)],
             false,
             &state,
             Some(DVec3::new(10.001, -1_900.0, 0.0)),
         );
         let second = route_signature(
             &targets,
+            &[(DVec3::new(1.0, -1_900.0, 0.0), false)],
             false,
             &state,
             Some(DVec3::new(10.002, -1_900.0, 0.0)),

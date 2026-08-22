@@ -19,7 +19,7 @@
 
 def Xform "FirstDrive" (
     kind = "assembly"
-    doc = "Take control of a rover and drive it to the glowing flag. Click the rover to possess it, then drive with W/A/S/D; F toggles an authored autopilot route."
+    doc = "Take control of a rover and drive it to the glowing flag. Click the rover to possess it, then drive with W/A/S/D."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {

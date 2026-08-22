@@ -183,10 +183,10 @@ def Xform "Motor" (
     # ceiling bought spin, not travel. A ceiling the tyre can approach is worth more
     # road speed than a ceiling it cannot.
     #
-    # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm; peak mechanical
-    # power (stall·noLoad/4) is ~1.8 kW, which now at least sits under the 2000 W
-    # `inputs:rated_power` below (nothing enforces that rating today — the powertrain
-    # reads only the two curve scalars, `usd-sim/powertrain.rs`).
+    # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm. The mechanical
+    # curve and the electrical facet are separate until the Modelica motor is
+    # shaft-coupled; the electrical nameplate below is therefore calibrated to
+    # the compact rover winding rather than guessed from the base speed tier.
     #
     # ⚠ THE RIM CEILING IS NOT THE ROAD SPEED. `vessels/rovers/rocker_bogie.usda`
     # `Motor_FL` holds the measured table (12 rad/s → 2.71 m/s, 19.5 rad/s →
@@ -219,13 +219,21 @@ def Xform "Motor" (
     # or the motor is rated to sustain more than it can ever produce.
     float lunco:motor:continuousTorque = 0.9
     float inputs:efficiency = 0.85
-    float inputs:rated_power = 2000.0
+    # The current-controlled electrical facet is a compact 28 V, 500 W drive.
+    # This is the continuous electrical nameplate used by the composed Modelica
+    # network; it keeps the Lunokhod winding's ~500 W mechanical envelope and
+    # the 83 Ah pack in the same operating regime. Larger authored windings must
+    # author a different electrical nameplate at their component boundary.
+    float inputs:rated_power = 500.0
     # A small rotor, reflected to the axle multiplied by the ratio SQUARED —
     # 1.2e-4 × 200² ≈ 4.8 kg·m², the same order as the wheel's own ½mr² ≈ 2 kg·m².
     # That reflected inertia is a real part of what a geared rover feels, which is why
     # the ratio is chosen against it and not only against torque — see the winding note.
     float lunco:motor:rotorInertia = 0.00012
-    float lunco:motor:ratedVoltage = 28.0
+    # The electrical facet and the mechanical motor curve share this authored
+    # nameplate voltage. `inputs:*` is the generic Modelica parameter boundary;
+    # a second custom voltage property would be a write with no reader.
+    float inputs:v_rated = 28.0
     # Which drive instance on the wheel's joint the output couples to, when the wheel has
     # one. The wheel target itself is authored per-instance by the vessel — a component
     # cannot know which wheel it is on.
@@ -248,6 +256,11 @@ def Xform "Motor" (
     # observable of the DCMotor facet, so generated electrical islands expose it
     # through their canonical member-output boundary alongside `heat`.
     float outputs:electrical_power
+    # Instantaneous electrical measurements from the same solved terminal. These
+    # are public component outputs, not values reconstructed by the drivetrain.
+    float outputs:terminal_voltage_v
+    float outputs:terminal_current_a
+    float outputs:mechanical_power_w
 
     # --- Telemetry ---
     # Drive command as a RETAINED channel, so "was this motor actually being
@@ -268,11 +281,10 @@ def Xform "Motor" (
     # the component that owns the value); until that exists, this channel states
     # what is true.
     #
-    # `Parameter` is a Component — ONE channel per prim — so this names the one
-    # quantity worth a mnemonic and a unit. Everything else the model exposes
-    # (`heat`, `electrical_power`, and every INTERNAL Modelica variable) is published wholesale under
-    # the `sim.` namespace by `lunco_cosim::telemetry`, which is why there is no
-    # temptation here to invent a channel prim per variable.
+    # The enclosing generated electrical domain admits the authored motor output
+    # ports (`heat`, electrical power, terminal measurements) and presents them
+    # back on this physical Motor prim. Solver-only connector values and wrapper
+    # aliases remain execution data, not operator telemetry.
     #
     # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
     # no dimension. The browser renders that as a blank unit cell rather than a

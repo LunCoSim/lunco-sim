@@ -218,7 +218,7 @@ impl Panel for MissionControl {
                         if ui.small_button("Focus").clicked() {
                             focus = Some(*entity);
                         }
-                        if ui.small_button("🌕 Surface").clicked() {
+                        if ui.small_button("Surface").clicked() {
                             teleport_body_bits = Some(entity.to_bits());
                         }
                     });
@@ -278,11 +278,14 @@ impl Panel for MissionControl {
                                 // TODO(theme): migrate to lunco-theme once the token set covers this.
                                 // "Owned by another session" — unavailable, not broken. Neither
                                 // `error` (nothing failed) nor `warning` (yellow, wrong hue) fits.
-                                ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x4c), "🔒")
-                                    .on_hover_text(format!(
-                                        "Controlled by session {}",
-                                        owner_sess.unwrap_or(0)
-                                    ));
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(0xff, 0x6b, 0x4c),
+                                    "Locked",
+                                )
+                                .on_hover_text(format!(
+                                    "Controlled by session {}",
+                                    owner_sess.unwrap_or(0)
+                                ));
                             } else {
                                 ui.weak("○").on_hover_text("Free to possess");
                             }
@@ -292,7 +295,7 @@ impl Panel for MissionControl {
                             focus = Some(*entity);
                         }
                         if *mine {
-                            if ui.small_button("🚪 Release").clicked() {
+                            if ui.small_button("Release").clicked() {
                                 release = true;
                             }
                         } else {
@@ -301,7 +304,7 @@ impl Panel for MissionControl {
                             let locked = *taken_by_other
                                 && matches!(policy, lunco_core::PossessionPolicy::Exclusive);
                             let resp =
-                                ui.add_enabled(!locked, egui::Button::new("🚗 Possess").small());
+                                ui.add_enabled(!locked, egui::Button::new("Possess").small());
                             if locked {
                                 resp.on_disabled_hover_text(
                                     "Controlled by another player (One-each policy)",
@@ -318,11 +321,11 @@ impl Panel for MissionControl {
             ui.separator();
             ui.heading("Quick Actions");
             if avatar_ent.is_some() {
-                if ui.button("🚀 Release (Free Fly)").clicked() {
+                if ui.button("Release (Free Fly)").clicked() {
                     release = true;
                 }
                 // Return to Orbit — show when avatar is in surface mode.
-                if on_surface && ui.button("🏠 Return to Orbit").clicked() {
+                if on_surface && ui.button("Return to Orbit").clicked() {
                     leave_surface = true;
                 }
             }

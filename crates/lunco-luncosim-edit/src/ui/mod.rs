@@ -287,7 +287,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("sandbox_view"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "🎬 View",
+                    title: "View",
                     description: "Full-screen 3D observation & control mode. Fly the \
                                   camera around the scene and claim an endpoint's \
                                   public input ports. The live sections below show \
@@ -306,7 +306,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("rover_build"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "🏗 Build",
+                    title: "Build",
                     description: "3D scene editor. Spawn objects from the palette, \
                                   select and transform them, and assemble the scene.",
                     shortcuts: vec![
@@ -332,7 +332,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("terrain_sculpt"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "🏔 Terrain",
+                    title: "Terrain",
                     description: "Sculpt the surface. Arm a brush in the Tools palette, \
                                   then click the terrain to raise, dig, or flatten it. \
                                   Edits re-bake the visuals and the collider live.",
@@ -355,7 +355,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("object_builder"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "🧩 Object Builder",
+                    title: "Object Builder",
                     description: "Assemble and edit objects from parts. Navigate the \
                                   object's structure in the tree, attach components from \
                                   the palette, and tune the selected prim's parameters in \
@@ -683,7 +683,7 @@ impl Perspective for ViewPerspective {
         PerspectiveId("sandbox_view")
     }
     fn title(&self) -> String {
-        "🎬 View".into()
+        "View".into()
     }
     fn restores_cached_layout(&self) -> bool {
         false
@@ -711,7 +711,10 @@ impl Perspective for BuildPerspective {
         "⚒ Build".into()
     }
     fn layout_revision(&self) -> u32 {
-        1
+        // Revision 2 adds the default Graphs instance to the bottom-center
+        // split. Existing cached Build layouts must be rebuilt once so the
+        // default is deterministic for every workspace.
+        2
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -747,9 +750,8 @@ impl Perspective for ObjectBuilderPerspective {
     fn id(&self) -> PerspectiveId {
         PerspectiveId("object_builder")
     }
-    // 🧩 renders in the bundled fallback (unlike 🏗, which tofus — see welcome.rs).
     fn title(&self) -> String {
-        "🧩 Object Builder".into()
+        "Object Builder".into()
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -784,7 +786,7 @@ impl Perspective for TerrainPerspective {
         PerspectiveId("terrain_sculpt")
     }
     fn title(&self) -> String {
-        "🏔 Terrain".into()
+        "Terrain".into()
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);

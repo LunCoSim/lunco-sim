@@ -133,7 +133,7 @@ impl Panel for ConsolePanel {
     }
 
     fn title(&self) -> String {
-        "🖥 Console".into()
+        "Console".into()
     }
 
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
@@ -164,7 +164,7 @@ impl Panel for ConsolePanel {
                     .color(muted),
             );
             if ui
-                .small_button("🗑 Clear")
+                .small_button("Clear")
                 .on_hover_text("Drop all console messages")
                 .clicked()
             {
@@ -175,7 +175,7 @@ impl Panel for ConsolePanel {
             // range-selected, so a one-click "copy all" is the reliable path.
             if count > 0
                 && ui
-                    .small_button("📋 Copy")
+                    .small_button("Copy")
                     .on_hover_text("Copy all console messages to the clipboard")
                     .clicked()
             {

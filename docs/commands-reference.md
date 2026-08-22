@@ -1407,7 +1407,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
  `held = true` is "stuck" (the key is down and stays down); `held = false` is
  "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
- The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
+ The named intent is the USD control vocabulary (`forward`, `thrust`, `action`, `yaw_left`,
  …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
  `Controls` profile binds.
 
@@ -1415,7 +1415,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
+| `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`, `thrust`, `action`, `release`, …). |
 | `held` | `bool` |  `true` = hold it down, `false` = release it. |
 | `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command surface). An intent is meaningless without its target: two spawns of one asset are two distinct entities, and a targetless intent is rejected. Over the API this takes the target's `api_id` — the `GlobalEntityId` reported by `ListEntities` — and is resolved to the live entity. |
 

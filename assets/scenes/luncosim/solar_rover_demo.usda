@@ -232,6 +232,7 @@ def Xform "SolarRoverTest" (
             float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_y>
             float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel/Environment.outputs:sun_mount_z>
             float outputs:solar_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:power_out>
+            float outputs:solar_available_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:available_power_w>
             float outputs:solar_incidence.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:cos_incidence>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
         }

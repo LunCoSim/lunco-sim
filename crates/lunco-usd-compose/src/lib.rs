@@ -238,6 +238,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn child_layer_ids_normalize_windows_separators_in_twin_uris() {
+        let source = r#"#usda 1.0
+(
+    subLayers = [
+        @twin://SummerSpaceSchool\sim\scenes\traverse.usda@
+    ]
+)
+"#;
+
+        assert_eq!(
+            child_layer_ids(
+                "twin://SummerSpaceSchool/sim/tutorials/curriculum.usda",
+                source.as_bytes()
+            )
+            .expect("valid curriculum layer"),
+            vec!["twin://SummerSpaceSchool/sim/scenes/traverse.usda"]
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn compose_reads_a_windows_authored_twin_sublayer_on_every_native_os() {
+        let temp = tempfile::tempdir().expect("temporary Twin root");
+        let curriculum = temp.path().join("sim/tutorials/curriculum.usda");
+        let world = temp.path().join("sim/scenes/traverse.usda");
+        std::fs::create_dir_all(curriculum.parent().expect("curriculum parent"))
+            .expect("create curriculum parent");
+        std::fs::create_dir_all(world.parent().expect("world parent"))
+            .expect("create world parent");
+        std::fs::write(
+            &curriculum,
+            r#"#usda 1.0
+(
+    subLayers = [
+        @twin://SummerSpaceSchool\sim\scenes\traverse.usda@
+    ]
+)
+"#,
+        )
+        .expect("write curriculum");
+        std::fs::write(&world, "#usda 1.0\ndef Scope \"Traverse\" {}\n").expect("write world");
+
+        compose_file_to_stage_with_roots(&curriculum, None, Some(temp.path()))
+            .expect("a Windows-authored Twin URI composes on this OS");
+    }
+
+    #[test]
     fn rejects_deep_nesting_before_recursive_parser() {
         let mut source = String::from("#usda 1.0\n");
         for depth in 0..=MAX_USDA_NESTING {

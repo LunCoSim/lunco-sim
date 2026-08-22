@@ -120,8 +120,8 @@ Interest recompute rate is `NetworkConfig.interest_hz` (`sync.rs:586`).
 
 There is **no dedicated policy-broadcast plane**. A `LunCoPolicy` USD prim
 (`lunco:policy:{seam,entry,source,deterministic}`) is authored like any doc op, so it
-persists, is RBAC-gated, and converges — see
-[`scripted_policy.rs`](../../crates/lunco-networking/src/scripted_policy.rs). Policies
+persists, is RBAC-gated, and converges — see the shared scripting policy owner
+([`policy.rs`](../../crates/lunco-scripting/src/policy.rs)). Policies
 activate reactively (`project_policies`) into a non-authoritative
 `ScriptedPolicyRegistry` cache. Hooks ([`lunco-hooks`](../../crates/lunco-hooks)) bind
 the merge order (`MERGE_SEAM`), authorization (`lunco_core::session::AUTHORIZE_HOOK`),

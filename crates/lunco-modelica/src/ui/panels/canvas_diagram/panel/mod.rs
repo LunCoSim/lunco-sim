@@ -22,7 +22,7 @@ impl Panel for CanvasDiagramPanel {
         CANVAS_DIAGRAM_PANEL_ID
     }
     fn title(&self) -> String {
-        "🧩 Canvas Diagram".into()
+        "Canvas Diagram".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center

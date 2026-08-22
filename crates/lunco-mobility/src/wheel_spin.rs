@@ -62,7 +62,11 @@ pub(crate) fn update_wheel_spin(
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        With<lunco_core::ActuatorPorts>,
+        // A raycast wheel is carried by the rigid body immediately above it.
+        // That body may be the vessel root or an articulated rocker/bogie link;
+        // mobility must follow the authored body topology rather than assuming
+        // every wheel hangs directly from the actuator owner.
+        With<RigidBody>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     // The USD-projected motor target for each raycast wheel. The native readback

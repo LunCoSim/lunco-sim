@@ -1,9 +1,11 @@
 //! Routes [`lunco_workbench::BrowserAction::OpenFile`] events with USD
-//! extensions (`.usda`, `.usdc`) into the USD document open pipeline, so
-//! a click on a `.usda` row in the Twin browser opens the file in the
-//! shared USD viewport — same shape as Modelica's
-//! `browser_dispatch::drain_browser_actions`, just gated on a different
-//! filetype.
+//! extensions (`.usda`, `.usdc`) into the USD document open pipeline.
+//!
+//! A browser click means **open this source**, never **replace the running
+//! scene**.  A Twin contains reusable vehicle, material, and support layers as
+//! well as scene roots; treating every layer as a `LoadScene` tore down the
+//! current world when a user merely inspected a referenced rover.  Loading a
+//! world is an explicit Scenarios action.
 //!
 //! ## File partitioning
 //!
@@ -14,17 +16,14 @@
 //!
 //! ## UI-only
 //!
-//! This module just translates browser-panel clicks into calls on the
-//! domain-layer load pipeline. The filesystem read, the `OpenFile`
-//! command observer, and the registry allocate live in
-//! [`crate::commands`] so they also work in headless / sandbox bins
-//! that never add `UsdUiPlugin`.
+//! This module just translates browser-panel clicks into the document-load
+//! pipeline. The filesystem read and registry allocation live in
+//! [`crate::commands`] so they also work in headless / sandbox bins that never
+//! add `UsdUiPlugin`.
 
 use bevy::prelude::*;
 use lunco_workbench::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
-
-use crate::LoadScene;
 
 /// Lower-cased extensions this dispatch recognises as USD files.
 /// `.usdc` (binary) is included so users get a *parser failure*
@@ -47,9 +46,29 @@ fn is_usd_open_file(action: &BrowserAction) -> bool {
     }
 }
 
-/// Drain Twin-browser `OpenFile` actions whose path looks like USD and
-/// hand each off to the domain load pipeline ([`spawn_usd_load`]), which
-/// reads the file and allocates the document idempotently.
+/// Resolve a browser file selection to an on-disk document under `root`.
+///
+/// Browser sections may already know an absolute path, but a selection outside
+/// the active Twin is not a document the current Twin is allowed to open.
+fn browser_document_path(
+    root: &std::path::Path,
+    selected: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let absolute = if selected.is_absolute() {
+        selected.to_path_buf()
+    } else {
+        root.join(selected)
+    };
+    if absolute.strip_prefix(root).is_ok() {
+        Some(absolute)
+    } else {
+        None
+    }
+}
+
+/// Drain Twin-browser `OpenFile` actions whose path looks like USD and hand
+/// each off to the document pipeline ([`crate::commands::spawn_usd_load`]).
+/// This deliberately does not trigger [`crate::LoadScene`].
 pub fn drain_browser_actions_for_usd(world: &mut World) {
     let actions: Vec<BrowserAction> = {
         // Bail gracefully when the workbench's outbox isn't present
@@ -74,10 +93,9 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
         let BrowserAction::OpenFile { relative_path } = action else {
             continue;
         };
-        // An ABSOLUTE path is already resolved and needs no Twin — the Scene
-        // Files section lists a scene's reference closure, whose layers routinely
-        // live in the shipped asset library rather than in the open Twin. Only a
-        // Twin-relative path needs a root to anchor on.
+        // A relative BrowserAction is anchored at the active Twin.  The raw
+        // Files section cannot emit an external relative path, so keep the
+        // document boundary within the user-opened Twin.
         let Some(root) = active_twin.as_ref() else {
             bevy::log::warn!(
                 "BrowserAction::OpenFile (USD) fired with no active Twin: {:?}",
@@ -85,33 +103,43 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
             );
             continue;
         };
-        let abs = if relative_path.is_absolute() {
-            relative_path
-        } else {
-            root.join(&relative_path)
-        };
-        let Ok(rel) = abs.strip_prefix(root).map(std::path::Path::to_path_buf) else {
+        let Some(abs) = browser_document_path(root, &relative_path) else {
+            let selected_display = if relative_path.is_absolute() {
+                relative_path
+            } else {
+                root.join(relative_path)
+            };
             bevy::log::warn!(
                 "BrowserAction::OpenFile (USD) is outside the active Twin: {}",
-                abs.display()
+                selected_display.display()
             );
             continue;
         };
-        let roots = world.resource::<lunco_assets::TwinRoots>();
-        let Some(twin_name) = roots
-            .names()
-            .into_iter()
-            .find(|name| roots.root_for(name).as_ref() == Some(root))
-        else {
-            bevy::log::warn!(
-                "active Twin root is not registered for scene loading: {}",
-                root.display()
-            );
-            continue;
-        };
-        world.trigger(LoadScene {
-            path: lunco_assets::twin_uri(twin_name, rel),
-            root_prim: String::new(),
-        });
+        crate::commands::spawn_usd_load(world, abs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_usd_selection_stays_within_the_active_twin() {
+        let root = std::env::temp_dir()
+            .join("lunco-browser-dispatch")
+            .join("twin");
+        let rover = root.join("sim").join("rovers").join("lunokhod2.usda");
+        let traverse = root.join("sim").join("scenes").join("traverse.usda");
+        let outside = root
+            .parent()
+            .expect("test root has a parent")
+            .join("solar_system.usda");
+
+        assert_eq!(
+            browser_document_path(&root, std::path::Path::new("sim/rovers/lunokhod2.usda")),
+            Some(rover)
+        );
+        assert_eq!(browser_document_path(&root, &traverse), Some(traverse));
+        assert_eq!(browser_document_path(&root, &outside), None,);
     }
 }

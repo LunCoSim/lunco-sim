@@ -265,6 +265,10 @@ impl Plugin for SandboxUiPlugin {
                 Startup,
                 |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
                     layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
+                    layout.open_instance(
+                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
+                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+                    );
                 },
             )
             .add_systems(
@@ -411,6 +415,10 @@ fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) ->
 fn on_runtime_ui_action(
     trigger: On<runtime_exposure::RuntimeUiAction>,
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
+    q_control: Query<
+        &lunco_controller::ControllerLink,
+        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
+    >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut commands: Commands,
@@ -447,6 +455,18 @@ fn on_runtime_ui_action(
         }
         runtime_exposure::RuntimeUiActionKind::DismissTerrainOverlay => {
             commands.trigger(DismissTerrainOverlay)
+        }
+        runtime_exposure::RuntimeUiActionKind::ToggleAutopilot => {
+            let Ok(link) = q_control.single() else {
+                report_runtime_ui_failure(
+                    &mut commands,
+                    "No locally controlled vessel is available",
+                );
+                return;
+            };
+            commands.trigger(lunco_luncosim_edit::ui::checkpoint_click::ToggleAutopilot {
+                vessel: link.vessel_entity,
+            });
         }
     }
 }
@@ -853,7 +873,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .is_some_and(|path| !path.0.is_empty());
 
         ui.add_enabled_ui(has_scene, |ui| {
-            if ui.button("🔄 Restart Scenario").clicked() {
+            if ui.button("Restart Scenario").clicked() {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
@@ -883,7 +903,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .resource::<CachedTwinsRegistry>()
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
-            ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
+            ui.menu_button(format!("Downloaded Twins ({})", entries.len()), |ui| {
                 ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 if entries.is_empty() {
@@ -1122,7 +1142,7 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         .cloned()
         .unwrap_or_default();
 
-    ui.menu_button("🎓 Tutorials", |ui| {
+    ui.menu_button("Tutorials", |ui| {
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         let Some(registry) = registry else {
@@ -1148,10 +1168,10 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             .show(ui, |ui| {
                 for meta in registry.ordered() {
                     let done = progress.completed.iter().any(|c| c == &meta.id);
-                    // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
+                    // Completed or fresh, then the title and a dim difficulty chip.
                     let label = format!(
                         "{} {}  ·  {}",
-                        if done { "✓" } else { "🎓" },
+                        if done { "[done]" } else { "[new]" },
                         meta.title,
                         meta.difficulty
                     );

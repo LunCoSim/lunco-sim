@@ -33,7 +33,7 @@ fn on_event(me, evt) {
 
     if this.i >= s.len() {
         end_tour();
-        notify_kind("Inspect the Simulation complete 🎉", "success");
+        notify_kind("Inspect the Simulation complete", "success");
         emit("MISSION_COMPLETE", 0);
     } else { show(s, this.i); }
 }

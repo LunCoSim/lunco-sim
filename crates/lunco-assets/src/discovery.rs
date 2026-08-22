@@ -143,19 +143,9 @@ pub fn resolve_asset(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (name, rel) = crate::twin_source::parse_twin_uri(asset_path)?;
-        let rel_path = Path::new(rel);
-        if rel_path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        }) {
-            return None;
-        }
+        let rel_path = crate::asset_path::relative_path(rel)?;
         let root = roots.root_of(name)?;
-        let abs_path = root.join(rel_path);
+        let abs_path = root.join(&rel_path);
         if !abs_path.is_file() {
             return None;
         }

@@ -615,7 +615,7 @@ pub fn on_duplicate_model_from_read_only(
         ),
     );
     console.info(format!(
-        "📄 Duplicating `{origin_class_short}` → `{name}` (building…)"
+        "Duplicating `{origin_class_short}` -> `{name}` (building...)"
     ));
     for mut ctx in egui_q.iter_mut() {
         ctx.get_mut().request_repaint();
@@ -766,7 +766,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     world
         .resource_mut::<crate::ui::panels::console::ConsoleLog>()
         .info(format!(
-            "📄 Opening class `{qualified}` → editable `{name}` (building…)"
+            "Opening class `{qualified}` -> editable `{name}` (building...)"
         ));
 }
 

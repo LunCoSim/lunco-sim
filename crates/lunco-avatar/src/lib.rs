@@ -1465,7 +1465,16 @@ fn fly_move_direction(
     } else {
         up_dir
     };
-    *tf.forward() * forward + *tf.right() * side + up_dir * elevation
+    let direction = *tf.forward() * forward + *tf.right() * side + up_dir * elevation;
+    // Keyboard diagonals intentionally contribute multiple axes, but the
+    // resulting command must still have the same maximum speed as a single
+    // axis. Preserve sub-unit analog input and cap only the combined vector.
+    let length_sq = direction.length_squared();
+    if length_sq > 1.0 {
+        direction / length_sq.sqrt()
+    } else {
+        direction
+    }
 }
 
 /// Decompose a camera rotation into the same surface-frame heading and pitch
@@ -4926,13 +4935,25 @@ mod tests {
         let direction = fly_move_direction(&tf, 1.0, 0.0, -1.0, Vec3::Y);
 
         assert!(
-            direction.z < -0.5,
+            direction.z < -0.3,
             "Q+W must retain forward travel at a pitched view, got {direction:?}"
         );
         assert!(
             direction.y < -0.5,
             "Q+W must retain downward travel at a pitched view, got {direction:?}"
         );
+        assert!(direction.length() <= 1.0 + 1e-6);
+    }
+
+    #[test]
+    fn diagonal_flight_is_capped_without_reducing_single_axis_speed() {
+        let tf = Transform::default();
+        let forward = fly_move_direction(&tf, 1.0, 0.0, 0.0, Vec3::Y);
+        let diagonal = fly_move_direction(&tf, 1.0, 1.0, 0.0, Vec3::Y);
+
+        assert!((forward.length() - 1.0).abs() < 1e-6);
+        assert!((diagonal.length() - 1.0).abs() < 1e-6);
+        assert!(diagonal.x > 0.0 && diagonal.z < 0.0);
     }
 
     #[test]

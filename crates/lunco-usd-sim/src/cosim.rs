@@ -33,10 +33,7 @@ use lunco_core::{
     SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
     SceneTransitionRequest, WorldGrid,
 };
-use lunco_cosim::{
-    ConnectionBinding, CosimOutputDescriptor, CosimOutputMetadata, DeclaredOutputPorts,
-    SimComponent, SimConnection, SimStatus,
-};
+use lunco_cosim::{ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
@@ -232,6 +229,14 @@ fn environment_probe_interface() -> DeclaredOutputPorts {
             .collect(),
     }
 }
+
+/// Return the authored body-level presentation scope for an environment probe.
+///
+/// A probe is often nested below the part whose mount frame it measures (an
+/// antenna or a solar panel), but its values describe the local environment of
+/// the rigid body, not that consumer. Walk the composed USD ancestry to the
+/// nearest body and expose the provider as `<body>/Environment`. This keeps the
+/// physical frame relationship intact while keeping the operator tree semantic.
 
 /// A compile-specific port-contract verdict already reported to the console.
 ///
@@ -1117,7 +1122,6 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
-    canonical: NonSend<CanonicalStages>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
     // The solver-selection input only carries the authored prediction contract.
@@ -1195,36 +1199,6 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 }
             }
         }
-        let usd_documentation = canonical
-            .get(prim_path.stage_handle.id())
-            .and_then(|stage| {
-                let path = SdfPath::new(&prim_path.path).ok()?;
-                stage.view().documentation(&path)
-            });
-        let outputs = interface
-            .variable_metadata
-            .into_iter()
-            .map(|(name, metadata)| {
-                let provenance = if metadata.description.is_some() {
-                    "modelica"
-                } else if usd_documentation.is_some() {
-                    "usd"
-                } else {
-                    "modelica"
-                };
-                (
-                    name,
-                    CosimOutputDescriptor {
-                        description: metadata.description.or_else(|| usd_documentation.clone()),
-                        unit: metadata.unit,
-                        provenance: provenance.to_string(),
-                        canonical_name: None,
-                        group_path: None,
-                    },
-                )
-            })
-            .collect();
-
         // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
         // channel means the compile is never attempted, and a `ModelicaModel`
         // with no `last_error` and no `variables` projects `SimStatus::Compiling`
@@ -1295,9 +1269,6 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 )
             });
 
-        commands
-            .entity(entity)
-            .try_insert(CosimOutputMetadata { outputs });
         component.parameters = parameters.clone();
         component.inputs = inputs.clone();
         commands.entity(entity).try_insert(ModelicaModel {
@@ -1564,47 +1535,12 @@ fn upsert_ports<'a>(
 /// Per-tick: ModelicaModel.variables → SimComponent.outputs.
 /// Lets `propagate_connections` see fresh Modelica outputs each step.
 pub fn sync_modelica_outputs(
-    mut q: Query<
-        (
-            &ModelicaModel,
-            &mut SimComponent,
-            Option<&GeneratedModelicaSource>,
-            Option<&mut CosimOutputMetadata>,
-        ),
-        With<UsdSourcedCosim>,
-    >,
+    mut q: Query<(&ModelicaModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
-    for (model, mut comp, generated, mut metadata) in &mut q {
+    for (model, mut comp) in &mut q {
         upsert_ports(&mut comp.outputs, model.variables.iter());
         for (k, v) in &model.inputs {
             comp.inputs.entry(k.clone()).or_insert(*v);
-        }
-        if let (Some(source), Some(metadata)) = (generated, metadata.as_deref_mut()) {
-            for name in model.variables.keys() {
-                let descriptor =
-                    metadata
-                        .outputs
-                        .entry(name.clone())
-                        .or_insert_with(|| CosimOutputDescriptor {
-                            description: None,
-                            unit: None,
-                            provenance: "modelica".to_string(),
-                            canonical_name: None,
-                            group_path: None,
-                        });
-                // The wrapper topology is immutable between projection
-                // revisions. Resolve each newly observed solver variable once;
-                // steady-state ticks only copy values into SimComponent.
-                if descriptor.group_path.is_none() {
-                    descriptor.group_path =
-                        crate::domain_projection::generated_signal_group(source, name);
-                }
-                if descriptor.canonical_name.is_some() {
-                    continue;
-                }
-                descriptor.canonical_name =
-                    crate::domain_projection::canonical_generated_signal(source, name);
-            }
         }
         comp.status = modelica_status(model);
     }

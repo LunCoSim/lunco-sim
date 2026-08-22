@@ -123,7 +123,7 @@ impl Panel for RhaiEditorPanel {
         PanelId("rhai_editor")
     }
     fn title(&self) -> String {
-        "📜 Behaviour".into()
+        "Behaviour".into()
     }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
@@ -157,7 +157,7 @@ impl Panel for RhaiEditorPanel {
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(vm.dirty, |ui| {
                     if ui
-                        .button("💾 Save & Run")
+                        .button("Save & Run")
                         .on_hover_text("Hot-reload the scenario with these edits and persist them to the prim's lunco:script")
                         .clicked()
                     {

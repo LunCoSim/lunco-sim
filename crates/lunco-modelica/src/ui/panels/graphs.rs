@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
 use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization, viz::VizId, SignalRegistry,
+    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::VizId, SignalRegistry,
     VisualizationRegistry, VizFitRequests,
 };
 use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
@@ -67,7 +67,7 @@ impl InstancePanel for ModelicaPlotPanel {
     fn menu_entry(&self) -> Option<lunco_workbench::InstancePanelMenuEntry> {
         Some(lunco_workbench::InstancePanelMenuEntry {
             group: lunco_workbench::PanelMenuGroup::Design,
-            title: "📈 Graphs",
+            title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
         })
     }
@@ -78,13 +78,13 @@ impl InstancePanel for ModelicaPlotPanel {
         // instances use whatever title was set on creation, falling
         // back to "Plot #N" via the registry config.
         if id == DEFAULT_MODELICA_GRAPH {
-            return "📈 Graphs".into();
+            return "Graphs".into();
         }
         world
             .get_resource::<VisualizationRegistry>()
             .and_then(|r| r.get(id))
-            .map(|cfg| format!("📈 {}", cfg.title))
-            .unwrap_or_else(|| format!("📈 Plot #{instance}"))
+            .map(|cfg| cfg.title.clone())
+            .unwrap_or_else(|| format!("Plot #{instance}"))
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
@@ -165,10 +165,8 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let has_exp = crate::ui::panels::experiments::has_experiment_runs(ctx);
 
     if has_live && !has_exp {
-        // Pure live mode keeps its own one-line action header above the
-        // dedicated LinePlot (which owns the X/Y/+add binding picker and
-        // its own log-Y toggle).
-        render_plot_header(ui, ctx, viz_id);
+        // The line plot owns one compact row for X/Y bindings and the host
+        // action buttons, so no separate settings band reduces graph height.
         render_line_plot(ui, ctx, viz_id);
     } else {
         // The experiments body draws the action buttons (New / Dup / Fit /
@@ -185,44 +183,24 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     }
 }
 
-/// The pure-live action controls share the LinePlot selector row visually.
-/// They are painted as a compact right-aligned overlay, so they do not
-/// reserve a second vertical toolbar row above the graph.
-fn render_plot_header(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
-    let rect = ui.max_rect();
-    egui::Area::new(egui::Id::new(("plot_actions", viz_id.0)))
-        .order(egui::Order::Foreground)
-        .fixed_pos(egui::pos2(
-            (rect.right() - 190.0).max(rect.left()),
-            rect.top() + 1.0,
-        ))
-        .show(ui.ctx(), |ui| {
-            ui.horizontal(|ui| {
-                plot_action_buttons(ui, ctx, viz_id);
-            });
-        });
-}
-
-/// The shared action cluster for every Modelica plot tab: `➕` opens a
-/// fresh plot panel, `📄` duplicates this one (same bindings + picked
-/// vars), `📐 Fit` queues a one-shot auto-fit via [`VizFitRequests`]
-/// (both the LinePlot and experiments bodies drain it), and `💾 CSV`
-/// exports the plot's curves. Renders in the caller's current layout
-/// direction (the callers use right-to-left, so `➕` lands rightmost).
+/// The shared action cluster for every Modelica plot tab: New opens a fresh
+/// plot panel, Duplicate copies this one (same bindings + picked vars), Fit
+/// queues a one-shot auto-fit via [`VizFitRequests`] (both the LinePlot and
+/// experiments bodies drain it), and CSV exports the plot's curves.
 pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let mut new_plot = false;
     let mut dup = false;
     let mut fit = false;
     let mut csv = false;
     if ui
-        .small_button("➕")
+        .small_button("New")
         .on_hover_text("New plot panel — opens a fresh tab.")
         .clicked()
     {
         new_plot = true;
     }
     if ui
-        .small_button("📄")
+        .small_button("Duplicate")
         .on_hover_text(
             "Duplicate this plot — new tab with the same \
              signal bindings and picked variables.",
@@ -232,14 +210,14 @@ pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id:
         dup = true;
     }
     if ui
-        .small_button("📐 Fit")
+        .small_button("Fit")
         .on_hover_text("Auto-fit axes to data")
         .clicked()
     {
         fit = true;
     }
     if ui
-        .small_button("💾 CSV")
+        .small_button("CSV")
         .on_hover_text("Export the plot's curves to CSV.")
         .clicked()
     {
@@ -304,7 +282,15 @@ fn collect_live_extras(
                     .map(|t| lunco_viz::signal::color_for_signal(t, &b.source.path))
                     .unwrap_or(bevy_egui::egui::Color32::GRAY)
             });
-            let label = b.label.clone().unwrap_or_else(|| b.source.path.clone());
+            let label = b.label.clone().unwrap_or_else(|| {
+                lunco_viz::display_channel_label(
+                    &b.source.path,
+                    sigs.meta(&b.source)
+                        .and_then(|meta| meta.group_path.as_deref()),
+                    ctx.resource_expect::<lunco_viz::TelemetryDisplaySettings>()
+                        .show_generated_names,
+                )
+            });
             Some(crate::ui::panels::experiments::PlotExtraLine {
                 label,
                 color: (color.r(), color.g(), color.b()),
@@ -324,7 +310,9 @@ fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     };
     let viz = LinePlot;
     let mut p2d = Panel2DCtx { ui, wb: ctx };
-    viz.render_panel_2d(&mut p2d, &config);
+    viz.render_panel_2d_with_actions(&mut p2d, &config, |ui, ctx| {
+        plot_action_buttons(ui, ctx, viz_id);
+    });
 }
 
 /// Gather the plot's bound signals, pop a native save-file picker,
@@ -353,10 +341,20 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                 if show_live {
                     for binding in &cfg.inputs {
                         if let Some(hist) = reg.scalar_history(&binding.source) {
-                            let label = binding
-                                .label
-                                .clone()
-                                .unwrap_or_else(|| format!("Live · {}", binding.source.path));
+                            let label = binding.label.clone().unwrap_or_else(|| {
+                                let channel = lunco_viz::display_channel_label(
+                                    &binding.source.path,
+                                    reg.meta(&binding.source)
+                                        .and_then(|meta| meta.group_path.as_deref()),
+                                    world
+                                        .get_resource::<lunco_viz::TelemetryDisplaySettings>()
+                                        .expect(
+                                            "LuncoVizPlugin installs telemetry display settings",
+                                        )
+                                        .show_generated_names,
+                                );
+                                format!("Live · {channel}")
+                            });
                             let mut data = Vec::new();
                             for s in &hist.samples {
                                 all_times.push(s.time);

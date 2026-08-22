@@ -50,9 +50,8 @@ use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
 // AUTHORED layer). Since the
 // terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
-// networking policy extractor and the UI terrain layer-map binding.
+// USD policy extractor and the UI terrain layer-map binding.
 use bevy::asset::AssetLoadFailedEvent;
-#[cfg(any(feature = "ui", feature = "networking"))]
 use lunco_usd_bevy::UsdRead;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
@@ -1633,8 +1632,7 @@ fn apply_run_status(
 }
 
 /// The USD type name of a policy prim, and the attribute names carrying its rhai
-/// hook definition — the projected form of `scripted_policy::PolicyDef`.
-#[cfg(feature = "networking")]
+/// hook definition — the projected form of `lunco_scripting::policy::PolicyDef`.
 const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 
 /// One authored `LunCoPolicy` prim, BEFORE its rhai source is resolved. The source is
@@ -1643,7 +1641,6 @@ const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 /// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified). Inline
 /// wins over the file — the same rule every `LunCoProgramAPI` source follows, whatever
 /// engine its extension selects (`.rhai`, `.mo`, `.xml`).
-#[cfg(feature = "networking")]
 struct AuthoredPolicy {
     seam: String,
     entry: String,
@@ -1661,7 +1658,6 @@ struct AuthoredPolicy {
 /// `source` nor a `sourcePath`, is skipped (incompletely authored). Pure over the
 /// stages, so it's unit-testable without a running app — the file-ref RESOLUTION (asset
 /// load) happens in [`project_usd_policies`], not here.
-#[cfg(feature = "networking")]
 fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
     for (_, cs) in canonical.iter() {
@@ -1702,7 +1698,6 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
 }
 
 /// The three states of resolving a `info:sourceAsset` `.rhai` reference.
-#[cfg(feature = "networking")]
 enum PolicySource {
     /// Loaded — the file's text.
     Ready(String),
@@ -1719,7 +1714,6 @@ enum PolicySource {
 /// scenario cache is loaded against the DEFAULT asset source here, so a
 /// twin/imported file policy syncs (whole-twin content plane) but needs the resolver's
 /// `canonicalize` anchoring to load on the peer. Inline source is unaffected (rides the doc).
-#[cfg(feature = "networking")]
 fn resolve_policy_source_file(
     path: &str,
     asset_server: &AssetServer,
@@ -1752,8 +1746,8 @@ fn resolve_policy_source_file(
 /// **Policy projection** — activation half of "policy is a USD prim". On any
 /// composed-stage change, read the `LunCoPolicy` prims and project them into the
 /// live hook registry via
-/// [`project_policies`](lunco_networking::scripted_policy::project_policies): a new
-/// prim registers its rhai hook (and, at [`MERGE_SEAM`](lunco_networking::scripted_policy::MERGE_SEAM),
+/// [`lunco_scripting::policy::project_policies`]: a new prim registers its rhai
+/// hook (and, at [`lunco_scripting::policy::MERGE_SEAM`],
 /// flips the journal merge strategy); a removed prim retracts it. Because a policy
 /// prim rides the USD doc-op journal, cross-peer propagation is (journal sync →
 /// each peer recomposes → each peer's projector re-registers) — no bespoke policy
@@ -1764,11 +1758,11 @@ fn resolve_policy_source_file(
 /// inline winning — so this also drives the async asset load, keeping the file's text
 /// resolved. Change-gated on total stage generation + stage count, PLUS a re-run while
 /// any file-backed source is still loading.
-#[cfg(feature = "networking")]
 #[allow(clippy::type_complexity)]
 fn project_usd_policies(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
-    mut registry: ResMut<lunco_networking::scripted_policy::ScriptedPolicyRegistry>,
+    mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
+    mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
     sources: Option<Res<Assets<lunco_scripting::source_asset::RhaiSource>>>,
@@ -1816,7 +1810,7 @@ fn project_usd_policies(
         } else {
             continue;
         };
-        desired.push(lunco_networking::scripted_policy::PolicyDef {
+        desired.push(lunco_scripting::policy::PolicyDef {
             seam: a.seam.clone(),
             entry: a.entry.clone(),
             source,
@@ -1824,7 +1818,22 @@ fn project_usd_policies(
         });
     }
     *awaiting = unresolved;
-    lunco_networking::scripted_policy::project_policies(desired, &mut registry, journal.as_deref());
+    let previous_synthesizers: std::collections::HashSet<String> = registry
+        .policies
+        .iter()
+        .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
+        .collect();
+    let desired_synthesizers: std::collections::HashSet<String> = desired
+        .iter()
+        .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
+        .collect();
+    lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
+    for name in previous_synthesizers.difference(&desired_synthesizers) {
+        lunco_usd_sim::domain_projection::unregister_hook_synthesizer(&mut synthesizers, name);
+    }
+    for name in desired_synthesizers {
+        lunco_usd_sim::domain_projection::register_hook_synthesizer(&mut synthesizers, name);
+    }
 }
 
 /// **Environment-settings projection** — the read half of persisting
@@ -1962,8 +1971,8 @@ fn project_env_settings(
 }
 
 /// Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
-/// USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
-/// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
+/// USD prim under `<mounted-root>/Policies/<name>` in ONE call, instead of
+/// hand-issuing the underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
 /// syncs to every peer → the projector activates it** (registers the rhai hook; at
 /// `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
 /// editing `info:sourceCode`) **hot-replaces the hook live** — dynamic rhai
@@ -1979,11 +1988,12 @@ fn project_env_settings(
 /// journal drivers).
 #[lunco_core::Command(default)]
 pub struct SetRhaiPolicy {
-    /// Prim name under `/World/Policies` (the identity for hot-replace); defaults to
-    /// a sanitized `seam` when empty.
+    /// Prim name under the mounted scene's `Policies` scope (the identity for
+    /// hot-replace); defaults to a sanitized `seam` when empty.
     pub name: String,
-    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or a
-    /// `lunco:driveKernel` id a rover points at.
+    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, a
+    /// `lunco:driveKernel` id a rover points at, or `"synth.<name>"` for a
+    /// generated Modelica source/unit/layout policy.
     pub seam: String,
     /// The rhai entry function name.
     pub entry: String,
@@ -1997,20 +2007,37 @@ pub struct SetRhaiPolicy {
 #[lunco_core::on_command(SetRhaiPolicy)]
 fn on_set_rhai_policy(
     trigger: On<SetRhaiPolicy>,
-    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>,
+    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
+    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};
     let cmd = trigger.event();
-    let docs: Vec<_> = registry.ids().collect();
-    let [doc] = docs.as_slice() else {
+    let roots: Vec<_> = roots.iter().collect();
+    let [root] = roots.as_slice() else {
         warn!(
-            "[policy] SetRhaiPolicy needs exactly one scene document (found {})",
-            docs.len()
+            "[policy] SetRhaiPolicy needs exactly one mounted USD scene (found {})",
+            roots.len()
         );
         return;
     };
-    let doc = *doc;
+    let Some(doc) = lunco_usd::twin_projection::scene_document_for(
+        &backed,
+        &asset_server,
+        root.stage_handle.id(),
+    ) else {
+        warn!(
+            "[policy] the mounted scene is not Twin document-backed; open it through a Twin to author a policy"
+        );
+        return;
+    };
+    let mounted_root = root.path.trim_end_matches('/');
+    let mounted_root = if mounted_root.is_empty() {
+        "/"
+    } else {
+        mounted_root
+    };
 
     // USD prim names are identifier-like — sanitize the seam/name into one.
     let base = if cmd.name.is_empty() {
@@ -2025,7 +2052,12 @@ fn on_set_rhai_policy(
     if name.is_empty() {
         name = "policy".to_string();
     }
-    let prim = format!("/World/Policies/{name}");
+    let policies_path = if mounted_root == "/" {
+        "/Policies".to_string()
+    } else {
+        format!("{mounted_root}/Policies")
+    };
+    let prim = format!("{policies_path}/{name}");
     let root = LayerId::root();
 
     // Idempotent: define_prim + attribute overwrite → re-issuing hot-replaces.
@@ -2036,14 +2068,14 @@ fn on_set_rhai_policy(
     let ops = vec![
         UsdOp::AddPrim {
             edit_target: root.clone(),
-            parent_path: "/World".into(),
+            parent_path: mounted_root.into(),
             name: "Policies".into(),
             type_name: Some("Scope".into()),
             reference: None,
         },
         UsdOp::AddPrim {
             edit_target: root.clone(),
-            parent_path: "/World/Policies".into(),
+            parent_path: policies_path,
             name,
             type_name: Some("LunCoPolicy".into()),
             reference: None,
@@ -2497,7 +2529,7 @@ impl Plugin for SandboxCorePlugin {
                 commands.insert_resource(SANDBOX_GRAVITY)
             })
             // Studio lighting for the luncosim — a generic editor scene, NOT a
-            // calibrated lunar surface (the canonical 128 klx / EV15 `LunarSun`
+            // calibrated lunar surface (the canonical 128 klx / EV16 `LunarSun`
             // crushes the dark blueprint ground to black). Inserted BEFORE
             // `EnvironmentPlugin` so its `init_resource` keeps these. The sun
             // spawn AND every camera's exposure read this one resource, so lux
@@ -2801,10 +2833,6 @@ impl Plugin for SandboxCorePlugin {
                 (broadcast_run_status, apply_run_status)
                     .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
             );
-            // Policy projection: activate `LunCoPolicy` prims from the composed
-            // stage into the hook registry. Because policies are USD prims they
-            // sync via the journal above — no bespoke policy broadcast.
-            app.add_systems(Update, project_usd_policies);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer
@@ -2825,6 +2853,10 @@ impl Plugin for SandboxCorePlugin {
             Update,
             track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
         );
+        // Policy projection is a core USD→Rhai path, not a networking feature.
+        // Network peers receive the same `LunCoPolicy` prim through the journal,
+        // while a standalone app can author and hot-replace the same policy locally.
+        app.add_systems(Update, project_usd_policies);
         // A just-promoted Dynamic body is not visible to the terrain ring until
         // deferred commands flush. Keep physics held across that fixed-loop
         // boundary, then let the terrain's own liveness gate take sole ownership.

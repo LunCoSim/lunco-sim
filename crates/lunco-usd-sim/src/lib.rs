@@ -480,6 +480,10 @@ impl Plugin for UsdSimPlugin {
                     .chain()
                     .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
             )
+            .add_systems(
+                FixedPostUpdate,
+                physics_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+            )
             .add_observer(on_add_usd_sim_prim)
             // `try_wire_wheel` runs in PreUpdate so that the `SimConnection` entities
             // exist before cosim propagation pushes values through them.
@@ -503,6 +507,7 @@ impl Plugin for UsdSimPlugin {
             .init_resource::<GroundColliderPending>()
             .init_resource::<GroundActivationInFlight>()
             .init_resource::<JointTopologyIndex>()
+            .init_resource::<physics_telemetry::PhysicsTelemetryState>()
             .add_systems(
                 Update,
                 (
@@ -572,6 +577,7 @@ pub mod domain_projection;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
+pub mod physics_telemetry;
 pub mod powertrain;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
@@ -2712,7 +2718,7 @@ fn setup_physical_wheel(
     // the chassis weight — it rings the pitch/roll mode down for 15-20 s after
     // the scene's 5 m spawn drop, can't be damped harder (high damping_ratio
     // diverges), and its effective tuning shifts with substep count. The fix for
-    // *vertical* travel is therefore the rigid axle below + `SubstepCount(16)` at
+    // *vertical* travel is therefore the rigid axle below + `SubstepCount(32)` at
     // the app; joint rovers are rigid-axle. See `project_physical_rover_suspension`.
     //
     // Steering is a yaw of the front wheel about the vertical. A physical
@@ -2733,7 +2739,7 @@ fn setup_physical_wheel(
     //
     // (A spring suspension was also rejected — avian's joint SpringDamper is
     // fragile bearing the chassis weight; the fix for vertical travel is the rigid
-    // axle + `SubstepCount(16)`. See `project_physical_rover_suspension`.)
+    // axle + `SubstepCount(32)`. See `project_physical_rover_suspension`.)
 
     // The joint starts with the authored motor model disabled. MotorActuator is
     // the sole owner of its velocity-motor drive and evaluates the same
@@ -3315,32 +3321,44 @@ fn try_wire_wheel(
 /// `lunco-autopilot` — that crate stays USD-free and merely compiles the bindings it
 /// is handed.
 ///
-/// Re-runs when a tree's XML changes or when any prim spawns (a waypoint may spawn
-/// after the vessel that names it — prim order is not guaranteed). Unresolved paths
-/// are simply left out of the map; the compiler refuses a tree with a dangling
-/// target rather than driving to the origin.
+/// Re-runs when a tree's XML changes, when any prim spawns, or while a previous
+/// projection is incomplete. Unresolved paths produce an explicitly empty
+/// binding set: the compiler then refuses the tree with a dangling target rather
+/// than driving to a guessed origin. The resolver retries until the composed
+/// prim exists; it never keeps a stale map as a compatibility fallback.
 fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,
         &lunco_autopilot::usd_tree::BehaviorXml,
         Option<&UsdPrimPath>,
+        Option<&lunco_autopilot::usd_tree::TargetBindings>,
     )>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_new_prims: Query<(), Added<UsdPrimPath>>,
     q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
     q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
-    q_existing_bindings: Query<&lunco_autopilot::usd_tree::TargetBindings>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
+    let retry_incomplete = q_trees.iter().any(|(_, xml, _, bindings)| {
+        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
+        bindings.map_or(!targets.is_empty(), |bindings| {
+            targets
+                .iter()
+                .any(|target| !bindings.0.contains_key(target))
+        })
+    });
     if q_trees.is_empty()
-        || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
+        || (q_new_prims.is_empty()
+            && q_changed_xml.is_empty()
+            && q_new_ids.is_empty()
+            && !retry_incomplete)
     {
         return;
     }
-    for (vessel, xml, vessel_path) in q_trees.iter() {
+    for (vessel, xml, vessel_path, current_bindings) in q_trees.iter() {
         let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         let mut missing = false;
@@ -3385,17 +3403,22 @@ fn resolve_behavior_targets(
                 );
             }
         }
-        // A binding is an atomic projection: replacing a complete map with a
-        // partial map makes the compiler observe a transient dangling target,
-        // which used to send the rover toward a default origin for one frame.
-        // Keep the previous complete map until the next prim projection gives
-        // us every target. The compiler then either has a complete new map or
-        // refuses the tree without changing vehicle pose.
         if !missing {
             commands.entity(vessel).try_insert(bindings);
-        } else if q_existing_bindings.get(vessel).is_ok() {
+        } else if !current_bindings.is_some_and(|bindings| bindings.0.is_empty()) {
+            // Empty is an explicit pending state, not a guessed route. This
+            // change wakes the autopilot compiler, which refuses the route
+            // until the resolver can publish the complete binding set.
+            commands
+                .entity(vessel)
+                .insert(lunco_autopilot::usd_tree::TargetBindings::default());
+            warn_once!(
+                "[resolve_behavior_targets] vessel {:?} has unresolved route targets; waiting for composed prim projection",
+                vessel
+            );
+        } else {
             debug!(
-                "[resolve_behavior_targets] retaining prior complete bindings for vessel {:?}",
+                "[resolve_behavior_targets] vessel {:?} still waiting for composed route targets",
                 vessel
             );
         }

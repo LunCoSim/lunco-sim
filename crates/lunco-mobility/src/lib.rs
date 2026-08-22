@@ -261,6 +261,40 @@ impl Plugin for LunCoMobilityPlugin {
 #[reflect(Component)]
 pub struct ProxyWheelMassFolded;
 
+/// Resolve a wheel's authored carrier chain to the vehicle's actuator owner.
+///
+/// A wheel can be a direct child of the vessel root or hang from an articulated
+/// link such as a rocker or bogie.  The mobility systems that apply forces use
+/// the immediate rigid-body carrier; mass and initial-support publication need
+/// the inverse mapping so their body-local offsets can be expressed in the
+/// vessel owner's frame.  The authored `ChildOf` chain is the topology source;
+/// no vehicle-specific path spelling belongs here.
+fn actuator_root_and_local_transform(
+    wheel: Entity,
+    roots: &Query<Entity, With<ActuatorPorts>>,
+    parents: &Query<&ChildOf>,
+    transforms: &Query<&Transform>,
+) -> Option<(Entity, Transform)> {
+    let mut current = wheel;
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+
+    loop {
+        if roots.get(current).is_ok() {
+            let mut local = Transform::IDENTITY;
+            for transform in chain.iter().rev() {
+                local = local.mul_transform(*transform);
+            }
+            return Some((current, local));
+        }
+        if !visited.insert(current) {
+            return None;
+        }
+        chain.push(transforms.get(current).copied().unwrap_or_default());
+        current = parents.get(current).ok()?.parent();
+    }
+}
+
 /// Publish the support envelope of the raycast physics realization.
 ///
 /// This is intentionally owned by mobility: it knows the contact model and its
@@ -271,29 +305,38 @@ pub struct ProxyWheelMassFolded;
 fn publish_raycast_support_footprints(
     mut commands: Commands,
     roots: Query<
-        (Entity, &Children),
+        Entity,
         (
             With<ActuatorPorts>,
             Without<lunco_physics::PhysicsSupportFootprint>,
         ),
     >,
-    wheels: Query<(&WheelRaycast, &Suspension, &Transform, &ChildOf)>,
+    actuator_roots: Query<Entity, With<ActuatorPorts>>,
+    wheels: Query<(Entity, &WheelRaycast, &Suspension)>,
+    parents: Query<&ChildOf>,
+    transforms: Query<&Transform>,
 ) {
-    for (root, children) in &roots {
-        let contacts = children
+    for root in roots.iter() {
+        let contacts = wheels
             .iter()
-            .filter_map(|child| wheels.get(child).ok())
-            .filter(|(_, _, _, parent)| parent.parent() == root)
-            .map(
-                |(wheel, suspension, transform, _)| lunco_physics::PhysicsSupportContact {
-                    local_offset: transform.translation.as_dvec3(),
+            .filter_map(|(wheel_entity, wheel, suspension)| {
+                let (owner, local) = actuator_root_and_local_transform(
+                    wheel_entity,
+                    &actuator_roots,
+                    &parents,
+                    &transforms,
+                )?;
+                (owner == root).then(|| lunco_physics::PhysicsSupportContact {
+                    local_offset: local.translation.as_dvec3(),
                     radius: wheel.wheel_radius.max(0.0),
-                    probe_origin: transform.translation.as_dvec3()
-                        + DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius),
-                    probe_direction: DVec3::NEG_Y,
+                    probe_origin: local.translation.as_dvec3()
+                        + local.rotation.as_dquat()
+                            * DVec3::Y
+                            * strut_offset(suspension.rest_length, wheel.wheel_radius),
+                    probe_direction: local.rotation.as_dquat() * DVec3::NEG_Y,
                     probe_length: suspension.rest_length,
-                },
-            )
+                })
+            })
             .collect::<Vec<_>>();
         if !contacts.is_empty() {
             commands.entity(root).try_insert((
@@ -358,8 +401,11 @@ fn publish_raycast_support_footprints(
 /// the solver integrates against.
 pub fn fold_proxy_wheel_mass(
     mut commands: Commands,
-    q_chassis: Query<(Entity, &Children), (With<ActuatorPorts>, Without<ProxyWheelMassFolded>)>,
-    q_wheels: Query<(&WheelRaycast, &Transform)>,
+    q_chassis: Query<Entity, (With<ActuatorPorts>, Without<ProxyWheelMassFolded>)>,
+    q_roots: Query<Entity, With<ActuatorPorts>>,
+    q_wheels: Query<(Entity, &WheelRaycast)>,
+    q_parents: Query<&ChildOf>,
+    q_transforms: Query<&Transform>,
     mut q_body: Query<(
         &mut Mass,
         Option<&mut AngularInertia>,
@@ -368,23 +414,30 @@ pub fn fold_proxy_wheel_mass(
         Option<&ComputedCenterOfMass>,
     )>,
 ) {
-    for (chassis, children) in &q_chassis {
+    let mut wheels_by_chassis = std::collections::HashMap::<Entity, Vec<(f64, DVec3)>>::new();
+    for (wheel_entity, wheel) in q_wheels.iter() {
+        let Some((chassis, local)) =
+            actuator_root_and_local_transform(wheel_entity, &q_roots, &q_parents, &q_transforms)
+        else {
+            continue;
+        };
+        wheels_by_chassis
+            .entry(chassis)
+            .or_default()
+            .push((wheel.mass, local.translation.as_dvec3()));
+    }
+
+    for chassis in q_chassis.iter() {
         // The wheel's `mass` arrives from `WheelParams::apply_to_raycast`, which may
         // land a frame after the component itself. A wheel still reading zero means
-        // the parameters have not been applied yet, so the vehicle is not ready to
-        // fold and must be left for a later tick — never folded at half its mass.
-        let mut wheels = Vec::new();
-        let mut pending = false;
-        for child in children.iter() {
-            let Ok((wheel, tf)) = q_wheels.get(child) else {
-                continue;
-            };
-            if wheel.mass <= 0.0 {
-                pending = true;
-                break;
-            }
-            wheels.push((wheel.mass, tf.translation.as_dvec3()));
-        }
+        // the vehicle is not ready to fold and must be left for a later tick — never
+        // folded at half its mass. Descendant wheels are grouped by their actuator
+        // owner, so articulated rocker/bogie wheels receive the same mass treatment
+        // as direct-child wheels.
+        let Some(wheels) = wheels_by_chassis.get(&chassis) else {
+            continue;
+        };
+        let pending = wheels.iter().any(|(mass, _)| *mass <= 0.0);
         if pending || wheels.is_empty() {
             continue;
         }
@@ -413,7 +466,7 @@ pub fn fold_proxy_wheel_mass(
         // only the drop survives — which is the whole point.
         let com_new = if total > 0.0 {
             let mut moment = com_chassis * chassis_mass;
-            for (m, d) in &wheels {
+            for (m, d) in wheels {
                 moment += *d * *m;
             }
             moment / total
@@ -434,7 +487,7 @@ pub fn fold_proxy_wheel_mass(
                 )
             };
             let mut principal = perp(chassis_mass, com_chassis - com_new);
-            for (m, d) in &wheels {
+            for (m, d) in wheels {
                 principal += perp(*m, *d - com_new);
             }
             inertia.principal += principal.as_vec3();
@@ -905,7 +958,7 @@ fn apply_wheel_suspension(
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_chassis: Query<(Forces, &RigidBody), (With<ActuatorPorts>, lunco_physics::Integrable)>,
+    mut q_chassis: Query<(Forces, &RigidBody), lunco_physics::Integrable>,
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<ActuatorPorts>)>,
@@ -1032,7 +1085,7 @@ fn sync_raycast_wheel_physics_pose(
         (Entity, &mut Position, &mut Rotation, &Transform, &ChildOf),
         With<WheelRaycast>,
     >,
-    q_chassis: Query<(&Position, &Rotation), (With<ActuatorPorts>, Without<WheelRaycast>)>,
+    q_chassis: Query<(&Position, &Rotation), (With<RigidBody>, Without<WheelRaycast>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
@@ -1112,7 +1165,7 @@ fn apply_wheel_drive(
             Option<&InputPorts>,
             Option<&lunco_environment::LocalGravity>,
         ),
-        (With<ActuatorPorts>, lunco_physics::Integrable),
+        lunco_physics::Integrable,
     >,
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
@@ -1264,7 +1317,7 @@ fn apply_wheel_steering(
         &WheelRaycast,
         Option<&SteerBaseRotation>,
     )>,
-    q_chassis: Query<&RigidBody, With<ActuatorPorts>>,
+    q_chassis: Query<&RigidBody, With<RigidBody>>,
 ) {
     for (entity, mut transform, parent, steer, wheel, base) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
@@ -1934,6 +1987,43 @@ mod proxy_wheel_mass_tests {
         app.update();
 
         assert!((app.world().get::<Mass>(chassis).unwrap().0 - 1025.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn articulated_wheel_mass_is_found_through_its_carrier() {
+        let mut app = App::new();
+        app.add_systems(Update, fold_proxy_wheel_mass);
+        let chassis = app
+            .world_mut()
+            .spawn((ActuatorPorts::default(), Mass(1000.0)))
+            .id();
+        let rocker = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(0.0, -0.2, 0.5)),
+                ChildOf(chassis),
+            ))
+            .id();
+        app.world_mut().spawn((
+            WheelRaycast {
+                mass: 25.0,
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(0.0, -0.65, -1.2)),
+            ChildOf(rocker),
+        ));
+
+        app.update();
+
+        let mass = app.world().get::<Mass>(chassis).unwrap().0;
+        let com = app
+            .world()
+            .get::<CenterOfMass>(chassis)
+            .map(|c| c.0)
+            .unwrap_or(Vec3::ZERO);
+        assert!((mass - 1025.0).abs() < 1e-3);
+        assert!((com.y + 0.85 * 25.0 / 1025.0).abs() < 1e-6);
+        assert!((com.z + 0.7 * 25.0 / 1025.0).abs() < 1e-6);
     }
 }
 

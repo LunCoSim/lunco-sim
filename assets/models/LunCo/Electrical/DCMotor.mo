@@ -7,11 +7,11 @@ within LunCo.Electrical;
 model DCMotor
   extends LunCo.Icons.Motor;
   parameter Real efficiency = 0.85 "Electrical-to-mechanical efficiency, 0..1";
-  parameter Real rated_power = 2000.0 "Continuous rated shaft power, W";
+  parameter Real rated_power = 500.0 "Continuous electrical nameplate power, W";
   // Bus voltage the drive is rated at. Used to turn the nameplate power rating
   // into the rated CURRENT the controller commands — a property of the machine's
   // rating, not a reading of the node.
-  parameter Real v_rated = 48.0 "Bus voltage the drive is rated at, V";
+  parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 
   input Real demand "Normalized motor demand, -1..1";
 
@@ -21,8 +21,8 @@ model DCMotor
   // nothing else, so a bare `Real` is computed every step and readable by no one.
   // A reported quantity is not a causal claim — `p.i` and `p.v` are still solved
   // acausally by the connection set; this only says the number leaves the model.
-  output Real electrical_power "Electrical power drawn, W";
-  output Real heat "Electrical loss delivered to the thermal network, W";
+  output Real electrical_power(unit="W") "Electrical power drawn by the motor drive";
+  output Real heat(unit="W") "Electrical loss delivered to the thermal network";
   output Real terminal_voltage_v(unit="V") "Voltage supplied to the motor drive";
   output Real terminal_current_a(unit="A") "Current drawn by the motor drive";
   output Real mechanical_power_w(unit="W") "Estimated mechanical power available after electrical losses";

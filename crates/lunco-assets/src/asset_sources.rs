@@ -62,21 +62,24 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // that must reach them without the `AssetServer` (scenario sync, shader
     // pre-validation, file dialogs) cannot disagree with the readers.
     let schemes = crate::scheme_registry::SchemeRegistry::default();
-    schemes.register(crate::LUNCO_SCHEME, move |rel| Some(assets_dir.join(rel)));
+    schemes.register(crate::LUNCO_SCHEME, move |rel| {
+        Some(assets_dir.join(crate::asset_path::relative_path(rel)?))
+    });
     let roots = twin_roots.clone();
     schemes.register(crate::TWIN_SCHEME, move |rest| {
         // `twin://<name>/<rel>` — the name selects the root, so this handler is
         // stateful where `lunco://`'s is constant.
         let (name, rel) = crate::split_twin_rel(rest)?;
         let root = roots.root_of(name)?;
-        let authored = root.join(rel);
+        let rel = crate::asset_path::relative_path(rel)?;
+        let authored = root.join(&rel);
         if authored.exists() {
             return Some(authored);
         }
         // Same two-step the `twin://` READER uses: a Twin's downloaded assets
         // live in its own `.cache`. Both sides must agree, or a file the asset
         // server can load is invisible to scenario sync / shader validation.
-        let cached = crate::twin_cache_dir(&root).join(rel);
+        let cached = crate::twin_cache_dir(&root).join(&rel);
         if cached.exists() {
             return Some(cached);
         }

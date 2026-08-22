@@ -60,8 +60,8 @@ impl InstancePanel for VizPanel {
         world
             .get_resource::<VisualizationRegistry>()
             .and_then(|r| r.get(id))
-            .map(|cfg| format!("📈 {}", cfg.title))
-            .unwrap_or_else(|| format!("📈 Plot #{instance}"))
+            .map(|cfg| cfg.title.clone())
+            .unwrap_or_else(|| format!("Plot #{instance}"))
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {

@@ -490,6 +490,7 @@ const INTENT_SPELLINGS: &[&str] = &[
     "yaw_left",
     "yaw_right",
     "action",
+    "thrust",
     "release",
     "switch_mode",
     "pause",
@@ -723,7 +724,7 @@ mod tests {
     fn valid_control_profile_produces_no_diagnostics() {
         let path = temp_usda(
             "valid_profile.usda",
-            &controls_usda(&["forward", "backward", "left", "right", "action"]),
+            &controls_usda(&["forward", "backward", "left", "right", "thrust"]),
         );
         let report = validate_asset(path.to_str().unwrap());
         assert!(report.ok, "{:?}", report.errors);

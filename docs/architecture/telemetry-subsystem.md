@@ -2,17 +2,35 @@
 
 > Status: Active · Audience: contributors on telemetry channels, plots, and the status bus
 >
-> Phases 0 and 1 are built. Phases 2–5 are proposal — each is marked inline.
+> Phases 0–5 are built. This document describes the current ownership and invariants.
 
-Landed in Phase 1: `ChannelSource::{Port, Reflect}`, **per-channel `rate_hz`**, `enabled`,
-`deadband`, clock binding via `TimeBinding`, `TelemetrySettings` (a persisted
-`SettingsSection`), rate clamping, backpressure warning, `SampledParameter::sim_secs`,
-`SampledParameter::source`, and `UnsubscribeTelemetry`.
+The built subsystem provides explicit `ChannelSource` declarations, per-channel rate and
+deadband, clock binding via `TimeBinding`, persisted `TelemetrySettings`, retained scalar
+history, the query/subscription API, engine diagnostics as channels, and
+`SampledParameter::sim_secs`/`source` identity.
 
-The one-line thesis: **almost every part of this already exists and is wired to something
-else.** The work is not writing a telemetry engine — it is *connecting four subsystems that
-were each built for one caller* and adding the single thing genuinely absent: **per-channel
-rate**.
+The one-line thesis: telemetry history is shared, bounded, and policy-driven. Modelica runtime
+state is retained by the render-free Modelica projection; authored channels use the same
+registry, so inspectors, APIs, recorders, and plots never depend on one another's UI state.
+
+### Identity, ownership, and labels
+
+`SignalRef { entity, path }` is the identity used by the registry, history, APIs, and saved
+bindings. It is never replaced by a display name. Producers attach `SignalMeta::group_path`
+from the composed USD ownership graph, so a generated solver variable can be shown under the
+authored prim that owns it without copying or renaming the model's state. `SignalExposure` then
+controls the normal operator catalog: canonical network values and authored member outputs are
+public, while complete runtime/model state remains available through the explicit model-variable
+inspection view. When a member output is also promoted to a network boundary, the boundary
+channel is the single public representation; its generated member alias stays internal so one
+physical value cannot appear twice.
+
+All operator-facing channel labels go through `lunco_viz::signal::display_channel_label`, which
+uses the same identifier humanizer and ownership-relative shortening in the telemetry browser,
+plot controls, legends, and exports. The generated-name setting only selects the presentation
+projection; it never changes identity, history, bindings, or the USD/Modelica model. A new
+producer therefore supplies ownership metadata once and does not need a second naming table in
+each UI surface.
 
 ---
 
@@ -20,14 +38,13 @@ rate**.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, path }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})` |
+| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})` |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
-| **Rate** | **`FIXED_HZ` = 60. Globally. For every channel. There is no per-channel rate anywhere in the codebase** (`grep sample_rate\|rate_limit\|min_interval` → 0 hits) |
+| **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |
-| Subscription | `lunco_api::subscription` — filters by **name allowlist + min_severity only**. No rate, no decimation |
-| Retention | **none in the telemetry path.** `lunco_core::log` is a "black box logger" that only `info!`s |
-| Unsubscribe | `TelemetrySubscriptions::unsubscribe()` exists, but **no `UnsubscribeTelemetry` request reaches it** |
-| The only "subscribe at a rate" in the product | **a JS `setTimeout` poll loop in the MCP server** (`mcp/src/index.js:810` `watch_ports`, 50–5000 ms, ≤120 samples) |
+| Subscription | `lunco_api::subscription` with explicit name/severity/rate filtering |
+| Retention | `lunco_signal::SignalRegistry` scalar histories, with per-channel retention and deadband |
+| Unsubscribe | `UnsubscribeTelemetry` owns subscription lifecycle explicitly |
 
 **Phase 0 (landed 2026-07-13):** `LunCoTelemetryPlugin` is now added in `lunco-luncosim`. It
 had never been added, so `SubscribeTelemetry` — whose consumer half (`sampled_param_observer`,
@@ -45,13 +62,13 @@ ring buffers, a clock tree, and a timeseries type already exist.
 | Need | **Already exists** | Verdict |
 |---|---|---|
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. Nothing to build. |
-| **Retention / ring buffer** | `lunco_viz::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal** (default 2000), `push_scalar()` drops non-finite, `SignalMeta { unit, provenance }`, deterministic per-path plot colour | **Use as-is.** Only producer today is the Modelica worker; its docs already anticipate other producers. Routing `SampledParameter → push_scalar` buys retention **and plotting** in one wire-up. |
+| **Retention / ring buffer** | `lunco_signal::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path. |
 | **FPS / frame stats** | `bevy::diagnostic::Diagnostic` — named `DiagnosticPath` + ring buffer + `history_len` + `smoothed()` + `is_enabled`. Used in **exactly one file** (`perf_hud.rs`), which then **hand-rolls its own** `frame_history: VecDeque<f32>` (`FRAME_HISTORY_LEN = 240`) on top of it | **A `Diagnostic` IS a telemetry channel** (f64-only). Expose it as a channel *source*; delete perf_hud's duplicate buffer. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
 | **Command shape** | `ControlAnimation { playing: Option<bool>, seek_secs: Option<f64>, rate: Option<f64> }` — one verb, all-`Option`, each field a distinct control | **Copy this idiom exactly.** One `ControlTelemetry`, not five verbs. |
-| **Settings** | `SettingsSection` trait (`const KEY`) → `~/.lunco/settings.json` (see `PerfHudSettings`, `ExperimentSettings`) | Add one `TelemetrySettings` section. |
+| **Settings** | `SettingsSection` trait (`const KEY`) → `~/.lunco/settings.json` | `TelemetrySettings` owns telemetry defaults; its persisted section must have the current shape. |
 | **Journal** | `ExperimentOp` (`experiment_journal.rs`) — journals the *definition*, never the results | Journal channel **definitions** (undo/replay/network-sync). **Never journal samples** — `twin-journal/src/lib.rs:40` says so explicitly. |
 
 ---
@@ -64,7 +81,7 @@ One component. It already exists; it grows four fields.
 pub struct Parameter {
     pub name: String,
     pub unit: String,
-    pub source: ChannelSource,      // was: `path: String`
+    pub source: ChannelSource,
     pub rate_hz: Option<f64>,       // None ⇒ TelemetrySettings::default_rate_hz
     pub enabled: bool,
     pub retention: Option<usize>,   // ring-buffer depth; None ⇒ settings default
@@ -89,9 +106,11 @@ covers every simulated subsystem; `Reflect` is the only way to reach a non-port 
 `Bool`/`String`; `Diagnostic` is where the engine's own health already lives with a ring buffer
 attached. The alternative — forcing FPS through a port backend — is more code, not less.
 
-`Parameter.path: String` → `Parameter.source: ChannelSource` is a **breaking change to a
-`Reflect` component**, which means USD/rhai/journal authoring of the old form breaks. It is
-worth it now, while the only authored `Parameter`s in existence are in tests.
+`Parameter` remains the explicit history declaration for non-Modelica and mission-semantic
+channels. Modelica runtime variables are a separate generic producer: the solver already
+publishes its complete current variable map, and the Modelica core projects that map into the
+same `SignalRegistry` using `TelemetrySettings`. No USD output attribute, per-variable
+`Parameter`, or plot binding is required.
 
 ---
 
@@ -121,7 +140,9 @@ those already live in the domain. A channel bound to a `scale = 100` domain samp
 sim-seconds per wall-second — which is exactly what "speed only the factory" means.
 
 Rate ceiling is the fixed step: you cannot sample faster than `FIXED_HZ`. A requested
-`rate_hz > FIXED_HZ` should **clamp and warn once**, not silently alias.
+`rate_hz > FIXED_HZ` is **clamped and warned**, not silently aliased. An omitted rate uses
+`TelemetrySettings::default_rate_hz`; an explicit non-positive or non-finite rate is invalid,
+warned, and skipped until corrected — it is never replaced by the subsystem default.
 
 ---
 
@@ -140,9 +161,9 @@ component you already have.
 
 Three lanes, and they are not interchangeable:
 
-1. **Live push → subscribers.** `SampledParameter` → `sampled_param_observer` → API. Today it
-   fans out at the sample rate. It needs **per-subscription decimation** (§7) so a 1 Hz
-   dashboard cannot be forced to eat a 60 Hz channel.
+1. **Live push → subscribers.** `SampledParameter` → `sampled_param_observer` → API, with
+   explicit per-subscription decimation so a 1 Hz dashboard is not forced to eat a 60 Hz
+   channel.
 2. **Retention → `SignalRegistry::push_scalar`.** Per-channel `ScalarHistory` ring buffer;
    this is what a plot reads, and what "how much history to store" means. **Scalars only** —
    `TelemetryValue::{Bool, String}` cannot enter a `ScalarHistory`.
@@ -150,23 +171,25 @@ Three lanes, and they are not interchangeable:
    String channels belong here, not in the ring buffer. *(This asymmetry is real and must be
    stated, not papered over: a `String` channel has no plot.)*
 
-### 5b. Co-sim variables are published wholesale — authored channels are not the only producer
+### 5b. Model state and explicit channels share one retention plane
 
-An authored channel (`Parameter`, `lunco:telemetry`) is a Component, so a prim carries **one**.
-A Modelica model has dozens of observable variables, and the internal ones are exactly what a
-plot is wanted for. `lunco_cosim::telemetry::publish_cosim_variables` therefore publishes every
-`SimComponent` output — which is the whole of `ModelicaModel::variables`, internals included —
-straight into `SignalRegistry`, at `CosimTelemetrySettings` rate/retention, tagged
-`provenance = "cosim"`.
+`ModelicaModel::parameters`, `inputs`, and `variables` are the live model-inspector surface, and
+`CosimStatus`/`SnapshotVariables` expose the same state to agents and API clients. After a solver
+response lands, `lunco-modelica::runtime_telemetry` retains finite `variables` in the shared
+`SignalRegistry` at `TelemetrySettings::default_rate_hz`, subject to the shared deadband,
+retention, and channel cap. The projection clears a solver session's old history when the
+authoritative Modelica `session_id` changes, so reloads cannot mix time bases.
 
-Two producers, one registry, and they must never share a buffer: auto-published variables are
-namespaced `sim.<var>`, authored channels keep their bare mnemonic. Without that, a motor prim
-carrying both a `torque` channel and a `torque` model variable would interleave two cadences into
-one history and the plot would show a signal that never existed.
+This is runtime exploration, not authored schema: no USD output attribute and no per-variable
+`Parameter` is synthesized. Explicit `Parameter`/`lunco:telemetry` channels remain the right
+choice when an author wants a stable mission-facing name, custom rate/unit, or a non-Modelica
+source. Both producers write the same signal identity and registry, so the telemetry browser,
+API, recorder, and plot surfaces see one catalog. Plot bindings only choose what to display; they
+do not decide whether model state exists.
 
-**Rate and depth are chosen together.** Defaults are 5 Hz × 1500 samples = a 5-minute window that
-does not wrap; one sample is 16 B, so a variable costs ~24 KB and a rover (~7 models × ~20 vars)
-~3.4 MB. Raising the rate alone does not cost memory — it silently shortens the window.
+The model inspector answers "what is the model doing now?"; the telemetry browser answers "what
+channels and history are available?". Both use the shared deadband to suppress numerical jitter,
+with non-finite values excluded from scalar history and solver time resets handled explicitly.
 
 ---
 
@@ -203,9 +226,8 @@ API-side, two changes to existing types — **no new request verbs**:
 - `TelemetryFilter { names, min_severity }` gains **`rate_hz: Option<f64>`** — per-subscription
   decimation, independent of the channel's own rate. This is what finally replaces the MCP
   `watch_ports` JS poll loop with a real server push.
-- **Add `UnsubscribeTelemetry`.** `TelemetrySubscriptions::unsubscribe()` already exists and is
-  **unreachable** — subscriptions currently leak for the life of the process. This is a bug, not
-  a feature request.
+- **`UnsubscribeTelemetry`** is the explicit lifecycle operation paired with
+  `SubscribeTelemetry`; subscriptions do not rely on process teardown.
 
 ---
 
@@ -274,39 +296,46 @@ No separate sensor telemetry machinery exists.
 
 ```rust
 struct TelemetrySettings {          // impl SettingsSection, KEY = "telemetry"
-    default_rate_hz: f64,           // 10.0 — NOT 60; 60 is a firehose default
-    default_retention: usize,       // 2000, matching ScalarHistory's default
+    default_rate_hz: f64,           // 5.0 — the semantic default for omitted channel rates
+    default_retention: usize,       // 1500 samples — five minutes at 5 Hz
     max_channels: usize,            // backpressure guard
     enabled: bool,
+    default_deadband: TelemetryDeadband,
 }
 ```
 
+The resolution rules are deliberately narrow:
+
+- `Parameter.rate_hz = None` selects the configured `default_rate_hz`.
+- A rate above `FIXED_HZ` selects the fixed-step ceiling and emits a warning.
+- A non-positive or non-finite explicit rate is rejected or skipped; no other rate is
+  substituted.
+- An explicit channel deadband must be finite and non-negative. Invalid authored or command
+  values are rejected or skipped; the subsystem deadband is never substituted.
+- `LunCoTelemetryPlugin` installs and owns the unified mission-time spine and telemetry
+  settings required by the sampler. A host that calls the internal sampler without that
+  plugin is misconfigured; it does not receive guessed settings or a second clock.
+- The query and export providers use the plugin-owned `SignalRegistry`; a missing registry is
+  an integration error, not an empty recording.
+- A persisted telemetry section must contain the current fields. Missing fields or unknown
+  fields invalidate that section and cause the settings owner to install current defaults;
+  there is no field-level compatibility reader.
+
 ---
 
-## 10. What else is needed — the things not asked for
+## 10. Operational invariants
 
-These are the gaps the requirements didn't name and that will bite:
-
-1. **Deadband / change-only sampling.** A channel that hasn't moved shouldn't spend bandwidth.
-   `emit_on_change: Option<f64>` (absolute epsilon) is the single biggest bandwidth win
-   available and is standard in real telemetry systems.
-2. **Timestamp precision.** `SampledParameter.timestamp` is `epoch_jd: f64`. Julian Date is
-   ~2.46e6 days, so an `f64` has ≈**86 µs** of resolution left — fine at 60 Hz, but it is *not*
-   a high-rate timebase, and differencing two JDs to get a Δt loses most of the precision.
-   Recordings should carry `sim_secs` (which starts near zero) and keep `epoch_jd` for absolute
-   wall-time labelling. **This is a real defect waiting to happen.**
-3. **Name collisions.** Two entities can both declare `"motor_current"`. Channels must be keyed
-   by `(entity, name)` — `SignalRef { entity, path }` already has exactly this shape, and
-   `SignalRef::global(path)` covers the un-owned case.
-4. **Backpressure / drop policy.** What happens when a subscriber is slower than its channel?
-   Decide explicitly: drop-oldest (lossy, bounded) vs. block (never). For a sim, drop-oldest.
-   And **say so in a log line** — a silently-lossy telemetry feed is worse than none.
-5. **Unsubscribe leak** (§7) — existing bug.
-6. **Pause semantics.** On the fixed clock, sampling stops when the sim pauses. That is correct
-   and comes for free — but it must be *documented*, or someone will "fix" it onto `Update`.
-7. **Determinism.** Sampling on the fixed clock means a replay produces the same samples. Moving
-   telemetry to `Update` would break that. This is the same failure the co-sim already had once
-   (paced by the render frame); do not reintroduce it here.
+1. **Explicit history.** Modelica parameters, inputs, and variables are live inspection state;
+   only a selected binding or authored `Parameter` is retained.
+2. **Bounded history.** Scalar retention is a ring buffer with an authored or configured sample
+   capacity. It never grows to preserve an implicit stream.
+3. **Fixed-clock sampling.** Sampling stops when the bound simulation clock pauses, which is
+   correct; moving it to `Update` would make replay depend on render cadence.
+4. **Numerical visibility.** The shared deadband suppresses ordinary jitter, while non-finite
+   transitions are always retained so numerical faults remain visible.
+5. **Identity.** Channels are keyed by `(measured entity, name)`, not by a name-only lookup.
+6. **No invented values.** Missing samples in a multi-rate recording remain empty; history is
+   not interpolated to make a slower channel look faster.
 
 ---
 
@@ -315,8 +344,8 @@ These are the gaps the requirements didn't name and that will bite:
 - **Phase 0 — DONE.** Plugin wired; `SubscribeTelemetry` can actually deliver.
 - **Phase 1 — DONE.** `ChannelSource`, per-channel `rate_hz`, `enabled`, `deadband`, the
   domain accumulator, `TimeBinding`, `TelemetrySettings`. Closes the "60 Hz firehose, one
-  global rate" gap. Plus the §10 defects: `sim_secs`, `(entity, name)` keying, the
-  unreachable unsubscribe, rate clamping, and a loud backpressure cap.
+  global rate" gap. Plus the §10 invariants: `sim_secs`, `(entity, name)` keying, rate
+  clamping, and a loud backpressure cap.
 - **Phase 2 — DONE.** `SampledParameter → SignalRegistry::push_scalar`, per-channel `retention`,
   history dropped with its entity. Required extracting **`lunco-signal`** (render-free) out of
   `lunco-viz` (which links `bevy_egui → bevy_render`), since a `--no-ui` run needs retention just
@@ -382,11 +411,22 @@ loudly rather than silently opening back up.
 must be the safe one.** Anything that writes to a user's home directory on a resource change must
 prove it isn't a test first.
 
-### A trap found while building Phase 1
+### The clock contract
 
-`WorldTime::default()` has `sim_secs == 0`. An app without the `lunco-time` spine therefore
-sees a clock that **never advances** — so every channel comes due once, fires, sets its next
-due time, and is never due again. Telemetry silently stops after one sample. The sampler now
-falls back to `Time<Fixed>`'s accumulated time when the spine is absent. Any future code that
-paces itself off `WorldTime` must handle this — a defaulted clock is not a stopped clock, it
-is a *frozen* one, and the two are indistinguishable at the call site.
+Telemetry is a fixed-clock subsystem and therefore requires `lunco_time::TimePlugin`.
+`WorldTime` supplies the absolute epoch and the resolved domain tree supplies each channel's
+simulation time. A missing time resource is an integration error; falling back to a different
+clock would make pause, warp, and replay semantics depend on how the host assembled the app.
+
+Runtime projections use the same contract at their owning boundaries:
+
+- fixed-step physics retains post-step state at `MissionClock::sim_secs(SimTick)`. It does not
+  use `Time<Fixed>::elapsed_secs_f64()`, which is only the Bevy fixed-schedule accumulator and
+  can repeat a timestamp when several fixed steps execute in one rendered frame;
+- Modelica retains a solver result at the solver's landed `current_time`, which is the same
+  simulation domain presented by the model participant;
+- `WorldTime.epoch_jd` remains the absolute display/correlation timestamp. It is not used for
+  finite differences because its large Julian-Date magnitude loses precision.
+
+This gives every producer one semantic time value for history, rate, deadband, and derivatives,
+while preserving the absolute epoch as a separate presentation field.

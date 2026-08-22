@@ -177,7 +177,7 @@ impl Panel for AvatarStatusPanel {
                 }
 
                 ui.separator();
-                if ui.button("🏠 Return to Orbit").clicked() {
+                if ui.button("Return to Orbit").clicked() {
                     leave_target = view.avatar;
                 }
                 ui.separator();

@@ -40,6 +40,9 @@ fn island_port(member, field) {
     if member == "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL" && field == "electrical_power" {
         return "__member_SolarRoverTest_x2f_SolarRover_x2f_Motor__FL_electrical_power";
     }
+    if member == "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL" && field == "terminal_current_a" {
+        return "__member_SolarRoverTest_x2f_SolarRover_x2f_Motor__FL_terminal_current_a";
+    }
     ()
 }
 
@@ -50,8 +53,12 @@ fn island_value(elec, member, field) {
 fn have_ports(s) {
     island_value(s.elec, "Battery", "soc_out") != () &&
     island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "power_out") != () &&
+    get(s.elec, "solar_available_power") != () &&
+    get(s.elec, "battery_discharge_power") != () &&
+    get(s.elec, "battery_charge_power") != () &&
     island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "cos_incidence") != () &&
     island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "electrical_power") != () &&
+    island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "terminal_current_a") != () &&
     get(s.tracker, "yaw") != () && get(s.hinge, "angle") != ()
 }
 
@@ -71,6 +78,7 @@ fn on_start(me) {
     this.soc_after_charge = ();
     this.power_before = ();
     this.power_after_step = ();
+    this.available_before = ();
     this.incidence_before = ();
     this.incidence_after_step = ();
     this.yaw_before = ();
@@ -81,6 +89,9 @@ fn on_start(me) {
     this.island_drive_left_after_stop = ();
     this.island_drive_right_after_stop = ();
     this.peak_motor_power = 0.0;
+    this.peak_motor_current = 0.0;
+    this.peak_battery_discharge_power = 0.0;
+    this.peak_battery_charge_power = 0.0;
 
     print("[solar-cycle] ── solar rover energy cycle ─────────────────────");
 }
@@ -112,6 +123,7 @@ fn on_tick(me) {
         }
 
         this.power_before = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "power_out");
+        this.available_before = get(this.elec, "solar_available_power");
         this.incidence_before = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "cos_incidence");
         this.yaw_before = get(this.tracker, "yaw");
         this.phase = "track_sun";
@@ -141,6 +153,14 @@ fn on_tick(me) {
         if motor != () && motor > this.peak_motor_power {
             this.peak_motor_power = motor;
         }
+        let current = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "terminal_current_a");
+        if current != () && current > this.peak_motor_current {
+            this.peak_motor_current = current;
+        }
+        let discharge = get(this.elec, "battery_discharge_power");
+        if discharge != () && discharge > this.peak_battery_discharge_power {
+            this.peak_battery_discharge_power = discharge;
+        }
         if phase_t < DRIVE_S { return; }
         this.soc_after_drive = island_value(this.elec, "Battery", "soc_out");
         this.position_after_drive = world_pos(this.rover);
@@ -157,6 +177,10 @@ fn on_tick(me) {
         // distinguishable from an idle electrical-model defect.
         this.island_drive_left_after_stop = get(this.elec, "drive_left");
         this.island_drive_right_after_stop = get(this.elec, "drive_right");
+        let charge = get(this.elec, "battery_charge_power");
+        if charge != () && charge > this.peak_battery_charge_power {
+            this.peak_battery_charge_power = charge;
+        }
         if phase_t < CHARGE_S { return; }
         this.soc_after_charge = island_value(this.elec, "Battery", "soc_out");
         this.done = true;
@@ -171,6 +195,7 @@ fn verdict(s) {
     f.push(t_present(s.soc_after_charge, "battery SOC after charge"));
     f.push(t_present(s.power_before, "panel power before sun step"));
     f.push(t_present(s.power_after_step, "panel power after sun step"));
+    f.push(t_present(s.available_before, "panel available power before drive"));
     f.push(t_present(s.incidence_before, "panel incidence before sun step"));
     f.push(t_present(s.incidence_after_step, "panel incidence after sun step"));
     f.push(t_present(s.yaw_after_step, "SunTracker yaw"));
@@ -200,6 +225,12 @@ fn verdict(s) {
     }
     f.push(t_true(s.peak_motor_power > 0.0,
         "generated motor model reported no electrical draw under BT patrol"));
+    f.push(t_true(s.peak_motor_current > 0.0,
+        "generated motor model reported no terminal current under BT patrol"));
+    f.push(t_true(s.peak_battery_discharge_power > 0.0,
+        "battery reported no discharge power under motor load"));
+    f.push(t_true(s.peak_battery_charge_power > 0.0,
+        "battery reported no charge power after the patrol stopped"));
     if s.soc_before_drive != () && s.soc_after_drive != () {
         f.push(t_true(s.soc_before_drive - s.soc_after_drive > SOC_DROP_MIN,
             "battery SOC did not fall under motor load"));
@@ -221,7 +252,10 @@ fn verdict(s) {
     print("[solar-cycle] tracker sun_mount_x=" +
           r4(get(s.tracker, "sun_mount_x")));
     print("[solar-cycle] power " + r2(s.power_before) + "W -> " +
-          r2(s.power_after_step) + "W, motor peak=" + r2(s.peak_motor_power) + "W");
+          r2(s.power_after_step) + "W, available=" + r2(s.available_before) +
+          "W, motor peak=" + r2(s.peak_motor_power) + "W, motor current=" +
+          r2(s.peak_motor_current) + "A, battery discharge/charge peak=" +
+          r2(s.peak_battery_discharge_power) + "/" + r2(s.peak_battery_charge_power) + "W");
     print("[solar-cycle] post-stop electrical inputs left/right=" +
           r4(s.island_drive_left_after_stop) + "/" + r4(s.island_drive_right_after_stop));
     report_verdict(f, "SOLAR ROVER ENERGY CYCLE", "SOLAR_ROVER_ENERGY_CYCLE");

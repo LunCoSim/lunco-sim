@@ -46,7 +46,7 @@ fn mission(me) {
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
-            text: "Click the rover to take control. F toggles autopilot when a route is authored.",
+            text: "Click the rover, then click Possess in the Inspector or Command Deck.",
             done: Fn("first_drive_controlled"),
             on_complete: Fn("first_drive_possessed"),
         }),
@@ -65,7 +65,7 @@ fn on_event(me, evt) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         hint("Tutorial complete! Free-roam, or pick another lesson from the Tutorials panel.");
-        notify_kind("First Drive complete 🎉", "success");
+        notify_kind("First Drive complete", "success");
     }
 }
 

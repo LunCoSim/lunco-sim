@@ -18,7 +18,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-usd-bevy", "dep:lunco-usd-compose"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-scripting", "lunco-scripting/rhai", "dep:lunco-usd-bevy", "dep:lunco-usd-compose"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -80,11 +80,9 @@ lunco-twin = { path = "../lunco-twin", optional = true }
 # Journal-on-wire (scenario-plane sync): ship `JournalEntry`s host→client, applied
 # via `Journal::append_remote` (which merges). Optional — networking build only.
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features = ["hooks"] }
-# Pluggable convergent merge policy authored in rhai ("conflict resolution
-# strategies but in rhai"): register a deterministic merge hook and switch the
-# journal to `MergeStrategy::Scripted`. Optional — networking build only.
-lunco-hooks = { path = "../lunco-hooks", optional = true }
-lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
+# Shared policy activation: standalone and networked apps must project the same
+# policy definitions through one scripting-owned hook registry.
+lunco-scripting = { path = "../lunco-scripting", optional = true, default-features = false }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets = { path = "../lunco-assets" }

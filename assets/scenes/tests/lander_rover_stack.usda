@@ -59,17 +59,6 @@ def Xform "LanderRoverStack" (
     }
 
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
-    )
-    {
-        uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
-        double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
-        double3 xformOp:translate = (16.0, 7.0, 16.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
     # Airframe arc only — no guidance. Pads sit at y = -5.0 in the vehicle's own
     # frame, so a hull at y = 8.0 holds them 3 m up.
     def "Lander" (

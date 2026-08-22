@@ -671,6 +671,14 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                     .map(|pending| pending.world.clone())
             });
 
+        // A tutorial is a guided presentation, not a continuation of the
+        // user's previous editor session. Reset the shared workbench owner at
+        // the canonical launch boundary so menu, panel, F1, API, and chained
+        // launches all get the same perspective and layout semantics.
+        #[cfg(feature = "ui")]
+        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+            layout.reset_to_default_perspective();
+        }
         clear_tutorial_hud(world);
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
@@ -1052,12 +1060,12 @@ fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
 
 /// Modal confirm popup shown when a tutorial finishes and a successor is queued
 /// (unless [`TutorialProgress::autoproceed`]). Continue starts the next tutorial;
-/// Stay dismisses. The checkbox flips `autoproceed`.
+/// Stay dismisses. Auto-continue is an app setting in the Settings menu, not a
+/// completion-prompt action.
 #[cfg(feature = "ui")]
 fn draw_advance_prompt(
     mut egui_ctx: EguiContexts,
     mut pending: ResMut<PendingAdvance>,
-    mut progress: ResMut<TutorialProgress>,
     registry: Res<TutorialRegistry>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
@@ -1091,18 +1099,9 @@ fn draw_advance_prompt(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(360.0);
-                ui.heading("🎓 Tutorial complete");
+                ui.heading("Tutorial complete");
                 ui.separator();
                 ui.label(format!("Continue to “{next_title}”?"));
-                ui.add_space(6.0);
-                let mut auto = progress.autoproceed;
-                if ui
-                    .checkbox(&mut auto, "Continue automatically from now on")
-                    .on_hover_text("Skip this prompt and chain straight to the next tutorial.")
-                    .changed()
-                {
-                    progress.autoproceed = auto;
-                }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if ui.button("Continue →").clicked() {
@@ -1320,7 +1319,20 @@ fn register_tutorials_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
-    layout.register_custom_menu("🎓 Tutorials", |ui, ctx| {
+    layout.register_settings(|ui, ctx| {
+        let Some(mut progress) = ctx.resource::<TutorialProgress>().cloned() else {
+            return;
+        };
+        ui.label(egui::RichText::new("Tutorials").weak().small());
+        if ui
+            .checkbox(&mut progress.autoproceed, "Auto-continue to next tutorial")
+            .on_hover_text("When off, a completion popup asks before starting the next tutorial.")
+            .changed()
+        {
+            ctx.set_resource(progress);
+        }
+    });
+    layout.register_custom_menu("Tutorials", |ui, ctx| {
         ui.set_min_width(MENU_MIN_WIDTH);
         ui.set_max_width(MENU_MAX_WIDTH);
         let registry = ctx
@@ -1340,7 +1352,7 @@ fn register_tutorials_menu(world: &mut World) {
             return;
         }
         ui.label(
-            egui::RichText::new("▶ tours · 🎯 simulator exercises · ✓ completed")
+            egui::RichText::new("Tours · simulator exercises · completed")
                 .weak()
                 .small(),
         );
@@ -1384,11 +1396,11 @@ fn register_tutorials_menu(world: &mut World) {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
                             let glyph = if done {
-                                "✓"
+                                "Done"
                             } else if meta.format == curriculum::LessonFormat::Tour {
-                                "▶"
+                                "Tour"
                             } else {
-                                "🎯"
+                                "Exercise"
                             };
                             if ui
                                 .add_sized(
@@ -1471,7 +1483,7 @@ impl Panel for TutorialsPanel {
             .unwrap_or_else(lunco_theme::Theme::dark);
 
         ui.add_space(4.0);
-        ui.heading("🎓 Tutorials");
+        ui.heading("Tutorials");
         ui.label(
             egui::RichText::new(
                 "Tours explain the UI · exercises require simulator evidence · ✓ completed.",
@@ -1482,16 +1494,6 @@ impl Panel for TutorialsPanel {
         if !progress.completed.is_empty() && ui.button("Reset completion history").clicked() {
             ctx.trigger(ResetTutorialProgress {});
         }
-
-        let mut auto = progress.autoproceed;
-        if ui
-            .checkbox(&mut auto, "Auto-continue to next tutorial")
-            .on_hover_text("When off, a popup asks before starting each next tutorial.")
-            .changed()
-        {
-            ctx.resource_scope::<TutorialProgress, ()>(|_ctx, p| p.autoproceed = auto);
-        }
-        ui.separator();
 
         if registry.tutorials.is_empty() {
             ui.label(egui::RichText::new("No tutorials registered.").weak());

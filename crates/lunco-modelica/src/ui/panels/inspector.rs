@@ -277,7 +277,7 @@ impl Panel for InspectorPanel {
         }
         if read_only {
             ui.label(
-                egui::RichText::new("🔒 Read-only library tab — duplicate to workspace to edit.")
+                egui::RichText::new("Read-only library tab - duplicate to workspace to edit.")
                     .italics()
                     .color(warning),
             );

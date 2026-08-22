@@ -107,7 +107,7 @@ the compositor and the unfocused power-save throttle, not the renderer.
 ## Interactive Controls
 
 - **WASD / Arrow Keys**: Drive the possessed rover.
-- **Space**: Brake.
+- **Space**: Thrust the possessed lander or brake the possessed rover, according to the vessel's authored control profile.
 - **G key**: Translate mode (3-axis arrows) for selected objects.
 - **R key**: Rotate mode (3-axis rings) for selected objects.
 - **Ctrl+Z**: Undo spawns and transform changes.

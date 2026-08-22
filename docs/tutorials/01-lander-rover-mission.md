@@ -201,7 +201,7 @@ immediately. One `piloted` signal, two different behaviours, no `if`.
 
 Where `pitch`, `roll` and `yaw` come from is worth knowing: nothing in this file, and
 no script. The `Controls` profile you'll reference in Step 3 maps the keyboard's
-intents onto ports *by name* — `action → external_throttle`, `forward → pitch`,
+intents onto ports *by name* — `thrust → external_throttle`, `forward → pitch`,
 `left → roll`, `yaw_left → yaw`. Name an input differently and that key quietly does
 nothing, which is a genuinely annoying afternoon.
 
@@ -537,7 +537,7 @@ Three details that matter:
 - **`piloted` is derived, never authored.** Nothing writes it. Possess the vessel
   and it reads 1; release it and it reads 0. Authority has exactly one source.
 - **The pilot's stick needs no wire.** `external_throttle` is fed by the `Controls`
-  profile you referenced in Step 3, which maps the `action` intent straight onto a
+  profile you referenced in Step 3, which maps the `thrust` intent straight onto a
   port of that name. Don't be tempted to `.connect` it to anything — wiring it to the
   model's own `throttle` output would feed the engine its own exhaust, and the moment
   you possessed the lander the throttle would latch wherever it happened to be.

@@ -1032,73 +1032,11 @@ def Xform "RockerBogie" (
         float physics:upperLimit = 20
     }
 
-    # ── Wheel revolute joints (rocker/bogie ↔ wheel) ────────────────────────
-    # The joint is the motor's OUTPUT COUPLING, not the motor: it carries
-    # `PhysicsDriveAPI:angular`, the drive `type` and the axis, and NOTHING ELSE.
-    # `maxForce` and `targetVelocity` are deliberately absent — the loader writes
-    # them from the `Motor_*` / `Gearbox_*` pair that names this joint's WHEEL via
-    # `lunco:motor:drivenWheel` — the loader follows wheel → joint to get here — so the
-    # torque ceiling is stated once, on the part that makes the torque, instead of being
-    # typed here as a second opinion.
-    def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/RockerL>
-        rel physics:body1 = </RockerBogie/RockerL/Wheel_FL>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
-
-    def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/RockerR>
-        rel physics:body1 = </RockerBogie/RockerR/Wheel_FR>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
-
-    def PhysicsRevoluteJoint "Wheel_ML_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/BogieL>
-        rel physics:body1 = </RockerBogie/BogieL/Wheel_ML>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
-
-    def PhysicsRevoluteJoint "Wheel_MR_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/BogieR>
-        rel physics:body1 = </RockerBogie/BogieR/Wheel_MR>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
-
-    def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/BogieL>
-        rel physics:body1 = </RockerBogie/BogieL/Wheel_RL>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
-
-    def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-    )
-    {
-        rel physics:body0 = </RockerBogie/BogieR>
-        rel physics:body1 = </RockerBogie/BogieR/Wheel_RR>
-        uniform token physics:axis = "X"
-        uniform token drive:angular:physics:type = "force"
-    }
+    # The six wheels intentionally have NO revolute joints. They are raycast
+    # wheels, so their authored rocker suspension supplies the compliant normal
+    # load while the rocker/bogie bodies and the four structural hinges above
+    # remain real Avian rigid bodies. A wheel revolute would promote each tire to
+    # a second rigid body and bypass the suspension component entirely.
 
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become actuator values is COMPOSITION, not an
@@ -1145,6 +1083,9 @@ def Xform "RockerBogie" (
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
                 float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+                float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+                float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
+                float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a
@@ -1248,6 +1189,7 @@ def Xform "RockerBogie" (
                 float inputs:sun_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
                 float inputs:sun_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
                 float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+                float outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
                 float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
                 prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
             }

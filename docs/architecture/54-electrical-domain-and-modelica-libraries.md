@@ -65,18 +65,23 @@ and says so at load rather than sitting inert.
 
 **The network boundary is derived from typed USD structure.** The presence of
 `CollectionAPI:components` identifies the Scope as a Modelica network. Its composed
-`connectors:*`, `inputs:` and `outputs:` properties supply the complete topology; there
-is no `lunco:synthesizer` selector and no Rhai hook that can emit an arbitrary replacement
-model. A different physical domain needs its own typed USD contract and runtime projector,
-so a string property cannot silently change the equations being simulated.
+`connectors:*`, `inputs:` and `outputs:` properties supply the facts. The authored
+`lunco:synthesizer` selector may choose a registered synthesizer, and the existing
+`synth.<name>` hook seam lets a Rhai policy return the generated Modelica source plus
+its unit merge and diagram layout. Rust still reads and validates the composed USD
+graph; it does not need a new branch when a policy changes the dynamic building
+behaviour. A different physical domain must still register its own typed synthesizer
+contract rather than silently changing this network's boundary.
 
 At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
 projects every included Modelica program facet into one generated composite Modelica
 root. Acausal facets contribute `connect()` equations; causal-only blocks participate
-through their `inputs:`/`outputs:` connections. The projector's connected units
+through their `inputs:`/`outputs:` connections. The built-in policy's connected units
 preserve independent equation subgraphs and route their public inputs/outputs through
-the root. The generated source exists only at runtime; USD remains the authored source
-of assembly truth and Modelica remains the equation language.
+the root. A hook-backed policy can replace that merge and the visual placements while
+remaining constrained to the same composed members and public boundary. The generated
+source exists only at runtime; USD remains the authored source of assembly truth and
+Modelica remains the equation language.
 
 ```usd
 def Xform "Battery" (
@@ -125,6 +130,14 @@ The Modelica class is resolved from the loaded `.mo` source (`within` plus its d
 class). `info:sourceAsset:subIdentifier` selects a definition when a source contains
 several; no class name is guessed from an asset path. A source that is still loading
 keeps the network pending, and a source that fails becomes a terminal projection error.
+
+The transient generated document is also a standard Modelica visual document. The root
+class carries an `Icon` and a `Diagram`, and each generated synthesis unit is a placed
+child instance with its own `Icon`/`Diagram`; the unit class contains the placed member
+instances that its equations actually execute. The workbench reads these annotations and
+the `connect()` equations from the same generated AST, so opening the root shows the
+runtime unit topology and drilling into a unit shows its real member topology. This is
+inspection of the executable projection, not a second visual-only network.
 
 ## 2a. Authoring a device model: the four rules that are not obvious
 
