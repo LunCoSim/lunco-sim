@@ -107,7 +107,7 @@ That is the whole enforcement in single-player. In networked play the host `auth
 Who may `PossessVessel` a vessel currently held by an autopilot is **not** hardcoded. It rides the existing scripted-authorization plane:
 
 - A rhai `fn allow(ctx)` registered under `AUTHORIZE_HOOK` (`"rbac.authorize"`, `session.rs:676`) receives `{ session, capability, target, owns_target, role }` and returns a bool. It can only **tighten** (fail-closed), so it never weakens the compiled floor.
-- Distribution is `SetScriptedPolicy { kind: Authorize, … }` (`crates/lunco-networking/src/scripted_policy.rs`): host-authoritative, compiled once, **broadcast to every peer on connect and on change**, so late joiners converge.
+- Distribution is a journaled `LunCoPolicy` USD prim projected through the shared Rhai policy owner (`crates/lunco-scripting/src/policy.rs`): host-authoritative, compiled once, **replicated to every peer on connect and on change**, so late joiners converge.
 - Example policy: *"a human `Operator` may steal a vessel from an `AiAgent`; an `AiAgent` may not steal from a human."* Expressed in a few lines of rhai, hot-swappable, no recompile.
 
 Because `PossessVessel` arbitration already runs through `SessionRegistry::claim` + `authorize`, "who controls, decided by scripting" needs **no new mechanism** — only the `allow` snippet.

@@ -72,6 +72,8 @@ pub struct GeneratedModelicaSource {
     pub member_output_aliases: Vec<(String, String, String)>,
     /// Deterministic composite units selected by the synthesizer.
     pub units: Vec<SynthesisUnit>,
+    /// Unit and member positions selected by the synthesizer policy.
+    pub layout: SynthesisLayout,
 }
 
 /// One public Modelica component facet authored in USD.
@@ -135,6 +137,22 @@ pub struct SynthesisUnit {
     pub outputs: BTreeSet<String>,
 }
 
+/// Visual placement selected alongside a generated Modelica plan.
+///
+/// Positions are presentation facts, not simulation inputs. The built-in
+/// synthesizer supplies a deterministic topology layout; a hook-backed
+/// synthesizer may replace it by returning a `layout` map. Keeping the
+/// positions in the plan makes the policy result inspectable through the
+/// generated-source API instead of leaving the visual decision implicit in a
+/// separate Rust pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SynthesisLayout {
+    /// Generated child-unit class name to Modelica diagram position.
+    pub unit_positions: BTreeMap<String, (i32, i32)>,
+    /// Composed USD member path to Modelica diagram position.
+    pub member_positions: BTreeMap<String, (i32, i32)>,
+}
+
 /// One authoring error that prevents a safe runtime projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DomainProjectionError {
@@ -166,6 +184,8 @@ pub struct SynthesisPlan {
     pub members: Vec<(String, String, String)>,
     /// Connected composite units emitted below the root model.
     pub units: Vec<SynthesisUnit>,
+    /// Presentation placements selected by the synthesizer.
+    pub layout: SynthesisLayout,
 }
 
 /// One way of turning a composed USD scope into ONE Modelica compilation unit.
@@ -175,12 +195,14 @@ pub struct SynthesisPlan {
 /// not an edit to [`project_domain_islands`]. A scope selects one with
 /// `uniform token lunco:synthesizer`; absent means the default.
 ///
-/// Not yet rhai-authored: a rhai body would need an emit surface of its own
-/// (`ApplyModelicaOp`-style verbs) before policy could live outside Rust. The
-/// registry is what makes that a later addition rather than a rewrite.
+/// Hook-backed entries use the existing `lunco_hooks` substrate: Rust supplies
+/// the composed facts and Rhai returns the Modelica source, merge units, and
+/// diagram placements. The registry keeps that policy selection independent of
+/// `project_domain_islands`, so changing dynamic building behaviour does not
+/// require a Rust branch.
 pub trait DomainSynthesizer: Send + Sync + 'static {
     /// Registry key, and the token a scope names.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     /// Turn one composed scope into a compilation unit.
     fn synthesize(
         &self,
@@ -256,20 +278,21 @@ impl SynthesizerRegistry {
 /// of it should require a rebuild to change.
 ///
 /// The hook receives one argument — [`network_facts`] — and returns a map with
-/// a required `source` key (room for a policy to report its own diagnostics
-/// later). A single result shape keeps the extension boundary typed for every
-/// authored emitter.
+/// a required `source` key. It may also return `units` and `layout`: those are
+/// the policy's explicit merge and presentation decisions. Omitting either
+/// keeps the documented deterministic default, which is supplied as facts to
+/// the policy and remains visible in the resulting plan.
 ///
 /// Registered through [`register_hook_synthesizer`]; the hook id is by convention
 /// `synth.<name>`, reached exactly like `lint.usd`.
 pub struct HookSynthesizer {
-    name: &'static str,
+    name: String,
     hook_id: String,
 }
 
 impl DomainSynthesizer for HookSynthesizer {
-    fn name(&self) -> &'static str {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
     fn synthesize(
         &self,
@@ -326,11 +349,39 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]);
         };
+        let default_units = partition_network(&network);
+        let units = parse_policy_units(
+            hook_map_value(map, "units"),
+            &network,
+            &network_root,
+            &self.name,
+            default_units,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message,
+            }]
+        })?;
+        let layout = parse_policy_layout(
+            hook_map_value(map, "layout"),
+            &network,
+            &units,
+            &network_root,
+            &self.name,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message,
+            }]
+        })?;
         Ok(SynthOutcome::Ready(SynthesisPlan {
             source: source.to_string(),
-            // The BOUNDARY and unit partition stay Rust's answer even when the
-            // emitter body is authored: they are the runtime contract and the
-            // topology facts supplied to the policy.
+            // The BOUNDARY remains Rust's composed-USD answer. The policy owns
+            // the emitted source, merge partition, and visual placement, but
+            // cannot invent a runtime port surface or a member outside the
+            // composed network.
             inputs: network.inputs.clone(),
             outputs: network.outputs.keys().cloned().collect(),
             component_paths: network
@@ -349,7 +400,8 @@ impl DomainSynthesizer for HookSynthesizer {
                     )
                 })
                 .collect(),
-            units: partition_network(&network),
+            units,
+            layout,
         }))
     }
 }
@@ -359,11 +411,253 @@ impl DomainSynthesizer for HookSynthesizer {
 /// The hook itself is registered by whatever compiled it — `lunco_hooks_rhai::register_rhai_hook`
 /// for a rhai policy — so this crate needs no scripting dependency and any
 /// language that implements [`lunco_hooks::ScriptHook`] can author one.
-pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'static str) {
+pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: impl Into<String>) {
+    let name = name.into();
     registry.register(HookSynthesizer {
-        name,
         hook_id: format!("synth.{name}"),
+        name,
     });
+}
+
+/// Remove a policy-owned hook synthesizer. Removing a policy that overrides a
+/// shipped name restores that name's documented built-in synthesizer; a custom
+/// policy name simply leaves the open registry without that entry.
+pub fn unregister_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &str) {
+    registry.0.remove(name);
+    match name {
+        DEFAULT_SYNTHESIZER => registry.register(AcausalNetworkSynthesizer),
+        ACTUATOR_WRENCH_SYNTHESIZER => registry.register(ActuatorWrenchSynthesizer),
+        _ => {}
+    }
+}
+
+fn hook_map_value<'a>(
+    map: &'a [(String, lunco_hooks::HookValue)],
+    key: &str,
+) -> Option<&'a lunco_hooks::HookValue> {
+    map.iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+}
+
+fn hook_map_string(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<String, String> {
+    hook_map_value(map, key)
+        .and_then(lunco_hooks::HookValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{context} must contain a non-empty string `{key}`"))
+}
+
+fn hook_map_string_array(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = hook_map_value(map, key) else {
+        return Ok(Vec::new());
+    };
+    let lunco_hooks::HookValue::Array(values) = value else {
+        return Err(format!("{context}.{key} must be an array of strings"));
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{context}.{key}[{index}] must be a string"))
+        })
+        .collect()
+}
+
+/// Read a policy-owned unit partition and prove that it is only rearranging
+/// the composed graph. USD facts stay authoritative for membership and public
+/// boundaries; Rhai chooses how those members are merged into Modelica units.
+fn parse_policy_units(
+    value: Option<&lunco_hooks::HookValue>,
+    network: &DomainNetwork,
+    root: &str,
+    policy_name: &str,
+    default_units: Vec<SynthesisUnit>,
+) -> Result<Vec<SynthesisUnit>, String> {
+    let Some(value) = value else {
+        return Ok(default_units);
+    };
+    let lunco_hooks::HookValue::Array(raw_units) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `units`, which must be an array"
+        ));
+    };
+    let known_components: BTreeSet<String> = network
+        .components
+        .iter()
+        .map(|component| component.path.clone())
+        .collect();
+    let known_inputs = &network.inputs;
+    let known_outputs: BTreeSet<_> = network.outputs.keys().map(String::as_str).collect();
+    let mut seen_components = BTreeSet::new();
+    let mut seen_names = BTreeSet::new();
+    let mut units = Vec::with_capacity(raw_units.len());
+
+    for (index, raw_unit) in raw_units.iter().enumerate() {
+        let context = format!("synthesizer `{policy_name}` units[{index}]");
+        let lunco_hooks::HookValue::Map(map) = raw_unit else {
+            return Err(format!("{context} must be a map"));
+        };
+        let name = hook_map_string(map, "name", &context)?;
+        if !is_modelica_identifier(&name) {
+            return Err(format!(
+                "{context}.name `{name}` is not a valid Modelica identifier"
+            ));
+        }
+        if !seen_names.insert(name.clone()) {
+            return Err(format!("{context}.name `{name}` is duplicated"));
+        }
+        let component_paths = hook_map_string_array(map, "components", &context)?;
+        if component_paths.is_empty() {
+            return Err(format!("{context}.components must not be empty"));
+        }
+        for path in &component_paths {
+            if !known_components.contains(path) {
+                return Err(format!(
+                    "{context}.components contains `{path}`, which is not in `{root}`"
+                ));
+            }
+            if !seen_components.insert(path.clone()) {
+                return Err(format!(
+                    "component `{path}` occurs in more than one policy unit"
+                ));
+            }
+        }
+        let inputs = hook_map_string_array(map, "inputs", &context)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for input in &inputs {
+            if !known_inputs.contains(input) {
+                return Err(format!(
+                    "{context}.inputs contains `{input}`, which is not a network boundary input"
+                ));
+            }
+        }
+        let outputs = hook_map_string_array(map, "outputs", &context)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for output in &outputs {
+            if !known_outputs.contains(output.as_str()) {
+                return Err(format!(
+                    "{context}.outputs contains `{output}`, which is not a network boundary output"
+                ));
+            }
+        }
+        units.push(SynthesisUnit {
+            name,
+            component_paths,
+            inputs,
+            outputs,
+        });
+    }
+
+    if seen_components != known_components {
+        let missing = known_components
+            .difference(&seen_components)
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "synthesizer `{policy_name}` units do not cover every composed component; missing: {}",
+            missing.join(", ")
+        ));
+    }
+    if units.is_empty() {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned an empty unit partition for `{root}`"
+        ));
+    }
+    Ok(units)
+}
+
+fn parse_policy_coordinate(
+    map: &[(String, lunco_hooks::HookValue)],
+    key: &str,
+    context: &str,
+) -> Result<i32, String> {
+    let value = hook_map_value(map, key)
+        .and_then(lunco_hooks::HookValue::as_i64)
+        .ok_or_else(|| format!("{context} must contain integer `{key}`"))?;
+    i32::try_from(value)
+        .map_err(|_| format!("{context}.{key} is outside Modelica coordinate range"))
+}
+
+/// Read the optional policy-owned unit/member diagram placements. Missing
+/// entries use the deterministic default only as an authored-schema default;
+/// every returned placement is still checked against the composed plan.
+fn parse_policy_layout(
+    value: Option<&lunco_hooks::HookValue>,
+    network: &DomainNetwork,
+    units: &[SynthesisUnit],
+    root: &str,
+    policy_name: &str,
+) -> Result<SynthesisLayout, String> {
+    let mut layout = default_synthesis_layout(network, units);
+    let Some(value) = value else {
+        return Ok(layout);
+    };
+    let lunco_hooks::HookValue::Map(map) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `layout`, which must be a map"
+        ));
+    };
+    let known_units: BTreeSet<_> = units.iter().map(|unit| unit.name.as_str()).collect();
+    let known_members: BTreeSet<_> = network
+        .components
+        .iter()
+        .map(|component| component.path.as_str())
+        .collect();
+
+    for (section, key, known, target) in [
+        ("unit", "units", known_units, &mut layout.unit_positions),
+        (
+            "member",
+            "members",
+            known_members,
+            &mut layout.member_positions,
+        ),
+    ] {
+        let Some(value) = hook_map_value(map, key) else {
+            continue;
+        };
+        let lunco_hooks::HookValue::Array(placements) = value else {
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.{key} must be an array"
+            ));
+        };
+        let mut provided = BTreeSet::new();
+        for (index, placement) in placements.iter().enumerate() {
+            let context = format!("synthesizer `{policy_name}` layout.{key}[{index}]");
+            let lunco_hooks::HookValue::Map(placement) = placement else {
+                return Err(format!("{context} must be a map"));
+            };
+            let identity_key = if section == "unit" { "name" } else { "path" };
+            let identity = hook_map_string(placement, identity_key, &context)?;
+            if !known.contains(identity.as_str()) {
+                return Err(format!(
+                    "{context}.{identity_key} `{identity}` is not part of `{root}`"
+                ));
+            }
+            if !provided.insert(identity.clone()) {
+                return Err(format!(
+                    "{context}.{identity_key} `{identity}` is duplicated"
+                ));
+            }
+            let x = parse_policy_coordinate(placement, "x", &context)?;
+            let y = parse_policy_coordinate(placement, "y", &context)?;
+            target.insert(identity, (x, y));
+        }
+    }
+    Ok(layout)
 }
 
 /// The composed network, as a map an authored policy can read.
@@ -374,6 +668,8 @@ pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &'sta
 /// reason for the policy to go read USD itself.
 pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::HookValue {
     use lunco_hooks::HookValue as H;
+    let units = partition_network(network);
+    let layout = default_synthesis_layout(network, &units);
     let components: Vec<H> = network
         .components
         .iter()
@@ -477,7 +773,7 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
         (
             "units",
             H::Array(
-                partition_network(network)
+                units
                     .into_iter()
                     .map(|unit| {
                         H::map([
@@ -498,6 +794,43 @@ pub fn network_facts(network: &DomainNetwork, model_name: &str) -> lunco_hooks::
                     })
                     .collect(),
             ),
+        ),
+        (
+            "layout",
+            H::map([
+                (
+                    "units",
+                    H::Array(
+                        layout
+                            .unit_positions
+                            .into_iter()
+                            .map(|(name, (x, y))| {
+                                H::map([
+                                    ("name", H::str(name)),
+                                    ("x", H::Int(i64::from(x))),
+                                    ("y", H::Int(i64::from(y))),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
+                    "members",
+                    H::Array(
+                        layout
+                            .member_positions
+                            .into_iter()
+                            .map(|(path, (x, y))| {
+                                H::map([
+                                    ("path", H::str(path)),
+                                    ("x", H::Int(i64::from(x))),
+                                    ("y", H::Int(i64::from(y))),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
         ),
     ])
 }
@@ -602,7 +935,7 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
 pub struct AcausalNetworkSynthesizer;
 
 impl DomainSynthesizer for AcausalNetworkSynthesizer {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         DEFAULT_SYNTHESIZER
     }
     fn synthesize(
@@ -646,6 +979,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
                 })
                 .collect(),
             units: partition_network(&network),
+            layout: default_synthesis_layout(&network, &partition_network(&network)),
         }))
     }
 }
@@ -661,7 +995,7 @@ impl DomainSynthesizer for AcausalNetworkSynthesizer {
 pub struct ActuatorWrenchSynthesizer;
 
 impl DomainSynthesizer for ActuatorWrenchSynthesizer {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         ACTUATOR_WRENCH_SYNTHESIZER
     }
 
@@ -794,6 +1128,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             component_paths,
             members: Vec::new(),
             units: vec![unit],
+            layout: SynthesisLayout::default(),
         }))
     }
 }
@@ -1142,6 +1477,17 @@ fn generated_unit_layout(units: &[SynthesisUnit]) -> BTreeMap<String, (i32, i32)
             )
         })
         .collect()
+}
+
+/// The deterministic presentation supplied when a policy does not override
+/// the diagram. Hook policies receive this exact result in `net.layout`, so a
+/// layout author can start from the current topology and change only the
+/// positions it cares about.
+fn default_synthesis_layout(network: &DomainNetwork, units: &[SynthesisUnit]) -> SynthesisLayout {
+    SynthesisLayout {
+        unit_positions: generated_unit_layout(units),
+        member_positions: network_layout(network),
+    }
 }
 
 /// Compute a symmetric diagram extent that contains all placed nodes plus a
@@ -1932,6 +2278,7 @@ pub fn project_domain_islands(
                         members: Vec::new(),
                         member_output_aliases: Vec::new(),
                         units: Vec::new(),
+                        layout: SynthesisLayout::default(),
                     },
                 ));
                 continue;
@@ -2040,6 +2387,7 @@ pub fn project_domain_islands(
             members: synthesized.members,
             member_output_aliases,
             units: synthesized.units,
+            layout: synthesized.layout,
         };
         // A changed wrapper may expose a different port interface. Rebuild the
         // derived co-sim projection instead of retaining values and port names
@@ -2184,6 +2532,24 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                             "outputs": unit.outputs,
                         }))
                         .collect::<Vec<_>>(),
+                    "layout": {
+                        "units": generated
+                            .layout
+                            .unit_positions
+                            .iter()
+                            .map(|(name, (x, y))| serde_json::json!({
+                                "name": name, "x": x, "y": y,
+                            }))
+                            .collect::<Vec<_>>(),
+                        "members": generated
+                            .layout
+                            .member_positions
+                            .iter()
+                            .map(|(path, (x, y))| serde_json::json!({
+                                "path": path, "x": x, "y": y,
+                            }))
+                            .collect::<Vec<_>>(),
+                    },
                     "source": generated.source,
                 })
             })
@@ -3483,6 +3849,7 @@ mod tests {
                     members: Vec::new(),
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
+                    layout: SynthesisLayout::default(),
                 },
                 lunco_cosim::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),

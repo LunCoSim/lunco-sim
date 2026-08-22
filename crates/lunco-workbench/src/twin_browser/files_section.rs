@@ -405,13 +405,27 @@ impl BrowserSection for FilesSection {
         }
 
         // Dispatch queued intents now that the egui closures have
-        // released their borrows on `self` and `ctx`.
+        // released their borrows on `self` and `ctx`. A single click is a
+        // source preview. A deliberate double-click opens a registered
+        // document kind through the domain-owned `BrowserAction` route
+        // (`.usda` -> USD, `.mo` -> Modelica, ...). If this app does not
+        // provide a domain for that extension -- standalone Lunica is a
+        // valid example for `.usda` -- retain the raw-source behaviour so
+        // the file never becomes a dead row in the browser.
         for (twin_root, relative_path, pinned) in clicks {
-            ctx.trigger(crate::OpenTwinSource {
-                twin_root: twin_root.to_string_lossy().into_owned(),
-                relative_path: relative_path.to_string_lossy().into_owned(),
+            if should_open_as_document(
+                &relative_path,
+                ctx.resource::<lunco_twin::DocumentKindRegistry>(),
                 pinned,
-            });
+            ) {
+                ctx.actions.push(BrowserAction::OpenFile { relative_path });
+            } else {
+                ctx.trigger(crate::OpenTwinSource {
+                    twin_root: twin_root.to_string_lossy().into_owned(),
+                    relative_path: relative_path.to_string_lossy().into_owned(),
+                    pinned,
+                });
+            }
         }
         if let Some(intent) = begin_rename {
             self.rename = Some(intent);
@@ -437,6 +451,66 @@ impl BrowserSection for FilesSection {
         if cancel_rename {
             self.rename = None;
         }
+    }
+}
+
+/// A deliberate double-click should enter the owning domain editor only when
+/// that domain is actually installed in this host. The browser is shared by
+/// standalone Lunica and USD-capable hosts; sending an unclaimed document
+/// action would otherwise look exactly like a dead click in the former.
+fn should_open_as_document(
+    relative_path: &std::path::Path,
+    registry: Option<&lunco_twin::DocumentKindRegistry>,
+    pinned: bool,
+) -> bool {
+    pinned && registry.is_some_and(|registry| registry.classify(relative_path).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_open_as_document;
+    use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
+    use std::path::Path;
+
+    fn usd_registry() -> DocumentKindRegistry {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("usd"),
+            DocumentKindMeta {
+                display_name: "USD".into(),
+                extensions: vec!["usd".into(), "usda".into(), "usdc".into()],
+                ..Default::default()
+            },
+        );
+        registry
+    }
+
+    #[test]
+    fn single_click_remains_a_source_preview() {
+        assert!(!should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&usd_registry()),
+            false,
+        ));
+    }
+
+    #[test]
+    fn double_click_routes_a_registered_usd_document() {
+        assert!(should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&usd_registry()),
+            true,
+        ));
+    }
+
+    #[test]
+    fn an_unclaimed_usd_file_stays_openable_as_source() {
+        let registry = DocumentKindRegistry::default();
+        assert!(!should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&registry),
+            true,
+        ));
     }
 }
 

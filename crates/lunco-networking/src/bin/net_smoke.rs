@@ -556,7 +556,7 @@ fn activate_smoke_merge_policy(journal: Option<Res<JournalResource>>) {
     let Some(j) = journal else {
         return;
     };
-    match lunco_networking::journal_plane::activate_scripted_merge_policy(
+    match lunco_scripting::policy::activate_scripted_merge_policy(
         &j,
         SMOKE_MERGE_HOOK,
         "cmp",
