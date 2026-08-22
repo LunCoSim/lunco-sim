@@ -5,9 +5,9 @@
 fn steps() {
     [
         #{ anchor: "",                         focus: (),                     title: "Your Workspace",   body: "This lesson shows where your models live and how to find examples to learn from. ◀ ▶ or the arrow keys; Esc to leave." },
-        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Twin Browser",     body: "A Twin is a folder of .mo files plus a manifest. It's your project. Everything you open and edit is organised here on the left." },
-        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Read-only libraries", body: "Bundled demos and the Modelica Standard Library appear here read-only. Right-click → Duplicate to make an editable copy you own." },
-        #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Learning Paths",   body: "The Welcome tab curates guided arcs — Circuits, Control, Mechanics. Each is a ladder of MSL models with a one-line goal. Click one to open and run it." },
+        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Twin Browser",     body: "A Twin is a folder of .mo files plus a manifest. Expand it, select a model, and open it in the model view; this browser is the source of your workspace documents." },
+        #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Read-only libraries", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate when you need an editable copy in your Twin." },
+        #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Learning Paths",   body: "Open a path such as Circuits, Control, or Mechanics, choose a class, and run it. Each step names a concrete signal or behavior to inspect." },
         #{ anchor: "",                         focus: (),                     title: "That's the map",   body: "Next: open a model and meet its four views. Continue when you're ready - or reopen any lesson from the Tutorials menu." },
     ]
 }

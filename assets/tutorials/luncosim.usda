@@ -5,8 +5,7 @@
     live here as USD composition, never in Rust or per-lesson host flags.
 
     The flagship tour is first, followed by the reusable sandbox-authoring and
-    rover-driving tracks inherited when the old sandbox app was merged into
-    LunCoSim.
+    rover-driving tracks offered by the unified app.
     """
     metersPerUnit = 1
     subLayers = [

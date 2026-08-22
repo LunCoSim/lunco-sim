@@ -8,12 +8,12 @@
 fn steps() {
     [
         #{ anchor: "",                      title: "Joining your team",     body: "On the day you'll each be on a laptop, 1–2 drivers per team. This 60-second tour shows how to get onto the shared world and take your rover. Next / Back below — Skip anytime." },
-        #{ anchor: "panel.side_browser",    title: "Connect to the server", body: "Open Connect (left panel) and enter the workshop server address the instructor gives you. You join as an Observer first — you can watch immediately." },
+        #{ anchor: "",                      title: "Connect to the server", body: "Open Network in the top menu bar and enter the workshop server address and access key supplied by the instructor. You join as an authenticated Observer first, so you can watch before requesting control." },
         #{ anchor: "panel.center",          title: "Find your rover",       body: "Your team's rover is the one in your team colour at your start marker. Orbit the camera (right-drag) to locate it in the world." },
-        #{ anchor: "panel.center",          title: "Take control",          body: "Click your rover, then click Possess. One driver holds control at a time; a teammate can take over after you release." },
+        #{ anchor: "panel.right_inspector", title: "Take control",          body: "Select your rover, then click Possess in the Inspector or Command Deck. One driver holds control at a time; a teammate can take over after you release." },
         #{ anchor: "panel.right_inspector", title: "Check your rover",      body: "With the rover selected, the Inspector shows its class and tuning — which variant you drew (Explorer LT / Standard / Hauler) changes how it climbs and tips." },
-        #{ anchor: "panel.bottom",          title: "Watch your telemetry",  body: "Speed, tilt and battery read out along the bottom. The instructor sees every team's telemetry at once on Mission Control." },
-        #{ anchor: "",                      title: "You're on the team",     body: "Connected, possessed, and reading telemetry. That's everything you need to join the scored run. Good luck out there." },
+        #{ anchor: "panel.side_browser",    title: "Watch your telemetry",  body: "Use Telemetry in the left dock to inspect the selected rover's live ports. The current client shows its own readable state; team-wide authority and peer dashboards are not part of this lesson." },
+        #{ anchor: "",                      title: "You're on the team",     body: "Connect through Network, select the right rover, request possession, read its live ports, and use Disconnect or Leave Server when the session ends. A scored run requires a separate event setup." },
     ]
 }
 

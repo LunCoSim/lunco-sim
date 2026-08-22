@@ -258,7 +258,7 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
     # The flight-control system. It is not something bolted onto the airframe — its
     # `inputs:` ARE the vessel's control surface, the ports the stick writes — so the
     # vessel prim IS the program: the `info:*` properties are authored right here.
-    uniform asset info:sourceAsset = @models/MyLander.mo@
+    uniform asset info:sourceAsset = @lunco://models/MyLander.mo@
     uniform bool lunco:program:realtimeSafe = true
 
     # Intent -> port map, so possessing this vessel actually does something.
@@ -692,14 +692,14 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
         float inputs:trigger.connect = </MyLander.outputs:low_fuel>
         uniform token lunco:event:name = "lander_low_fuel"
         uniform token lunco:event:severity = "warning"
-        double lunco:event:qualificationTime = 0.0
+        uniform double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "Depleted"
     {
         float inputs:trigger.connect = </MyLander.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "critical"
-        double lunco:event:qualificationTime = 0.0
+        uniform double lunco:event:qualificationTime = 0.0
     }
 
     # The flight computer owns the landing predicates and exposes typed outputs.
@@ -710,7 +710,7 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
         uniform token lunco:event:name = "lander_engine_cutoff"
         uniform token lunco:event:severity = "info"
         uniform bool lunco:event:latched = true
-        double lunco:event:qualificationTime = 0.0
+        uniform double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "FlightHandoff"
     {
@@ -718,7 +718,7 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
         uniform token lunco:event:name = "lander_flight_handoff"
         uniform token lunco:event:severity = "info"
         uniform bool lunco:event:latched = true
-        double lunco:event:qualificationTime = 0.0
+        uniform double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "Touchdown"
     {
@@ -726,12 +726,12 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
         uniform token lunco:event:name = "lander_touchdown"
         uniform token lunco:event:severity = "info"
         uniform bool lunco:event:latched = true
-        double lunco:event:qualificationTime = 0.0
+        uniform double lunco:event:qualificationTime = 0.0
     }
 
     # And the supervisor that reacts to them — bolted on, so a child program prim.
     def Scope "Supervisor" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/my_mission/lander_supervisor.rhai@
     }
 ```
 
@@ -783,13 +783,13 @@ The lander carries a rover down and drops it. Reference a ready-made rover into 
 scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
 
 ```usda
-    def Xform "SkidRover" ( prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover> )
+    def Xform "SkidRover" ( prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover> )
     {
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         def Scope "Autopilot" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-            uniform asset info:sourceAsset = @behaviors/lander_rover_patrol.btxml@
+            uniform asset info:sourceAsset = @lunco://behaviors/lander_rover_patrol.btxml@
         }
     }
 
@@ -818,46 +818,51 @@ autopilot script now and write that in Step 10.
 
 ## Step 8 — Plant the waypoints
 
-The rover's job is to visit three spots. A glowing marker whose visible sphere is
-also its overlap Sensor already exists at `assets/vessels/markers/waypoint.usda`:
+The rover's job is to visit three spots. The reusable waypoint asset at
+`assets/vessels/markers/waypoint.usda` has a visible lifted dome and a separate
+ground-anchored trigger volume:
 
 ```usda
 def Xform "WaypointMarker"
 {
-    def Sphere "Dome" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    def Sphere "Dome"
     {
         double radius = 2.5
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f primvars:displayColor = (0.2, 0.95, 0.5)
         color3f primvars:emissiveColor = (0.12, 0.85, 0.42)
-        float primvars:displayOpacity = 0.28
+        float primvars:displayOpacity = 0.45
+    }
+    def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    {
+        double radius = 2.5
+        token visibility = "invisible"
         bool physics:collisionEnabled = true
         custom string lunco:triggerZone = "waypoint"
     }
 }
 ```
 
-The standard USD `radius` above is the single size input for both the rendered
-marker and the Avian collider. `lunco:triggerZone` makes that same sphere a
-non-solid Sensor: it emits `enter:waypoint`, and the waypoint projection records
-the composed marker path in `ReachedWaypoints` and emits `waypoint.reached`.
-There is no second invisible volume and no distance-polling fallback. The marker
-stays visible after arrival; the route UI tints only the marker recorded as reached.
+The dome is visual only. The `Trigger` uses standard USD `radius`, collision, and
+`lunco:triggerZone` properties to provide the non-solid Sensor footprint; it emits
+`enter:waypoint`, and the waypoint projection records the composed marker path in
+`ReachedWaypoints` and emits `waypoint.reached`. The marker stays visible after
+arrival; the route UI tints only the marker recorded as reached.
 
 Drop three markers into the scene:
 
 ```usda
-    def Xform "RoverTarget1" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget1" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (14, 0, 9); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget2" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget2" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (-11, 0, 16); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget3" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
+    def Xform "RoverTarget3" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
     { double3 xformOp:translate = (5, 0, -15); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
     # The touchdown target: a landmark for the pilot, not a wire. The GNC descends
     # on its altimeter and never reads this — it just marks the spot to aim at.
-    def Xform "LandingLocation" ( prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker> )
+    def Xform "LandingLocation" ( prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker> )
     { double3 xformOp:translate = (0, 0, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 ```
 
@@ -877,7 +882,7 @@ Add it to `my_mission.usda`:
         custom string lunco:scenario = "my-surface-ops"
 
         def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-            uniform asset info:sourceAsset = @scenarios/my_mission/mission.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/my_mission/mission.rhai@
         }
     }
 ```
@@ -979,6 +984,11 @@ authority takes over. Continuous steering remains in the native navigation actio
 not interpreted each tick by rhai. The mission script has only one job here: when
 `rover_deployed` arrives, dispatch `EngageAutopilot` for the rover. This keeps mission
 policy event-driven and leaves numerical control in the compiled runtime.
+
+For a custom `/Mission` hierarchy, author a behaviour tree whose targets use that
+scene's paths; the shipped `lander_rover_patrol.btxml` intentionally targets the
+`/LanderTest/...` fixture. `EngageAutopilot` loads the behaviour tree attached to
+the rover when no inline specification is supplied.
 
 Reload one more time. The lander flies down, the rover drops and drives the course
 on its own, the domes light up one by one — and the moment you click it, the rover is

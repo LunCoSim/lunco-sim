@@ -3,9 +3,9 @@
 fn steps() {
     [
         #{ anchor: "",                            focus: (),                     title: "Compile & Run",      body: "Time to make a model move. We opened CascadedRCFilter — let's simulate it. ◀ ▶ or arrow keys." },
-        #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Two run modes",      body: "Interactive: compile, then step in real time; sliders drive inputs live and signals stream into Graphs.\nFast Run: batch, headless: integrate 0 -> t_end then dump results. Best for sweeps and reproducibility." },
-        #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Live Inputs",        body: "During an Interactive run, Telemetry lists every parameter and input. Drag a slider to drive an input at simulation rate and watch the model respond." },
-        #{ anchor: "panel.modelica_plot",         focus: (),        title: "Watch it move",      body: "Toggle a signal to trace and it appears in Graphs as the sim runs. Try Fast Run for the whole 0 → t_end curve at once." },
+        #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Two run modes",      body: "Click Run for an interactive compile-and-step session; use the input controls while it runs. Click Fast Run for a headless integration from 0 to t_end that produces a completed result." },
+        #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Live Inputs",        body: "During Run, select an input in Telemetry and drag its slider. Observe the signal change at simulation rate; parameters remain model configuration, not live inputs." },
+        #{ anchor: "panel.modelica_plot",         focus: (),        title: "Watch it move",      body: "Choose a signal for Graphs while Run is active, then repeat with Fast Run to compare a complete 0 → t_end trajectory." },
         #{ anchor: "",                            focus: (),                     title: "Go further",         body: "Next: sweep parameters without editing source. Continue when you're ready." },
     ]
 }

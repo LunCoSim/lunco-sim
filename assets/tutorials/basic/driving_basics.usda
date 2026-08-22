@@ -81,8 +81,7 @@ def Xform "DrivingBasics" (
 
     # A gentle ~12° ramp (a long wedge) to introduce climbing + wheel slip before
     # the real slopes. The route runs along +X, so the ramp's long axis and slope
-    # are authored along X; rotating the old wide slab around X made its
-    # transverse edge an uncrossable wall.
+    # are authored along X; its transverse width stays across the route.
     def Cube "Ramp" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )

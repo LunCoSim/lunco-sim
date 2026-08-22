@@ -78,7 +78,7 @@ def Xform "SandboxIntro" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Environment only — the orchestrator is the standalone `tour.rhai` (run on a
-    # host entity), which `load_scene`s this backdrop in `on_start`. The chain
-    # (→ First Drive) lives in the launcher registry (`next`), not in USD.
+    # Environment only — the curriculum declares this backdrop as the lesson
+    # payload and the launcher mounts it before the script runs. The chain
+    # (→ First Drive) lives in the curriculum layer (`next`).
 }

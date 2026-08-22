@@ -116,7 +116,7 @@ The rover drives the waypoints. Re-issue `RunScenario` on the same entity to
 **hot-reload** after you edit the file by sending the updated contents again —
 no rebuild, no restart (the outgoing program's `on_stop` runs first). For a
 scene-authored file-backed program, use
-`uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@` instead;
+`uniform asset info:sourceAsset = @lunco://scenarios/my_rover_mission.rhai@` instead;
 the asset pipeline owns loading and hot replacement.
 
 ### Inspect & debug
@@ -139,7 +139,7 @@ program is a prim, not an attribute — delete the prim and the behaviour goes w
 ```usda
 def Xform "Rover_01" {
     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/my_rover_mission.rhai@
         # …or author the source in place:
         # uniform string info:sourceCode = '''<rhai source>'''
     }
@@ -414,8 +414,8 @@ Available nodes include:
 
 - **Per-entity scenarios → USD (load):** a script is a `LunCoProgramAPI` child prim, and it
   auto-attaches and runs when the prim is spawned:
-  - `uniform asset info:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
-    like every other asset the scene depends on.
+  - `uniform asset info:sourceAsset = @lunco://scenarios/foo.rhai@` — the shipped
+    file, resolved through the asset boundary.
   - `uniform string info:sourceCode = '''<rhai>'''` — the source authored in place
     in the USD layer. An edit to it is an ordinary attribute edit, so it journals, undoes
     and replicates like any other.

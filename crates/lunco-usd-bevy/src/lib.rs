@@ -1445,6 +1445,8 @@ fn instantiate_usd_prim_from_stage(
                 .try_insert(lunco_core::NextScene(next));
         }
 
+        project_catalog_entry_id(reader, &sdf_path, entity, commands);
+
         // glTF / external-mesh branch.
         //
         // Read the authored binary `payload`/`references` directly from the
@@ -1778,15 +1780,29 @@ fn instantiate_usd_prim_from_stage(
                     .entity(child_entity)
                     .try_insert(lunco_core::SelectableRoot);
             }
-            if let Some(entry_id) = reader
-                .text(&child_path, "lunco:catalogId")
-                .filter(|id| !id.trim().is_empty())
-            {
-                commands
-                    .entity(child_entity)
-                    .try_insert(lunco_core::CatalogEntryId(entry_id));
-            }
+            project_catalog_entry_id(reader, &child_path, child_entity, commands);
         }
+    }
+}
+
+/// Project the authored catalog identity from one USD prim onto its ECS owner.
+///
+/// The same USD attribute is valid on an instance root and on a child prim;
+/// both are projected through this one boundary so identity ownership does not
+/// depend on which part of the composed asset owns the authored opinion.
+fn project_catalog_entry_id(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    entity: Entity,
+    commands: &mut Commands,
+) {
+    if let Some(entry_id) = reader
+        .text(path, "lunco:catalogId")
+        .filter(|id| !id.trim().is_empty())
+    {
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::CatalogEntryId(entry_id));
     }
 }
 

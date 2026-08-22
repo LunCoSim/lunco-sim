@@ -31,10 +31,8 @@
 //! the student got there — click it or use the authored handoff path.
 
 fn on_start(me) {
-    // One source: the tutorial loads its own environment. The scene's embedded
-    // scenarios do the flying; the mission() below coaches over their events.
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The curriculum payload is mounted before this script starts. The scene's
+    // embedded scenarios do the flying; mission() coaches over their events.
     hint("A powered descent is landing a rover. Watch it touch down — then you'll take control and drive.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");
 }
@@ -111,6 +109,7 @@ fn mission(me) {
         objective("touchdown", #{
             text: "Watch the powered descent land the rover",
             requires_event: "lander_touchdown",
+            requires_event_source: "/LanderTest/Lander",
             on_complete: Fn("lander_touchdown_message"),
         }),
         // 2 — passive: the scene detaches the joint and announces `rover_deployed`.
@@ -121,6 +120,7 @@ fn mission(me) {
             text: "Wait for the rover to be released",
             requires: ["touchdown"],
             requires_event: "rover_deployed",
+            requires_event_source: "/LanderTest/Scenario",
             on_complete: Fn("lander_deployed_message"),
         }),
         // 3 — take over. Completes when a PERSON holds the rover, however they got

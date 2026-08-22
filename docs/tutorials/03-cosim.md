@@ -7,20 +7,21 @@
 
 A rover that drives, a lander that descends, a balloon that rises — when the
 *behaviour* lives in a [Modelica](https://modelica.org) model and the *motion*
-lives in the physics engine, the two run side by side and talk every step. That
-is **co-simulation** (cosim). This walkthrough uses the lander asset
+lives in the physics engine, the two run side by side and exchange values at
+declared communication points. That is **co-simulation** (cosim). This walkthrough uses the lander asset
 `vessels/landers/descent_lander.usda` — a real, working cosim vessel, referenced by
 `scenes/luncosim/lander_ops.usda` — to show the whole loop, then points at how to
 wire your own.
 
 ## The pattern in one paragraph
 
-A Modelica model is attached to an entity. Every fixed timestep the model emits
-outputs (forces, throttle), a `SimConnection` copies each output to a target
-input, Avian integrates the resulting forces, and the new altitude/velocity flow
-back into the model. Read outputs → propagate → apply forces → step engines.
-That round-trip is the [FMI master algorithm](https://fmi-standard.org/), and it
-runs in `FixedUpdate` at one shared `dt` so both engines agree on time.
+A Modelica model is attached to an entity. The fixed master clock advances the
+world; at each participant's declared communication point, model outputs
+propagate through `SimConnection`s, Avian applies the resulting forces, and the
+new state becomes the next model input sample. Outputs are held between points.
+The causal ordering is shaped like the [FMI master algorithm](https://fmi-standard.org/),
+but this runtime is not itself an FMI implementation and not every participant
+is forced to communicate at the physics tick rate.
 
 ## Read it off the vessel
 
@@ -33,7 +34,7 @@ A model is a PROGRAM, and a program is a prim with typed ports — exactly as a
 # 1. Name the model. The lander's flight-control system is inseparable from the
 #    airframe, so the vessel prim authors the `info:*` properties on ITSELF
 #    (a bolted-on program — a guidance law, a supervisor — is a child prim instead).
-uniform asset info:sourceAsset = @models/Lander.mo@
+uniform asset info:sourceAsset = @lunco://models/Lander.mo@
 
 #    It drives a force on a body the client predicts, so it must promise it steps
 #    fast enough to be trusted with one.
@@ -47,7 +48,7 @@ float inputs:q_w.connect     = </DescentLander.outputs:quat_w>
 
 # 3. Modelica owns the condition; USD connects its 0/1 output to the event bus.
 def LunCoEvent "LowFuel" {
-    float inputs:trigger.connect = </DescentLander.outputs:low_fuel>
+    float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:low_fuel>
     uniform token lunco:event:name = "lander_low_fuel"
     uniform token lunco:event:severity = "warning"
 }

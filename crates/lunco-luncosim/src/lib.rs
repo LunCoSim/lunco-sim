@@ -4087,6 +4087,7 @@ impl Plugin for SandboxHeadlessPlugin {
                 "SetObjectives",
                 "Spotlight",
                 "ClearSpotlight",
+                "FocusPanel",
                 "SetTourStep",
                 "ClearTour",
             ],

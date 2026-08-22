@@ -11,9 +11,7 @@
 
     JoinTeam carries NO payload, and that is a statement, not an omission: it is
     a networking tour with no world of its own, and it runs in whatever world is
-    already open. Under the old `load_scene`-inside-`on_start` model this was
-    indistinguishable from a lesson that forgot to open one — the failure that
-    motivated declaring the environment.
+    already open.
     """
     defaultPrim = "Basic"
     metersPerUnit = 1
@@ -45,7 +43,7 @@ def Scope "Basic" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
         string lunco:tutorial:title = "Slopes & Tip-Over"
-        string lunco:tutorial:blurb = "Climb a borderline grade and feel exactly why a top-heavy rover rolls — plus how to right one that has."
+        string lunco:tutorial:blurb = "Climb a borderline grade, feel why a top-heavy rover rolls, and practise the recovery control when it does."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "exercise"
         rel lunco:tutorial:next = </Basic/RoverVariants>

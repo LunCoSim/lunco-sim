@@ -3,9 +3,9 @@
 fn steps() {
     [
         #{ anchor: "",                              focus: (),                       title: "Plots & Results",  body: "A simulation is only as good as what you can read off it. Let's tour the output surfaces. ◀ ▶ or arrow keys." },
-        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",           body: "Multi-axis plots, one set per document. Pick signals to trace, put fast + slow signals on separate axes, and snapshot a run to overlay against later ones." },
-        #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Diagnostics",      body: "Compile and solver problems land here with severities. Click a diagnostic to jump straight to the offending line in the source." },
-        #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Console",          body: "The running log — compile progress, solver messages, and any script output stream here. Your first stop when something looks off." },
+        #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",           body: "Select two signals, put fast and slow signals on separate axes, and snapshot the run. Then overlay a later run to make the comparison visible." },
+        #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Diagnostics",      body: "Compile the model, open a diagnostic with a severity, and click it. The source view should jump to the reported line when a source location is available." },
+        #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Console",          body: "Read compile progress, solver messages, and script output here. Use the message context to decide whether a problem is in source, setup, or runtime." },
         #{ anchor: "",                              focus: (),                       title: "Last stop",        body: "You can model, run, sweep, and read results. Finish with “Automate” — drive all of this from scripts. Continue when you're ready." },
     ]
 }

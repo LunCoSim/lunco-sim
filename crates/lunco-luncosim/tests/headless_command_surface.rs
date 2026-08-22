@@ -70,9 +70,13 @@ fn an_unregistered_name_does_not_resolve() {
 
 #[test]
 fn presentation_commands_are_explicitly_ignored_not_registered() {
-    let policy =
-        lunco_scripting::bridge_core::IgnoredScenarioCommands::new(["SetHint", "SetObjectives"]);
+    let policy = lunco_scripting::bridge_core::IgnoredScenarioCommands::new([
+        "SetHint",
+        "SetObjectives",
+        "FocusPanel",
+    ]);
     assert!(policy.accepts("SetHint"));
     assert!(policy.accepts("SetObjectives"));
+    assert!(policy.accepts("FocusPanel"));
     assert!(!policy.accepts("NoSuchCommandExists"));
 }

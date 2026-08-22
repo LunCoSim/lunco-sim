@@ -36,7 +36,8 @@ own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
    - `coach_step(steps, i)` + the `on_event` cursor — a guided coach-mark tour.
    - `hint(...)`, `spotlight(anchor, caption)`, `notify_kind(...)` — HUD.
    - `mission(me)` with `objective(...)` — auto-published objectives that advance
-     on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
+     on real actions (`requires_event`, optional `requires_event_source`, and
+     `done` predicates); emits `MISSION_COMPLETE`.
    - Setup: `cmd("OpenClass", #{ qualified })`, `set_subsystem(name, on)`.
    - **No scene-opening call** — the world is declared, see step 2.
 
@@ -79,3 +80,13 @@ first. lunica panel ids: `lunco.workbench.twin_browser`, `modelica_welcome`,
 `modelica_diagram_inspector`; model-view anchors `model_view.view_toggles` /
 `model_view.compile_buttons` (need a model open). `panel.modelica_plot` is an
 instance panel — spotlight its anchor, but don't `focus` it. See `lunica/README.md`.
+
+For luncosim, use the current generic dock anchors: `panel.center`,
+`panel.side_browser`, `panel.right_inspector`, and `panel.bottom`; use the real
+panel id with `focus` when a lesson needs to open a tab. The menu bar and
+toolbar are outside the coach card's content rectangle, so a step that teaches
+`Time`, `Network`, `Help`, or the pause button must use `anchor: ""` and name
+the exact menu/action in its body. Do not invent `panel.<instance>` anchors.
+Windowless scene tests keep these presentation intents explicit but inert
+(`FocusPanel`, `Spotlight`, and the tutorial HUD commands); unknown domain
+commands still fail through the normal command boundary.
