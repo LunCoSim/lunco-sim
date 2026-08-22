@@ -862,6 +862,26 @@ version = "0.1.0"
     }
 
     #[test]
+    fn owns_rejects_a_path_that_cannot_be_canonicalized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_manifest(
+            &root.join("twin.toml"),
+            r#"
+name = "parent"
+version = "0.1.0"
+"#,
+        );
+        let TwinMode::Twin(parent) = TwinMode::open(root).unwrap() else {
+            panic!();
+        };
+
+        let missing = lunco_storage::StorageHandle::File(root.join("missing.mo"));
+        assert!(!parent.owns(&missing));
+        assert!(parent.find_owning(&missing).is_none());
+    }
+
+    #[test]
     fn walk_visits_every_twin_in_tree() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();

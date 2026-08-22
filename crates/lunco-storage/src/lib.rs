@@ -216,10 +216,11 @@ fn path_is_under(p: &Path, root: &Path) -> bool {
     {
         match (p.canonicalize(), root.canonicalize()) {
             (Ok(pp), Ok(rp)) => pp.starts_with(rp),
-            // Fall back to prefix-string comparison if either path can't be
-            // canonicalised (e.g. referenced file was just deleted). Not
-            // symlink-safe but the common case works.
-            _ => p.starts_with(root),
+            // Ownership is an authority decision, so an unresolved path is
+            // not close enough. A lexical fallback can claim a deleted file
+            // or an unresolved symlink for the wrong Twin; wait for a
+            // canonical path instead.
+            _ => false,
         }
     }
     #[cfg(target_arch = "wasm32")]
