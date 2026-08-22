@@ -239,6 +239,18 @@ fn mission_checkpoint(me, key, value) {
     result.ok == true
 }
 
+/// Explicit-document form for a mission whose active editor tab is not USD.
+/// Prefer this in long-running missions: the active-tab convenience above is
+/// intentionally conservative and refuses to guess a document.
+fn mission_checkpoint_in(me, doc, key, value) {
+    let path = name(me);
+    if path == () { return false; }
+    let result = usd_set_attribute_in(
+        doc, path, "lunco:mission:checkpoint:" + key, "string", value
+    );
+    result.ok == true
+}
+
 fn mission_checkpoint_read(me, key) {
     let path = name(me);
     if path == () { return (); }
