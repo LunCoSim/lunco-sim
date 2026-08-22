@@ -12,10 +12,10 @@
 //! Earlier the MSL class cache lived in a separate process-wide
 //! `Session` (a `Mutex<ModelicaEngine>` here in `class_cache.rs`)
 //! disjoint from the workspace engine that holds user docs. That
-//! split made `class_inherited_annotations_query` for a user class
-//! that extends an MSL base return empty — the workspace engine
-//! couldn't see the base. Routing both into one session resolves
-//! cross-tier inheritance walks naturally.
+//! split made inheritance queries for a user class that extends an MSL
+//! base return empty — the workspace engine couldn't see the base.
+//! Routing both into one session resolves cross-tier inheritance walks
+//! naturally.
 //!
 //! ## Bootstrap timing
 //!

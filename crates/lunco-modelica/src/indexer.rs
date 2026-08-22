@@ -315,8 +315,7 @@ struct MSLIndexer {
     /// `install_into_engine` to feed the session via the full
     /// `add_document` pipeline so rumoca's `within`-aware lookup
     /// indexes are populated correctly. `replace_parsed_source_set`
-    /// alone leaves `class_inherited_annotations_query`'s file-walk
-    /// blind to within-prefixed nested classes.
+    /// alone leaves scope-aware lookup blind to within-prefixed nested classes.
     sources: Vec<(std::path::PathBuf, String)>,
 }
 
@@ -483,7 +482,7 @@ impl MSLIndexer {
     /// Install each file into the engine's session via the full
     /// `add_document` pipeline. `replace_parsed_source_set` looked
     /// like the right call (it's what web bootstrap uses) but
-    /// rumoca's `class_inherited_annotations_query` calls
+    /// the old annotation walker called
     /// `find_class_def_in_file` which expects `qualified_name` to
     /// walk through `parsed.classes` directly — and MSL's flat
     /// per-file `within X; model Y end Y;` shape doesn't have
@@ -506,8 +505,8 @@ impl MSLIndexer {
             "[indexer] installed {count} docs into engine session in {:.1}s",
             started.elapsed().as_secs_f64()
         );
-        // Probe: confirm the session resolves a known-good class
-        // AND its inheritance walk has non-empty layers.
+        // Probe: confirm the session resolves a known-good class and that the
+        // authoritative component-members query can walk its inheritance.
         let probes = [
             "Modelica.Mechanics.Rotational.Sensors.SpeedSensor",
             "Modelica.Mechanics.Rotational.Components.Inertia",
@@ -516,8 +515,8 @@ impl MSLIndexer {
         ];
         for p in probes {
             let resolved = self.engine.session_mut().class_lookup_query(p);
-            let n_layers = self.engine.inherited_annotations(p).len();
-            println!("  probe {p}: resolved={resolved:?} layers={n_layers}");
+            let n_members = self.engine.inherited_components(p).len();
+            println!("  probe {p}: resolved={resolved:?} inherited_members={n_members}");
         }
     }
 
@@ -606,7 +605,7 @@ impl MSLIndexer {
             // Capture source for engine population. add_document
             // needs raw text so rumoca's full pipeline runs (which
             // populates the within-aware lookup tables that
-            // class_inherited_annotations_query reads).
+            // scope-aware lookup tables read).
             self.sources.push((path.to_path_buf(), source.to_string()));
             self.add_stored_definition(ast, package_prefix, is_package_file);
         }
@@ -942,8 +941,8 @@ impl MSLIndexer {
                 // qualified name and populated during scan).
                 //
                 // Why two layers: rumoca's
-                // `class_inherited_annotations_query` would do this
-                // end-to-end, but its internal `find_class_def_in_file`
+                // Rumoca's query would do this end-to-end, but its internal
+                // file lookup
                 // expects `parsed.classes` to contain the full-path
                 // nesting — and MSL's `within X; model Y end Y;`
                 // shape only puts `Y` directly under `parsed.classes`.

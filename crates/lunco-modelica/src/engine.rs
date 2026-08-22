@@ -41,8 +41,6 @@ use rumoca_compile::Session;
 use std::collections::{HashMap, HashSet};
 
 /// Inherited member info with variability + causality.
-/// Note: `class_component_members_typed_query` was removed from rumoca main.
-/// This stub struct preserves the public API until the upstream feature returns.
 #[derive(Debug, Clone)]
 pub struct InheritedMember {
     pub name: String,
@@ -459,8 +457,8 @@ impl ModelicaEngine {
     /// `Self::inherited_components` but consumers don't have to
     /// re-walk the AST to bucket parameters / inputs / outputs.
     ///
-    /// rumoca main dropped the typed `class_component_members_typed_query`,
-    /// so we take the authoritative (scope-resolved) membership list from
+    /// The typed query is not part of the maintained rumoca API, so we take
+    /// the authoritative (scope-resolved) membership list from
     /// `class_component_members_query` and enrich each member with the
     /// variability / causality / binding we read directly off the
     /// `ClassDef` of the class (and its `extends` bases). Extraction
@@ -542,17 +540,6 @@ impl ModelicaEngine {
                 }
             })
             .collect()
-    }
-
-    /// Inheritance chain of annotation lists for a class.
-    ///
-    /// Note: `class_inherited_annotations_query` was removed from rumoca main.
-    /// Returns empty until the upstream feature returns.
-    pub fn inherited_annotations(
-        &mut self,
-        _qualified: &str,
-    ) -> Vec<Vec<rumoca_compile::parsing::ast::Expression>> {
-        Vec::new()
     }
 
     /// Read-only access to the underlying session for advanced queries
