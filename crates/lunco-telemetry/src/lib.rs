@@ -431,8 +431,7 @@ fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan) -> usize {
 /// same strings for every sample.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 struct RetainedSignalMeta {
-    description: Option<String>,
-    unit: String,
+    signal: lunco_signal::SignalMeta,
 }
 
 /// Cheap change detector in front of the exclusive sampler: any added/changed/
@@ -575,22 +574,49 @@ fn retain_sample(
         retention,
     );
 
+    // A USD telemetry declaration is the operator-facing name for a measured
+    // Modelica port.  Inherit the producer's authored ownership and Modelica
+    // identity so the browser can group it with the same component state as
+    // the generated solver channel; do not make the UI reverse-engineer the
+    // generated wrapper spelling.
+    let producer_meta = match &channel.source {
+        ChannelSource::Port(port) => signals
+            .meta(&lunco_signal::SignalRef::new(s.source, port.clone()))
+            .cloned(),
+        _ => None,
+    };
+    let signal_meta = lunco_signal::SignalMeta {
+        description: channel.description.clone().or_else(|| {
+            producer_meta
+                .as_ref()
+                .and_then(|meta| meta.description.clone())
+        }),
+        unit: (!channel.unit.is_empty())
+            .then_some(channel.unit.clone())
+            .or_else(|| producer_meta.as_ref().and_then(|meta| meta.unit.clone())),
+        provenance: Some("telemetry".to_string()),
+        group_path: producer_meta
+            .as_ref()
+            .and_then(|meta| meta.group_path.clone()),
+        // An explicit telemetry declaration is a public canonical channel,
+        // even when its source is an internal Modelica port.
+        exposure: lunco_signal::SignalExposure::Public,
+        model_class: producer_meta
+            .as_ref()
+            .and_then(|meta| meta.model_class.clone()),
+        model_variable: producer_meta
+            .as_ref()
+            .and_then(|meta| meta.model_variable.clone()),
+        source_asset: producer_meta
+            .as_ref()
+            .and_then(|meta| meta.source_asset.clone()),
+        canonical_name: Some(channel.name.clone()),
+    };
     let expected_meta = RetainedSignalMeta {
-        description: channel.description.clone(),
-        unit: channel.unit.clone(),
+        signal: signal_meta.clone(),
     };
     if applied_meta != Some(&expected_meta) {
-        signals.update_meta(
-            signal,
-            lunco_signal::SignalMeta {
-                description: expected_meta.description.clone(),
-                unit: (!expected_meta.unit.is_empty()).then_some(expected_meta.unit.clone()),
-                provenance: Some("telemetry".to_string()),
-                group_path: None,
-                exposure: Default::default(),
-                ..Default::default()
-            },
-        );
+        signals.update_meta(signal, signal_meta);
         commands.entity(s.channel).try_insert(expected_meta);
     }
 }

@@ -19,6 +19,31 @@ const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 // makes scene-closure rows and raw Twin files follow the same OpenFile path.
 const TEXT_VIEW_EXTS: &[&str] = &["rhai", "btxml", "wgsl", "usda", "usd", "usdc"];
 
+fn is_text_view_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            TEXT_VIEW_EXTS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(extension))
+        })
+}
+
+/// Text assets without a richer domain editor. These must stay on the source
+/// viewer path even when a host's document registry happens to classify their
+/// extension; otherwise a double-click can be consumed by a domain dispatcher
+/// that has no editor for the file.
+pub(crate) fn is_source_only_text_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "rhai" | "btxml" | "wgsl"
+            )
+        })
+}
+
 pub(crate) struct SourceEditorPanel;
 
 impl InstancePanel for SourceEditorPanel {
@@ -221,11 +246,7 @@ pub(crate) fn on_open_file_for_text(
     mut pending: ResMut<PendingSourceRequests>,
 ) {
     let path = trigger.event().path.clone();
-    if Path::new(&path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| TEXT_VIEW_EXTS.contains(&extension))
-    {
+    if is_text_view_path(Path::new(&path)) {
         pending.opens.push(SourceOpenRequest::Path(path));
     }
 }
@@ -693,5 +714,11 @@ mod tests {
         let panel = SourceEditorPanel;
         assert_eq!(panel.kind(), SOURCE_EDITOR_KIND);
         assert_eq!(panel.default_slot(), PanelSlot::Center);
+    }
+
+    #[test]
+    fn wgsl_open_file_uses_the_shared_text_viewer() {
+        assert!(is_text_view_path(Path::new("shaders/terrain_layered.wgsl")));
+        assert!(!is_text_view_path(Path::new("textures/ortho.png")));
     }
 }

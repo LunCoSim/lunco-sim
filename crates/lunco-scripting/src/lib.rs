@@ -226,6 +226,19 @@ fn register_builtin_policies() {
             lunco_readiness::READINESS_HOOK,
             "readiness_action",
         ),
+        // Generated Modelica source, topology and diagram schema. The USD
+        // projector supplies the complete composed graph as facts; this policy
+        // owns the emitted model and its presentation without a Rust edit.
+        (
+            "synth_acausal_network",
+            "synth.acausal-network",
+            "synthesize",
+        ),
+        (
+            "synth_actuator_wrench",
+            "synth.actuator-wrench",
+            "synthesize",
+        ),
         // Direct rover links are Earth-only. Rover-to-rover connectivity belongs
         // to a separate authored radio system, not the generic direct-link graph.
         ("link", lunco_celestial::link::LINK_HOOK, "link_connected"),

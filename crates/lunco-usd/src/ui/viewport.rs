@@ -80,8 +80,8 @@ use lunco_render::{GraphicsCameraDefaults, SceneCamera};
 use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_workbench::{
-    Panel, PanelCtx, PanelId, PanelRect, PanelRects, PanelSlot, ScenePickGate, SceneTarget,
-    WorkbenchAppExt,
+    Panel, PanelCtx, PanelId, PanelRect, PanelRects, PanelScrollPolicy, PanelSlot, ScenePickGate,
+    SceneTarget, WorkbenchAppExt,
 };
 
 use crate::document::UsdDocument;
@@ -763,6 +763,10 @@ impl Panel for UsdViewportPanel {
 
     fn closable(&self) -> bool {
         false
+    }
+
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

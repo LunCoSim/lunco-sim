@@ -463,7 +463,9 @@ fn should_open_as_document(
     registry: Option<&lunco_twin::DocumentKindRegistry>,
     pinned: bool,
 ) -> bool {
-    pinned && registry.is_some_and(|registry| registry.classify(relative_path).is_some())
+    pinned
+        && !crate::source_viewer::is_source_only_text_path(relative_path)
+        && registry.is_some_and(|registry| registry.classify(relative_path).is_some())
 }
 
 #[cfg(test)]
@@ -508,6 +510,24 @@ mod tests {
         let registry = DocumentKindRegistry::default();
         assert!(!should_open_as_document(
             Path::new("scenes/rover.usda"),
+            Some(&registry),
+            true,
+        ));
+    }
+
+    #[test]
+    fn shader_always_uses_the_source_viewer() {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("shader"),
+            DocumentKindMeta {
+                display_name: "Shader".into(),
+                extensions: vec!["wgsl".into()],
+                ..Default::default()
+            },
+        );
+        assert!(!should_open_as_document(
+            Path::new("shaders/terrain.wgsl"),
             Some(&registry),
             true,
         ));

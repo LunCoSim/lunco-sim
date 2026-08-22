@@ -18,7 +18,7 @@ use lunco_canvas::{
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
 
@@ -795,6 +795,10 @@ impl Panel for AutopilotCanvasPanel {
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
+    }
+
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

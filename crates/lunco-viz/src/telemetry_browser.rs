@@ -50,7 +50,7 @@
 //! `VisualizationConfig`, fire `OpenTab { VIZ_PANEL_KIND }`) and works
 //! without any canvas host wiring.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -311,6 +311,86 @@ impl TreeNode {
     }
 }
 
+/// Authored identity of one Modelica state as it should appear in the operator
+/// tree.  Generated aliases and unit-qualified solver variables can have
+/// different signal paths while still describing the same `(component, class,
+/// variable)` value.  The signal registry keeps every path; the browser chooses
+/// one presentation row from this identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ModelStateIdentity {
+    entity: Entity,
+    group_path: String,
+    model_class: String,
+    model_variable: String,
+}
+
+fn model_state_identity(row: &Row) -> Option<ModelStateIdentity> {
+    Some(ModelStateIdentity {
+        entity: row.sig.entity,
+        group_path: row.group_path.clone()?,
+        model_class: row.model_class.clone()?,
+        model_variable: row.model_variable.clone()?,
+    })
+}
+
+/// Prefer the public channel, then the exact canonical authored channel. A
+/// generated wrapper may expose one authored value through several public or
+/// internal paths; only the path named by `canonical_name` is the
+/// operator-facing address. This is presentation selection only: all other
+/// signal identities remain in the registry and remain valid plot/API sources.
+fn model_state_priority(row: &Row) -> (u8, u8) {
+    (
+        (row.exposure == SignalExposure::Public) as u8,
+        (row.canonical_name.as_deref() == Some(row.sig.path.as_str())) as u8,
+    )
+}
+
+fn deduplicated_rows(reg: &SignalRegistry) -> Vec<Row> {
+    let mut selected = HashMap::<ModelStateIdentity, Row>::new();
+    let mut standalone = Vec::new();
+
+    for (sig, _history) in reg.iter_scalar() {
+        let meta = reg.meta(sig);
+        let row = Row {
+            sig: sig.clone(),
+            unit: meta.and_then(|m| m.unit.clone()),
+            description: meta.and_then(|m| m.description.clone()),
+            provenance: meta.and_then(|m| m.provenance.clone()),
+            group_path: meta.and_then(|m| m.group_path.clone()),
+            model_class: meta.and_then(|m| m.model_class.clone()),
+            model_variable: meta.and_then(|m| m.model_variable.clone()),
+            source_asset: meta.and_then(|m| m.source_asset.clone()),
+            canonical_name: meta.and_then(|m| m.canonical_name.clone()),
+            exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
+            in_focus: sig.entity != Entity::PLACEHOLDER,
+            active: reg.is_active(sig),
+        };
+
+        let Some(identity) = model_state_identity(&row) else {
+            standalone.push(row);
+            continue;
+        };
+        match selected.get(&identity) {
+            Some(current)
+                if model_state_priority(&row) <= model_state_priority(current)
+                    && row.sig.path >= current.sig.path => {}
+            _ => {
+                selected.insert(identity, row);
+            }
+        }
+    }
+
+    standalone.extend(selected.into_values());
+    standalone.sort_by(|left, right| {
+        left.sig
+            .entity
+            .to_bits()
+            .cmp(&right.sig.entity.to_bits())
+            .then(left.sig.path.cmp(&right.sig.path))
+    });
+    standalone
+}
+
 struct Catalog {
     key: u64,
     /// [`TelemetryFocus::fingerprint`] the tree's `in_focus` flags were built
@@ -344,6 +424,19 @@ fn display_entity_name(name: &str) -> String {
     humanize_identifier(name.trim_matches('/').rsplit('/').next().unwrap_or(name))
 }
 
+fn authored_path_lineage(path: &str) -> Vec<(String, String)> {
+    let mut key = String::new();
+    path.trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            key.push('/');
+            key.push_str(segment);
+            (key.clone(), humanize_identifier(segment))
+        })
+        .collect()
+}
+
 /// Rebuild the catalog from the live ownership hierarchy. This deliberately
 /// has no `wheel`, `motor`, `beam`, or other name-based classifier: the USD
 /// parent graph supplies the assembly, subsystem, and component grouping for
@@ -357,79 +450,62 @@ fn build_tree(
     in_focus: impl Fn(Entity) -> bool,
 ) -> TreeNode {
     let mut root = TreeNode::new("root".to_string(), "Telemetry".to_string());
-    for (sig, _hist) in reg.iter_scalar() {
-        let meta = reg.meta(sig);
-        let provenance = meta.and_then(|m| m.provenance.clone());
+    for row in deduplicated_rows(reg) {
+        // Keep the signal identity independent from the row move below.
+        let sig = row.sig.clone();
         let row = Row {
-            sig: sig.clone(),
-            unit: meta.and_then(|m| m.unit.clone()),
-            description: meta.and_then(|m| m.description.clone()),
-            provenance,
-            group_path: meta.and_then(|m| m.group_path.clone()),
-            model_class: meta.and_then(|m| m.model_class.clone()),
-            model_variable: meta.and_then(|m| m.model_variable.clone()),
-            source_asset: meta.and_then(|m| m.source_asset.clone()),
-            canonical_name: meta.and_then(|m| m.canonical_name.clone()),
-            exposure: meta.map_or(SignalExposure::Public, |m| m.exposure),
             in_focus: sig.entity != Entity::PLACEHOLDER && in_focus(sig.entity),
-            active: reg.is_active(sig),
+            ..row
         };
 
-        let mut lineage: Vec<(String, String)> = if let Some(path) = usd_path_of(sig.entity) {
-            let mut key = String::new();
-            path.trim_matches('/')
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .map(|segment| {
-                    key.push('/');
-                    key.push_str(segment);
-                    (key.clone(), humanize_identifier(segment))
-                })
-                .collect()
-        } else {
-            let mut entities = Vec::new();
-            let mut cursor = Some(sig.entity);
-            for _ in 0..MAX_ANCESTOR_DEPTH {
-                let Some(entity) = cursor else { break };
-                if entities.contains(&entity) {
-                    break;
+        let group_path = row.group_path.as_deref().filter(|path| !path.is_empty());
+        let mut lineage: Vec<(String, String)> =
+            if let Some(path) = group_path.filter(|path| path.trim_start().starts_with('/')) {
+                // Authored ownership is the canonical hierarchy for all
+                // producers. This merges physical readback and Modelica channels
+                // without coupling either producer to the other.
+                authored_path_lineage(path)
+            } else if let Some(path) = usd_path_of(sig.entity) {
+                authored_path_lineage(&path)
+            } else {
+                let mut entities = Vec::new();
+                let mut cursor = Some(sig.entity);
+                for _ in 0..MAX_ANCESTOR_DEPTH {
+                    let Some(entity) = cursor else { break };
+                    if entities.contains(&entity) {
+                        break;
+                    }
+                    entities.push(entity);
+                    if is_navigation_root(entity) {
+                        break;
+                    }
+                    cursor = (entity != Entity::PLACEHOLDER)
+                        .then(|| parent_of(entity))
+                        .flatten();
                 }
-                entities.push(entity);
-                if is_navigation_root(entity) {
-                    break;
-                }
-                cursor = (entity != Entity::PLACEHOLDER)
-                    .then(|| parent_of(entity))
-                    .flatten();
-            }
-            entities.reverse();
-            entities
-                .into_iter()
-                .map(|entity| {
-                    let label = if entity == Entity::PLACEHOLDER {
-                        "Global".to_string()
-                    } else {
-                        name_of(entity)
-                            .map(|name| display_entity_name(&name))
-                            .unwrap_or_else(|| format!("Entity {entity}"))
-                    };
-                    (format!("entity:{}", entity.to_bits()), label)
-                })
-                .collect()
-        };
-        // Extend the authored entity lineage with every structural segment in
-        // the signal path. A generated model publishes on its domain wrapper
-        // entity, so replace that wrapper's leaf with the output's authored
-        // component path. The user sees the model that owns the value rather
-        // than an implementation container. This remains producer-neutral:
-        // every hierarchical model path gets the same treatment.
-        let group_path = meta.and_then(|metadata| {
-            metadata
-                .group_path
-                .as_deref()
-                .filter(|path| !path.is_empty())
-        });
-        let mut structure = signal_structure(group_path.unwrap_or(&sig.path));
+                entities.reverse();
+                entities
+                    .into_iter()
+                    .map(|entity| {
+                        let label = if entity == Entity::PLACEHOLDER {
+                            "Global".to_string()
+                        } else {
+                            name_of(entity)
+                                .map(|name| display_entity_name(&name))
+                                .unwrap_or_else(|| format!("Entity {entity}"))
+                        };
+                        (format!("entity:{}", entity.to_bits()), label)
+                    })
+                    .collect()
+            };
+        // A group path already names the owning component. Use the authored
+        // Modelica variable for its optional value namespace; generated solver
+        // spellings never become a second hierarchy. Without a group path,
+        // retain the ordinary producer path structure.
+        let structure_path = group_path
+            .and_then(|_| row.model_variable.as_deref())
+            .unwrap_or(&sig.path);
+        let mut structure = signal_structure(structure_path);
         // Canonical authored paths may repeat the USD ancestry already
         // represented by the entity lineage. Remove the complete shared
         // prefix, then make the remaining nodes relative to their owner.
@@ -448,22 +524,17 @@ fn build_tree(
                 }
             }
         }
-        // `group_path` is an authored ownership path. Once its shared USD prefix
-        // has been removed, the remaining component names are presentation
-        // structure, not new USD prims. Keep that distinction explicit so a
-        // generated solver wrapper cannot reappear as a second authored branch.
         if group_path.is_some_and(|path| path.trim_start().starts_with('/')) {
+            // `signal_structure` returns relative IDs for Modelica variables;
+            // keep that distinction explicit even if a future producer emits
+            // an absolute variable spelling.
             for (id, _) in &mut structure {
-                if let Some(segment) = id.rsplit('/').next().filter(|s| !s.is_empty()) {
-                    *id = format!("signal-structure:{segment}");
+                if id.starts_with('/') {
+                    if let Some(segment) = id.rsplit('/').find(|s| !s.is_empty()) {
+                        *id = format!("signal-structure:{segment}");
+                    }
                 }
             }
-        }
-        // A resolved group path means the projection supplied an authored
-        // ownership target. Replace the runtime wrapper leaf regardless of
-        // whether that projection entity currently has a USD path component.
-        if group_path.is_some() && !structure.is_empty() && !lineage.is_empty() {
-            lineage.pop();
         }
         lineage.extend(structure);
         let mut node = &mut root;
@@ -605,10 +676,24 @@ fn row_visible(
         )
 }
 
-/// Display the canonical channel name together with the authored Modelica
-/// class that produces it. The class suffix is presentation-only; signal
-/// identity and plot bindings remain the registry's `(entity, path)`.
+/// Display the authored/operator channel name.  Public rows stay concise; the
+/// exact Modelica class, variable, and source asset remain in the row detail
+/// tooltip.  Internal rows retain their generated identity so implementation
+/// channels cannot collapse into apparent duplicates.
 fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
+    if row.exposure == SignalExposure::Internal && !show_generated_names {
+        // The tree already identifies the authored component.  Show the
+        // Modelica variable here and keep the exact solver address in the
+        // detail strip, so inspecting internal state does not require reading
+        // a generated namespace.
+        let variable = row
+            .model_variable
+            .as_deref()
+            .or_else(|| row.sig.path.rsplit('.').next())
+            .map(humanize_identifier)
+            .unwrap_or_else(|| "state".to_string());
+        return format!("{variable} · internal");
+    }
     let base = display_channel_label(
         &row.sig.path,
         row.group_path.as_deref(),
@@ -617,12 +702,7 @@ fn telemetry_row_label(row: &Row, show_generated_names: bool) -> String {
     if show_generated_names {
         return base;
     }
-    row.model_class
-        .as_deref()
-        .and_then(|class| class.rsplit('.').next())
-        .filter(|class| !class.is_empty())
-        .map(|class| format!("{base} · {class}"))
-        .unwrap_or(base)
+    base
 }
 
 fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> bool {
@@ -901,13 +981,23 @@ fn fmt_value(v: f64, settings: &TelemetryDisplaySettings) -> String {
             precision = (significant_digits - 1) as usize
         )
     } else {
-        format!("{v:.decimals$}")
+        // Round the decimal value explicitly before formatting.  Relying only
+        // on binary-float formatting makes halfway decimal values such as
+        // 1.2345 render as 1.234 on some toolchains.
+        let factor = 10_f64.powi(decimals as i32);
+        let rounded = (v * factor).round() / factor;
+        format!("{rounded:.decimals$}")
     };
     if let Some((mantissa, exponent)) = text.split_once('e') {
         let trimmed = mantissa.trim_end_matches('0').trim_end_matches('.');
         text = format!("{trimmed}e{exponent}");
-    } else {
-        text = text.trim_end_matches('0').trim_end_matches('.').to_string();
+    } else if let Some((whole, fraction)) = text.split_once('.') {
+        let fraction = fraction.trim_end_matches('0');
+        text = if fraction.is_empty() {
+            whole.to_string()
+        } else {
+            format!("{whole}.{fraction}")
+        };
     }
     text
 }
@@ -976,10 +1066,11 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
-            // The registry exposes canonical USD-facing channels and the
-            // complete generated solver state. Start with both visible so a
-            // missing modeled subsystem cannot be mistaken for a UI filter;
-            // the checkbox remains available for a concise operator view.
+            // The operator view starts with the complete generated solver
+            // state. `deduplicated_rows` collapses the public/member alias
+            // pairs, while the checkbox remains available for a concise
+            // operator-only view. A telemetry browser must not hide authored
+            // model state by default.
             show_model_variables: true,
         }
     }
@@ -1064,10 +1155,11 @@ impl Panel for TelemetryBrowserPanel {
                         .color(subdued),
                 );
             }
-            ui.checkbox(&mut self.show_model_variables, "Model variables")
+            ui.checkbox(&mut self.show_model_variables, "Internal variables")
                 .on_hover_text(
                     "Include generated Modelica inputs, connector values, and component state. \
-                     Canonical USD-facing channels stay visible when this is off.",
+                     Canonical USD-facing channels remain visible; implementation rows are \
+                     marked internal and keep their generated identity.",
                 );
             ui.menu_button("Display", |ui| {
                 ui.label("Latest-value formatting");
@@ -1202,6 +1294,21 @@ impl Panel for TelemetryBrowserPanel {
                 .color(subdued),
             );
             return;
+        }
+
+        if !self.show_model_variables {
+            let public_count = visible_count(&self.catalog.root, scoped, false, &self.filter);
+            let complete_count = visible_count(&self.catalog.root, scoped, true, &self.filter);
+            let hidden_count = complete_count.saturating_sub(public_count);
+            if hidden_count > 0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{hidden_count} internal variables hidden — enable Internal variables to inspect the complete model state."
+                    ))
+                    .small()
+                    .color(subdued),
+                );
+            }
         }
 
         // Deferred row actions — can't mutate `self.selected` while
@@ -1368,6 +1475,116 @@ mod tests {
 
     fn ent(n: u32) -> Entity {
         Entity::from_raw_u32(n).unwrap()
+    }
+
+    #[test]
+    fn telemetry_labels_keep_public_names_concise_and_internal_names_distinct() {
+        let public = Row {
+            sig: SignalRef::new(ent(1), "electrical_power"),
+            unit: None,
+            description: None,
+            provenance: None,
+            group_path: None,
+            model_class: Some("LunCo.Electrical.DCMotor".into()),
+            model_variable: Some("electrical_power".into()),
+            source_asset: None,
+            canonical_name: None,
+            exposure: SignalExposure::Public,
+            in_focus: false,
+            active: true,
+        };
+        assert_eq!(telemetry_row_label(&public, false), "electrical power");
+
+        let mut internal = public.clone();
+        internal.sig = SignalRef::new(
+            ent(1),
+            "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power",
+        );
+        internal.exposure = SignalExposure::Internal;
+        assert_eq!(
+            telemetry_row_label(&internal, false),
+            "electrical power · internal"
+        );
+        assert_eq!(
+            telemetry_row_label(&internal, true),
+            "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power"
+        );
+    }
+
+    #[test]
+    fn telemetry_browser_starts_with_complete_model_state_visible() {
+        assert!(TelemetryBrowserPanel::default().show_model_variables);
+    }
+
+    #[test]
+    fn duplicate_modelica_aliases_collapse_to_the_canonical_component_state() {
+        let entity = ent(1);
+        let mut reg = SignalRegistry::default();
+        let public = SignalRef::new(entity, "power_draw");
+        let generated = SignalRef::new(entity, "unit_1_Rover.Traverse_x2f_Rover_Camera.power_draw");
+        for signal in [&public, &generated] {
+            reg.push_scalar(signal.clone(), 0.0, 1.0);
+            reg.update_meta(
+                signal.clone(),
+                crate::signal::SignalMeta {
+                    group_path: Some("/Traverse/Rover/Camera".into()),
+                    model_class: Some("LunCo.Electrical.CameraPayload".into()),
+                    model_variable: Some("power_draw_w".into()),
+                    exposure: if signal == &public {
+                        SignalExposure::Public
+                    } else {
+                        SignalExposure::Internal
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+
+        let rows = deduplicated_rows(&reg);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sig, public);
+        assert_eq!(telemetry_row_label(&rows[0], false), "power draw");
+    }
+
+    #[test]
+    fn duplicate_public_modelica_aliases_choose_the_canonical_path() {
+        let entity = ent(1);
+        let mut reg = SignalRegistry::default();
+        let canonical = SignalRef::new(entity, "battery_capacity_ah");
+        let generated = SignalRef::new(entity, "unit_1_Rover_Battery.battery_capacity_ah");
+        for signal in [&canonical, &generated] {
+            reg_push_with_meta(
+                &mut reg,
+                signal,
+                SignalExposure::Public,
+                Some("battery_capacity_ah"),
+            );
+        }
+
+        let rows = deduplicated_rows(&reg);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sig, canonical);
+        assert_eq!(telemetry_row_label(&rows[0], false), "capacity ah");
+    }
+
+    fn reg_push_with_meta(
+        reg: &mut SignalRegistry,
+        signal: &SignalRef,
+        exposure: SignalExposure,
+        canonical_name: Option<&str>,
+    ) {
+        reg.push_scalar(signal.clone(), 0.0, 1.0);
+        reg.update_meta(
+            signal.clone(),
+            crate::signal::SignalMeta {
+                group_path: Some("/Traverse/Rover/Battery".into()),
+                model_class: Some("LunCo.Electrical.Battery".into()),
+                model_variable: Some("capacity_ah".into()),
+                canonical_name: canonical_name.map(str::to_owned),
+                exposure,
+                ..Default::default()
+            },
+        );
     }
 
     #[test]
@@ -1602,6 +1819,7 @@ mod tests {
             signal,
             crate::signal::SignalMeta {
                 group_path: Some("/SandboxScene/Rover/Motor_FL".into()),
+                model_variable: Some("p.v".into()),
                 ..Default::default()
             },
         );
@@ -1624,9 +1842,44 @@ mod tests {
                 .contains_key("/SandboxScene/Rover/Electrical"),
             "the generated solver scope is an implementation detail"
         );
-        let motor = &rover.children["signal-structure:Motor_FL"];
+        let motor = &rover.children["/SandboxScene/Rover/Motor_FL"];
         assert_eq!(motor.label, "Motor FL");
-        assert_eq!(motor.rows[0].sig.path, "Motor__FL.p.v");
+        let p = &motor.children["signal-structure:p"];
+        assert_eq!(p.rows[0].sig.path, "Motor__FL.p.v");
+    }
+
+    #[test]
+    fn authored_group_path_merges_channels_from_different_producers() {
+        let mut reg = SignalRegistry::default();
+        let readback = SignalRef::new(ent(1), "torque");
+        let modelica = SignalRef::new(ent(2), "electrical_power");
+        for signal in [&readback, &modelica] {
+            reg.push_scalar(signal.clone(), 0.0, 1.0);
+            reg.update_meta(
+                signal.clone(),
+                crate::signal::SignalMeta {
+                    group_path: Some("/Traverse/Rover/Motor_L0".into()),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let tree = build_tree(
+            &reg,
+            |_| None,
+            |_| None,
+            |entity| match entity {
+                e if e == ent(1) => Some("/Traverse/Rover/Motor_L0".into()),
+                e if e == ent(2) => Some("/Traverse/Rover/Electrical".into()),
+                _ => None,
+            },
+            |_| false,
+            |_| false,
+        );
+        let rover = &tree.children["/Traverse"].children["/Traverse/Rover"];
+        let motor = &rover.children["/Traverse/Rover/Motor_L0"];
+        assert_eq!(motor.rows.len(), 2);
+        assert!(!rover.children.contains_key("/Traverse/Rover/Electrical"));
     }
 
     #[test]

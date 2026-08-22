@@ -92,14 +92,10 @@ fn window_control_button(
     let bottom = rect.bottom() - 6.0;
     match icon {
         WindowControlIcon::Close => {
-            ui.painter().line_segment(
-                [egui::pos2(left, top), egui::pos2(right, bottom)],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [egui::pos2(right, top), egui::pos2(left, bottom)],
-                stroke,
-            );
+            ui.painter()
+                .line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
+            ui.painter()
+                .line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
         }
         WindowControlIcon::Maximize => {
             ui.painter().rect_stroke(
@@ -199,8 +195,8 @@ pub use workspace_state::{
 
 pub use menu::{MenuCtx, UndoProbeCtx};
 pub use panel::{
-    InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot,
-    TabId,
+    InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup,
+    PanelScrollPolicy, PanelSlot, TabId,
 };
 
 /// SystemSet that runs the main workbench egui pass. Use
@@ -3125,8 +3121,17 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // only spans the growable content and misses the transparent
                     // area below a short card.
                     let body = ui.clip_rect();
+                    let scroll_policy = panel.scroll_policy();
                     let mut ctx = PanelCtx::new(self.world);
-                    panel.render(ui, &mut ctx);
+                    match scroll_policy {
+                        PanelScrollPolicy::Vertical => {
+                            egui::ScrollArea::vertical()
+                                .id_salt(("workbench_panel_body", id.as_str()))
+                                .auto_shrink([false; 2])
+                                .show(ui, |ui| panel.render(ui, &mut ctx));
+                        }
+                        PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
+                    }
                     let intents = ctx.into_intents();
                     self.panels.insert(id, panel);
                     for intent in intents {
@@ -3158,8 +3163,17 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         false,
                     );
                     let body = ui.clip_rect();
+                    let scroll_policy = panel.scroll_policy();
                     let mut ctx = PanelCtx::new(self.world);
-                    panel.render(ui, &mut ctx, instance);
+                    match scroll_policy {
+                        PanelScrollPolicy::Vertical => {
+                            egui::ScrollArea::vertical()
+                                .id_salt(("workbench_instance_panel_body", kind.as_str(), instance))
+                                .auto_shrink([false; 2])
+                                .show(ui, |ui| panel.render(ui, &mut ctx, instance));
+                        }
+                        PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx, instance),
+                    }
                     let intents = ctx.into_intents();
                     self.instance_panels.insert(kind, panel);
                     for intent in intents {
@@ -3836,10 +3850,7 @@ fn render_layout(
                 layout.edit_menu = callbacks;
             });
             anchor_rects.push(("menu.edit", r_edit.response.rect));
-            // Use the same compact, font-safe symbol treatment as the
-            // perspective tabs (Build/Lunica). A geometric lens is deliberate:
-            // emoji eye glyphs fall back to tofu in the bundled UI font.
-            let r_view = ui.menu_button("◉ View", |ui| {
+            let r_view = ui.menu_button("View", |ui| {
                 if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
                     // restoring panels (notably the 3D Viewport) a stale
@@ -5139,8 +5150,17 @@ fn render_panel_solo(
         ui.separator();
     }
     if let Some(mut panel) = layout.panels.remove(id) {
+        let scroll_policy = panel.scroll_policy();
         let mut ctx = PanelCtx::new(world);
-        panel.render(ui, &mut ctx);
+        match scroll_policy {
+            PanelScrollPolicy::Vertical => {
+                egui::ScrollArea::vertical()
+                    .id_salt(("workbench_solo_panel_body", id.as_str()))
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| panel.render(ui, &mut ctx));
+            }
+            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
+        }
         let intents = ctx.into_intents();
         layout.panels.insert(*id, panel);
         for intent in intents {

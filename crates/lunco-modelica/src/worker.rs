@@ -3322,7 +3322,8 @@ pub struct InFlightModelicaStep {
 pub struct ModelicaModel {
     pub model_name: String,
     /// Canonical source asset/document URI used for user-facing readiness
-    /// notifications. Empty for generated or manually constructed models.
+    /// notifications. Empty only for manually constructed models that have no
+    /// source document identity.
     #[reflect(ignore)]
     pub source_uri: String,
     /// The model's OWN clock — `stepper.time()` as of the last result that

@@ -9,7 +9,7 @@
 
 use lunco_usd_sim::domain_projection::{
     network_facts, read_network, register_hook_synthesizer, MemberClasses, SynthContext,
-    SynthOutcome, SynthesizerRegistry,
+    SynthOutcome, SynthesizerRegistry, DEFAULT_SYNTHESIZER,
 };
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
@@ -177,7 +177,7 @@ fn facts_describe_the_whole_graph() {
         .expect("well-formed")
         .expect("a network");
 
-    let facts = network_facts(&network, "Rig_Electrical_System");
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
     let components = facts.get("components").expect("components");
     let lunco_hooks::HookValue::Array(components) = components else {
         panic!("components is an array");
@@ -200,5 +200,62 @@ fn facts_describe_the_whole_graph() {
             .and_then(|v| v.get("voltage_nom"))
             .and_then(|v| v.as_f64()),
         Some(24.0)
+    );
+}
+
+#[test]
+fn shipped_default_policy_emits_visual_and_executable_topology() {
+    let source = lunco_assets::scripting::policy("synth_acausal_network")
+        .expect("the shipped synthesis policy is embedded");
+    lunco_hooks_rhai::register_rhai_hook("synth.acausal-network", "synthesize", source, true)
+        .expect("the shipped synthesis policy compiles");
+
+    let registry = SynthesizerRegistry::default();
+    let synthesizer = registry
+        .get(DEFAULT_SYNTHESIZER)
+        .expect("the default owner is the Rhai synthesizer")
+        .clone();
+    let stage = stage("electrical_network.usda");
+    let view = stage.view();
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let classes = fixture_classes();
+    let outcome = synthesizer
+        .synthesize(
+            &view,
+            &root,
+            "Rig_Electrical_System",
+            &SynthContext { classes: &classes },
+        )
+        .expect("the shipped policy result is valid");
+    let SynthOutcome::Ready(plan) = outcome else {
+        panic!("the fixture must synthesize");
+    };
+
+    assert!(
+        plan.source.contains("connect("),
+        "the generated source has no topology"
+    );
+    assert!(plan.source.contains("COMPOSED TOPOLOGY"));
+    assert!(
+        plan.source.contains("Ellipse("),
+        "ports are part of the visual schema"
+    );
+    assert!(plan.source.contains("LunCo.Electrical.Battery"));
+    assert!(plan.source.contains("LunCo.Electrical.DCMotor"));
+    let interface = lunco_modelica::ast_extract::parse_model_interface(
+        &plan.source,
+        "shipped-synthesis-policy.mo",
+    );
+    assert_eq!(
+        interface.model_name.as_deref(),
+        Some("Rig_Electrical_System")
+    );
+    let ast = rumoca_phase_parse::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
+        .expect("the Rhai-owned source and visual annotations remain valid Modelica");
+    assert!(
+        lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Rig_Electrical_System")
+            .and_then(|class| lunco_modelica::annotations::extract_icon(&class.annotation))
+            .is_some(),
+        "the policy must emit a discoverable root icon"
     );
 }

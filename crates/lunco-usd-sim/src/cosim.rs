@@ -38,6 +38,7 @@ use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
     ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
+    ModelicaSignalLayout,
 };
 use lunco_render::SceneCamera;
 use lunco_scripting::python::{get_python_status, PythonStatus};
@@ -549,10 +550,11 @@ fn read_authored_telemetry_string(
     if !view.has_authored_attribute(path, attribute) {
         return Ok(None);
     }
-    match view.attr_value(path, attribute) {
-        Some(Value::String(value)) => Ok(Some(value)),
-        _ => Err(()),
-    }
+    // USD `token` and `string` are distinct Value variants, but both are
+    // textual authored telemetry metadata.  StageView::text is the shared
+    // reader for that contract; matching Value::String here silently rejected
+    // every schema-declared token such as lunco:telemetry:port.
+    view.text(path, attribute).map(Some).ok_or(())
 }
 
 fn read_authored_telemetry_real(
@@ -575,11 +577,77 @@ fn read_authored_telemetry_real(
 /// the signal registry.
 fn project_usd_telemetry(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath), Without<UsdTelemetryProjected>>,
+    query: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&GeneratedModelicaSource>,
+        Option<&ModelicaSignalLayout>,
+        Option<&lunco_core::Provenance>,
+        Option<&lunco_core::GlobalEntityId>,
+        Has<UsdInstanceRoot>,
+        Has<UsdTelemetryProjected>,
+    )>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
-    for (entity, prim_path) in &query {
+    // The generated wrapper is the only runtime Modelica participant.  Build
+    // the authored-member -> wrapper port map from its projection metadata
+    // before projecting declarations, so a member's USD telemetry never
+    // creates a second, transform-only channel on the member entity.
+    let instance_of = |provenance: Option<&lunco_core::Provenance>,
+                       gid: Option<&lunco_core::GlobalEntityId>,
+                       is_root: bool| {
+        match provenance {
+            Some(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
+            _ if is_root => gid.map(lunco_core::GlobalEntityId::get),
+            _ => None,
+        }
+    };
+    let mut generated_outputs: HashMap<
+        (
+            bevy::asset::AssetId<UsdStageAsset>,
+            Option<u64>,
+            String,
+            String,
+        ),
+        (Entity, String),
+    > = HashMap::new();
+    let mut network_members_by_stage: HashMap<
+        bevy::asset::AssetId<UsdStageAsset>,
+        std::collections::HashSet<String>,
+    > = HashMap::new();
+    for (wrapper, prim_path, generated, layout, provenance, gid, is_root, _) in &query {
+        let (Some(generated), Some(layout)) = (generated, layout) else {
+            continue;
+        };
+        let instance = instance_of(provenance, gid, is_root);
+        for (member, output, alias) in &generated.member_output_aliases {
+            // A boundary output is the canonical runtime address when one
+            // exists; otherwise the generated member alias is the public
+            // wrapper port.  The same layout used by Modelica telemetry owns
+            // this choice, so authored telemetry and solver retention cannot
+            // disagree about which value they read.
+            let runtime_port = layout
+                .exact_provenance
+                .get(alias)
+                .and_then(|identity| identity.canonical_name.clone())
+                .unwrap_or_else(|| alias.clone());
+            generated_outputs.insert(
+                (
+                    prim_path.stage_handle.id(),
+                    instance,
+                    member.clone(),
+                    output.clone(),
+                ),
+                (wrapper, runtime_port),
+            );
+        }
+    }
+
+    for (entity, prim_path, _, _, provenance, gid, is_root, already_projected) in &query {
+        if already_projected {
+            continue;
+        }
         let Some(recipe) = stages
             .get(&prim_path.stage_handle)
             .and_then(|asset| asset.recipe.clone())
@@ -688,6 +756,41 @@ fn project_usd_telemetry(
                         .entity(entity)
                         .try_insert(lunco_core::PortSurfacePending);
                 }
+                let (target, source) = match &parameter.source {
+                    ChannelSource::Port(port) => {
+                        let key = (
+                            prim_path.stage_handle.id(),
+                            instance_of(provenance, gid, is_root),
+                            prim_path.path.clone(),
+                            port.clone(),
+                        );
+                        if let Some((wrapper, runtime_port)) = generated_outputs.get(&key) {
+                            (Some(*wrapper), ChannelSource::Port(runtime_port.clone()))
+                        } else {
+                            // A domain member has no standalone port surface.
+                            // Leave its declaration unprojected until the
+                            // generated wrapper publishes the topology map;
+                            // marking it now would permanently cache the wrong
+                            // member target and produce a false missing-port
+                            // warning during the compile window.
+                            let members = network_members_by_stage
+                                .entry(prim_path.stage_handle.id())
+                                .or_insert_with(|| {
+                                    lunco_usd_bevy::program::modelica_network_member_paths(&view)
+                                });
+                            if members.contains(&prim_path.path) {
+                                continue;
+                            }
+                            (parameter.target, parameter.source.clone())
+                        }
+                    }
+                    _ => (parameter.target, parameter.source.clone()),
+                };
+                let parameter = Parameter {
+                    target,
+                    source,
+                    ..parameter
+                };
                 commands.spawn((
                     Name::new(format!("telemetry:{}", parameter.name)),
                     ChildOf(entity),
@@ -4472,7 +4575,6 @@ pub(crate) fn install(app: &mut App) {
             // Project authored `lunco:telemetry:*` declarations once the live
             // composed stage is available. This is independent of co-sim model
             // discovery so physical/avian and Modelica channels use one sampler.
-            project_usd_telemetry,
             // Python source-load drain runs every Update; cheap when no
             // `PendingPythonSource` entities exist. Splitting it from
             // `process_usd_cosim_prims` is intentional — the source asset may
@@ -4499,6 +4601,11 @@ pub(crate) fn install(app: &mut App) {
         Update,
         (
             crate::domain_projection::project_domain_islands,
+            // Domain projection must publish the generated wrapper and its
+            // member-output layout before authored telemetry declarations are
+            // attached.  Otherwise a member declaration is mistaken for a
+            // standalone port and produces the duplicate/silent channel pair.
+            project_usd_telemetry,
             crate::domain_projection::sync_generated_network_documents,
             crate::domain_projection::publish_generated_sources,
         )

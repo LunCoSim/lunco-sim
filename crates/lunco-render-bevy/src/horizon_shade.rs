@@ -661,8 +661,7 @@ mod tests {
     #[test]
     fn terrain_shader_waits_for_a_resolved_material_instead_of_guessing_gray() {
         assert_eq!(
-            DEFAULT_TERRAIN_SHADER_PATH,
-            "shaders/terrain_layered.wgsl",
+            DEFAULT_TERRAIN_SHADER_PATH, "shaders/terrain_layered.wgsl",
             "the default terrain material must expose the authored layer-map contract"
         );
         let materials = Assets::<StandardMaterial>::default();
