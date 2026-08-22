@@ -5679,7 +5679,12 @@ fn register_graphics_settings_menu(world: &mut World) {
                     error_color,
                     format!("Graphics settings rejected: {reason}"),
                 );
-            } else if settings != *current {
+            }
+            // Keep invalid edits in memory so dependent fields can be corrected
+            // over multiple UI interactions. Runtime consumers validate at their
+            // own boundaries and preserve the last applied quality; the settings
+            // persister likewise refuses to replace the last valid disk value.
+            if settings != *current {
                 ctx.set_resource(settings);
             }
         }

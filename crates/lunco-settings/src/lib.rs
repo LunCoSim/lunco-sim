@@ -410,6 +410,13 @@ fn persist_section<S: SettingsSection>(section: Res<S>, mut settings: ResMut<Set
     if !section.is_changed() {
         return;
     }
+    if let Err(reason) = section.validate_section() {
+        warn!(
+            "[Settings:{}] refusing to persist invalid runtime section: {reason}",
+            S::KEY
+        );
+        return;
+    }
     let value = match serde_json::to_value(&*section) {
         Ok(v) => v,
         Err(e) => {
@@ -583,6 +590,37 @@ mod disk_guard_tests {
         let settings = app.world().resource::<Settings>();
         assert!(settings.raw(ValidatedTestSection::KEY).is_none());
         assert!(settings.dirty);
+    }
+
+    #[test]
+    fn invalid_runtime_section_does_not_replace_last_valid_persisted_value() {
+        let mut app = App::new();
+        app.insert_resource(Settings {
+            raw: BTreeMap::from([(
+                ValidatedTestSection::KEY.to_string(),
+                serde_json::json!({ "value": 3 }),
+            )]),
+            dirty: false,
+        });
+        app.register_settings_section::<ValidatedTestSection>();
+
+        app.world_mut().resource_mut::<ValidatedTestSection>().value = 0;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Settings>()
+                .raw(ValidatedTestSection::KEY),
+            Some(&serde_json::json!({ "value": 3 }))
+        );
+
+        app.world_mut().resource_mut::<ValidatedTestSection>().value = 4;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Settings>()
+                .raw(ValidatedTestSection::KEY),
+            Some(&serde_json::json!({ "value": 4 }))
+        );
     }
 
     #[test]
