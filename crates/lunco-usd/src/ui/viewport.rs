@@ -76,6 +76,7 @@ use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
+use lunco_render::{GraphicsCameraDefaults, SceneCamera};
 use lunco_render::{LightGraphicsDefaults, RenderingQualitySettings};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_workbench::{
@@ -344,6 +345,8 @@ fn bootstrap(world: &mut World) {
     let mut commands = world.commands();
     let camera = commands
         .spawn((
+            SceneCamera::default(),
+            GraphicsCameraDefaults,
             Camera3d::default(),
             Camera {
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.10, 0.12)),
@@ -893,5 +896,11 @@ mod tests {
         assert_eq!(light.illuminance, 42_000.0);
         assert!(defaults.intensity_uses_graphics_default);
         assert_eq!(defaults.intensity_scale, 1.0);
+        let camera = app
+            .world()
+            .get_entity(app.world().resource::<UsdViewportState>().camera.unwrap())
+            .expect("preview bootstrap creates its camera");
+        assert!(camera.contains::<SceneCamera>());
+        assert!(camera.contains::<GraphicsCameraDefaults>());
     }
 }
