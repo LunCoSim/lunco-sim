@@ -74,8 +74,11 @@ fn on_event(me, evt) {
 }
 ```
 
-Touchdown is another Modelica output wired to a `LunCoEvent`; the script contains
-no polling or physical threshold math.
+Landing transitions use the same explicit projection. The GNC publishes
+`landing_engine_cutoff_request` and `landing_handoff_request`, while `Lander.mo`
+publishes the settled `touchdown` predicate; USD maps them to the latched
+`lander_engine_cutoff`, `lander_flight_handoff`, and `lander_touchdown` events.
+The script contains no polling, threshold math, or second touchdown state owner.
 
 ## Verify the chain is live
 

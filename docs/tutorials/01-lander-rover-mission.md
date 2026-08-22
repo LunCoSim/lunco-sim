@@ -692,12 +692,41 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
         float inputs:trigger.connect = </MyLander.outputs:low_fuel>
         uniform token lunco:event:name = "lander_low_fuel"
         uniform token lunco:event:severity = "warning"
+        double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "Depleted"
     {
         float inputs:trigger.connect = </MyLander.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "critical"
+        double lunco:event:qualificationTime = 0.0
+    }
+
+    # The flight computer owns the landing predicates and exposes typed outputs.
+    # These three projections publish the only mission transition events.
+    def LunCoEvent "EngineCutoff"
+    {
+        float inputs:trigger.connect = </MyLander/GNC.outputs:landing_engine_cutoff_request>
+        uniform token lunco:event:name = "lander_engine_cutoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "FlightHandoff"
+    {
+        float inputs:trigger.connect = </MyLander/GNC.outputs:landing_handoff_request>
+        uniform token lunco:event:name = "lander_flight_handoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "Touchdown"
+    {
+        float inputs:trigger.connect = </MyLander.outputs:touchdown>
+        uniform token lunco:event:name = "lander_touchdown"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
     }
 
     # And the supervisor that reacts to them — bolted on, so a child program prim.
@@ -706,42 +735,30 @@ add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
     }
 ```
 
-Read `LowFuel` as "when `m_prop` drops below 200, fire `lander_low_fuel`"; `Depleted`
-says the same at near-zero. Each fires once when it crosses, and re-arms if the value
-climbs back. This is exactly the kind of "watch a signal for a moment" job that belongs
-outside the model (remember the warning in Step 2). Every part of the rule is a typed
-property, so nothing is hiding in a string the type system can't see.
+Read `LowFuel` as "when the authored `low_fuel` output becomes true, fire
+`lander_low_fuel`"; `Depleted` says the same for `depleted`. The landing events use
+the same explicit projection: the GNC requests the target-qualified engine cutoff
+and flight handoff, while `Lander.mo` publishes the physical settled-touchdown
+predicate. `latched = true` makes each transition a one-way mission fact, and
+`qualificationTime = 0.0` is explicit because the event schema requires it.
+Every event name, source port, and latch is authored; no script infers a transition
+from altitude, velocity, or a priority-ordered list of strings.
 
 Now the supervisor. Create `assets/scenarios/my_mission/lander_supervisor.rhai`:
 
 ```rhai
-fn check_touchdown(me) {
-    // Touchdown is "low AND slow" — two things at once, so it's easiest to spot
-    // here and announce as our own event for the mission to wait on. Emits once.
-    if this.touchdown != true && __settled(me) {
-        this.touchdown = true;
-        emit("lander_touchdown");
-    }
-}
-
 fn on_event(me, evt) {
-    check_touchdown(me);
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
     } else if evt.name == "lander_depleted" {
         notify_kind("Propellant depleted.", "warn");
+    } else if evt.name == "lander_engine_cutoff" {
+        notify_kind("Landing engine cutoff accepted.", "info");
+    } else if evt.name == "lander_flight_handoff" {
+        notify_kind("Landing gear has flight-control handoff.", "info");
+    } else if evt.name == "lander_touchdown" {
+        notify_kind("Touchdown.", "success");
     }
-}
-
-// Low altitude (our own altimeter) plus a near-zero vertical rate. Entity names are
-// full prim paths, so `name(me)` finds our sensor wherever the scene put us.
-fn __settled(me) {
-    let alt_ent = find(name(me) + "/Altimeter");
-    if alt_ent < 0 { return false; }          // find() returns -1 when absent
-    let alt = get(alt_ent, "range");
-    if alt == () || alt >= 2.0 { return false; }
-    let vy = get(me, "velocity_y");
-    vy != () && vy > -0.2 && vy < 0.2
 }
 ```
 
@@ -752,10 +769,11 @@ its own altimeter relative to itself, so it rides along into any scene.
 `notify(msg)` and `notify_kind(msg, kind)` pop a message onto the screen (`kind` is
 `info`, `success`, `warn`, or `error`). We'll use them all over the mission.
 
-Notice the two styles side by side: fuel is a clean single-value threshold, so it's
-declared on the prim; touchdown is a compound "low and slow" condition, so a script
-watches it and `emit`s its own event. Both end up as events the rest of the mission
-can wait for.
+Notice the ownership boundary: Modelica and the GNC own the physical and
+target-qualified predicates; USD `LunCoEvent` owns their explicit bus projection;
+Rhai only reacts to the named events. The mission can therefore wait for
+`lander_touchdown` without duplicating touchdown thresholds or creating a second
+state owner in a script.
 
 ---
 
@@ -994,10 +1012,12 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - A vehicle drops like a rock with the model attached? Its `.connect` wiring is
   missing, or it names scene paths (`</Mission/Lander...>`) instead of asset-local
   ones (`</MyLander...>`), so nothing rebased through the reference.
-- Touchdown fires while the lander is still in the air, or never fires at all? Check
-  where the altimeter is mounted against the height the hull rests at. `rest_altitude`
-  must equal the range the sensor reads with the vehicle sitting on the ground — and
-  the sensor must hang below any cargo, or it ranges the cargo instead of the ground.
+- A landing transition event never fires? Inspect the typed producer-to-consumer
+  chain: the GNC or `Lander.mo` output, its `LunCoEvent.inputs:trigger` connection,
+  the exact `lunco:event:name`, and the explicit `qualificationTime`. For
+  `lander_touchdown`, the physical predicate requires all four native leg contacts,
+  an upright airframe, quiet suspension, and low translational/angular speed; do
+  not replace that contract with an altitude or velocity poll in Rhai.
 - Physics goes berserk at touchdown, or a slung payload sinks into the floor? The
   carrier has no ground clearance. Its legs must hold the attachment point above the
   ground by more than the payload is tall.

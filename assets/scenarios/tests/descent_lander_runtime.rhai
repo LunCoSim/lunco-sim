@@ -22,6 +22,8 @@ fn scalar_ok(v) {
 fn on_start(me) {
     this.done = false;
     this.elapsed = 0.0;
+    this.engine_cutoff = false;
+    this.flight_handoff = false;
     this.touchdown = false;
     this.deployed = false;
     this.course_complete = false;
@@ -42,7 +44,11 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     if this.done { return; }
-    if evt.name == "lander_touchdown" {
+    if evt.name == "lander_engine_cutoff" {
+        this.engine_cutoff = true;
+    } else if evt.name == "lander_flight_handoff" {
+        this.flight_handoff = true;
+    } else if evt.name == "lander_touchdown" {
         this.touchdown = true;
     } else if evt.name == "rover_deployed" {
         this.deployed = true;
@@ -111,10 +117,13 @@ fn finish(me) {
     let pose_ok = t_bounded(world_pos(me.lander), 1000.0, "lander pose");
     let goal_ok = false;
     if me.rover >= 0 && me.goal >= 0 { goal_ok = distance(me.rover, me.goal) < 6.0; }
-    let reason = "touchdown=" + me.touchdown + " deployed=" + me.deployed +
+    let reason = "engine_cutoff=" + me.engine_cutoff +
+                " flight_handoff=" + me.flight_handoff +
+                " touchdown=" + me.touchdown + " deployed=" + me.deployed +
                 " course=" + me.course_complete + " max_thrust=" + me.max_thrust +
                 " max_rcs_flow=" + me.max_rcs_flow;
-    if !me.touchdown || !state_ok || !thrust_ok || !rover_ok || !goal_ok || pose_ok != "" {
+    if !me.engine_cutoff || !me.flight_handoff || !me.touchdown || !state_ok ||
+       !thrust_ok || !rover_ok || !goal_ok || pose_ok != "" {
         verdict(false, reason + " state/motion contract failed");
         return;
     }

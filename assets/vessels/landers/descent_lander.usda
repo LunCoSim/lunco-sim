@@ -1195,12 +1195,44 @@ def Xform "DescentLander" (
         float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:low_fuel>
         uniform token lunco:event:name = "lander_low_fuel"
         uniform token lunco:event:severity = "warning"
+        double lunco:event:qualificationTime = 0.0
     }
     def LunCoEvent "Depleted"
     {
         float inputs:trigger.connect = </DescentLander/MainPropulsion.outputs:depleted>
         uniform token lunco:event:name = "lander_depleted"
         uniform token lunco:event:severity = "warning"
+        double lunco:event:qualificationTime = 0.0
+    }
+
+    # The flight computer owns each physical transition predicate. These
+    # bindings are the only projection from those typed Modelica outputs onto
+    # the shared event bus; the supervisor and mission scripts consume the
+    # resulting source-qualified events. The latches remain in the GNC input
+    # surface, so a bus event never becomes a second state owner.
+    def LunCoEvent "EngineCutoff"
+    {
+        float inputs:trigger.connect = </DescentLander/GNC.outputs:landing_engine_cutoff_request>
+        uniform token lunco:event:name = "lander_engine_cutoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "FlightHandoff"
+    {
+        float inputs:trigger.connect = </DescentLander/GNC.outputs:landing_handoff_request>
+        uniform token lunco:event:name = "lander_flight_handoff"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
+    }
+    def LunCoEvent "Touchdown"
+    {
+        float inputs:trigger.connect = </DescentLander.outputs:touchdown>
+        uniform token lunco:event:name = "lander_touchdown"
+        uniform token lunco:event:severity = "info"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
     }
 
     # ── Onboard supervisor ───────────────────────────────────────────────────

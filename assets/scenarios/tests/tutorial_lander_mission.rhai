@@ -14,13 +14,22 @@ fn verdict(pass, reason) {
 fn on_start(me) {
     this.possess_count = 0;
     this.port_writes = 0;
+    this.engine_cutoff = false;
+    this.flight_handoff = false;
+    this.touchdown = false;
     this.deployed = false;
     this.done = false;
     this.elapsed = 0.0;
 }
 
 fn on_event(me, evt) {
-    if evt.name == "rover_deployed" {
+    if evt.name == "lander_engine_cutoff" {
+        this.engine_cutoff = true;
+    } else if evt.name == "lander_flight_handoff" {
+        this.flight_handoff = true;
+    } else if evt.name == "lander_touchdown" {
+        this.touchdown = true;
+    } else if evt.name == "rover_deployed" {
         this.deployed = true;
     } else if evt.name == "cmd:PossessVessel" && this.deployed {
         this.possess_count += 1;
@@ -38,6 +47,10 @@ fn on_event(me, evt) {
         this.done = true;
         if !used_controls { verdict(false, "autopilot did not drive after rover deployment"); return; }
         if !arrived { verdict(false, "mission completed away from the final waypoint"); return; }
+        if !this.engine_cutoff || !this.flight_handoff || !this.touchdown {
+            verdict(false, "landing transition event chain was incomplete");
+            return;
+        }
         verdict(true, "");
     }
 }
