@@ -76,7 +76,8 @@ pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
 /// again. A drive-qualified Windows path is already absolute and passes through.
 pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
     match parse_lunco_uri(id) {
-        Some(rel) => Some(assets_root?.join(rel)),
+        Some(rel) if crate::asset_path::is_safe_relative_path(rel) => Some(assets_root?.join(rel)),
+        Some(_) => None,
         None => {
             let p = PathBuf::from(id);
             Some(if p.is_absolute() {
@@ -159,6 +160,25 @@ mod tests {
             let error = read_asset_bytes_with_twin_root(id, None, Some(root.path()))
                 .expect_err("unsafe Twin path must be rejected");
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn library_ids_cannot_escape_the_asset_root() {
+        let root = tempfile::tempdir().expect("temporary asset root");
+        assert_eq!(
+            id_to_disk_path("lunco://terrain/moon.usda", Some(root.path())),
+            Some(root.path().join("terrain/moon.usda"))
+        );
+        for id in [
+            "lunco://../outside.usda",
+            "lunco://terrain/../../outside.usda",
+            r"lunco://terrain\outside.usda",
+        ] {
+            assert!(
+                id_to_disk_path(id, Some(root.path())).is_none(),
+                "unsafe library id must be rejected: {id}"
+            );
         }
     }
 }
@@ -274,6 +294,9 @@ macro_rules! try_both {
 
 impl AssetReader for FallbackReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         let result = try_both!(self, read, path);
         if matches!(result, Err(AssetReaderError::NotFound(_))) {
             // Only `read`. Bevy probes for a sibling `.meta` on EVERY asset and
@@ -294,6 +317,9 @@ impl AssetReader for FallbackReader {
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         try_both!(self, read_meta, path)
     }
 
@@ -301,10 +327,16 @@ impl AssetReader for FallbackReader {
         &'a self,
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Err(AssetReaderError::NotFound(path.to_path_buf()));
+        }
         try_both!(self, read_directory, path)
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return Ok(false);
+        }
         // `is_directory` answers false rather than erroring for a missing path,
         // so `NotFound` is not the signal here — a plain `false` is.
         let mut last = Ok(false);

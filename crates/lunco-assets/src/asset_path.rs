@@ -98,6 +98,17 @@ pub fn is_safe_relative_path(rel: &str) -> bool {
     !(bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
+/// Whether a path contains only ordinary relative components.
+///
+/// This is the `Path` counterpart to [`is_safe_relative_path`]. It is used at
+/// async reader boundaries, after a URI has already become a platform path,
+/// where the platform's own component parser is the authority for roots,
+/// prefixes, and parent traversal.
+pub fn is_safe_relative_components(path: &Path) -> bool {
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_)))
+}
+
 /// Resolve `asset_path`, as named inside the document at `anchor`, to a stable
 /// asset-source-relative identifier.
 ///

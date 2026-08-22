@@ -275,15 +275,15 @@ impl TwinReader {
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        if !crate::asset_path::is_safe_relative_components(path) {
+            return None;
+        }
         let mut comps = path.components();
         let name = comps.next()?.as_os_str().to_str()?;
         let root = self.roots.root_for(name)?;
         let mut rel = PathBuf::new();
         for comp in comps {
-            match comp {
-                std::path::Component::Normal(seg) => rel.push(seg),
-                _ => return None,
-            }
+            rel.push(comp.as_os_str());
         }
         let authored = root.join(&rel);
         if authored.exists() {
