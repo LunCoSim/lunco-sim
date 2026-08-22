@@ -120,18 +120,13 @@ pub fn read_asset_bytes_with_twin_root(
                 format!("Twin asset `{id}` has no composing Twin root"),
             )
         })?;
-        let mut relative = PathBuf::new();
-        for component in Path::new(rel).components() {
-            match component {
-                std::path::Component::Normal(part) => relative.push(part),
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Twin asset `{id}` escapes its root"),
-                    ));
-                }
-            }
+        if !crate::asset_path::is_safe_relative_path(rel) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Twin asset `{id}` escapes its root"),
+            ));
         }
+        let relative = PathBuf::from(rel);
         let authored = root.join(&relative);
         if authored.is_file() {
             return std::fs::read(authored);
@@ -140,6 +135,32 @@ pub fn read_asset_bytes_with_twin_root(
         return std::fs::read(cached);
     }
     read_asset_bytes(id, assets_root)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        std::fs::write(root.path().join("lesson.rhai"), "40 + 2").expect("lesson");
+
+        let id = "twin://example/lesson.rhai";
+        assert_eq!(
+            read_asset_bytes_with_twin_root(id, None, Some(root.path())).expect("authored file"),
+            b"40 + 2"
+        );
+        for id in [
+            "twin://example/../outside.rhai",
+            "twin://example/a/../../outside.rhai",
+            r"twin://example/..\outside.rhai",
+        ] {
+            let error = read_asset_bytes_with_twin_root(id, None, Some(root.path()))
+                .expect_err("unsafe Twin path must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
 }
 
 /// Native read for a caller-selected root document. Kept in `lunco-assets` so
