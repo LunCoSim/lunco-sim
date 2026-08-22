@@ -266,7 +266,7 @@ impl Node<dyn TaskCtx> for Leaf {
 }
 
 /// Extract an optional `FnPtr` field, erroring on a present-but-wrong type
-/// (the silent-skip alternative turns a typo'd `#{ act: 5 }` into a no-op).
+/// (the silent-skip alternative turns a typo'd action field into a no-op).
 fn fnptr_field(m: &Map, key: &str) -> Result<Option<FnPtr>, String> {
     match m.get(key) {
         None => Ok(None),

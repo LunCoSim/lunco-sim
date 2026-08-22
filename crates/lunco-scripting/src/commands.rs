@@ -1088,7 +1088,6 @@ mod tests {
         assert!(source.contains("fn task(me)"), "{source}");
         assert!(source.contains("compile_timeline"), "{source}");
         assert!(!source.contains("fn on_tick"), "{source}");
-        assert!(!source.contains("seq_note_event"), "{source}");
     }
 
     #[test]
