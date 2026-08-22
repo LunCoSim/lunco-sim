@@ -321,7 +321,7 @@ fn source_field(m: &Map) -> Result<SrcSpec, String> {
 fn validate_fields(m: &Map, allowed: &[&str]) -> Result<(), String> {
     for key in m.keys() {
         let key = key.as_str();
-        if key != INTERNAL_TASK_MARKER && !allowed.contains(&key) {
+        if key != NODE_KIND_FIELD && key != INTERNAL_TASK_MARKER && !allowed.contains(&key) {
             return Err(format!(
                 "task field `{key}` is not valid for this node kind"
             ));
