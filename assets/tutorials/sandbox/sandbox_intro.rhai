@@ -1,41 +1,39 @@
 //! Sandbox Onboarding Tour — guided COACH-MARK tour with live action progression.
 //!
-//! Employs interactive progression: steps listen for specific user actions
-//! (camera cycle, flight locomotion, shift-select, spawn, possess, release)
-//! and advance automatically, while retaining "Back" / "Skip" and "Next"
-//! controls.
+//! Employs interactive progression: the Rhai event policy listens for the
+//! authored raw command/input names (camera cycle, flight locomotion,
+//! selection, spawn, possess, release) and advances automatically, while
+//! retaining "Back" / "Skip" and "Next" controls.
 
 fn steps() {
     [
         // 0
-        #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "Welcome! This is the Sandbox, a 3D digital twin of the solar system. Let's learn the basics: camera navigation, selecting, spawning, avatars, and agentic workflows. Click Next to begin.", require: "next" },
+        #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "Welcome! This is the Sandbox, a 3D digital twin of the solar system. Let's learn the basics: camera navigation, selecting, spawning, avatars, and agentic workflows. Click Next to begin.", require: "cmd:TutorialNext" },
         // 1
-        #{ anchor: "panel.center",          focus: (),             title: "Moving: Orbit & Zoom",  body: "Let's look around! In Avatar mode (orbit rig by default), hold RIGHT MOUSE BUTTON and drag to orbit the target, or scroll the MOUSE WHEEL to zoom. Click Next when done.", require: "next" },
+        #{ anchor: "panel.center",          focus: (),             title: "Moving: Orbit & Zoom",  body: "Let's look around! In Avatar mode (orbit rig by default), hold RIGHT MOUSE BUTTON and drag to orbit the target, or scroll the MOUSE WHEEL to zoom. Click Next when done.", require: "cmd:TutorialNext" },
         // 2
-        #{ anchor: "panel.center",          focus: (),             title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Double-click an object to focus the camera on it. Click Next.", require: "next" },
+        #{ anchor: "panel.center",          focus: (),             title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Double-click an object to focus the camera on it. Click Next.", require: "cmd:TutorialNext" },
         // 3
-        #{ anchor: "panel.center",          focus: (),             title: "Camera Cycling",        body: "You can cycle perspectives. Press the C key to switch camera views (Avatar, Follow, First-Person). Press C now!", require: "cycle" },
+        #{ anchor: "panel.center",          focus: (),             title: "Camera Cycling",        body: "You can cycle perspectives. Press the C key to switch camera views (Avatar, Follow, First-Person). Press C now!", require: "key:KeyC" },
         // 4
-        #{ anchor: "panel.center",          focus: (),             title: "Locomotion: Flight",    body: "In Avatar flight mode, RMB drag looks around, and WASD keys fly you through space (hold Shift to boost speed x10). Pan and Zoom do not apply here. Try flying with W, A, S, or D now!", require: "fly" },
+        #{ anchor: "panel.center",          focus: (),             title: "Locomotion: Flight",    body: "In Avatar flight mode, RMB drag looks around, and WASD keys fly you through space (hold Shift to boost speed x10). Pan and Zoom do not apply here. Try flying with W, A, S, or D now!", require: ["key:KeyW", "key:KeyA", "key:KeyS", "key:KeyD"] },
         // 5
-        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it (or click multiple to extend selection). Or click it in the Entities panel (left dock). Hold Shift and select now!", require: "select" },
+        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it (or click multiple to extend selection). Or click it in the Entities panel (left dock). Hold Shift and select now!", require: "cmd:SelectEntity" },
         // 6
-        #{ anchor: "panel.right_inspector", focus: "spawn_palette", title: "Spawning Objects",      body: "Open Spawn in the right dock. Click on any catalogued rover, prop, or structure to spawn it. Spawn something now!", require: "spawn" },
+        #{ anchor: "panel.right_inspector", focus: "spawn_palette", title: "Spawning Objects",      body: "Open Spawn in the right dock. Click on any catalogued rover, prop, or structure to spawn it. Spawn something now!", require: "cmd:SpawnEntity" },
         // 7
-        #{ anchor: "panel.right_inspector", focus: (),             title: "What is the Avatar?",   body: "Click the rover in the viewport or Entities panel, then click Possess in the Inspector or Command Deck. Possess a vehicle now!", require: "possess" },
+        #{ anchor: "panel.right_inspector", focus: (),             title: "What is the Avatar?",   body: "Click the rover in the viewport or Entities panel, then click Possess in the Inspector or Command Deck. Possess a vehicle now!", require: "cmd:PossessVessel" },
         // 8
-        #{ anchor: "panel.right_inspector", focus: (),             title: "Releasing Control",     body: "This links your keyboard controls directly to it. Press BACKSPACE to release control and return to Avatar mode. Press Backspace now!", require: "release" },
+        #{ anchor: "panel.right_inspector", focus: (),             title: "Releasing Control",     body: "This links your keyboard controls directly to it. Press BACKSPACE to release control and return to Avatar mode. Press Backspace now!", require: "key:Backspace" },
         // 9
-        #{ anchor: "",                      focus: (),             title: "Agentic Workflows",     body: "Open Help in the top menu for the command and automation guidance. You can write scripts using Rhai, run co-simulations, or connect external AI coding agents via the HTTP API and MCP tools. Click Next to complete.", require: "next" },
+        #{ anchor: "",                      focus: (),             title: "Agentic Workflows",     body: "Open Help in the top menu for the command and automation guidance. You can write scripts using Rhai, run co-simulations, or connect external AI coding agents via the HTTP API and MCP tools. Click Next to complete.", require: "cmd:TutorialNext" },
         // 10
-        #{ anchor: "",                      focus: (),             title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Choose First Drive or Moon Driving Basics from the Tutorials menu when you want to practise.", require: "next" },
+        #{ anchor: "",                      focus: (),             title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Choose First Drive or Moon Driving Basics from the Tutorials menu when you want to practise.", require: "cmd:TutorialNext" },
     ]
 }
 
 fn show(s, i) {
-    let step = s[i];
-    if step.focus != () { cmd("FocusPanel", #{ id: step.focus }); }
-    coach(i, s.len(), step.anchor, step.title, step.body, step.require);
+    coach_step(s, i);
 }
 
 fn on_start(me) {
@@ -47,10 +45,23 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext" { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
+    if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
     else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
-    else { return; }
+    else if this.i >= s.len() { return; }
+    else {
+        let required = s[this.i].require;
+        let matched = if type_of(required) == "string" {
+            evt.name == required
+        } else {
+            let found = false;
+            for name in required {
+                if evt.name == name { found = true; break; }
+            }
+            found
+        };
+        if !matched { return; }
+        this.i += 1;
+    }
 
     if this.i >= s.len() {
         end_tour();

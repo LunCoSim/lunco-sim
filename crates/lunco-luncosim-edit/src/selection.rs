@@ -133,6 +133,7 @@ pub(crate) fn apply_selection(
             selected.entities.push(target);
         }
     }
+    commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
 }
 
 /// Replaces the Inspector/command focus without enabling edit manipulation.

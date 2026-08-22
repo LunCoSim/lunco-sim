@@ -21,6 +21,7 @@ def Scope "Lunica" (
 )
 {
     string lunco:track:label = "3️⃣ Modelica Workbench"
+    string lunco:track:perspective = "modelica_analyze"
 
     def Scope "Overview" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]

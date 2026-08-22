@@ -14,6 +14,51 @@ fn repo(rel: &str) -> std::path::PathBuf {
         .join(rel)
 }
 
+/// App curriculum roots are the top-level USD layers, not a list maintained by
+/// this test. Adding an app root automatically brings it into these checks.
+fn curriculum_apps() -> Vec<String> {
+    let mut apps = std::fs::read_dir(repo("assets/tutorials"))
+        .expect("tutorial asset root")
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_file() {
+                return None;
+            }
+            let path = entry.path();
+            (path.extension().and_then(|ext| ext.to_str()) == Some("usda"))
+                .then(|| path.file_stem()?.to_str().map(str::to_owned))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    apps.sort();
+    assert!(!apps.is_empty(), "no tutorial app roots found");
+    apps
+}
+
+fn compose_app(app: &str) -> curriculum::Curriculum {
+    let stage =
+        lunco_usd_compose::compose_file_to_stage(&repo(&format!("assets/tutorials/{app}.usda")))
+            .unwrap_or_else(|error| panic!("compose {app} curriculum: {error}"));
+    curriculum::project(&stage)
+}
+
+fn tutorial_test_scenes() -> Vec<(std::path::PathBuf, String)> {
+    let mut scenes = std::fs::read_dir(repo("assets/scenes/tests"))
+        .expect("tutorial test scene root")
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            (name.starts_with("tutorial_") && path.extension()?.to_str()? == "usda")
+                .then(|| Some((path.clone(), std::fs::read_to_string(path).ok()?)))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    scenes.sort_by(|a, b| a.0.cmp(&b.0));
+    scenes
+}
+
 /// Resolve an authored asset path to a file on disk. Mirrors what the launcher
 /// must do: `lunco://` is engine-shipped, `twin://` belongs to a twin.
 fn resolve(asset: &str) -> Option<std::path::PathBuf> {
@@ -36,10 +81,9 @@ fn the_app_layer_composes_the_tracks_it_offers() {
         c.failures
     );
     let labels: Vec<&str> = c.tracks.iter().map(|t| t.label.as_str()).collect();
-    assert_eq!(
-        c.tracks.len(),
-        3,
-        "expected luncosim + sandbox + basic, got {labels:?}"
+    assert!(
+        !c.tracks.is_empty(),
+        "luncosim offers no tracks: {labels:?}"
     );
     assert!(!c.lessons.is_empty(), "no lessons composed");
     for t in &c.tracks {
@@ -51,12 +95,8 @@ fn the_app_layer_composes_the_tracks_it_offers() {
 /// worse than absent: it appears in the menu and fails when a student picks it.
 #[test]
 fn every_lesson_resolves_its_script() {
-    for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
-            "assets/tutorials/{app}.usda"
-        )))
-        .expect("compose curriculum");
-        let c = curriculum::project(&stage);
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
         assert!(
             c.failures.is_empty(),
             "{app} curriculum failures: {:?}",
@@ -85,12 +125,8 @@ fn every_lesson_resolves_its_script() {
 fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
     let mut with = 0;
     let mut without = 0;
-    for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
-            "assets/tutorials/{app}.usda"
-        )))
-        .expect("compose curriculum");
-        let c = curriculum::project(&stage);
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
         assert!(
             c.failures.is_empty(),
             "{app} curriculum failures: {:?}",
@@ -121,12 +157,8 @@ fn declared_worlds_exist_and_world_less_lessons_are_allowed() {
 /// A chain must not strand a student: every `next` targets a composed lesson.
 #[test]
 fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
-    for app in ["luncosim", "lunica", "sandbox"] {
-        let stage = lunco_usd_compose::compose_file_to_stage(&repo(&format!(
-            "assets/tutorials/{app}.usda"
-        )))
-        .expect("compose curriculum");
-        let c = curriculum::project(&stage);
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
         assert!(
             c.failures.is_empty(),
             "{app} curriculum failures: {:?}",
@@ -152,37 +184,71 @@ fn no_lesson_chains_to_a_lesson_that_does_not_exist() {
 /// into a Next-button slideshow.
 #[test]
 fn exercises_cannot_complete_from_tour_navigation() {
-    let stage = lunco_usd_compose::compose_file_to_stage(&repo("assets/tutorials/luncosim.usda"))
-        .expect("compose luncosim curriculum");
-    let c = curriculum::project(&stage);
-    assert!(
-        c.failures.is_empty(),
-        "curriculum failures: {:?}",
-        c.failures
-    );
-
     let mut tours = 0;
     let mut exercises = 0;
-    for lesson in &c.lessons {
-        match lesson.format {
-            curriculum::LessonFormat::Tour => tours += 1,
-            curriculum::LessonFormat::Exercise => {
-                exercises += 1;
-                let path = resolve(&lesson.script).expect("bundled tutorial script");
-                let script = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-                assert!(
-                    !script.contains("cmd:TutorialNext"),
-                    "exercise {} completes through tour navigation",
-                    lesson.path
-                );
-                assert!(
-                    script.contains("MISSION_COMPLETE"),
-                    "exercise {} has no runtime completion verdict",
-                    lesson.path
-                );
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
+        assert!(
+            c.failures.is_empty(),
+            "{app} curriculum failures: {:?}",
+            c.failures
+        );
+        for lesson in &c.lessons {
+            match lesson.format {
+                curriculum::LessonFormat::Tour => tours += 1,
+                curriculum::LessonFormat::Exercise => {
+                    exercises += 1;
+                    let path = resolve(&lesson.script).expect("bundled tutorial script");
+                    let script = std::fs::read_to_string(&path)
+                        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                    assert!(
+                        !script.contains("cmd:TutorialNext"),
+                        "exercise {} completes through tour navigation",
+                        lesson.path
+                    );
+                    assert!(
+                        script.contains("MISSION_COMPLETE"),
+                        "exercise {} has no runtime completion verdict",
+                        lesson.path
+                    );
+                }
             }
         }
     }
     assert!(tours > 0 && exercises > 0, "expected both lesson formats");
+}
+
+/// Every shipped exercise has a production scene gate. The scene itself names
+/// the lesson source, so this stays data-driven and cannot drift into a list of
+/// lesson names maintained in Rust.
+#[test]
+fn every_exercise_has_a_production_rhai_gate() {
+    let scenes = tutorial_test_scenes();
+    assert!(
+        !scenes.is_empty(),
+        "no tutorial production test scenes found"
+    );
+
+    for app in curriculum_apps() {
+        let c = compose_app(&app);
+        for lesson in c
+            .lessons
+            .iter()
+            .filter(|lesson| lesson.format == curriculum::LessonFormat::Exercise)
+        {
+            let needle = format!("@{}@", lesson.script);
+            let Some((scene, source)) = scenes.iter().find(|(_, source)| source.contains(&needle))
+            else {
+                panic!(
+                    "exercise {} has no scene test naming {}",
+                    lesson.path, lesson.script
+                );
+            };
+            assert!(
+                source.contains("@lunco://scenarios/tests/"),
+                "{} has no authored Rhai observer",
+                scene.display()
+            );
+        }
+    }
 }

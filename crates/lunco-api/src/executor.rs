@@ -128,13 +128,7 @@ pub fn api_request_observer(
 /// step keys off. `source: 0` (no single emitter); payload = the command name.
 pub fn project_command_events(trigger: On<ApiCommandEvent>, mut commands: Commands) {
     let name = &trigger.event().command;
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: format!("cmd:{name}"),
-        source: 0,
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::String(name.clone()),
-        timestamp: 0.0,
-    });
+    commands.trigger(lunco_core::command_telemetry_event(name.clone()));
 }
 
 /// Can `params` actually become this command? `Ok(())` if it deserializes AND

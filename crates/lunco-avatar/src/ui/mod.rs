@@ -3,8 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_workbench::{
-    tutorial_overlay::TutorialHud, Panel, PanelCtx, PanelId, PanelRects, PanelSlot,
-    WorkbenchAppExt, VIEWPORT_PANEL_ID,
+    Panel, PanelCtx, PanelId, PanelRects, PanelSlot, WorkbenchAppExt, VIEWPORT_PANEL_ID,
 };
 
 use crate::RoverNameTagSettings;
@@ -305,86 +304,14 @@ pub fn populate_avatar_status_view(
     view.mode_detail = detail;
 }
 
-fn trigger_tutorial_next(commands: &mut Commands) {
-    commands.trigger(lunco_core::TelemetryEvent {
-        name: "cmd:TutorialNext".to_string(),
-        source: 0,
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::Bool(true),
-        timestamp: 0.0,
-    });
-}
-
-fn on_possess_progress(
-    _trigger: On<crate::commands::PossessVessel>,
-    hud: Option<Res<TutorialHud>>,
-    mut commands: Commands,
-) {
-    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("possess")) {
-        trigger_tutorial_next(&mut commands);
-    }
-}
-
-fn on_release_progress(
-    _trigger: On<crate::commands::ReleaseVessel>,
-    hud: Option<Res<TutorialHud>>,
-    mut commands: Commands,
-) {
-    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("release")) {
-        trigger_tutorial_next(&mut commands);
-    }
-}
-
-fn check_tutorial_keyboard_progress(
-    keys: Option<Res<ButtonInput<KeyCode>>>,
-    hud: Option<Res<TutorialHud>>,
-    mut commands: Commands,
-) {
-    let Some(keys) = keys else {
-        return;
-    };
-    let Some(hud) = hud else {
-        return;
-    };
-    let Some(tour) = &hud.tour else {
-        return;
-    };
-    let Some(require) = &tour.require else {
-        return;
-    };
-
-    let mut done = false;
-    match require.as_str() {
-        "cycle" => done = keys.just_pressed(KeyCode::KeyC),
-        "fly" => {
-            done =
-                keys.any_just_pressed([KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]);
-        }
-        "release" => done = keys.just_pressed(KeyCode::Backspace),
-        _ => {}
-    }
-
-    if done {
-        trigger_tutorial_next(&mut commands);
-    }
-}
-
 /// Plugin that registers avatar UI panels.
 pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AvatarStatusView>();
-        app.add_systems(
-            Update,
-            (
-                populate_avatar_status_view,
-                check_tutorial_keyboard_progress,
-            ),
-        );
+        app.add_systems(Update, populate_avatar_status_view);
         app.register_panel(AvatarStatusPanel);
-        app.add_observer(on_possess_progress);
-        app.add_observer(on_release_progress);
     }
 }
 

@@ -85,6 +85,10 @@ one directly when doing that kind of task by hand.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
 - **Policy → rhai, identity → USD, math → Modelica** — keep logic out of the Rust core.
+- **Tutorial tests → Rhai** — put lesson-specific runtime assertions in
+  `assets/scenarios/tests/*.rhai` and run them through production
+  `luncosim test`; keep Rust tests generic to the scripting/lifecycle seam so
+  editing a tutorial does not require rebuilding the core.
 - **USD is the source of truth; the ECS is a projection of it.** An edit that
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).

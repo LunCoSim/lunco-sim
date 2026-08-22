@@ -92,11 +92,13 @@ it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch i
 
 ## Two kinds of lesson
 
-- **Coach-mark tour** (narrated slideshow) — `coach(i, len, anchor, title, body)`
-  in `on_start`, advanced by an `on_event` cursor on `cmd:TutorialNext` /
-  `cmd:TutorialBack` / `cmd:TutorialSkip` (the card's own buttons). **Guaranteed
-  completable** — it depends on nothing in the scene, so it's the safe default for
-  teaching *concepts* and UI. End by `emit("MISSION_COMPLETE", 0)`. Reference:
+- **Coach-mark tour** (narrated slideshow) — `coach_step(steps, i)` (or
+  `coach(...)`) in `on_start`, advanced by an `on_event` cursor. A tour may use
+  the card's `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip` events,
+  or authored action requirements such as `key:KeyC` and `cmd:SpawnEntity`.
+  **Guaranteed completable** means that every required action is documented and
+  observable; it does not mean that every step must accept Next. End by
+  `emit("MISSION_COMPLETE", 0)`. Reference:
   `assets/tutorials/sandbox/sandbox_intro.rhai`.
 - **Objective mission** — `mission(me)` with objectives that advance on **real
   user actions** (a `cmd:*` event or a `done` predicate). Best for *doing*
@@ -164,6 +166,42 @@ first. lunica ids include `modelica_experiments`, `modelica_inspector`,
 `modelica_diagnostics`, `modelica_component_palette`,
 `model_view.compile_buttons` (needs a model open); instance panel
 `panel.modelica_plot` — spotlight but don't `focus`. Full list: `assets/tutorials/lunica/README.md`.
+
+## Test a tutorial in Rhai
+
+Tutorial runtime tests belong beside the authored assets, not in a Rust test
+per lesson:
+
+```
+assets/scenes/tests/<lesson>.usda       # the real lesson rig
+assets/scenarios/tests/<lesson>.rhai    # an observing verdict scenario
+```
+
+The test scenario attaches to the same composed world, observes the lesson's
+public `cmd:*`, `MISSION_COMPLETE`, `MISSION_FAILED`, and live state, then calls
+the shared `report_verdict(...)` helper. It must not drive the lesson with a
+second autopilot or accept `MISSION_COMPLETE` without checking the mechanism
+that was supposed to teach something. A timeout is allowed only as test
+liveness handling; it is not lesson policy.
+
+For example, a First Drive observer should count `cmd:PossessVessel` and
+`cmd:SetPorts`, then verify the rover reached the flag. Run it with the
+production binary:
+
+```
+target/debug/luncosim test \
+  --scene scenes/tests/tutorial_first_drive.usda \
+  --max-ticks 6000
+```
+
+This is the normal edit loop for tutorial behavior: change the `.rhai`, rebuild
+nothing, and run the scene gate again. `--validate` and a script parser only
+prove syntax; the authored Rhai verdict is what proves the live behavior.
+
+The generic Rust scripting contract may still check that every embedded script
+compiles and that the shared hook seam does not panic. It must stay content
+agnostic. Do not add a new Rust test just to encode a lesson's steps, action
+requirements, or expected command sequence.
 
 ## Onboarding (first-run)
 

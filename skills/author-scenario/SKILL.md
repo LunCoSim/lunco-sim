@@ -160,6 +160,25 @@ code — and raises a toast. Call it once, last. Use `fail_fast` for setup
 failures (a `find` that returned -1, the wrong scene) so a broken run stops on
 tick one instead of ticking silently to the limit.
 
+For a tutorial, this scenario is an **observer**, not a second lesson. Attach it
+to the same production scene fixture as the tutorial and observe its public
+`cmd:*` events, mission verdict, and live state. Count the mechanism that
+matters (`cmd:PossessVessel` plus a real port write, for example), then verify
+the resulting movement or value. Never make the observer send the same control
+commands as the lesson, and never accept `MISSION_COMPLETE` by itself.
+
+This keeps tutorial regression tests in Rhai, where they can be edited and run
+without rebuilding the Rust core:
+
+```bash
+target/debug/luncosim test \
+  --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
+```
+
+The generic Rust contract may still compile every embedded script and exercise
+the shared hook seam. Keep it content-agnostic; a lesson's steps, required
+events, and expected command sequence belong in an authored Rhai observer.
+
 **A silent pass is not a pass.** A scenario fails silently in every direction
 that matters: a hook that never fires, a phase that never advances, a `find`
 that missed. So assert that something was MEASURED (`t_present`) and that

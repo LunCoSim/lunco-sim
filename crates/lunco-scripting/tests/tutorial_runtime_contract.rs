@@ -2,12 +2,11 @@
 //!
 //! Parsing every tutorial is necessary but not sufficient: a script can parse
 //! while its first `on_start` call still references a missing host function, or
-//! while the shared Back/Next/Goto/Skip contract panics on a real event.  This
-//! test installs the small command/HUD seam that production supplies, starts
-//! every bundled tutorial, and drives its navigation hook through one complete
-//! step list.  It deliberately does not fake a USD/physics world; world facts
-//! belong to the production API/runtime gates.  The check here is the
-//! language-to-command contract and the bounded lifecycle of each tutorial.
+//! while the shared Back/Goto/Skip contract panics on a real event. This test
+//! installs the small command/HUD seam that production supplies and starts
+//! every bundled tutorial. It deliberately does not fake a USD/physics world;
+//! world facts and lesson-specific action requirements belong to authored Rhai
+//! production gates. The check here is only the language-to-command seam.
 
 use std::sync::{Arc, Mutex};
 
@@ -102,35 +101,10 @@ fn every_bundled_tutorial_starts_and_navigates_without_a_rhai_runtime_error() {
             .unwrap_or_else(|error| panic!("{path}: on_start failed: {error}"));
         }
 
-        // A guided tour publishes a finite `steps()` array.  Drive one full
-        // pass plus one extra event to exercise its terminal branch without an
-        // unbounded loop. Other mission scripts simply ignore these UI events.
-        let step_count = if has_function(&ast, "steps") {
-            engine
-                .call_fn::<Dynamic>(&mut scope, &ast, "steps", ())
-                .unwrap_or_else(|error| panic!("{path}: steps() failed: {error}"))
-                .try_cast::<rhai::Array>()
-                .map(|steps| steps.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-
         if has_function(&ast, "on_event") {
-            for _ in 0..=step_count {
-                let _ = call_hook(
-                    &engine,
-                    &mut scope,
-                    &ast,
-                    "on_event",
-                    (Dynamic::from_int(0), event("cmd:TutorialNext", 0)),
-                    &mut this,
-                )
-                .unwrap_or_else(|error| panic!("{path}: TutorialNext failed: {error}"));
-            }
-
-            // Exercise the other navigation payloads as well. The event map
-            // always includes `value`, matching the production telemetry shape.
+            // Keep this generic. A tour's authored action policy is tested by
+            // its Rhai production observer, not by a Rust branch naming one
+            // tutorial or reverse-engineering its step table here.
             for (name, value) in [
                 ("cmd:TutorialBack", 0),
                 ("cmd:TutorialGoto", 0),

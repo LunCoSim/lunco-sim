@@ -1120,6 +1120,11 @@ class "LunCoTutorialTrackAPI" (
         Display text, so `string` rather than `token`: it is prose, not a value
         from a fixed set."""
     )
+    string lunco:track:perspective = "" (
+        doc = """Optional workbench perspective required before lessons in this
+        track run. The host resolves the authored identifier; an empty value
+        leaves the host's normal presentation active."""
+    )
 }
 
 class "LunCoTutorialAPI" (

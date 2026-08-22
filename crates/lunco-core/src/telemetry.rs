@@ -97,6 +97,23 @@ pub struct TelemetryEvent {
     pub timestamp: f64,
 }
 
+/// Project a typed command occurrence onto the shared script event bus.
+///
+/// Commands that can originate outside the API dispatcher (viewport input,
+/// native panels, or typed observers) use this same representation as the API
+/// projector. Tutorial and mission policy can therefore consume the command
+/// name without importing the command's owning crate.
+pub fn command_telemetry_event(name: impl Into<String>) -> TelemetryEvent {
+    let name = name.into();
+    TelemetryEvent {
+        name: format!("cmd:{name}"),
+        source: 0,
+        severity: Severity::Info,
+        data: TelemetryValue::String(name),
+        timestamp: 0.0,
+    }
+}
+
 impl Default for TelemetryEvent {
     fn default() -> Self {
         Self {

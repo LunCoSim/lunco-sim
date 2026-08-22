@@ -1834,7 +1834,8 @@ type and literal, journals the edit, and re-composes the live stage.
  Rhai: `coach(index, total, anchor, title, body)`. The controls emit
  `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip` on the event bus,
  which the tour script advances on (a script can simulate a click with
- `emit("cmd:TutorialNext", 0)`).
+ `emit("cmd:TutorialNext", 0)`). Action requirements are Rhai lesson data and
+ are evaluated by the lesson's `on_event`; they are not command parameters.
 
 - *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
 
@@ -1845,7 +1846,6 @@ type and literal, journals the edit, and re-composes the live stage.
 | `anchor` | `String` |  `HelpAnchors` key to spotlight; empty = centred card. |
 | `title` | `String` |  Coach-card banner title. |
 | `body` | `String` |  Coach-card body text. |
-| `require` | `Option < String >` |  Optional action requirement key for automatic progression. |
 
 #### `ShowOpenFilePicker`
 

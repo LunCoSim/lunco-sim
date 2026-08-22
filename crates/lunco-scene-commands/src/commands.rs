@@ -420,6 +420,7 @@ pub fn on_spawn_entity_command(
             label: format!("Spawn {}", entry.display_name),
             ops,
         });
+        commands.trigger(lunco_core::command_telemetry_event("SpawnEntity"));
         return;
     }
 
@@ -450,6 +451,7 @@ pub fn on_spawn_entity_command(
             rotation,
         },
     ));
+    commands.trigger(lunco_core::command_telemetry_event("SpawnEntity"));
 }
 
 /// Client: instantiate rovers the host has replicated to us (M1 content
