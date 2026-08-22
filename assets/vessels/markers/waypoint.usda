@@ -45,6 +45,14 @@ def Xform "WaypointMarker" (
                 # lunar sun instead of a tinted bubble — the same trick the
                 # headlight lens uses. Below 1.0 the tonemapper has nothing to
                 # bloom and the marker sinks into the regolith at midday.
+                # This is an emissive annotation, not a reflective surface.
+                # Keep the UsdPreviewSurface contract explicit; the runtime
+                # standard gprim cast flag below controls shadow-map participation
+                # on the actual mesh entity.
+                color3f inputs:diffuseColor = (0, 0, 0)
+                color3f inputs:specularColor = (0, 0, 0)
+                float inputs:useSpecularWorkflow = 1
+                float inputs:roughness = 1.0
                 color3f inputs:emissiveColor = (0.35, 3.2, 1.4)
                 token outputs:surface
             }
@@ -53,8 +61,8 @@ def Xform "WaypointMarker" (
 
     # Translucent emissive dome. It is visual-only; the trigger volume below is
     # ground-anchored so a vehicle approaching a marker on a slope can enter the
-    # waypoint without having to overlap the top of a dome floating one radius
-    # above the terrain.
+        # waypoint without having to overlap the top of a dome floating one radius
+        # above the terrain.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI"]
     )
@@ -72,7 +80,9 @@ def Xform "WaypointMarker" (
         # the terrain (and any vehicle) through the dome.
         float[] primvars:displayOpacity = [0.45]
         # Waypoints are navigational annotations, not scenery. Keep their glow
-        # visible without making a floating dome cast a terrain shadow.
+        # visible without making a floating dome cast a terrain shadow. The
+        # emissive-only UsdPreviewSurface above also makes its appearance
+        # independent of scene lighting, shadows, and reflections.
         bool primvars:doNotCastShadows = true
     }
 

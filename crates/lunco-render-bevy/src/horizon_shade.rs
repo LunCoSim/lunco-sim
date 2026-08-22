@@ -32,6 +32,12 @@ use lunco_environment::horizon::{
 };
 use lunco_materials::ParamValue;
 
+/// The semantic default for a DEM terrain surface. This is the shader whose
+/// contract includes the authored terrain layer maps; the horizon uniforms
+/// are only one part of that material. Keeping the choice here makes the
+/// terrain appearance projection and the layer-map binder share one owner.
+pub(crate) const DEFAULT_TERRAIN_SHADER_PATH: &str = "shaders/terrain_layered.wgsl";
+
 pub(crate) fn build(app: &mut App) {
     // `EnvironmentPlugin` also inits this (it drives the bake); `init_resource` is a
     // no-op when it is already there. Doing it here too means adding the render
@@ -84,7 +90,7 @@ fn sync_horizon_quality_settings(
 /// Keeps every horizon terrain's `ShaderMaterial` wired: heightfield
 /// texture, static size/resolution, the per-frame sun direction, and the
 /// **shadow cache** binding + `shadow_cache_on` flag.
-/// A terrain with no authored shader gets the default `terrain_shadow.wgsl`
+/// A terrain with no authored shader gets the default `terrain_layered.wgsl`
 /// (albedo from its already-resolved `StandardMaterial`). Idempotent and
 /// self-healing against later material swaps; steady-state cost is a uniform
 /// compare per terrain (writes only when the sun moves or the cache swaps).
@@ -284,8 +290,11 @@ pub fn wire_terrain_materials(
                 }
             }
         } else {
-            // No authored shader: apply the default ray-march terrain
-            // shader, carrying the displayColor albedo over.
+            // No authored shader: apply the semantic DEM terrain material,
+            // carrying the displayColor albedo over. This is the same shader
+            // contract consumed by the authored layer-map projection below;
+            // using a shadow-only material here would make the real orthophoto
+            // topology unreachable and silently render gray terrain.
             // The StandardMaterial may be absent for one or more frames while
             // the PbrLook observer resolves the authored appearance. Do not
             // turn that transient state into an irreversible shader takeover
@@ -295,7 +304,7 @@ pub fn wire_terrain_materials(
             };
             let a = albedo.to_linear();
             let mut material = ShaderMaterial {
-                shader: asset_server.load("shaders/terrain_shadow.wgsl"),
+                shader: asset_server.load(DEFAULT_TERRAIN_SHADER_PATH),
                 height_map: height_map_handle.clone(),
                 shadow_cache: cache_image.clone(),
                 ..Default::default()
@@ -303,7 +312,7 @@ pub fn wire_terrain_materials(
             material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
             write_engine(&mut material);
             let handle = shader_mats.add(material);
-            info!("[horizon] applied terrain_shadow.wgsl to {entity:?}");
+            info!("[horizon] applied {DEFAULT_TERRAIN_SHADER_PATH} to {entity:?}");
             // The terrain takes the SHADER path: drop any `PbrLook` intent with the
             // `StandardMaterial` it bound, or the mesh would carry two materials and
             // draw twice (the contract in `rebind_changed_pbr_look`).
@@ -651,6 +660,11 @@ mod tests {
 
     #[test]
     fn terrain_shader_waits_for_a_resolved_material_instead_of_guessing_gray() {
+        assert_eq!(
+            DEFAULT_TERRAIN_SHADER_PATH,
+            "shaders/terrain_layered.wgsl",
+            "the default terrain material must expose the authored layer-map contract"
+        );
         let materials = Assets::<StandardMaterial>::default();
         let missing = MeshMaterial3d::<StandardMaterial>(Handle::default());
 

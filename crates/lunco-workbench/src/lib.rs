@@ -61,6 +61,77 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy)]
+enum WindowControlIcon {
+    Close,
+    Maximize,
+    Restore,
+    Minimize,
+}
+
+/// Draw a titlebar control as vector geometry. Unicode glyphs are not a
+/// reliable icon source: on Linux a missing font glyph becomes a tofu square,
+/// which makes a destructive control ambiguous. The control remains an egui
+/// button, so hover/keyboard/click semantics stay in the workbench layer.
+fn window_control_button(
+    ui: &mut egui::Ui,
+    icon: WindowControlIcon,
+    tooltip: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
+    let visuals = ui.visuals();
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 4.0, visuals.widgets.hovered.bg_fill);
+    }
+    let stroke = egui::Stroke::new(1.4, visuals.widgets.inactive.fg_stroke.color);
+    let inset = 8.0;
+    let left = rect.left() + inset;
+    let right = rect.right() - inset;
+    let top = rect.top() + 6.0;
+    let bottom = rect.bottom() - 6.0;
+    match icon {
+        WindowControlIcon::Close => {
+            ui.painter().line_segment(
+                [egui::pos2(left, top), egui::pos2(right, bottom)],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [egui::pos2(right, top), egui::pos2(left, bottom)],
+                stroke,
+            );
+        }
+        WindowControlIcon::Maximize => {
+            ui.painter().rect_stroke(
+                egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
+                0.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        WindowControlIcon::Restore => {
+            let back = egui::Rect::from_min_max(
+                egui::pos2(left + 3.0, top),
+                egui::pos2(right, bottom - 3.0),
+            );
+            let front = egui::Rect::from_min_max(
+                egui::pos2(left, top + 3.0),
+                egui::pos2(right - 3.0, bottom),
+            );
+            ui.painter()
+                .rect_stroke(back, 0.0, stroke, egui::StrokeKind::Inside);
+            ui.painter()
+                .rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        WindowControlIcon::Minimize => {
+            let y = (top + bottom) * 0.5;
+            ui.painter()
+                .line_segment([egui::pos2(left, y), egui::pos2(right, y)], stroke);
+        }
+    }
+    response.on_hover_text(tooltip)
+}
+
 mod editor_tabs;
 mod menu;
 mod panel;
@@ -3765,7 +3836,10 @@ fn render_layout(
                 layout.edit_menu = callbacks;
             });
             anchor_rects.push(("menu.edit", r_edit.response.rect));
-            let r_view = ui.menu_button("View", |ui| {
+            // Use the same compact, font-safe symbol treatment as the
+            // perspective tabs (Build/Lunica). A geometric lens is deliberate:
+            // emoji eye glyphs fall back to tofu in the bundled UI font.
+            let r_view = ui.menu_button("◉ View", |ui| {
                 if ui.button("Reset Layout").clicked() {
                     // Recovery hatch: re-apply the active perspective's preset,
                     // restoring panels (notably the 3D Viewport) a stale
@@ -4313,15 +4387,19 @@ fn render_layout(
                         .get_resource::<window_command::WindowMaximized>()
                         .map(|s| s.0)
                         .unwrap_or(false);
-                    if ui.small_button("✕").on_hover_text("Close").clicked() {
+                    if window_control_button(ui, WindowControlIcon::Close, "Close").clicked() {
                         world.trigger(window_command::CloseWindow {});
                     }
-                    let max_label = if is_max { "Restore" } else { "Maximize" };
+                    let max_icon = if is_max {
+                        WindowControlIcon::Restore
+                    } else {
+                        WindowControlIcon::Maximize
+                    };
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
-                    if ui.small_button(max_label).on_hover_text(max_hover).clicked() {
+                    if window_control_button(ui, max_icon, max_hover).clicked() {
                         world.trigger(window_command::MaximizeWindow { maximized: None });
                     }
-                    if ui.small_button("─").on_hover_text("Minimize").clicked() {
+                    if window_control_button(ui, WindowControlIcon::Minimize, "Minimize").clicked() {
                         world.trigger(window_command::MinimizeWindow {});
                     }
                     ui.separator();

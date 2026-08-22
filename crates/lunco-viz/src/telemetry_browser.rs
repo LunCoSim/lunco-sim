@@ -976,7 +976,11 @@ impl Default for TelemetryBrowserPanel {
             selected: None,
             preview: None,
             focus_only: true,
-            show_model_variables: false,
+            // The registry exposes canonical USD-facing channels and the
+            // complete generated solver state. Start with both visible so a
+            // missing modeled subsystem cannot be mistaken for a UI filter;
+            // the checkbox remains available for a concise operator view.
+            show_model_variables: true,
         }
     }
 }
@@ -1192,8 +1196,8 @@ impl Panel for TelemetryBrowserPanel {
         {
             ui.label(
                 egui::RichText::new(
-                    "No channels match the current display filters. Enable Model variables, \
-                     change the filter, or untick Selected only.",
+                    "No channels match the current display filters. Change the filter or \
+                     untick Selected only.",
                 )
                 .color(subdued),
             );

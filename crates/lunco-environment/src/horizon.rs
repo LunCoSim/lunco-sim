@@ -44,7 +44,7 @@
 //! 2. **Material wiring** (idempotent, RENDER-SIDE): the heightfield
 //!    (R32Float texture) and sun uniforms are written into the terrain's
 //!    `ShaderMaterial` — the authored one (e.g. regolith) if present, else a
-//!    default `terrain_shadow.wgsl` is applied, keeping the prim's
+//!    default `terrain_layered.wgsl` is applied, keeping the prim's
 //!    `displayColor` as albedo. The mesh gets planar UVs (done here, in
 //!    [`install_horizon_map`]) so shaders can address the heightfield.
 //!

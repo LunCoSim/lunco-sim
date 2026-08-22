@@ -2856,6 +2856,11 @@ fn apply_standard_material(
     } else {
         SurfaceAlpha::Opaque
     };
+    // Entity-level cast intent is authored on the gprim, beside the standard
+    // material network. It remains outside material sharing: two prims may use
+    // the same UsdPreviewSurface while differing in shadow casting.
+    let no_shadow_cast =
+        read_material_bool(reader, sdf_path, "primvars:doNotCastShadows")?.unwrap_or(false);
 
     // An animated material channel means the sampler rewrites this look every
     // frame → it MUST NOT share a content-keyed material (that leaks one material
@@ -2915,8 +2920,7 @@ fn apply_standard_material(
             // hard shadow until this says otherwise. Read on the GPRIM, not the shader
             // — two prims sharing one material can disagree about casting, and
             // `material:binding` is not the place to say so.
-            no_shadow_cast: read_material_bool(reader, sdf_path, "primvars:doNotCastShadows")?
-                .unwrap_or(false),
+            no_shadow_cast,
             ..default()
         },
     ));
