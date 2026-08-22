@@ -33,7 +33,10 @@
 //! also re-reads every descendant body, so teleporting a chassis carries its
 //! jointed wheels. Plain chain nodes (no body, no collider) carry no shadow;
 //! their motion is probed via `Changed<Transform>`/`Changed<CellCoord>`
-//! instead, so moving a group Xform re-reads the bodies beneath it too. Static bodies at rest are never touched — the previous
+//! instead, so moving a group Xform re-reads the bodies beneath it too. A
+//! `Grid` can be either a paired BigSpace representation re-split or a real
+//! moving physical frame; only the paired re-split is excluded below. Static
+//! bodies at rest are never touched — the previous
 //! bridge dirtied every static's `Position` each tick, and the resulting
 //! whole-world contact churn is what corrupted avian's island bookkeeping
 //! (`islands/mod.rs:547` unwrap on a stale contact edge, reached from
@@ -58,6 +61,10 @@
 //! chassis' solved pose — the case avian's `position_to_transform` used to
 //! handle via `GlobalTransform` math.
 
+use avian3d::dynamics::solver::xpbd::joints::{
+    DistanceJointSolverData, FixedJointSolverData, PrismaticJointSolverData,
+    RevoluteJointSolverData, SphericalJointSolverData,
+};
 use avian3d::math::Vector;
 use avian3d::physics_transform::{
     PhysicsTransformConfig, PhysicsTransformSystems, Position, Rotation,
@@ -69,8 +76,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::{
-    cell_local_remainder, compose_cell_local, grid_relative_pose_seeded, pose_in_grid,
-    pose_in_grid_seeded, GridPos, GridRot,
+    cell_local_remainder, compose_cell_local, grid_relative_pose_seeded,
+    grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
 };
 
 /// The bridge's two passes, as orderable sets.
@@ -87,6 +94,10 @@ pub enum PhysicsBridgeSystems {
     /// a body's `Position` is its authored world pose rather than
     /// `RigidBody`'s required-component default of zero.
     Read,
+    /// RESET: invalidate Avian solver state that was expressed in the previous
+    /// active frame. This runs after READ has transported the body state and
+    /// before Avian prepares or solves constraints.
+    FrameReset,
     /// WRITEBACK: solved `Position`/`Rotation` → `Transform`.
     Writeback,
 }
@@ -112,11 +123,25 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // which is also what initialises `Position` (avian's own spawn init
         // lived inside the disabled `transform_to_position`).
         app.register_required_components::<RigidBody, BridgeShadow>();
+        // Avian's interpolation plugin is a render-side Transform writer. The
+        // bridge deliberately writes the solved f64 Position/Rotation back to
+        // that same Transform, so allowing interpolation on the physics body
+        // would feed a presentation pose into the next READ pass as an
+        // external teleport. Keep the body pose authoritative; visual child
+        // presentation may still ease independently.
+        app.register_required_components::<RigidBody, NoTranslationEasing>();
+        app.register_required_components::<RigidBody, NoRotationEasing>();
         app.register_required_components::<Collider, BridgeShadow>();
         // Plain Grid/CellCoord chain nodes can carry physical descendants. Keep
         // the same exact previous-representation record on them so a BigSpace
         // re-split is distinguishable from a semantic ancestor teleport.
         app.register_required_components::<CellCoord, SpatialBridgeShadow>();
+        // The active Avian frame can be selected after bodies have already been
+        // seeded (scene mount starts in WorldRoot, then adopts the authored
+        // body-fixed site grid).  Keep that handoff transactionally visible to
+        // both bridge registrations; a Local would process it twice because
+        // the same read pass runs in FixedPostUpdate and PhysicsSchedule.
+        app.init_resource::<PhysicsFrameTransportState>();
         app.add_systems(
             PhysicsSchedule,
             pose_to_position
@@ -130,6 +155,17 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .after(PhysicsSystems::First)
                 .before(PhysicsStepSystems::First)
                 .before(PhysicsTransformSystems::TransformToPosition),
+        );
+        // Joint construction is also allowed to run while Avian's nested
+        // schedule is held for world readiness. Seed only never-seen poses in
+        // the enclosing schedule; all change detection remains owned by the
+        // single PhysicsSchedule read pass above.
+        app.add_systems(
+            PhysicsSchedule,
+            reset_frame_dependent_solver_state
+                .in_set(PhysicsBridgeSystems::FrameReset)
+                .after(PhysicsBridgeSystems::Read)
+                .before(PhysicsStepSystems::First),
         );
         // The world-readiness hold pauses Avian's inner PhysicsSchedule, but
         // preparation must still be able to seed poses while that hold is up:
@@ -153,6 +189,13 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
                 .after(PhysicsTransformSystems::PositionToTransform)
                 .before(PhysicsSystems::Last),
         );
+        app.add_systems(
+            PhysicsSchedule,
+            propagate_collider_transforms_rootless
+                .in_set(PhysicsTransformSystems::Propagate)
+                .after(PhysicsBridgeSystems::Read)
+                .before(PhysicsStepSystems::First),
+        );
         // Bridge-owned ColliderTransform propagation. avian's own
         // `propagate_collider_transforms` only descends from tree roots that
         // carry a `Transform` — with the canonical (Transform-free) BigSpace
@@ -162,10 +205,49 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         // sandbox Ground collapsing to ~1 m. This system computes every
         // collider's transform directly from its `ColliderOf` chain instead,
         // no tree root involved. Same set as avian's pass (which no-ops).
-        app.add_systems(
-            FixedPostUpdate,
-            propagate_collider_transforms_rootless.in_set(PhysicsTransformSystems::Propagate),
-        );
+    }
+}
+
+/// Last active Avian frame observed by the bridge.
+///
+/// This is provenance, not another pose/velocity store.  It lets the READ pass
+/// distinguish a real active-frame handoff from BigSpace's representation-only
+/// cell re-split and apply one rigid coordinate conversion to the complete
+/// Avian state before the solver sees it.
+#[derive(Resource, Debug, Clone, Copy)]
+struct PhysicsFrameTransportState {
+    frame: Option<Entity>,
+    pending_solver_reset: bool,
+}
+
+impl Default for PhysicsFrameTransportState {
+    fn default() -> Self {
+        Self {
+            frame: None,
+            pending_solver_reset: false,
+        }
+    }
+}
+
+impl PhysicsFrameTransportState {
+    fn take_transition(&mut self, current: Entity) -> Option<Entity> {
+        let previous = self.frame.filter(|previous| *previous != current);
+        self.frame = Some(current);
+        previous
+    }
+
+    fn initialize_from_seeded_frame(&mut self, frame: Entity) {
+        if self.frame.is_none() {
+            self.frame = Some(frame);
+        }
+    }
+
+    fn request_solver_reset(&mut self) {
+        self.pending_solver_reset = true;
+    }
+
+    fn take_solver_reset(&mut self) -> bool {
+        core::mem::take(&mut self.pending_solver_reset)
     }
 }
 
@@ -178,7 +260,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
 /// value, not grid-absolute) — deliberately a bare `Vec3`, not a `GridPos`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BridgeShadow {
-    cell: CellCoord,
+    cell: Option<CellCoord>,
     translation: Vec3,
     rotation: Quat,
     physics_frame: Entity,
@@ -187,7 +269,7 @@ pub struct BridgeShadow {
 impl Default for BridgeShadow {
     fn default() -> Self {
         Self {
-            cell: CellCoord::ZERO,
+            cell: None,
             translation: Vec3::NAN,
             rotation: Quat::NAN,
             physics_frame: Entity::PLACEHOLDER,
@@ -197,14 +279,14 @@ impl Default for BridgeShadow {
 
 impl BridgeShadow {
     fn matches(&self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) -> bool {
-        self.cell == cell.copied().unwrap_or_default()
+        self.cell.as_ref() == cell
             && self.translation == tf.translation
             && self.rotation == tf.rotation
             && self.physics_frame == physics_frame
     }
 
     fn capture(&mut self, cell: Option<&CellCoord>, tf: &Transform, physics_frame: Entity) {
-        self.cell = cell.copied().unwrap_or_default();
+        self.cell = cell.copied();
         self.translation = tf.translation;
         self.rotation = tf.rotation;
         self.physics_frame = physics_frame;
@@ -230,21 +312,10 @@ impl BridgeShadow {
         let (Some(cell), Some(grid)) = (cell, parent_grid) else {
             return false;
         };
-        let old_position = grid.cell_to_float(&self.cell) + self.translation.as_dvec3();
-        let new_position = grid.cell_to_float(cell) + tf.translation.as_dvec3();
-        if old_position == new_position {
-            return true;
-        }
-
-        // BigSpace computes the new f32 remainder through a dvec split. For
-        // non-power-of-two cell edges the reconstructed DVec3 can differ by
-        // the final f32 rounding even though the operation is its exact
-        // canonical re-split. Validate that operation directly as the second
-        // exact representation-only case; no distance epsilon is involved.
-        let (delta, expected_translation) = grid.imprecise_translation_to_grid(self.translation);
-        delta != CellCoord::ZERO
-            && *cell == self.cell + delta
-            && tf.translation == expected_translation
+        let Some(previous_cell) = self.cell.as_ref() else {
+            return false;
+        };
+        exact_big_space_resplit(grid, previous_cell, self.translation, cell, tf.translation)
     }
 
     /// Has [`pose_to_position`] written a real world pose for this entity yet?
@@ -262,7 +333,7 @@ impl BridgeShadow {
     /// uninitialised body from a placed one. `With<Position>` proves only that the
     /// body was admitted to the island graph, never that its pose is real.
     pub fn is_seeded(&self) -> bool {
-        self.translation.is_finite() && !self.rotation.is_nan()
+        self.translation.is_finite() && self.rotation.is_finite()
     }
 }
 
@@ -274,7 +345,7 @@ impl BridgeShadow {
 /// structurally distinguishable using BigSpace's own re-split operation.
 #[derive(Component, Clone, Copy, Debug)]
 struct SpatialBridgeShadow {
-    cell: CellCoord,
+    cell: Option<CellCoord>,
     translation: Vec3,
     rotation: Quat,
     parent: Entity,
@@ -283,7 +354,7 @@ struct SpatialBridgeShadow {
 impl Default for SpatialBridgeShadow {
     fn default() -> Self {
         Self {
-            cell: CellCoord::ZERO,
+            cell: None,
             translation: Vec3::NAN,
             rotation: Quat::NAN,
             parent: Entity::PLACEHOLDER,
@@ -306,23 +377,39 @@ impl SpatialBridgeShadow {
         if !self.is_seeded() || self.parent != parent || self.rotation != tf.rotation {
             return false;
         }
-        let old_position = grid.cell_to_float(&self.cell) + self.translation.as_dvec3();
-        let new_position = grid.cell_to_float(cell) + tf.translation.as_dvec3();
-        if old_position == new_position {
-            return true;
-        }
-        let (delta, expected_translation) = grid.imprecise_translation_to_grid(self.translation);
-        delta != CellCoord::ZERO
-            && *cell == self.cell + delta
-            && tf.translation == expected_translation
+        let Some(previous_cell) = self.cell.as_ref() else {
+            return false;
+        };
+        exact_big_space_resplit(grid, previous_cell, self.translation, cell, tf.translation)
     }
 
     fn capture(&mut self, cell: &CellCoord, tf: &Transform, parent: Entity) {
-        self.cell = *cell;
+        self.cell = Some(*cell);
         self.translation = tf.translation;
         self.rotation = tf.rotation;
         self.parent = parent;
     }
+}
+
+/// Test the two exact representation-only outcomes of BigSpace's cell split.
+/// An epsilon is deliberately not part of this predicate: a close-but-not
+/// canonical pair is a semantic motion and must reach Avian.
+fn exact_big_space_resplit(
+    grid: &Grid,
+    old_cell: &CellCoord,
+    old_translation: Vec3,
+    new_cell: &CellCoord,
+    new_translation: Vec3,
+) -> bool {
+    let old_position = grid.cell_to_float(old_cell) + old_translation.as_dvec3();
+    let new_position = grid.cell_to_float(new_cell) + new_translation.as_dvec3();
+    if old_position == new_position {
+        return true;
+    }
+    let (delta, expected_translation) = grid.imprecise_translation_to_grid(old_translation);
+    delta != CellCoord::ZERO
+        && *new_cell == *old_cell + delta
+        && new_translation == expected_translation
 }
 
 /// Bodies and standalone colliders the bridge syncs. Child colliders of a
@@ -385,6 +472,53 @@ fn is_below_active_frame(
     false
 }
 
+/// Project an authored `(CellCoord, Transform)` into the single Avian frame.
+/// This is shared by initial seeding and external-motion transport so those
+/// two entry points cannot acquire different moving-grid semantics.
+fn seeded_pose_in_active_frame(
+    entity: Entity,
+    active_frame: Entity,
+    cell: Option<&CellCoord>,
+    transform: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> (GridPos, GridRot) {
+    if is_below_active_frame(entity, active_frame, q_parents) {
+        grid_relative_pose_seeded(
+            entity,
+            active_frame,
+            cell,
+            transform,
+            q_parents,
+            q_grids,
+            q_spatial,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+        .unwrap_or_else(|| {
+            panic!(
+                "physical entity {entity:?} is below active PhysicsFrame {active_frame:?} but its hierarchy is not a valid BigSpace grid chain"
+            )
+        })
+    } else {
+        pose_in_grid_seeded(
+            entity,
+            active_frame,
+            cell,
+            transform,
+            q_parents,
+            q_grids,
+            q_spatial,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+        .unwrap_or_else(|| {
+            panic!(
+                "physical entity {entity:?} does not share a BigSpace root with active PhysicsFrame {active_frame:?}"
+            )
+        })
+    }
+}
+
 /// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
 /// carrying the change to descendant bodies (chassis teleport moves wheels).
 ///
@@ -398,6 +532,7 @@ fn pose_to_position(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    mut frame_state: ResMut<PhysicsFrameTransportState>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
     // Plain chain nodes have a representation shadow when they carry a
     // CellCoord. Transform-only nodes cannot be recentered and every change is
@@ -411,7 +546,7 @@ fn pose_to_position(
             Option<&ChildOf>,
         ),
         (
-            Or<(Changed<Transform>, Changed<CellCoord>)>,
+            Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
             Without<RigidBody>,
             Without<Collider>,
         ),
@@ -423,6 +558,8 @@ fn pose_to_position(
             &Transform,
             &mut Position,
             &mut Rotation,
+            &mut LinearVelocity,
+            &mut AngularVelocity,
             &mut BridgeShadow,
             Option<&lunco_core::PhysicsPoseAuthoritative>,
         ),
@@ -430,9 +567,80 @@ fn pose_to_position(
     >,
 ) {
     let active_frame = active_frame.0;
+    if q_grids.get(active_frame).is_err() {
+        panic!("ActivePhysicsFrame {active_frame:?} is not a live BigSpace Grid");
+    }
+    // The enclosing FixedPostUpdate can be held while the first physics
+    // schedule read is deferred.  In that interval bodies may already be
+    // seeded in the old frame, so the resource cannot use an "unobserved"
+    // sentinel and assume the first read is the initial frame.  Recover the
+    // authoritative previous frame from the bridge provenance exactly once.
+    let mut seeded_frame = None;
+    for (_, _, _, _, _, _, _, shadow, pose_override) in q_bodies.iter() {
+        if pose_override.is_some() || !shadow.is_seeded() {
+            continue;
+        }
+        let frame = shadow.physics_frame;
+        if frame == Entity::PLACEHOLDER {
+            continue;
+        }
+        if seeded_frame.is_some_and(|known| known != frame) {
+            panic!("seeded Avian bodies disagree about their physics frame");
+        }
+        seeded_frame = Some(frame);
+    }
+    if let Some(seeded_frame) = seeded_frame {
+        frame_state.initialize_from_seeded_frame(seeded_frame);
+    }
+    let previous_frame = frame_state.take_transition(active_frame);
+    let handoff = previous_frame.and_then(|previous| {
+        // `grid_transform_between_grids(previous, active)` maps a pose in the
+        // old Avian frame into the new one.  It is the same typed hierarchy
+        // conversion used by placement/networking; no GlobalTransform or
+        // guessed cell arithmetic is allowed at this boundary.
+        let transform = grid_transform_between_grids(
+            previous,
+            active_frame,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        );
+        if transform.is_none()
+            && q_bodies
+                .iter()
+                .any(|(_, _, _, _, _, _, _, shadow, pose_override)| {
+                    pose_override.is_none() && shadow.is_seeded()
+                })
+        {
+            panic!(
+                "active Avian frame changed from {previous:?} to {active_frame:?}, but the two BigSpace frames have no connected typed transform"
+            );
+        }
+        transform
+    });
+    if previous_frame.is_some() && handoff.is_some() {
+        // Avian's Position/Rotation and velocity components are now in the
+        // new frame, but its cached constraint state is still from the old
+        // frame. The cache is not physical state: resetting it is required so
+        // the next narrow-phase/solver pass derives it from the transported
+        // pose, current contacts, and current joint geometry.
+        frame_state.request_solver_reset();
+    }
     // Pass 1 (read-only): which entities did an external writer touch?
     let mut moved = EntityHashSet::default();
-    for (e, cell, tf, _, _, shadow, pose_override) in q_bodies.iter() {
+    for (e, _, _, _, _) in q_moved_plain.iter() {
+        // A Grid's Transform can be either a representation rebase or a real
+        // moving-frame update.  The former changes CellCoord and Transform as
+        // one pair and is filtered by the exact representation check below; the latter is a
+        // physical frame motion (for example the Moon's rotating surface
+        // grid).  Treating every Grid as non-moving leaves Avian's absolute
+        // Position in the old frame while the terrain and scene move in the
+        // new one.  That frame split is especially destructive to jointed
+        // assemblies: the solver sees a stationary body next to a moving
+        // collider and can inject unbounded constraint energy.
+        moved.insert(e);
+    }
+    for (e, cell, tf, _, _, _, _, shadow, pose_override) in q_bodies.iter() {
         if pose_override.is_some() {
             continue;
         }
@@ -469,9 +677,34 @@ fn pose_to_position(
     // Pass 2: re-read a body if it moved OR any ancestor moved (the ancestor's
     // new Transform is already in place, so the chain walk composes the
     // carried pose).
-    for (e, cell, tf, mut pos, mut rot, mut shadow, pose_override) in &mut q_bodies {
+    for (e, cell, tf, mut pos, mut rot, mut linear, mut angular, mut shadow, pose_override) in
+        &mut q_bodies
+    {
         if pose_override.is_some() {
             continue;
+        }
+
+        // A scene is first projected under WorldRoot, where Avian is seeded,
+        // and is then migrated under its authored body-fixed site Grid.  The
+        // pose read below already recomputes the current position/orientation
+        // in the new frame.  Velocities need the matching rigid-vector
+        // conversion or the solver receives a mixed-frame state.  This is a
+        // frame rebase, not an impulse: preserve sleeping/contact/joint state
+        // and do not manufacture a velocity from the frame's astronomical
+        // translation.  Motion above the selected frame remains render-only;
+        // its transport belongs to the inertial celestial presentation, not
+        // to this local Avian world.
+        if let Some(frame_transform) = handoff {
+            if shadow.is_seeded() {
+                let old_position = pos.0;
+                let old_linear = linear.0;
+                let old_angular = angular.0;
+                let new_position = frame_transform.transform_position(old_position);
+                pos.0 = new_position;
+                rot.0 = frame_transform.transform_rotation(rot.0);
+                linear.0 = frame_transform.transform_vector(old_linear);
+                angular.0 = frame_transform.transform_vector(old_angular);
+            }
         }
         let parent_grid = q_parents
             .get(e)
@@ -497,46 +730,21 @@ fn pose_to_position(
             }
             hit
         };
-        let fired = direct_move || ancestor_move;
-        if !fired {
+        if !direct_move && !ancestor_move {
             continue;
         }
         // Typed until the component write: the cell chain composes a
         // grid-absolute pose, and avian's `Position`/`Rotation` carry exactly
         // that frame — `.0` at the write IS the frame assertion.
-        let seed_cell = cell.copied().unwrap_or_default();
-        let (position, rotation) = if is_below_active_frame(e, active_frame, &q_parents) {
-            grid_relative_pose_seeded(
-                e,
-                active_frame,
-                &seed_cell,
-                tf,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            )
-            .unwrap_or_else(|| {
-                panic!(
-                    "physical entity {e:?} is below active PhysicsFrame {active_frame:?} but its hierarchy is not a valid BigSpace grid chain"
-                )
-            })
-        } else {
-            pose_in_grid_seeded(
-                e,
-                active_frame,
-                &seed_cell,
-                tf,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            )
-            .unwrap_or_else(|| {
-                panic!(
-                    "physical entity {e:?} does not share a BigSpace root with active PhysicsFrame {active_frame:?}"
-                )
-            })
-        };
-        let (p, r) = (GridPos(position), GridRot(rotation));
+        let (p, r) = seeded_pose_in_active_frame(
+            e,
+            active_frame,
+            cell,
+            tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        );
         pos.0 = p.0;
         rot.0 = r.0;
         shadow.capture(cell, tf, active_frame);
@@ -550,6 +758,63 @@ fn pose_to_position(
         // `wake_on_remove_sleeping` hook — the sanctioned island wake path.
         if q_sleeping.contains(e) {
             commands.entity(e).remove::<Sleeping>();
+        }
+    }
+}
+
+/// Invalidate Avian's frame-dependent solver caches after an active-frame
+/// handoff.
+///
+/// XPBD joint multipliers and contact warm-start impulses are solver caches,
+/// not state that can be carried across a change of coordinate basis. Avian
+/// intentionally keeps them in components/resources for warm starting; the
+/// bridge owns the frame boundary and must reset them before Avian prepares
+/// the next step. This uses Avian's public component/resource ownership rather
+/// than maintaining a parallel cache or applying an approximate impulse
+/// transform.
+fn reset_frame_dependent_solver_state(
+    mut frame_state: ResMut<PhysicsFrameTransportState>,
+    mut contact_graph: ResMut<ContactGraph>,
+    mut fixed_joints: Query<&mut FixedJointSolverData>,
+    mut revolute_joints: Query<&mut RevoluteJointSolverData>,
+    mut spherical_joints: Query<&mut SphericalJointSolverData>,
+    mut prismatic_joints: Query<&mut PrismaticJointSolverData>,
+    mut distance_joints: Query<&mut DistanceJointSolverData>,
+) {
+    if !frame_state.take_solver_reset() {
+        return;
+    }
+
+    for mut solver_data in &mut fixed_joints {
+        *solver_data = default();
+    }
+    for mut solver_data in &mut revolute_joints {
+        *solver_data = default();
+    }
+    for mut solver_data in &mut spherical_joints {
+        *solver_data = default();
+    }
+    for mut solver_data in &mut prismatic_joints {
+        *solver_data = default();
+    }
+    for mut solver_data in &mut distance_joints {
+        *solver_data = default();
+    }
+
+    for pair in contact_graph.iter_active_mut() {
+        clear_contact_warm_start(pair);
+    }
+    for pair in contact_graph.iter_sleeping_mut() {
+        clear_contact_warm_start(pair);
+    }
+}
+
+fn clear_contact_warm_start(pair: &mut ContactPair) {
+    for manifold in &mut pair.manifolds {
+        for point in &mut manifold.points {
+            point.normal_impulse = 0.0;
+            point.warm_start_normal_impulse = 0.0;
+            point.warm_start_tangent_impulse = default();
         }
     }
 }
@@ -618,7 +883,7 @@ fn position_to_pose(
         }
     }
 
-    'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
+    for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
         // Sync Position → Transform for every body avian moves via `Position`:
         // `Dynamic` (solver-integrated) AND `Kinematic` (externally seated — the
         // networked client pins replicated proxies `Kinematic` and drives their
@@ -636,9 +901,9 @@ fn position_to_pose(
         // Walk up from the direct parent to the nearest anchor: another body
         // (use its solved pose), a Grid (use its cell-chain pose), or the
         // root. Intermediate plain nodes accumulate bottom-up. An
-        // inaccessible intermediate (a chain node the disjoint query cannot
-        // see) skips the body — writing a pose composed against the wrong
-        // frame is worse than leaving last tick's Transform.
+        // inaccessible intermediate is a malformed physical hierarchy; the
+        // bridge reports it rather than leaving a stale Transform that hides
+        // the topology defect.
         enum Anchor {
             Body(GridPos, GridRot),
             GridEntity(Entity),
@@ -646,21 +911,29 @@ fn position_to_pose(
         }
         chain.clear();
         let mut anchor = Anchor::Root;
+        let mut anchored = false;
         let mut cur = e;
         for _ in 0..32 {
-            let Ok(co) = q_parents.get(cur) else { break };
+            let Ok(co) = q_parents.get(cur) else {
+                anchored = true;
+                break;
+            };
             let parent = co.parent();
             if let Some(&(bp, br)) = body_poses.get(&parent) {
                 anchor = Anchor::Body(bp, br);
+                anchored = true;
                 break;
             }
             if q_grids.contains(parent) {
                 anchor = Anchor::GridEntity(parent);
+                anchored = true;
                 break;
             }
             // Plain intermediate node: local offset in ITS parent's frame.
             let Ok((p_cell, p_tf)) = q_plain.get(parent) else {
-                continue 'bodies;
+                panic!(
+                    "writeback body {e:?} has ancestor {parent:?} without a plain spatial Transform"
+                );
             };
             let edge = q_parents
                 .get(parent)
@@ -675,13 +948,18 @@ fn position_to_pose(
             ));
             cur = parent;
         }
+        if !anchored {
+            panic!("writeback body {e:?} exceeds the 32-node BigSpace ancestor limit");
+        }
 
         let (mut fp, mut fr) = match anchor {
             Anchor::Body(p, r) => (p, r),
             Anchor::GridEntity(g) => {
                 let Some((p, r)) = pose_in_grid(g, active_frame, &q_parents, &q_grids, &q_plain)
                 else {
-                    continue;
+                    panic!(
+                        "writeback body {e:?} has Grid anchor {g:?} with no connected pose in active PhysicsFrame {active_frame:?}"
+                    );
                 };
                 (GridPos(p), GridRot(r))
             }
@@ -746,7 +1024,7 @@ fn position_to_pose(
 /// Change-gated at the WALK, not just the write: the composition below is a
 /// pure function of the ancestor chain's `Transform`s, the chain topology
 /// (`ChildOf`), and which nodes are bodies. Recomputing every collider's full
-/// chain every `FixedPostUpdate` with only the final write compare-gated was
+/// chain every physics tick with only the final write compare-gated was
 /// O(colliders × depth) even when nothing moved — a static terrain scene paid
 /// the whole walk per tick for nothing. Now a collider recomputes only when it
 /// is new (`is_added`) or some node on its path changed; component REMOVALS
@@ -835,9 +1113,10 @@ fn propagate_collider_transforms_rootless(
     }
 }
 
-/// Write `e`'s ancestor path into `path` as `[e, parent, …, root]` (walk capped
-/// at 32). Caller-owned buffer: this runs per collider per tick, so the Vec is
-/// reused rather than reallocated.
+/// Write `e`'s ancestor path into `path` as `[e, parent, …, root]`. Caller-owned
+/// buffer: this runs per collider per tick, so the Vec is reused rather than
+/// reallocated. Physical topology errors are fatal; a truncated collider path
+/// would silently put the shape in the wrong frame.
 fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>, path: &mut Vec<Entity>) {
     path.clear();
     let mut cur = e;
@@ -846,10 +1125,16 @@ fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>, path: &mut Vec<Entity>)
         match q_parents.get(cur) {
             Ok(co) => {
                 cur = co.parent();
+                if path.contains(&cur) {
+                    panic!("collider ancestor hierarchy contains a cycle at {cur:?}");
+                }
                 path.push(cur);
             }
-            Err(_) => break,
+            Err(_) => return,
         }
+    }
+    if q_parents.get(cur).is_ok() {
+        panic!("collider {e:?} exceeds the 32-node ancestor limit");
     }
 }
 
@@ -929,5 +1214,30 @@ mod tests {
         );
         let rot_err = local_rot.angle_between(b_tf.rotation.as_dquat()).abs();
         assert!(rot_err < 1e-4, "rotation error {rot_err}");
+    }
+
+    #[test]
+    fn frame_cache_reset_clears_contact_warm_start_state() {
+        let mut pair = ContactPair::new(
+            Entity::PLACEHOLDER,
+            Entity::PLACEHOLDER,
+            avian3d::collision::contact_types::ContactId::PLACEHOLDER,
+        );
+        let mut point = ContactPoint::new(Vector::ZERO, Vector::ZERO, Vector::ZERO, 0.0);
+        point.normal_impulse = 4.0;
+        point.warm_start_normal_impulse = 3.0;
+        point.warm_start_tangent_impulse = avian3d::math::Vector2::new(2.0, -1.0);
+        pair.manifolds
+            .push(ContactManifold::new([point], Vector::Y));
+
+        clear_contact_warm_start(&mut pair);
+
+        let point = &pair.manifolds[0].points[0];
+        assert_eq!(point.normal_impulse, 0.0);
+        assert_eq!(point.warm_start_normal_impulse, 0.0);
+        assert_eq!(
+            point.warm_start_tangent_impulse,
+            avian3d::math::Vector2::ZERO
+        );
     }
 }

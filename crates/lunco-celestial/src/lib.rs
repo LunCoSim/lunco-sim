@@ -318,7 +318,15 @@ impl Plugin for CelestialPlugin {
                 },
             ),
         );
-        app.add_systems(Update, big_space_setup::sync_site_gravity);
+        // A USD PhysicsScene is projected through deferred commands while the
+        // scene prims are materialised.  Those commands may land after the
+        // ordinary Update systems and restore stage-frame Gravity::Flat.  A
+        // site scene has a different live contract: its root is migrated onto
+        // a body-fixed tangent frame, so gravity must be derived from the
+        // body's frame, not from the pre-migration USD stage axis.  Run this
+        // finalisation in PostUpdate, after the USD projection has flushed,
+        // before the next FixedUpdate computes LocalGravity and applies force.
+        app.add_systems(PostUpdate, big_space_setup::sync_site_gravity);
 
         // Teardown is the first phase of the scene replacement transaction.
         // It cannot be inferred from a frame where declarations happen to be
@@ -492,6 +500,7 @@ impl Plugin for CelestialPlugin {
 /// its `Epoch` root by the time this runs.
 fn teardown_celestial_scene(
     mut commands: Commands,
+    mut active_physics_frame: ResMut<lunco_core::ActivePhysicsFrame>,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     mut registry: ResMut<MissionRegistry>,
@@ -505,7 +514,13 @@ fn teardown_celestial_scene(
     let world_root = q_world_root
         .single()
         .expect("WorldShellPlugin must provide exactly one persistent WorldRoot");
-    commands.insert_resource(lunco_core::ActivePhysicsFrame(world_root));
+    // This assignment is intentionally immediate. `clear_scene_entities` queues
+    // this teardown from inside a larger scene-replacement command buffer, and
+    // the replacement mount is queued after it. Inserting the resource through
+    // `Commands` would append the reset behind the replacement mount and restore
+    // the outgoing WorldRoot AFTER the new body-fixed frame had been selected.
+    // That made the bridge transport the live bodies into the wrong Avian frame.
+    active_physics_frame.0 = world_root;
 
     let mut n = 0;
     for e in &q_derived {
@@ -527,6 +542,13 @@ fn teardown_celestial_scene(
 #[cfg(test)]
 mod scene_teardown_tests {
     use super::*;
+
+    fn queue_teardown_then_select_replacement(mut commands: Commands, replacement: Entity) {
+        commands.queue(lunco_core::run_scene_teardown);
+        commands.queue(move |world: &mut World| {
+            world.insert_resource(lunco_core::ActivePhysicsFrame(replacement));
+        });
+    }
 
     #[test]
     fn replacement_declarations_cannot_suppress_celestial_teardown() {
@@ -555,6 +577,34 @@ mod scene_teardown_tests {
         assert!(app.world().get_entity(outgoing).is_err());
         assert!(app.world().get_entity(replacement_decl).is_ok());
         assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            world_root
+        );
+    }
+
+    #[test]
+    fn teardown_frame_reset_cannot_overwrite_replacement_frame() {
+        let mut app = App::new();
+        app.init_resource::<MissionRegistry>();
+        app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
+
+        let world_root = app.world_mut().spawn(lunco_core::WorldRoot).id();
+        let outgoing_frame = app.world_mut().spawn_empty().id();
+        let replacement_frame = app.world_mut().spawn_empty().id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(outgoing_frame));
+        app.world_mut().spawn(big_space_setup::CelestialDerived);
+
+        app.add_systems(Update, move |commands: Commands| {
+            queue_teardown_then_select_replacement(commands, replacement_frame);
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            replacement_frame,
+            "deferred celestial teardown reset overwrote the replacement physics frame"
+        );
+        assert_ne!(
             app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
             world_root
         );

@@ -97,10 +97,21 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
                 .before(bevy_flair::style::StyleSystems::Prepare),
             runtime_exposure::hand_runtime_ui_styling_to_flair
                 .after(bevy_hui::HuiSystems::Style)
-                .after(runtime_exposure::sync_runtime_ui_manifest),
+                .after(runtime_exposure::sync_runtime_ui_manifest)
+                // HUI emits HtmlStyle during its style pass; the bridge must
+                // hand that tree to Flair before Flair snapshots selectors and
+                // computes authored properties, otherwise a newly mounted
+                // surface paints one frame with raw HUI text.
+                .before(bevy_flair::style::StyleSystems::Prepare),
             runtime_exposure::apply_runtime_ui_exposures
                 .after(runtime_exposure::sync_runtime_ui_manifest)
-                .after(bevy_hui::HuiSystems::Style),
+                // Exposure values populate HUI TemplateProperties and inline
+                // style inputs. They must be visible to the same style pass
+                // that computes the retained tree; applying them after Style
+                // paints one frame of raw text before the authored panel is
+                // laid out and styled.
+                .after(bevy_hui::HuiSystems::Build)
+                .before(bevy_hui::HuiSystems::Style),
         ),
     )
     .add_systems(

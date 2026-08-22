@@ -11,12 +11,14 @@ model LanderNavigation
   extends LunCo.Icons.Sensor;
 
   input Real altimeter_range = 0.0 "Range sensor reading to the surface (m)";
-  input Real altimeter_range_rate = 0.0
-    "Measured range rate (m/s), positive when the vehicle climbs";
-  input Real altimeter_valid = 0.0
-    "1 when the range measurement hit terrain, 0 when it is out of range";
+  input Real altimeter_position_valid = 0.0
+    "1 when the ray hit provides a valid vehicle X/Z observation";
+  input Real altimeter_altitude_confidence = 0.0
+    "0..1 confidence that the ray provides vertical altitude evidence";
   input Real altimeter_vehicle_position_x = 0.0
     "Altimeter-derived vehicle X position (m)";
+  input Real altimeter_vehicle_position_y = 0.0
+    "Altimeter-derived vehicle Y position (m)";
   input Real altimeter_vehicle_position_z = 0.0
     "Altimeter-derived vehicle Z position (m)";
   input Real imu_coordinate_accel_local_x = 0.0 "IMU local coordinate acceleration X (m/s²)";
@@ -30,12 +32,16 @@ model LanderNavigation
   input Real gravity_nav_y = -1.62 "Gravity in the navigation Y axis (m/s²)";
   input Real gravity_nav_z = 0.0 "Gravity in the navigation Z axis (m/s²)";
   parameter Real quaternion_epsilon = 1.0e-12 "Quaternion normalization floor";
-  parameter Real range_rate_acquisition_time_constant_s = 0.25
-    "Time for a newly valid altimeter rate to enter the estimator (s)";
-  parameter Real altitude_position_correction_gain = 1.0
-    "Complementary altitude correction bandwidth (1/s)";
-  input Real lateral_position_correction_gain = 0.8
-    "Complementary terrain-hit lateral correction bandwidth (1/s)";
+  parameter Real altitude_position_correction_gain = 4.0
+    "Complementary altitude position correction gain (1/s)";
+  parameter Real altitude_observation_acquisition_time_constant_s = 0.5
+    "Continuous authority ramp when vertical altitude evidence returns (s)";
+  input Real altitude_velocity_correction_gain = 4.0
+    "Complementary altitude velocity correction gain (1/s2)";
+  input Real lateral_position_correction_gain = 2.0
+    "Complementary terrain-hit lateral position gain (1/s)";
+  input Real lateral_velocity_correction_gain = 1.0
+    "Complementary terrain-hit lateral velocity gain (1/s2)";
 
   parameter Real initial_pos_x = 0.0 "Mission-initialized X position (m)";
   parameter Real initial_pos_y = 0.0 "Mission-initialized Y position (m)";
@@ -43,10 +49,6 @@ model LanderNavigation
   parameter Real initial_vel_x = 0.0 "Mission-initialized X velocity (m/s)";
   parameter Real initial_vel_y = 0.0 "Mission-initialized Y velocity (m/s)";
   parameter Real initial_vel_z = 0.0 "Mission-initialized Z velocity (m/s)";
-  input Real altimeter_mount_offset = 3.3 "Sensor-to-COM offset along +Y (m)";
-  input Real vertical_velocity_correction_gain = 2.0
-    "Range-rate correction gain for the vertical estimator (1/s)";
-
   output Real nav_pos_x(unit = "m") "Estimated X position";
   output Real nav_pos_y(unit = "m") "Estimated Y position from altimeter";
   output Real nav_pos_z(unit = "m") "Estimated Z position";
@@ -55,15 +57,19 @@ model LanderNavigation
   output Real nav_vel_z(unit = "m/s") "Estimated Z velocity";
   output Real measured_altitude(unit = "m") "Raw altimeter measurement";
 
-  Real nav_vel_y_integrated(start = 0.0)
-    "Vertical velocity propagated while the raw ray is invalid";
   Real measured_altitude_value "Conditioned altitude telemetry";
   Real navigation_accel_x;
   Real navigation_accel_y;
   Real navigation_accel_z;
-  Real range_confidence;
-  Real range_rate_confidence(start = 0.0)
-    "Confidence ramp for the first valid range-rate measurement";
+  Real lateral_position_error_x;
+  Real lateral_position_error_z;
+  Real position_observation_valid;
+  Real altitude_observation_confidence;
+  Real altitude_position_error
+    "Geometric altitude innovation used by the observer";
+  LunCo.Sensors.FilteredSignal altitude_observation_authority(
+    time_constant_s = 0.02,
+    acquisition_time_constant_s = altitude_observation_acquisition_time_constant_s);
   LunCo.Sensors.FrameVectorTransform acceleration_transform(
     quaternion_epsilon = quaternion_epsilon);
 
@@ -84,44 +90,47 @@ equation
   navigation_accel_z = acceleration_transform.world_frame_z + gravity_nav_z;
 
   // Integrate navigation-frame acceleration for velocity and lateral position.
-  // Vertical position is a complementary estimate: IMU propagation remains
-  // active, while a valid altimeter return corrects accumulated drift toward
-  // the measured sensor-to-ground clearance. Do not blend two absolute heights;
-  // that would make the old integrated state leak back into the measurement.
+  // Vertical position and velocity form the same continuous observer as the
+  // lateral axes: IMU acceleration propagates the state, while a valid
+  // geometric altimeter height corrects both position and velocity drift.
+  // The altimeter's slant-range derivative is not treated as world-Y speed:
+  // during attitude recovery it is the derivative of an oblique ray.
   // A nadir terrain return also carries the horizontal location of the ray
   // hit. Use it as a complementary position correction so IMU integration
   // remains the high-rate propagation while long-flight lateral drift stays
   // observable. During attitude recovery the ray is invalid and this term
   // naturally disappears.
+  lateral_position_error_x = altimeter_vehicle_position_x - nav_pos_x;
+  lateral_position_error_z = altimeter_vehicle_position_z - nav_pos_z;
+  // Alpha-beta observer correction: the terrain hit corrects both position
+  // drift and the velocity integral that would otherwise acquire an incorrect
+  // sign during a long powered descent.  This is the ordinary continuous
+  // position/velocity observer, not a truth-position feed or a scripted path.
   der(nav_pos_x) = nav_vel_x + lateral_position_correction_gain
-    * range_confidence * (altimeter_vehicle_position_x - nav_pos_x);
+    * position_observation_valid * lateral_position_error_x;
   der(nav_pos_z) = nav_vel_z + lateral_position_correction_gain
-    * range_confidence * (altimeter_vehicle_position_z - nav_pos_z);
-  der(nav_vel_x) = navigation_accel_x;
-  // The valid range-rate is the direct vertical-velocity measurement. Use it
-  // for the control output whenever the altimeter has a real return, and keep
-  // the IMU-propagated state as the out-of-range estimate. This is a
-  // continuous complementary estimator: the flight computer never mistakes
-  // a transient IMU integration state for a measured descent rate while the
-  // ray is valid.
-  range_confidence = max(0.0, min(1.0, altimeter_valid));
-  // A ray can become valid after several invalid samples when the vehicle is
-  // recovering from a large tilt. The first valid distance is a measurement
-  // acquisition step, not a physical vehicle-speed impulse. Ramp only the
-  // range-rate contribution while retaining the IMU-propagated state during
-  // acquisition; this is the same estimator boundary for every vehicle.
-  der(range_rate_confidence) = (range_confidence - range_rate_confidence)
-    / max(1.0e-6, range_rate_acquisition_time_constant_s);
-  der(nav_vel_y_integrated) = navigation_accel_y;
-  nav_vel_y = range_rate_confidence * altimeter_range_rate
-    + (1.0 - range_rate_confidence) * nav_vel_y_integrated;
+    * position_observation_valid * lateral_position_error_z;
+  der(nav_vel_x) = navigation_accel_x + lateral_velocity_correction_gain
+    * position_observation_valid * lateral_position_error_x;
+  position_observation_valid = max(0.0, min(1.0, altimeter_position_valid));
+  altitude_observation_confidence = max(0.0,
+    min(1.0, altimeter_altitude_confidence));
+  // A nadir return can disappear and reappear as the airframe rotates.  The
+  // first valid sample after that gap may have a large geometric innovation
+  // because the IMU-only state has continued to propagate.  Reuse the
+  // canonical sensor acquisition primitive so measurement authority itself is
+  // a continuous state: it acquires the evidence with its authored time
+  // constant and begins releasing it as soon as the evidence is gone.  This is
+  // sensor dynamics, not a frame-count delay or a mission-script handoff.
+  altitude_observation_authority.u = 0.0;
+  altitude_observation_authority.sample_valid = altitude_observation_confidence;
+  altitude_position_error = altimeter_vehicle_position_y - nav_pos_y;
   der(nav_pos_y) = nav_vel_y + altitude_position_correction_gain
-    * range_confidence * (altimeter_range + altimeter_mount_offset - nav_pos_y);
-  // With a downward ray over the landing surface, range and world +Y have the
-  // same sign: a climbing vehicle increases the measured distance, while a
-  // descending vehicle decreases it. Do not negate this measurement or the
-  // derivative term will brake in the wrong direction during descent.
-  der(nav_vel_z) = navigation_accel_z;
+    * altitude_observation_authority.acquisition * altitude_position_error;
+  der(nav_vel_y) = navigation_accel_y + altitude_velocity_correction_gain
+    * altitude_observation_authority.acquisition * altitude_position_error;
+  der(nav_vel_z) = navigation_accel_z + lateral_velocity_correction_gain
+    * position_observation_valid * lateral_position_error_z;
 
   measured_altitude_value = altimeter_range;
   measured_altitude = measured_altitude_value;
@@ -129,9 +138,8 @@ equation
 initial equation
   nav_pos_x = initial_pos_x;
   nav_pos_y = initial_pos_y;
-  range_rate_confidence = 0.0;
   nav_pos_z = initial_pos_z;
   nav_vel_x = initial_vel_x;
-  nav_vel_y_integrated = initial_vel_y;
+  nav_vel_y = initial_vel_y;
   nav_vel_z = initial_vel_z;
 end LanderNavigation;

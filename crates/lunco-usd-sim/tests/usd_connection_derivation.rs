@@ -13,7 +13,8 @@ use lunco_cosim::SimConnection;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdRead, UsdStageAsset};
 use lunco_usd_sim::cosim::{rewire_usd_connections, WiringDirty};
 use lunco_usd_sim::domain_projection::{
-    ActuatorWrenchSynthesizer, DomainSynthesizer, MemberClasses, SynthContext, SynthOutcome,
+    derive_synthesizer_name, ActuatorWrenchSynthesizer, DomainSynthesizer, MemberClasses,
+    SynthContext, SynthOutcome,
 };
 use openusd::sdf::Path as SdfPath;
 
@@ -302,10 +303,14 @@ fn lander_asset_wiring_migrated() {
         ["/LanderTest/Lander.outputs:torque_x"]
     );
     let attitude_actuation = SdfPath::new("/LanderTest/Lander/AttitudeActuation").unwrap();
-    assert_eq!(
+    assert!(
         view.text(&attitude_actuation, "lunco:synthesizer")
-            .as_deref(),
-        Some("actuator-wrench")
+            .is_none(),
+        "the actuator collection must not expose a synthesizer selector"
+    );
+    assert_eq!(
+        derive_synthesizer_name(&view, &attitude_actuation).unwrap(),
+        "actuator-wrench"
     );
     assert!(
         !view.has_prim(&SdfPath::new("/LanderTest/Lander/AttitudeActuation/Allocator").unwrap()),
@@ -348,10 +353,6 @@ fn lander_asset_wiring_migrated() {
     assert_eq!(
         view.connections(&gnc, "inputs:altimeter_range"),
         ["/LanderTest/Lander/Altimeter/Model.outputs:range_m"]
-    );
-    assert_eq!(
-        view.connections(&gnc, "inputs:altimeter_range_rate"),
-        ["/LanderTest/Lander/Altimeter/Model.outputs:range_rate_mps"]
     );
     assert_eq!(
         view.connections(&gnc, "inputs:landing_contact"),

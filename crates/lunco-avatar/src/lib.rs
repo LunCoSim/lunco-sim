@@ -899,12 +899,6 @@ impl Plugin for LunCoAvatarPlugin {
             crate::ui::draw_notifications,
         );
 
-        // The cinematic-lock janitor runs in PreUpdate so a lock inserted (or a
-        // mode re-inserted by ReleaseVessel) is stripped before this frame's
-        // camera systems reason about mode components. The Without<…> guards on
-        // those systems are the same-frame protection; this is the cleanup.
-        app.add_systems(PreUpdate, strip_camera_modes_from_locked);
-
         // Incremental camera modes are stepped at a constant 60 Hz and eased by
         // `InteractionEased`.  Surface mode is derived directly from its gravity
         // frame and is therefore a direct single-writer mode. The chase camera is different: it follows the body's
@@ -997,7 +991,14 @@ pub struct AvatarCameraSet;
 /// from the live local rotation makes the next writer frame-idempotent and
 /// does not guess a world/body offset.
 fn rebase_freeflight_state(
-    mut q_avatar: Query<(&mut FreeFlightCamera, &Transform), (With<Avatar>, Changed<ChildOf>)>,
+    mut q_avatar: Query<
+        (&mut FreeFlightCamera, &Transform),
+        (
+            With<Avatar>,
+            Changed<ChildOf>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
 ) {
     for (mut freeflight, transform) in q_avatar.iter_mut() {
         let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
@@ -1072,7 +1073,11 @@ fn sync_avatar_easing(
 fn reset_easing_before_spatial_rebase(
     mut q: Query<
         &mut lunco_time::InteractionEased,
-        (With<Avatar>, Or<(Changed<CellCoord>, Changed<ChildOf>)>),
+        (
+            With<Avatar>,
+            Without<lunco_core::CinematicCameraLock>,
+            Or<(Changed<CellCoord>, Changed<ChildOf>)>,
+        ),
     >,
 ) {
     for mut eased in &mut q {
@@ -1377,8 +1382,10 @@ fn surface_axes_for_grid_position<F: bevy::ecs::query::QueryFilter>(
 ///
 /// A surface camera's gravity is authored in its body's body-fixed frame. If
 /// the camera grid is under that same body frame, convert through only the
-/// local BigSpace grid branch. The world-frame path is the semantic fallback
-/// for flat gravity and non-surface views, which have no body-fixed ENU frame.
+/// local BigSpace grid branch. The world-frame path handles flat gravity and
+/// non-surface views, which have no body-fixed ENU frame. A broken coordinate
+/// hierarchy is an integration error, never a reason to invent a local-up
+/// result.
 fn gravity_up_in_grid(
     grid_entity: Entity,
     gravity: &LocalGravityField,
@@ -1392,13 +1399,15 @@ fn gravity_up_in_grid(
         return up;
     }
 
-    lunco_core::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
-        .map(|(_, grid_rotation)| {
-            (grid_rotation.0.inverse() * gravity.up)
-                .normalize_or(DVec3::Y)
-                .as_vec3()
-        })
-        .unwrap_or_else(|| gravity.local_up.normalize_or(DVec3::Y).as_vec3())
+    let (_, grid_rotation) = lunco_core::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
+        .unwrap_or_else(|error| {
+            panic!(
+                "camera Grid {grid_entity:?} has no valid BigSpace pose while resolving gravity: {error}"
+            )
+        });
+    (grid_rotation.0.inverse() * gravity.up)
+        .normalize_or(DVec3::Y)
+        .as_vec3()
 }
 
 /// The body explicitly authored by the loaded site.
@@ -2178,7 +2187,13 @@ fn orbit_system(
         // in the selected inertial body grid; no subtraction of ~AU root-frame
         // coordinates can consume local precision.
         let Some((cam_orbit, _)) = lunco_core::coords::pose_in_grid_seeded(
-            avatar_ent, orbit_grid, &cell, &tf, &q_parents, &q_grids, &q_spatial,
+            avatar_ent,
+            orbit_grid,
+            Some(&*cell),
+            &tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
         ) else {
             continue;
         };
@@ -2336,45 +2351,6 @@ fn orbit_system(
         *log_countdown = log_countdown.saturating_sub(1);
     }
 }
-/// Strip interactive camera-mode components off a cinematically-locked camera.
-///
-/// [`lunco_core::CinematicCameraLock`] marks a camera whose pose is owned by an
-/// authored driver (a USD camera path). The mode components arrive anyway: the
-/// avatar SPAWNS with `FreeFlightCamera`, and `ReleaseVessel` re-inserts it —
-/// both legitimately, both unaware of the lock. The `Without<…>` guards on the
-/// mode systems already keep them from writing the locked `Transform`; this
-/// removes the stale components too, so mode-transition systems (which key on
-/// component presence, not on writes) don't reason about a camera they don't
-/// own. Runs whenever a locked avatar still carries a mode component; steady
-/// state is an empty query.
-fn strip_camera_modes_from_locked(
-    mut commands: Commands,
-    q: Query<
-        Entity,
-        (
-            With<lunco_core::CinematicCameraLock>,
-            Or<(
-                With<FreeFlightCamera>,
-                With<SpringArmCamera>,
-                With<OrbitCamera>,
-                With<SurfaceCamera>,
-                With<FrameBlend>,
-            )>,
-        ),
-    >,
-) {
-    for e in q.iter() {
-        info!("[avatar] {e:?} is cinematically locked — stripping interactive camera modes");
-        commands
-            .entity(e)
-            .remove::<FreeFlightCamera>()
-            .remove::<SpringArmCamera>()
-            .remove::<OrbitCamera>()
-            .remove::<SurfaceCamera>()
-            .remove::<FrameBlend>();
-    }
-}
-
 /// FreeFlightCamera system: moves the camera in absolute coordinates.
 ///
 /// Only runs when `FreeFlightCamera` is present AND no `FrameBlend` is active.
@@ -2465,6 +2441,7 @@ fn freeflight_scroll_transit_system(
             Option<&FreeFlightCamera>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
+            Has<lunco_core::CinematicCameraLock>,
         ),
         (
             With<Avatar>,
@@ -2495,8 +2472,12 @@ fn freeflight_scroll_transit_system(
         freeflight_camera,
         gravity_body,
         surface_relative,
+        cinematic_lock,
     ) in q_avatar.iter_mut()
     {
+        if cinematic_lock {
+            continue;
+        }
         if zoom.delta == 0.0 {
             continue;
         }
@@ -2841,10 +2822,19 @@ fn collect_camera_zoom(
 /// the yawed-right axis, matching the surface-relative camera orientation.
 fn avatar_behavior_input_system(
     q_avatar: Query<(&IntentAnalogState, Option<&SurfaceRelativeMode>), With<Avatar>>,
-    mut q_spring: Query<&mut SpringArmCamera, With<Avatar>>,
-    mut q_orbit: Query<&mut OrbitCamera, With<Avatar>>,
-    mut q_freeflight: Query<&mut FreeFlightCamera, With<Avatar>>,
-    mut q_surface: Query<&mut SurfaceCamera, With<Avatar>>,
+    mut q_spring: Query<
+        &mut SpringArmCamera,
+        (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
+    >,
+    mut q_orbit: Query<&mut OrbitCamera, (With<Avatar>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_freeflight: Query<
+        &mut FreeFlightCamera,
+        (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
+    >,
+    mut q_surface: Query<
+        &mut SurfaceCamera,
+        (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
+    >,
     mut q_tf: Query<
         (&mut Transform, &CellCoord, &ChildOf),
         (
@@ -3290,13 +3280,27 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
 fn on_return_from_orbit(
     trigger: On<ReturnFromOrbit>,
     mut commands: Commands,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, &OrbitViewReturn), With<Avatar>>,
+    mut q_avatar: Query<
+        (
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            &OrbitViewReturn,
+            Has<lunco_core::CinematicCameraLock>,
+        ),
+        With<Avatar>,
+    >,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
     let avatar = trigger.event().target;
-    let Ok((mut transform, mut cell, child_of, return_state)) = q_avatar.get_mut(avatar) else {
+    let Ok((mut transform, mut cell, child_of, return_state, cinematic_lock)) =
+        q_avatar.get_mut(avatar)
+    else {
         return;
     };
+    if cinematic_lock {
+        return;
+    }
     let return_state = return_state.clone();
 
     if child_of.parent() == return_state.parent_grid {
@@ -3336,6 +3340,7 @@ fn on_release_command(
             Option<&SurfaceRelativeMode>,
             &ChildOf,
             Option<&OrbitViewReturn>,
+            Has<lunco_core::CinematicCameraLock>,
         ),
         With<Avatar>,
     >,
@@ -3367,10 +3372,27 @@ fn on_release_command(
     }
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
-    let (yaw, pitch, opt_link, is_surface, local_translation, return_state) =
-        if let Ok((mut tf, mut cell, link, surface, child_of, return_state)) =
+    let (yaw, pitch, opt_vessel, is_surface, local_translation, return_state) =
+        if let Ok((mut tf, mut cell, link, surface, child_of, return_state, cinematic_lock)) =
             q_avatar.get_mut(avatar_ent)
         {
+            let opt_vessel = link.map(|link| link.vessel_entity);
+            if cinematic_lock {
+                if let Some(vessel_entity) = opt_vessel {
+                    commands.trigger(lunco_cosim::SetPorts {
+                        target: vessel_entity,
+                        writes: vec![
+                            ("throttle".into(), 0.0),
+                            ("steer".into(), 0.0),
+                            ("brake".into(), 1.0),
+                        ],
+                        seq: 0,
+                        tick: 0,
+                    });
+                }
+                commands.entity(avatar_ent).remove::<ControllerLink>();
+                return;
+            }
             let return_state = return_state.cloned();
             if let Some(state) = &return_state {
                 if child_of.parent() == state.parent_grid {
@@ -3408,7 +3430,7 @@ fn on_release_command(
             (
                 y,
                 p,
-                link,
+                opt_vessel,
                 returning_surface || surface.is_some(),
                 return_state
                     .as_ref()
@@ -3421,9 +3443,9 @@ fn on_release_command(
         };
 
     // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
-    if let Some(link) = opt_link {
+    if let Some(vessel_entity) = opt_vessel {
         commands.trigger(lunco_cosim::SetPorts {
-            target: link.vessel_entity,
+            target: vessel_entity,
             writes: vec![
                 ("throttle".into(), 0.0),
                 ("steer".into(), 0.0),
@@ -3528,7 +3550,16 @@ fn get_grid_for_entity(
 fn on_possess_command(
     trigger: On<PossessVessel>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, &ChildOf, Option<&ControllerLink>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &ChildOf,
+            Option<&ControllerLink>,
+            Has<lunco_core::CinematicCameraLock>,
+        ),
+        With<Avatar>,
+    >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -3590,7 +3621,7 @@ fn on_possess_command(
         .avatar
         .and_then(|a| q_avatar.get(a).ok())
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, cam_tf, _child_of, existing_link)) = resolved else {
+    let Some((avatar_ent, cam_tf, _child_of, existing_link, cinematic_lock)) = resolved else {
         return;
     };
 
@@ -3610,6 +3641,16 @@ fn on_possess_command(
     // work though — it is the control/telemetry binding consumed by the generic
     // exposure publisher and runtime HUD — so it is still bound before bailing.
     if !cmd.bind_camera {
+        commands.entity(avatar_ent).try_insert(ControllerLink {
+            vessel_entity: cmd.target,
+        });
+        return;
+    }
+
+    // A possession command may still establish control, but it cannot replace
+    // the pose owner of a cinematic camera. The caller must explicitly release
+    // the authored camera path before requesting an interactive camera bind.
+    if cinematic_lock {
         commands.entity(avatar_ent).try_insert(ControllerLink {
             vessel_entity: cmd.target,
         });
@@ -3793,7 +3834,15 @@ fn on_possess_command(
 fn on_follow_command(
     trigger: On<FollowTarget>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &ChildOf, Option<&SpringArmCamera>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            &ChildOf,
+            Option<&SpringArmCamera>,
+            Has<lunco_core::CinematicCameraLock>,
+        ),
+        With<Avatar>,
+    >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
@@ -3805,9 +3854,13 @@ fn on_follow_command(
         .avatar
         .and_then(|a| q_avatar.get(a).ok())
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, _child_of, existing_spring)) = resolved else {
+    let Some((avatar_ent, _child_of, existing_spring, cinematic_lock)) = resolved else {
         return;
     };
+
+    if cinematic_lock {
+        return;
+    }
 
     // Idempotent: already following this target — no-op.
     if let Some(arm) = existing_spring {
@@ -3932,6 +3985,7 @@ fn on_focus_command(
             Option<&FreeFlightCamera>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
+            Has<lunco_core::CinematicCameraLock>,
         ),
         With<Avatar>,
     >,
@@ -3952,7 +4006,7 @@ fn on_focus_command(
         .or_else(|| {
             q_avatar
                 .iter()
-                .find(|(_, _, _, _, cam, _, _, _, _, _, _, _)| cam.is_some_and(|c| c.is_active))
+                .find(|(_, _, _, _, cam, _, _, _, _, _, _, _, _)| cam.is_some_and(|c| c.is_active))
         })
         .or_else(|| q_avatar.iter().next());
     let Some((
@@ -3968,10 +4022,18 @@ fn on_focus_command(
         freeflight_camera,
         gravity_body,
         surface_relative,
+        cinematic_lock,
     )) = resolved
     else {
         return;
     };
+
+    // Focus is an interactive camera-mode transition. A cinematic path owns
+    // this entity's complete pose, so the command has no valid camera-side
+    // effect while the lock is present.
+    if cinematic_lock {
+        return;
+    }
 
     // Compute distance based on target type.
     let mut distance = 20.0;
@@ -4061,12 +4123,8 @@ fn on_focus_command(
 /// current transform orientation.
 ///
 /// `Without<CinematicCameraLock>` is load-bearing, not hygiene: a path-driven
-/// camera has NO mode component by design (the janitor strips them), and
-/// without the guard this system re-inserted `FreeFlightCamera` every frame
-/// while the janitor removed it every frame — a permanent insert/remove war
-/// (measured: 8 590 strip rounds in one 63 s recording) whose per-frame
-/// archetype churn on the camera entity destabilised scene bring-up
-/// (terrain/sky visuals raced and lost) and multiplied run time.
+/// camera has no interactive mode, and this initializer must never create one
+/// after the authored path has claimed pose ownership.
 fn avatar_init_system(
     mut commands: Commands,
     q_avatar: Query<
@@ -4214,7 +4272,16 @@ fn update_avatar_clip_planes_system(
 fn on_surface_teleport_command(
     trigger: On<TeleportToSurface>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Has<lunco_core::CinematicCameraLock>,
+        ),
+        With<Avatar>,
+    >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
@@ -4248,9 +4315,13 @@ fn on_surface_teleport_command(
     debug!("TELEPORT: triggered for avatar {:?}", avatar_ent);
 
     // Get camera cell for position lookup
-    let Ok((_, _cam_tf, _cam_cell, _cam_child_of)) = q_avatar.get(avatar_ent) else {
+    let Ok((_, _cam_tf, _cam_cell, _cam_child_of, cinematic_lock)) = q_avatar.get(avatar_ent)
+    else {
         return;
     };
+    if cinematic_lock {
+        return;
+    }
 
     // GlobeLod is the authoritative owner of a body's surface Grid. This is
     // deliberately data-driven: adding another celestial body does not add a
@@ -4313,11 +4384,14 @@ fn on_surface_teleport_command(
             return;
         }
         let root = discriminant.sqrt();
-        let t = [-b - root, -b + root]
+        let Some(t) = [-b - root, -b + root]
             .into_iter()
             .filter(|t| *t > 0.0)
             .next()
-            .unwrap_or(0.0);
+        else {
+            warn!("TELEPORT: camera ray does not intersect the body's forward surface");
+            return;
+        };
         let surface_body_pos = origin_body + direction_body * t;
         let surface_normal = surface_body_pos.normalize_or(DVec3::Y);
         let body_center_in_grid = grid_to_common.inverse() * (body_position - grid_position);
@@ -4372,7 +4446,7 @@ fn on_surface_teleport_command(
         field.local_up = surface_normal;
         field.surface_g = surface_g;
         let Some((_, body_world_rotation)) =
-            lunco_core::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs)
+            lunco_core::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs).ok()
         else {
             warn!("TELEPORT: body has no complete world BigSpace pose");
             return;
@@ -4396,14 +4470,24 @@ fn on_surface_teleport_command(
 fn on_leave_surface_command(
     trigger: On<LeaveSurface>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, Option<&GravityBody>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            Option<&GravityBody>,
+            Has<lunco_core::CinematicCameraLock>,
+        ),
+        With<Avatar>,
+    >,
     mut field: ResMut<LocalGravityField>,
 ) {
     let avatar_ent = trigger.event().target;
-    let Ok((_, gravity_body)) = q_avatar.get(avatar_ent) else {
+    let Ok((_, gravity_body, cinematic_lock)) = q_avatar.get(avatar_ent) else {
         warn!(?avatar_ent, "LEAVE SURFACE: target is not an avatar");
         return;
     };
+    if cinematic_lock {
+        return;
+    }
 
     // Find the body we're leaving
     let body_entity = gravity_body
@@ -4452,7 +4536,11 @@ fn surface_mode_transition_system(
             Option<&SurfaceCamera>,
             Option<&SpringArmCamera>,
         ),
-        (With<Avatar>, Without<OrbitCamera>),
+        (
+            With<Avatar>,
+            Without<OrbitCamera>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
     >,
     q_bodies: Query<&CelestialBody>,
     q_grids: Query<&Grid>,

@@ -168,6 +168,11 @@ pub fn update_local_gravity_field(
                     avatar_ent,
                     gb.body_entity
                 );
+            // A failed frame resolution must not leave the previous body's
+            // field active. Clearing the derived state makes the invalid
+            // coordinate explicit to every consumer instead of preserving a
+            // stale body-relative vector and orientation.
+            *field = LocalGravityField::default();
             return;
         };
         derived
@@ -209,7 +214,7 @@ fn gravity_at_body(
     q_bodies: &Query<&GravityProvider>,
 ) -> Option<(DVec3, DVec3, DVec3, f64)> {
     let (_, body_rotation) =
-        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial)?;
+        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial).ok()?;
     let relative_body =
         local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)?;
     let provider = q_bodies.get(body_entity).ok()?;

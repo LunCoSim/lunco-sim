@@ -1,229 +1,190 @@
-# Lander landing: moving surface-grid / Avian frame failure
+# Lander landing: active BigSpace frame and Avian state
 
 ## Purpose
 
-This is an engineering handoff for the coordinate-system work in the `usd/`
-branch. The marketing episode is only the reproducible consumer. The fix belongs
-in the USD/celestial/Avian frame boundary; do not solve this by adding lander-
--specific forces, pose resets, camera offsets, or a second GNC path.
+This is the engine-level record of the moving body-fixed-grid failure exposed by
+the tutorial recording. The campaign is only the reproducer. The ownership is
+the typed BigSpace/Avian bridge; there is no lander-specific pose reset, force,
+camera correction, compatibility API, or frozen-clock workaround.
 
-## Short version
+## Root cause
 
-The landing scene is authored in a Moon body-fixed surface frame, while Avian
-integrates `Position`/`Rotation` as grid-absolute physics state. The Moon surface
-`Grid` is updated by `body_rotation_system` as `WorldTime.epoch_jd` advances.
+The scene is authored below a Moon body-fixed surface `Grid`. During scene
+mount, the engine selects that site grid as `ActivePhysicsFrame`, the frame in
+which Avian's f64 `Position`, `Rotation`, and velocity state are solved.
 
-`lunco-usd-avian::pose_to_position` currently notices the changed `Grid` and
-re-reads every descendant body pose from the render transform. That copies the
-new frame pose into Avian, but does not transfer the frame's linear/angular
-transport velocity (or the equivalent relative-frame state). Dynamic landers and
-their joints therefore see a discontinuous external pose change. Contact/joint
-constraints inject energy until a leg leaves the world.
+The bridge had two independent first-observation paths: the canonical
+`pose_to_position` read/transport pass, and a hold-safe fixed-update seed pass.
+When the site frame changed while physics admission was held, the seed pass
+captured newly spawned bodies as already belonging to the new site frame, while
+the bridge transaction state still correctly recorded the previous WorldRoot
+frame for bodies already seeded. The next physics read then applied the
+old-to-new transform to a mixed set of states. Bodies already seeded in the new
+frame were transported a second time, producing astronomical Avian positions
+and velocities before the first admitted solve.
 
-This is why the same lander/GNC setup can pass the headless probe and then fail in
-the filmed scene. The GNC is not the first fault; the physics frame contract is.
+The static terrain, joints, and colliders were local to the site, so the solver
+saw an enormous body/constraint mismatch. The resulting contact and joint
+impulses produced the apparent moving-grid escape. It could look like a
+velocity-transport defect because the failure appeared when the celestial
+hierarchy advanced, but the first invalid state was the split frame
+transaction itself.
 
-## Reproduction and evidence
+After that bridge defect was removed, the same scenario exposed three
+independent errors at the flight-software boundary. They were not repaired by
+loosening assertions or delaying the mission:
 
-The episode is:
+- the GNC graph collapsed the sensor's physical `range_valid` bit and its
+  vertical `range_confidence` into one `altimeter_valid` input. An oblique but
+  geometrically valid ray was therefore discarded as a lateral position
+  observation;
+- altitude was reconstructed with a fixed sensor-to-COM Y offset. The authored
+  mount offset must first be rotated into the navigation frame, so a fixed
+  `range + offset` expression is wrong whenever the body tilts;
+- when vertical evidence returned after an IMU-only interval, the alpha-beta
+  observer applied its full position innovation immediately. That legitimate
+  measurement re-entry injected an artificial velocity impulse into the
+  estimator and the controller amplified it.
 
-```text
-/home/rod/Documents/lunco/lunco-marketing/campaigns/tutorial-series/episode_01_lander
-```
+The last two errors explain why an apparently correct ray and a correct
+BigSpace/Avian pose could still produce a runaway lander. They are coordinate
+and observation-authority errors, not physics-frame transport errors.
 
-The engine checkout used for the take is:
+## Architectural contract
 
-```text
-/home/rod/Documents/luncosim-workspace/tutorials
-```
+BigSpace owns the hierarchy representation: `Grid`, `CellCoord`, and
+`Transform` are composed with its typed cell-chain operations. Avian owns the
+physical state. The bridge is the sole boundary between them.
 
-### Control: headless probe passes
+For a physical body below `ActivePhysicsFrame`, the bridge always uses the
+active-frame projection (`grid_relative_pose_seeded`) for initialisation and
+external pose changes. For bodies outside that branch it uses the typed
+`pose_in_grid_seeded` projection into the active frame. No `GlobalTransform`,
+raw celestial translation, or guessed cell arithmetic is used at this boundary.
 
-The native probe uses the same authored USD landers, sensors, Modelica models,
-Avian legs, targets, and GNC parameters. It advances after the completed-physics
-event, and passed:
+Celestial ancestors above the selected surface frame are render/inertial
+presentation. They are not copied into the local Avian solve each tick. This is
+the stable BigSpace arrangement: physics remains in one numerically local frame
+while the celestial hierarchy can rotate and translate for presentation.
 
-```text
-TESTS_OK 45
-EPISODE GNC PROBE: PASS
-luncosim test PASS ... ticks=11760 sim=196.00s ... jitter=0
-```
+Coordinate topology is explicit at every conversion boundary. `Some(CellCoord)`
+is composed only with a real parent `Grid`; `None` means the entity carries an
+ordinary parent-local `Transform`. A cell attached below a non-Grid parent is a
+`CoordinateError`, not cell-zero or raw-translation input. Missing spatial
+ancestors, cycles, and over-depth chains are also errors. Presentation/query
+callers may report an unavailable result when their optional target is not ready,
+but they never substitute another coordinate frame; the physics bridge panics on
+the same malformed topology instead of continuing with stale state.
 
-The final probe state had both landers on their separate targets, engine thrust
-and propellant flow at zero, four qualified pad contacts, quiet suspension, and
-the required underdamped attitude-error crossings on the baseline lander.
+If the authored active physics frame itself changes, the bridge performs one
+explicit transaction at the physics boundary:
 
-Command used:
+- convert position, orientation, linear velocity, and angular velocity with
+  `grid_transform_between_grids`;
+- invalidate Avian's public XPBD joint multipliers and contact warm-start
+  impulses, which are expressed in the old coordinate basis;
+- let Avian rebuild contacts and constraints from the transported state before
+  the next solve.
 
-```bash
-cd /home/rod/Documents/luncosim-workspace/tutorials
-env -u LUNCO_ROLLBACK \
-  RUST_LOG='warn,lunco_scripting::world_bridge=info' \
-  target/debug/luncosim test \
-  --scene /home/rod/Documents/lunco/lunco-marketing/campaigns/tutorial-series/episode_01_lander/episode_01_gnc_probe.usda \
-  --max-ticks 12000 \
-  > target/episode-gnc-probe-canonical-final.log 2>&1
-```
+That is a coordinate-basis change, not an impulse. The bridge does not invent
+astronomical translational velocity for a body-fixed site solve, and it does
+not maintain a parallel physics cache. BigSpace's own representation-only
+cell re-split remains distinct from a semantic physical frame change.
 
-### Failure: production recorder with a moving celestial frame
+The sensor/GNC boundary is explicit as well. `Altimeter` publishes the raw-hit
+validity, vertical usefulness, and back-projected vehicle position in all three
+navigation axes as separate signals. The position observer uses the geometric
+hit for X/Z and the vertical-confidence signal for Y. The vertical observer's
+authority is a continuous Modelica state with an authored acquisition time
+constant; it ramps measurement authority continuously and begins releasing it
+as soon as the evidence disappears. No frame-count wait, mission-script handoff,
+truth-position feed, or stale-value fallback is involved.
 
-With the production recorder and the Moon surface grid advancing, the landers
-leave the camera composition and then the solver becomes unstable. The terminal
-failure observed in the simulator log was:
+## Implemented fix
 
-```text
-physics-body-escaped: /Episode01Recording/Lander/LegNZ
-position=DVec3(876.7658449, -840.5120411, -1862.1602655)
-velocity=DVec3(580616.2690, -1061403.3663, -1989018.9535)
-```
+`crates/lunco-usd-avian/src/big_space_bridge.rs` now has one bridge-owned
+read/transport state machine. The same `pose_to_position` pass runs before
+nested physics admission and during normal physics ticks; it seeds never-seen
+bodies, commits active-frame handoffs, transports the complete Avian state, and
+publishes `PhysicsPoseSeeded` only after the pose is in the committed frame.
+There is no parallel seed pass that can label a body with a frame the
+transaction has not committed.
 
-The recorder stopped after only 98 frames of shot 06. This is a physics escape,
-not a render-only crop or a bad HUD.
+The scene lifecycle also resets `ActivePhysicsFrame` immediately during
+celestial teardown. This prevents a deferred teardown command from overwriting
+a replacement site frame after a scene transition.
 
-The earlier diagnostic production take also printed the drift in the same
-simulation sequence. At `sim_tick=120` the bodies were near the authored local
-site; later the camera and the two bodies no longer shared the same local frame.
-By `sim_tick=4320`, for example, the diagnostic showed approximately:
+USD avatar projection follows the same rule: it requires a connected BigSpace
+`Grid` and a valid typed pose chain, then derives the camera's actual `CellCoord`
+and local transform from that frame. It does not create a cell-zero avatar when
+the authored hierarchy is incomplete.
 
-```text
-tuned    [105.84, 16.28, 106.41]
-baseline [ 24.31,134.16,  72.02]
-camera   [ 29.53, 10.88, -21.98]
-```
+The reusable lander scene and the recording scene now wire the complete
+altimeter contract (`range_valid`, `range_confidence`, and
+`vehicle_position_x/y/z`) into the canonical GNC ports. The fixed
+`altimeter_valid` and `altimeter_mount_offset` interfaces were removed rather
+than retained as aliases.
 
-The two landers were not merely displaying different GNC responses; their
-physical world poses had diverged from the camera/site frame.
+## Evidence
 
-### Diagnostic isolation: freezing only the celestial clock
+Native bridge integration coverage passes 15/15, including:
 
-As an isolation experiment, the episode temporarily authored:
+- first active-site-frame seeding;
+- velocity transport across an active-frame handoff;
+- astronomical cell offsets and BigSpace re-splits;
+- rotating celestial parents with free and jointed surface assemblies;
+- child-collider contact, scaled rootless grids, teleport wake-up, and nested
+  lander-like strut contacts;
+- a body spawned during the active-frame handoff, proving it is seeded directly
+  in the committed frame while an existing body's velocity is rebased exactly
+  once.
 
-```rhai
-cmd("SetClock", #{ clock: "Celestial", parent: "Sim", scale: 0.0 });
-```
+The Modelica sensor contract suite passes 7/7, including shared-frame
+conversion, raw-ray altimeter conversion without a fallback, and both reusable
+stateful measurement boundaries.
 
-The next production take completed all six files (`479, 479, 599, 479, 479,
-3359` frames at 60 FPS) without `physics-body-escaped`. The simulator log records:
+The USD connection derivation suite passes 12/12, including the lander asset
+composition and authored actuator/sensor connection topology.
 
-```text
-[celestial] site scene re-branched onto body surface grid 1560v0 (body 301)
-[time] clock command: clock=Celestial parent=Some(Sim) scale=Some(0.0)
-```
+The rebuilt DEBUG engine ran the complete lander GNC probe through `t=98 s` and
+reported `TESTS_OK 45` and `EPISODE GNC PROBE: PASS`. Both landers remained in
+the local site frame with finite positions and velocities, engines off, and
+bounded body rates. The log contains no `physics-body-escaped`, terminal
+runtime failure, callback failure, or solver panic. This probe exercises the
+real USD composition, Modelica sensor/GNC models, Avian state, and the normal
+celestial clock; it is not a unit-only recognition test.
 
-This proves that advancing the celestial surface frame is the trigger. It is not
-the final fix: the episode must not permanently depend on freezing celestial time
-to hide an unsupported moving-frame transfer. Remove this command after the
-coordinate boundary is repaired.
+The rebuilt DEBUG engine now completes the canonical episode recording with the
+campaign's stable controller profile. The production run at API port 5040
+captured all six MP4 streams at 720x1280 and 60 FPS: 480, 479, 599, 480, 479,
+and 3,359 frames. The log contains no transport escape, terminal runtime
+failure, callback failure, or panic, and port 5040 closed after exit. The
+recorder now rejects a non-zero simulator exit even when partial MP4s exist, so
+a partial take cannot be reported as successful.
 
-## Relevant ownership boundaries
+The earlier `hold_kd=3` take was also an underdamped contact profile and remains
+invalid evidence. The canonical scene authors the stable `hold_kd=4` profile
+directly. That controller tuning is separate from, and does not replace, the
+coordinate/API fixes above.
 
-### Scene migration
+A preceding port-5037 run reproduced the same unstable-profile failure with a
+different leg: shot 06 stopped at frame 2,328 when `BaselineLander/LegNZ`
+reached `DVec3(680.52, -326.70, 742.48)` with approximately `187,648 m/s`
+horizontal velocity. That partial remains invalid evidence; it is retained as
+the root-cause diagnostic and is not used as a successful take.
 
-`crates/lunco-celestial/src/placement.rs` migrates the site root and its physical
-descendants onto the body's surface grid in
-`attach_site_scene_to_surface_grid`. The production log confirms this is
-`MoonSurfaceGrid` entity `1560v0`, body `301`.
+## Regression requirements
 
-This migration is correct as an authoring operation: terrain, landing target,
-lander bodies, and camera site content must share the body-fixed site frame. Do
-not move the episode back to `WorldGrid` to make the failure disappear.
+The focused native tests and the production probe must remain part of the
+coordinate boundary acceptance. A valid production acceptance uses the normal
+celestial clock and does not add `SetClock(... scale: 0.0)` to hide a transport
+defect. The recorder must produce every episode take with all lander bodies,
+joints, and contacts finite and in the same active site frame.
 
-### Surface-grid motion
+## Non-solutions deliberately excluded
 
-`crates/lunco-celestial/src/systems.rs::body_rotation_system` writes the body
-grid rotation from `WorldTime.epoch_jd`. The body grid is intentionally rotating;
-surface children inherit that rotation. `sync_inertial_anchors` deliberately
-copies only position and leaves the inertial anchor rotation as identity, which
-is the correct distinction between a surface frame and a star-fixed observer.
-
-### USD/Avian read bridge
-
-`crates/lunco-usd-avian/src/big_space_bridge.rs::pose_to_position` currently:
-
-1. detects changed plain nodes, including a moving `Grid`;
-2. marks descendant rigid bodies as moved;
-3. composes each body's current render hierarchy with `world_pose_seeded`;
-4. writes the resulting pose directly into Avian `Position`/`Rotation`.
-
-The corresponding `position_to_pose` path converts Avian's grid-absolute solved
-pose back to a parent-grid-local `Transform`. That position conversion is not
-enough for a moving parent: no corresponding `LinearVelocity` or
-`AngularVelocity` transport is applied when the parent frame changes.
-
-The existing `q_rebranched` filter must remain: a paired `CellCoord + Transform`
-change caused by BigSpace re-splitting is representation-only and must not be
-treated as physical motion. A real moving-frame change and a recenter/rebranch
-must be separate typed cases.
-
-## Required fix in `usd/`
-
-Choose and document one authoritative contract for dynamic bodies under moving
-grids. The likely correct implementation is a generic moving-frame transport in
-the bridge, not an episode special case:
-
-1. Distinguish a physical parent-frame update from a BigSpace representation
-   rebranch using the existing typed change information.
-2. Capture the previous and current frame pose at the bridge boundary. Derive
-   the frame delta over the actual physics step: translation velocity and
-   angular velocity, with the same coordinate convention used by
-   `world_pose_seeded` and Avian's global `Position`/`Rotation`.
-3. Transform each descendant dynamic body's position and orientation into the
-   new Avian frame without treating the change as a user teleport.
-4. Transform its linear and angular velocity consistently, or run the solver in
-   the body-fixed relative frame and apply the corresponding inertial transport
-   terms. Do not write only pose and leave stale velocity behind.
-5. Preserve joint anchors, contact manifolds, sleeping/waking state, and collider
-   transforms in the same frame. A four-leg lander must not receive four
-   independent teleports.
-6. Keep kinematic/editor-drive handling separate from dynamic body transport.
-   Do not add `PhysicsPoseAuthoritative`, per-lander resets, force impulses, or
-   name/path checks as a substitute for the frame contract.
-7. Make the conversion helpers typed and shared. The camera, terrain, sensors,
-   gravity, Avian bridge, and telemetry must all use the same frame conversion
-   path; no second hand-written ENU/grid/world conversion.
-
-If the engine deliberately chooses a local body-fixed landing approximation for
-short operations, that choice must be a generic authored frame/regime policy,
-not a hidden episode hack. It must be explicit in the coordinate architecture and
-must not be required only because the bridge cannot transport a moving grid.
-
-## Regression tests to add
-
-Add focused tests in the engine branch before re-recording the campaign:
-
-### 1. Moving-grid free body
-
-Create a rotating `Grid` with one dynamic rigid body and no forces. Advance the
-frame by several physics steps. Assert:
-
-- the body's parent-local pose remains constant;
-- Avian position, rotation, linear velocity, and angular velocity stay finite;
-- no artificial kinetic energy grows from the frame update;
-- a BigSpace cell/transform rebranch alone does not change the physical pose.
-
-### 2. Moving-grid joint assembly
-
-Use the real four-leg lander topology (dynamic leg bodies, prismatic joints,
-fixed pad colliders). Advance a rotating surface frame through the same bridge.
-Assert that joint errors, leg stroke, and body rates remain bounded and that all
-four pads retain their authored local offsets.
-
-### 3. Production integration acceptance
-
-Run both paths:
-
-- the 196-second headless probe (`TESTS_OK 45`);
-- the full 98-second production recorder with the default celestial transport
-  running and **without** the temporary `SetClock(...scale: 0.0)` command.
-
-The recorder must produce all six takes, never emit `physics-body-escaped`, and
-keep both landers in the same local landing site. The final frame must show both
-four-pad assemblies settled, with zero main-engine thrust/flow and RCS activity
-derived only from the live control response.
-
-## Definition of done
-
-This issue is fixed only when the episode-level `SetClock` experiment can be
-removed and the production take still passes. A successful take with the clock
-frozen is useful isolation evidence, but is not evidence that the moving-grid
-coordinate architecture is correct.
+- freezing celestial time;
+- adding per-lander forces, pose snaps, or velocity clamps;
+- copying `GlobalTransform` into Avian;
+- preserving obsolete physics-clock or coordinate aliases;
+- keeping a second compatibility bridge beside the canonical active-frame API.

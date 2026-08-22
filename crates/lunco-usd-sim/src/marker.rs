@@ -121,25 +121,18 @@ pub fn scale_screen_constant_markers(
     else {
         return;
     };
-    let default_cell = CellCoord::default();
-    let cam = lunco_core::coords::world_position_seeded(
-        cam_entity,
-        cam_cell.unwrap_or(&default_cell),
-        cam_tf,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-    );
+    let Ok(cam) = lunco_core::coords::world_position_seeded(
+        cam_entity, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+    ) else {
+        return;
+    };
 
     for (entity, marker, cell, mut tf, mut vis) in q_markers.iter_mut() {
-        let pos = lunco_core::coords::world_position_seeded(
-            entity,
-            cell.unwrap_or(&default_cell),
-            &tf,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        );
+        let Ok(pos) = lunco_core::coords::world_position_seeded(
+            entity, cell, &tf, &q_parents, &q_grids, &q_spatial,
+        ) else {
+            continue;
+        };
         let distance = (pos.0 - cam.0).length();
         if distance < marker.show_beyond_m as f64 {
             if *vis != Visibility::Hidden {

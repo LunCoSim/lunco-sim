@@ -996,7 +996,8 @@ mod tests {
             + moon_rotation.as_dquat()
                 * grid
                     .grid_position_double(&camera_cell, &Transform::from_translation(camera_local));
-        let expected = earth_rotation.as_dquat().inverse() * (expected_root - earth_center);
+        let expected =
+            earth_rotation.as_dquat().normalize().inverse() * (expected_root - earth_center);
 
         assert!(
             actual.distance(expected) < 1.0e-3,

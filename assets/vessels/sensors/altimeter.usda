@@ -47,6 +47,7 @@ def Xform "Altimeter" (
         float inputs:ray_distance_m.connect = </Altimeter.outputs:ray_distance>
         float inputs:ray_hit_valid.connect = </Altimeter.outputs:ray_hit_valid>
         float inputs:ray_hit_position_x.connect = </Altimeter.outputs:ray_hit_position_x>
+        float inputs:ray_hit_position_y.connect = </Altimeter.outputs:ray_hit_position_y>
         float inputs:ray_hit_position_z.connect = </Altimeter.outputs:ray_hit_position_z>
         float inputs:ray_sample_time.connect = </Altimeter.outputs:ray_sample_time>
         # The ray origin is mounted on the vehicle, so the Modelica sensor
@@ -81,6 +82,7 @@ def Xform "Altimeter" (
         float outputs:range_confidence
         float outputs:range_rate_valid
         float outputs:vehicle_position_x
+        float outputs:vehicle_position_y
         float outputs:vehicle_position_z
         float outputs:sample_time_s
         float outputs:vertical_projection

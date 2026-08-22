@@ -2419,11 +2419,27 @@ pub fn rewire_usd_connections(
                 {
                     (wrapper, alias)
                 } else {
-                    let Some(&element) = by_path.get(&(
+                    // A source path is absolute in the composed USD stage. An
+                    // instance-local source must resolve in the sink's instance,
+                    // but a scene-authored source (for example a kinematic landing
+                    // target) intentionally lives outside that instance. Resolve
+                    // the local namespace first, then the authored scene namespace.
+                    // This keeps duplicated assets isolated without making a
+                    // scene-level connection depend on which asset consumes it.
+                    let source_key = (
                         prim_path.stage_handle.id(),
                         sink_instance,
                         src_prim.to_string(),
-                    )) else {
+                    );
+                    let scene_source_key =
+                        (prim_path.stage_handle.id(), None, src_prim.to_string());
+                    let source_entity = by_path.get(&source_key).copied().or_else(|| {
+                        sink_instance
+                            .is_some()
+                            .then(|| by_path.get(&scene_source_key).copied())
+                            .flatten()
+                    });
+                    let Some(element) = source_entity else {
                         // Two very different situations, and they must not look alike.
                         // A prim that EXISTS on the stage but has no entity yet is
                         // mid-spawn: its later spawn is a structural change that re-runs

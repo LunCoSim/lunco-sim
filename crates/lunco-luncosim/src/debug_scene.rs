@@ -487,8 +487,8 @@ fn modelica_sources_terminal(world: &mut World) -> bool {
         .all(|model| !model.is_compiling && (model.is_compiled || model.last_error.is_some()))
 }
 
-/// True once every Modelica participant has either produced its first live
-/// sample or reached a terminal error, and all authored USD joints have crossed
+/// True once every Modelica participant has compiled (or reached a terminal
+/// error), and all authored USD joints have crossed
 /// both deferred admission stages.
 ///
 /// A terminal Modelica error is not an initialized solver and must keep physics
@@ -504,7 +504,6 @@ fn participants_ready(world: &mut World) -> bool {
                 || (model.last_error.is_none()
                     && model.is_compiled
                     && !model.paused
-                    && model.current_time > 0.0
                     && !model.variables.is_empty())
         })
     };

@@ -71,8 +71,8 @@ use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
-    avian_queries::RaycastObservation, joint::PassivePrismaticSuspension, ports::PORT_NAME,
-    ForceActuator, SimConnection, TorqueActuator,
+    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, SimConnection,
+    TorqueActuator,
 };
 use lunco_hardware::{MotorReadback, MotorReadbackTarget, SteeringActuator};
 use lunco_materials::ShaderLook;
@@ -162,7 +162,9 @@ fn actuator_body_path(
 
 /// Read a force actuator's generic description. Position comes from the
 /// composed prim transform; direction and force capacity are authored
-/// properties on the same prim.
+/// properties on the same prim. The direction is authored in the actuator
+/// prim's local frame (the USD schema contract) and is converted once into the
+/// owning body's frame before it enters the generic Avian actuator component.
 pub(crate) fn force_actuator_from_usd(
     reader: &lunco_usd_bevy::StageView<'_>,
     actuator_path: &SdfPath,
@@ -195,13 +197,21 @@ pub(crate) fn force_actuator_from_usd(
         })
         .map(Vec3::from_array)
         .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
-    let Some(direction_local) = direction else {
+    let Some(direction_in_prim_frame) = direction else {
         warn!(
             "[usd-cosim] force actuator {} has no finite non-zero {}",
             actuator_path, FORCE_DIRECTION_ATTR
         );
         return None;
     };
+    let direction_local = relative.rotation * direction_in_prim_frame;
+    if !direction_local.is_finite() || direction_local.length_squared() <= f32::EPSILON {
+        warn!(
+            "[usd-cosim] force actuator {} produced an invalid body-frame direction",
+            actuator_path
+        );
+        return None;
+    }
     let Some(max_force_n) = reader
         .real(actuator_path, FORCE_MAX_ATTR)
         .filter(|v| v.is_finite() && *v > 0.0)
@@ -1031,61 +1041,6 @@ fn collect_behavior_sources(
     }
 }
 
-/// Project the explicitly classified passive prismatic suspension API onto its
-/// generic co-simulation physics component. A bilateral `PhysicsDriveAPI` is
-/// intentionally not inferred here: elevators and actuators are also
-/// prismatic joints, and only the applied suspension API means "compression
-/// only".
-fn passive_prismatic_suspension_from_usd(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    prim: &SdfPath,
-) -> Option<PassivePrismaticSuspension> {
-    if !reader.has_api_schema(prim, "LunCoPrismaticSuspensionAPI") {
-        return None;
-    }
-    if reader.type_name(prim).as_deref() != Some("PhysicsPrismaticJoint") {
-        warn!(
-            "USD prim {} applies LunCoPrismaticSuspensionAPI but is not a PhysicsPrismaticJoint",
-            prim.as_str()
-        );
-        return None;
-    }
-
-    let rest_position = reader
-        .real_f32(prim, "lunco:prismaticSuspension:restPosition")
-        .unwrap_or(0.0) as f64;
-    let spring_k = reader.real_f32(prim, "lunco:prismaticSuspension:stiffness")? as f64;
-    let damping_c = reader.real_f32(prim, "lunco:prismaticSuspension:damping")? as f64;
-    let yield_force = reader.real_f32(prim, "lunco:prismaticSuspension:yieldForce")? as f64;
-    let max_force = reader.real_f32(prim, "lunco:prismaticSuspension:maxForce")? as f64;
-    if !spring_k.is_finite()
-        || spring_k <= 0.0
-        || !damping_c.is_finite()
-        || damping_c < 0.0
-        || !rest_position.is_finite()
-        || !yield_force.is_finite()
-        || yield_force <= 0.0
-        || !max_force.is_finite()
-        || max_force <= 0.0
-        || max_force < yield_force
-    {
-        warn!(
-            "USD passive suspension {} has invalid parameters: rest={} m, k={} N/m, c={} N*s/m, yield={} N, max={} N",
-            prim.as_str(), rest_position, spring_k, damping_c, yield_force, max_force
-        );
-        return None;
-    }
-    Some(PassivePrismaticSuspension {
-        rest_position,
-        plastic_position: rest_position,
-        spring_k,
-        damping_c,
-        yield_force,
-        max_force,
-        reaction_force: 0.0,
-    })
-}
-
 fn process_usd_sim_prim_read(
     reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
@@ -1107,13 +1062,6 @@ fn process_usd_sim_prim_read(
     commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
-
-    // A passive landing suspension is a physical capability claimed by an
-    // applied USD API on the joint. It is not inferred from a prim name,
-    // damping values, or the fact that the joint happens to be prismatic.
-    if let Some(suspension) = passive_prismatic_suspension_from_usd(reader, &sdf_path) {
-        commands.entity(entity).try_insert(suspension);
-    }
 
     // --- Network replication policy, derived from USD ---
     // Structure from the joint graph (Pass 1) + `lunco:net:*` overrides. Stamps
@@ -1372,27 +1320,30 @@ fn process_usd_sim_prim_read(
         // parallel grid. Resolve the pose directly in that Grid's frame; a
         // root-world compose followed by an immediate inverse conversion is
         // both unnecessary and unstable when the distant root is re-pinned.
-        let target_grid = lunco_core::coords::ancestor_grid(entity, q_child_of, grid_components);
-        let (avatar_cell, avatar_tf) = match target_grid {
-            Some((grid_entity, grid)) => lunco_core::coords::grid_relative_pose(
-                entity,
-                grid_entity,
-                q_child_of,
-                grid_components,
-                q_spatial,
+        let (grid_entity, grid) = lunco_core::coords::ancestor_grid(
+            entity,
+            q_child_of,
+            grid_components,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "USD avatar {sdf_path} is not below a BigSpace Grid; an explicit spatial frame is required"
             )
-            .map(|(position, rotation)| {
-                let (cell, translation) = grid.translation_to_grid(position);
-                (
-                    cell,
-                    Transform::from_translation(translation)
-                        .with_rotation(rotation.as_quat())
-                        .with_scale(existing_tf.scale),
-                )
-            })
-            .unwrap_or_else(|| (CellCoord::default(), existing_tf)),
-            None => (CellCoord::default(), existing_tf),
-        };
+        });
+        let (position, rotation) = lunco_core::coords::grid_relative_pose(
+            entity,
+            grid_entity,
+            q_child_of,
+            grid_components,
+            q_spatial,
+        )
+        .unwrap_or_else(|| {
+            panic!("USD avatar {sdf_path} has an invalid spatial chain to Grid {grid_entity:?}")
+        });
+        let (avatar_cell, translation) = grid.translation_to_grid(position);
+        let avatar_tf = Transform::from_translation(translation)
+            .with_rotation(rotation.as_quat())
+            .with_scale(existing_tf.scale);
 
         // Shared render-look for the avatar camera: SMAA post-process AA,
         // MSAA off (can't touch shader-internal regolith speckle), and
@@ -1523,9 +1474,7 @@ fn process_usd_sim_prim_read(
         // was selected above from the authored parent chain, so this is not a
         // second celestial frame and does not detach the camera from the rover
         // scene during bootstrap or body-surface rebranching.
-        if let Some((grid_entity, _)) = target_grid {
-            commands.entity(entity).try_insert(ChildOf(grid_entity));
-        }
+        commands.entity(entity).try_insert(ChildOf(grid_entity));
     }
 
     // 1. Detect PhysxVehicleContextAPI (The Rover Root)
@@ -3524,7 +3473,6 @@ fn activate_dynamic_bodies(
     mut commands: Commands,
     ground_pending: Res<GroundColliderPending>,
     mut activation: ResMut<GroundActivationInFlight>,
-    mut physics_holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     q_kinematic: Query<
         (Entity, &UsdPrimPath, Option<&AuthoredInitialVelocity>),
         With<ShouldBeDynamic>,
@@ -3554,13 +3502,16 @@ fn activate_dynamic_bodies(
     q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
-    // pass runs in Update. During scene readiness physics is deliberately held,
-    // so a parked joint is safe to admit before the first released fixed tick.
-    // Do not deadlock the world by waiting for a nested-schedule admission that
-    // cannot run while the hold is active.
-    let readiness_hold_active = physics_holds
-        .as_deref()
-        .is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::READINESS));
+    // pass runs in Update. A body may not become dynamic until every authored
+    // joint touching it has crossed both native boundaries:
+    //
+    //   USD schema -> typed PendingJoint -> Avian joint component
+    //
+    // The readiness hold pauses integration, not topology construction. The
+    // joint builder and the outer Update admission system continue to run while
+    // that hold is active, so waiting here cannot deadlock the scene. Promoting
+    // first and hoping the parked constraint appears before the next solver tick
+    // is precisely how an articulated pad escaped during warm-cache startup.
     let mut promoted = false;
     for (entity, path, authored_velocity) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
@@ -3609,8 +3560,9 @@ fn activate_dynamic_bodies(
             .iter()
             .any(|d_path| d_path.stage_handle == path.stage_handle);
         let blocked = ground_pending.0
-            || (!readiness_hold_active
-                && (has_pending_joint || has_pending_admission || has_unready_authored_joint))
+            || has_pending_joint
+            || has_pending_admission
+            || has_unready_authored_joint
             || has_pending_diff;
         if !blocked {
             // Despawn-safe: scene-load churn / doc-backed reload can despawn a
@@ -3657,14 +3609,9 @@ fn activate_dynamic_bodies(
         }
     }
     if promoted {
-        // Arm the physics hold at the same ownership boundary as the
-        // Kinematic→Dynamic transition.  The next FixedUpdate can run before
-        // the following Update pass (which normally publishes the release),
-        // so arming it in a later bridge system leaves one unplaced tick in
-        // which a raycast rover can launch from its authored embedded wheel.
-        if let Some(ref mut holds) = physics_holds {
-            holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
-        }
+        // The assembly root owns the ground-activation hold. This projector only
+        // publishes the promotion boundary; a second physics-hold writer here
+        // made the release order depend on plugin insertion order.
         // Promotion publishes the authored physical initial condition through
         // deferred component insertion. Reopen the co-sim binding epoch so the
         // next sealed pass seeds every already-valid sensor/actuator wire from

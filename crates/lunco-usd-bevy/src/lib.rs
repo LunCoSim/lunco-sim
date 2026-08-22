@@ -97,6 +97,15 @@ pub use light::{
 /// system that processes USD prims into Bevy entities with meshes and transforms.
 pub struct UsdBevyPlugin;
 
+/// The authored camera pose is inserted into BigSpace's propagation pipeline,
+/// after floating-origin recentering and before high-precision propagation.
+/// Keeping this as a sibling set of BigSpace's propagation phases is necessary:
+/// `RecenterLargeTransforms` itself is a member of Bevy's `Propagate` set, so a
+/// standalone system cannot be ordered both after that member and before the
+/// containing set.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+struct CameraPathSet;
+
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
         // `SetActiveCamera` (avatar-free camera switch). Registered here so a
@@ -295,6 +304,13 @@ impl Plugin for UsdBevyPlugin {
                 )
                     .chain(),
             )
+            .configure_sets(
+                PostUpdate,
+                CameraPathSet
+                    .in_set(bevy::transform::TransformSystems::Propagate)
+                    .after(big_space::prelude::BigSpaceSystems::LocalFloatingOrigins)
+                    .before(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
+            )
             .add_systems(
                 PostUpdate,
                 (
@@ -302,7 +318,11 @@ impl Plugin for UsdBevyPlugin {
                     camera_path::apply_camera_paths,
                 )
                     .chain()
-                    .before(bevy::transform::TransformSystems::Propagate),
+                    // The path is the complete pose owner. It must run after
+                    // generic interaction interpolation and BigSpace's local
+                    // recentering, otherwise either writer can leave one
+                    // stale cell-local pose in the extracted render frame.
+                    .in_set(CameraPathSet),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into
             // a cubemap and bind it to the cameras (`dome.rs`).

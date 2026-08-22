@@ -10,7 +10,7 @@
 use avian3d::math::Vector;
 use avian3d::physics_transform::Position;
 use avian3d::prelude::*;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
@@ -78,6 +78,23 @@ fn make_app() -> App {
     )));
     // Plugins registering resources in `Plugin::finish` (avian's diagnostics)
     // never get it called when tests drive `app.update()` directly.
+    app.finish();
+    app.cleanup();
+    app
+}
+
+fn make_app_with_usd_collision_hooks() -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    app.init_asset::<Mesh>();
+    app.add_plugins((
+        big_space::plugin::BigSpaceMinimalPlugins,
+        PhysicsPlugins::default().with_collision_hooks::<lunco_usd_avian::UsdCollisionFilter>(),
+        BigSpacePhysicsBridgePlugin,
+    ));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+        15625,
+    )));
     app.finish();
     app.cleanup();
     app
@@ -440,7 +457,7 @@ fn paired_cell_transform_teleport_reaches_physics() {
             ChildOf(grid),
         ))
         .id();
-    step(&mut app, 2);
+    step(&mut app, 10);
 
     // This changes both components, just like a BigSpace re-split, but it is
     // semantically a move to x=2250 m. Change flags cannot distinguish the two.
@@ -450,7 +467,7 @@ fn paired_cell_transform_teleport_reaches_physics() {
         entity.insert(CellCoord::new(1, 0, 0));
         entity.get_mut::<Transform>().unwrap().translation.x = 250.0;
     }
-    step(&mut app, 1);
+    step(&mut app, 2);
 
     let position = app.world().get::<Position>(body).unwrap().0;
     assert!(
@@ -492,7 +509,10 @@ fn plain_ancestor_resplit_and_teleport_are_distinguished() {
         entity.insert(CellCoord::new(1, 0, 0));
         entity.get_mut::<Transform>().unwrap().translation.x = -EDGE;
     }
-    step(&mut app, 1);
+    // The first manual update advances Bevy's clock but does not yet admit a
+    // FixedUpdate step.  Seed is owned by the enclosing fixed schedule, so
+    // observe it after the first admitted physics frame.
+    step(&mut app, 2);
     let after_resplit = app.world().get::<Position>(body).unwrap().0;
     assert_eq!(
         after_resplit, initial,
@@ -505,7 +525,7 @@ fn plain_ancestor_resplit_and_teleport_are_distinguished() {
         entity.insert(CellCoord::new(2, 0, 0));
         entity.get_mut::<Transform>().unwrap().translation.x = -EDGE;
     }
-    step(&mut app, 1);
+    step(&mut app, 2);
     let after_teleport = app.world().get::<Position>(body).unwrap().0;
     assert!(
         (after_teleport.x - (initial.x + f64::from(EDGE))).abs() < 1e-6,
@@ -628,6 +648,248 @@ fn surface_physics_frame_is_invariant_to_rotating_celestial_parent() {
 }
 
 #[test]
+fn active_frame_handoff_transports_velocity_into_the_new_grid() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root = shell(&mut app);
+
+    // Scene loading seeds bodies while WorldRoot is still the active Avian
+    // frame. Celestial placement then promotes the authored site Grid to the
+    // active frame. This is the production handoff that used to rewrite only
+    // Position/Rotation and leave the velocity components in root axes.
+    let site = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::from_rotation(Quat::from_rotation_y(0.7)),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            LinearVelocity(Vector::new(2.0, -0.5, 3.0)),
+            AngularVelocity(Vector::new(-0.2, 0.4, 0.1)),
+            CellCoord::ZERO,
+            Transform::from_xyz(4.0, 8.0, -2.0),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+
+    // Seed the body in WorldRoot coordinates before the frame is promoted.
+    // The first manual update only initializes the fixed clock accumulator.
+    step(&mut app, 2);
+    let old_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let old_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+    let frame_rotation = app
+        .world()
+        .get::<Transform>(site)
+        .unwrap()
+        .rotation
+        .as_dquat();
+
+    app.world_mut().insert_resource(ActivePhysicsFrame(site));
+    step(&mut app, 1);
+
+    // Position/Rotation and both velocity vectors must now use the site Grid's
+    // axes. A rebranch is not a physical impulse and must not alter magnitudes.
+    let expected_linear = frame_rotation.inverse() * old_linear;
+    let expected_angular = frame_rotation.inverse() * old_angular;
+    let actual_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let actual_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+    assert!(
+        (actual_linear - expected_linear).length() < 1.0e-6,
+        "linear velocity was not rebased: old={old_linear:?} expected={expected_linear:?} actual={actual_linear:?}"
+    );
+    assert!(
+        (actual_angular - expected_angular).length() < 1.0e-6,
+        "angular velocity was not rebased: old={old_angular:?} expected={expected_angular:?} actual={actual_angular:?}"
+    );
+    assert!((actual_linear.length() - old_linear.length()).abs() < 1.0e-6);
+    assert!((actual_angular.length() - old_angular.length()).abs() < 1.0e-6);
+}
+
+#[test]
+fn active_frame_handoff_is_transport_on_the_first_physics_read() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root = shell(&mut app);
+    let site = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::from_rotation(Quat::from_rotation_y(0.7)),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            LinearVelocity(Vector::new(2.0, 0.0, 3.0)),
+            AngularVelocity(Vector::new(-0.2, 0.0, 0.1)),
+            CellCoord::ZERO,
+            Transform::from_xyz(4.0, 8.0, -2.0),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+
+    // Seed in WorldRoot directly, then promote the site before any physics
+    // schedule read. This is the ordering produced while scene activation is
+    // held; a prior physics tick is not part of the transport contract.
+    app.world_mut().run_schedule(FixedPostUpdate);
+    assert!(app
+        .world()
+        .get::<lunco_physics::PhysicsPoseSeeded>(body)
+        .is_some());
+    let old_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let old_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+    let frame_rotation = app
+        .world()
+        .get::<Transform>(site)
+        .unwrap()
+        .rotation
+        .as_dquat();
+    app.world_mut().insert_resource(ActivePhysicsFrame(site));
+    step(&mut app, 2);
+
+    let actual_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
+    let actual_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
+    assert!(
+        (actual_linear - frame_rotation.inverse() * old_linear).length() < 1.0e-6,
+        "first-read linear rebase failed: old={old_linear:?} expected={:?} actual={actual_linear:?}",
+        frame_rotation.inverse() * old_linear
+    );
+    assert!(
+        (actual_angular - frame_rotation.inverse() * old_angular).length() < 1.0e-6,
+        "first-read angular rebase failed: old={old_angular:?} expected={:?} actual={actual_angular:?}",
+        frame_rotation.inverse() * old_angular
+    );
+}
+
+#[test]
+fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root = shell(&mut app);
+    let site_rotation = Quat::from_rotation_y(0.7);
+    let site = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::from_rotation(site_rotation),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let old_linear = Vector::new(2.0, -0.5, 3.0);
+    let existing = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            LinearVelocity(old_linear),
+            CellCoord::ZERO,
+            Transform::from_xyz(4.0, 8.0, -2.0),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+
+    // Establish the old-frame state before the site is promoted.
+    app.world_mut().run_schedule(FixedPostUpdate);
+    app.world_mut().insert_resource(ActivePhysicsFrame(site));
+
+    // This body appears during the frame transaction. It must not be seeded
+    // in the new frame by a parallel hold-safe pass and then transported a
+    // second time by the canonical READ owner.
+    let late_local = DVec3::new(-3.0, 6.0, 2.0);
+    let late = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            CellCoord::ZERO,
+            Transform::from_translation(late_local.as_vec3()),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+    app.world_mut().run_schedule(FixedPostUpdate);
+
+    let rebased = app.world().get::<LinearVelocity>(existing).unwrap().0;
+    assert!((rebased - site_rotation.inverse().as_dquat() * old_linear).length() < 1.0e-6);
+    let late_position = app.world().get::<Position>(late).unwrap().0;
+    assert!(
+        (late_position - late_local).length() < 1.0e-6,
+        "late body was seeded or transported in the wrong frame: expected={late_local:?} actual={late_position:?}"
+    );
+    assert!(app
+        .world()
+        .get::<lunco_physics::PhysicsPoseSeeded>(late)
+        .is_some());
+}
+
+#[test]
+fn active_site_frame_seeds_initial_pose_in_site_coordinates() {
+    let mut app = make_app();
+    app.insert_resource(Gravity(Vector::ZERO));
+    let root = shell(&mut app);
+    let site_rotation = Quat::from_rotation_y(0.7);
+    let site_translation = Vec3::new(120.0, -30.0, 75.0);
+    let site = app
+        .world_mut()
+        .spawn((
+            Grid::new(EDGE, 100.0),
+            CellCoord::ZERO,
+            Transform::from_translation(site_translation).with_rotation(site_rotation),
+            GlobalTransform::default(),
+            ChildOf(root),
+        ))
+        .id();
+    app.world_mut().insert_resource(ActivePhysicsFrame(site));
+    let body_local = DVec3::new(4.0, 8.0, -2.0);
+    let body = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            CellCoord::ZERO,
+            Transform::from_translation(body_local.as_vec3()),
+            GlobalTransform::default(),
+            ChildOf(site),
+        ))
+        .id();
+
+    // Exercise the bridge at its authoritative fixed-physics boundary.  This
+    // is the first admitted physics frame; no arbitrary frame-count delay is
+    // part of the contract.
+    app.world_mut().run_schedule(FixedPostUpdate);
+
+    let position = app.world().get::<Position>(body).unwrap().0;
+    assert!(
+        (position - body_local).length() < 1.0e-6,
+        "initial pose was seeded in the celestial frame instead of the active site frame: expected={body_local:?} actual={position:?}"
+    );
+    assert!(
+        app.world()
+            .get::<lunco_physics::PhysicsPoseSeeded>(body)
+            .is_some(),
+        "active-frame pose was written without publishing the authoritative readiness marker"
+    );
+}
+
+#[test]
 fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
     let mut app = make_app();
     app.insert_resource(Gravity(Vector::ZERO));
@@ -720,4 +982,157 @@ fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
         assert!(linear.is_finite() && linear.length() < 1e-4);
         assert!(angular.is_finite() && angular.length() < 1e-4);
     }
+}
+
+#[test]
+fn nested_body_strut_contact_preserves_mass_frame() {
+    let mut app = make_app_with_usd_collision_hooks();
+    app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
+    app.insert_resource(SubstepCount(32));
+    let grid = shell(&mut app);
+
+    app.world_mut().spawn((
+        RigidBody::Static,
+        Collider::cuboid(100.0, 0.1, 100.0),
+        Friction {
+            dynamic_coefficient: 1.0,
+            static_coefficient: 1.0,
+            combine_rule: CoefficientCombine::Min,
+        },
+        ActiveCollisionHooks::MODIFY_CONTACTS,
+        CellCoord::ZERO,
+        Transform::from_xyz(0.0, -0.05, 0.0),
+        GlobalTransform::default(),
+        ChildOf(grid),
+    ));
+    let hull = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Mass(4000.0),
+            AngularInertia::new(Vec3::new(5905.0, 6250.0, 5905.0)),
+            CenterOfMass::ZERO,
+            NoAutoMass,
+            NoAutoAngularInertia,
+            NoAutoCenterOfMass,
+            Collider::cuboid(2.5, 1.5, 2.5),
+            CellCoord::ZERO,
+            Transform::from_xyz(0.0, 12.0, 0.0),
+            GlobalTransform::default(),
+            ChildOf(grid),
+        ))
+        .id();
+
+    let angle = 20.0_f64.to_radians();
+    let sin = angle.sin();
+    let cos = angle.cos();
+    let legs = [
+        (
+            DVec3::new(sin, -cos, 0.0),
+            DVec3::new(2.519, 1.388, 0.0),
+            Quat::from_rotation_z(angle as f32),
+        ),
+        (
+            DVec3::new(-sin, -cos, 0.0),
+            DVec3::new(-2.519, 1.388, 0.0),
+            Quat::from_rotation_z(-angle as f32),
+        ),
+        (
+            DVec3::new(0.0, -cos, sin),
+            DVec3::new(0.0, 1.388, 2.519),
+            Quat::from_rotation_x(-angle as f32),
+        ),
+        (
+            DVec3::new(0.0, -cos, -sin),
+            DVec3::new(0.0, 1.388, -2.519),
+            Quat::from_rotation_x(angle as f32),
+        ),
+    ];
+    for (axis, mount, rotation) in legs {
+        let leg = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Mass(30.0),
+                AngularInertia::new(Vec3::new(124.30, 0.0844, 124.30)),
+                CenterOfMass::new(0.0, -3.525, 0.0),
+                NoAutoMass,
+                NoAutoAngularInertia,
+                NoAutoCenterOfMass,
+                Transform::from_translation(mount.as_vec3()).with_rotation(rotation),
+                GlobalTransform::default(),
+                ChildOf(hull),
+            ))
+            .id();
+        let pad = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Mass(10.0),
+                AngularInertia::new(Vec3::splat(10.0)),
+                NoAutoMass,
+                NoAutoAngularInertia,
+                Collider::cylinder(0.455, 0.1),
+                Friction {
+                    dynamic_coefficient: 0.60,
+                    static_coefficient: 0.65,
+                    combine_rule: CoefficientCombine::Min,
+                },
+                ActiveCollisionHooks::MODIFY_CONTACTS,
+                Transform::from_xyz(0.0, -7.2, 0.0).with_rotation(rotation.inverse()),
+                GlobalTransform::default(),
+                ChildOf(leg),
+            ))
+            .id();
+        let rotation_d = DQuat::from_xyzw(
+            rotation.x as f64,
+            rotation.y as f64,
+            rotation.z as f64,
+            rotation.w as f64,
+        );
+        let pad_anchor1 = match axis {
+            _ if axis.x > 0.0 => DVec3::new(0.017101, -7.153015, 0.0),
+            _ if axis.x < 0.0 => DVec3::new(-0.017101, -7.153015, 0.0),
+            _ if axis.z > 0.0 => DVec3::new(0.0, -7.153015, 0.017101),
+            _ => DVec3::new(0.0, -7.153015, -0.017101),
+        };
+        app.world_mut().spawn((
+            SphericalJoint::new(leg, pad)
+                .with_local_anchor1(pad_anchor1)
+                .with_local_anchor2(DVec3::new(0.0, 0.05, 0.0)),
+            JointCollisionDisabled,
+            JointDamping {
+                linear: 0.0,
+                angular: 2.5,
+            },
+        ));
+        app.world_mut().spawn((
+            PrismaticJoint::new(hull, leg)
+                .with_local_anchor1(mount)
+                .with_local_anchor2(DVec3::ZERO)
+                .with_local_basis1(rotation_d)
+                .with_local_basis2(DQuat::IDENTITY)
+                .with_slider_axis(DVec3::Y)
+                .with_limits(-0.8, 0.0)
+                .with_motor(
+                    LinearMotor::new(MotorModel::ForceBased {
+                        stiffness: 1_800_000.0,
+                        damping: 90_000.0,
+                    })
+                    .with_target_position(0.0)
+                    .with_max_force(42_000.0),
+                ),
+            JointCollisionDisabled,
+        ));
+    }
+
+    for _ in 0..600 {
+        app.update();
+    }
+    let position = app.world().get::<Position>(hull).unwrap().0;
+    let velocity = app.world().get::<LinearVelocity>(hull).unwrap().0;
+    assert!(
+        position.is_finite() && velocity.is_finite() && velocity.length() < 10.0,
+        "nested BigSpace body/child-collider contact became unstable: position={position:?} velocity={velocity:?}"
+    );
 }

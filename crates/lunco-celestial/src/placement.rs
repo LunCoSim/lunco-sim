@@ -72,8 +72,9 @@ fn direct_grid_pose(
 ) -> Option<(DVec3, DQuat)> {
     let grid = q_grids.get(parent).ok()?;
     let (cell, transform) = q_spatial.get(entity).ok()?;
-    let cell = cell.copied().unwrap_or_default();
-    let position = grid.grid_position_double(&cell, transform);
+    let position = cell.map_or(transform.translation.as_dvec3(), |cell| {
+        grid.grid_position_double(cell, transform)
+    });
     Some((position, transform.rotation.as_dquat()))
 }
 
@@ -121,7 +122,17 @@ pub fn attach_site_scene_to_surface_grid(
         (Entity, &Transform, Option<&CellCoord>, &ChildOf),
         (With<lunco_core::Avatar>, With<FloatingOrigin>),
     >,
-    q_physical: Query<Entity, With<avian3d::prelude::RigidBody>>,
+    // Environment probes are physical assembly consumers too: a probe nested
+    // under a rigid body samples that body's local environment. Keep the
+    // celestial ownership binding on the probe instead of making the
+    // environment bridge infer a body from a prim name or a model port.
+    q_physical: Query<
+        Entity,
+        Or<(
+            With<avian3d::prelude::RigidBody>,
+            With<lunco_environment::EnvironmentProbe>,
+        )>,
+    >,
     q_parents: Query<&ChildOf>,
     q_children: Query<&Children>,
     q_grids: Query<&Grid>,
@@ -164,7 +175,7 @@ pub fn attach_site_scene_to_surface_grid(
     // FloatingOrigin, while the rover/terrain remain descendants of the scene
     // root; this is the one intentional branch crossing in the handoff.
     let scene_root_world_pose =
-        lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial);
+        lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial).ok();
 
     let root_is_site_grid = q_grids.get(scene_root).is_ok();
     if !root_is_site_grid {
@@ -220,7 +231,7 @@ pub fn attach_site_scene_to_surface_grid(
                 continue;
             };
             let Some((avatar_world_position, avatar_world_rotation)) =
-                lunco_core::coords::world_pose(avatar, &q_parents, &q_grids, &q_spatial)
+                lunco_core::coords::world_pose(avatar, &q_parents, &q_grids, &q_spatial).ok()
             else {
                 continue;
             };

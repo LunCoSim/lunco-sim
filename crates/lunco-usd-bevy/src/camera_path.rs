@@ -107,7 +107,8 @@ pub enum AimMode {
 }
 
 /// One entry in the aim track: `mode` applies from `t` until the next entry.
-/// Held, not interpolated — like `lunco:activeCamera` cuts (doc 35).
+/// The mode is held; an authored path-level blend may make the pose transition
+/// into this key continuously.
 #[derive(Debug, Clone, Copy)]
 pub struct AimKey {
     /// Start time, seconds on the path's own clock.
@@ -126,6 +127,10 @@ pub struct CameraPath {
     /// `Tangent` (or `Target`, when the whole-path `lunco:path:lookAt` relation
     /// is authored) key at t=0, so the lookup below needs no special case.
     pub aim: Vec<AimKey>,
+    /// Optional duration used to blend from the preceding aim key into the
+    /// current one. `None` preserves an authored cut; `Some(0)` is equivalent
+    /// and is accepted so USD authoring can disable blending explicitly.
+    pub aim_blend_duration: Option<f64>,
     /// The USD path behind every `Target` aim key, kept for the path's life.
     ///
     /// The aim target is bound BY PATH, continuously, not by entity once at
@@ -193,6 +198,27 @@ impl CameraPath {
             .map(|k| k.mode)
             .unwrap_or(AimMode::Tangent)
     }
+
+    /// Return the preceding and current aim modes while an authored blend is
+    /// active. The result is a pure function of path time, so it cannot acquire
+    /// the frame-history dependence that caused the old camera interpolation.
+    pub fn aim_transition_at(&self, t: f64) -> Option<(AimMode, AimMode, f32)> {
+        let duration = self.aim_blend_duration?.max(0.0);
+        if duration == 0.0 {
+            return None;
+        }
+        let next = self.aim.iter().position(|key| key.t > t)?;
+        if next == 0 {
+            return None;
+        }
+        let key = self.aim[next];
+        let start = key.t - duration;
+        if t < start {
+            return None;
+        }
+        let alpha = ((t - start) / duration).clamp(0.0, 1.0) as f32;
+        Some((self.aim[next - 1].mode, key.mode, alpha))
+    }
 }
 
 /// Marks a camera whose pose is owned by a [`CameraPath`], and carries the pose
@@ -213,9 +239,15 @@ impl CameraPath {
 /// `(cell, local)`; write both, or fight the engine and lose.
 #[derive(Component)]
 pub struct CameraPathDriven {
-    /// Grid-absolute target position (double precision — a path can sit far from
-    /// the floating origin, which is the whole reason for the grid).
-    pub target_world: DVec3,
+    /// The authored frame of the path curve. The curve can acquire its final
+    /// site/body grid after USD load (for example when a site root is attached
+    /// to a celestial surface grid), so this is the frame owner rather than a
+    /// snapshot of the grid that happened to exist during path discovery.
+    pub frame: Entity,
+    /// Position in the path frame's grid-absolute coordinates. Keeping the
+    /// sample in that frame avoids subtracting two AU-scale root-frame values
+    /// whenever a body-fixed scene is attached below the celestial hierarchy.
+    pub target_local: DVec3,
     pub target_rot: Quat,
     /// Whether the path currently owns the camera's rotation. False during an
     /// [`AimMode::Manual`] stretch, where the writer sets position only and
@@ -458,6 +490,9 @@ pub fn resolve_camera_paths(
         //
         // Absent ⇒ fall back to the whole-path `lunco:path:lookAt` rel, else
         // tangent. So the simple case stays a one-liner and the track is opt-in.
+        // `aim:blendDuration` is explicit: absent means the authored track keeps
+        // its cut semantics, while a positive value makes every target-to-target
+        // transition continuous.
         // Tolerant reads: `modes` is naturally authored `token[]` (it is an enum) but
         // reads fine as `string[]`, and `times` is naturally `double[]` but authors
         // reach for `float[]`. A strict read of either degrades to an EMPTY array,
@@ -465,6 +500,14 @@ pub fn resolve_camera_paths(
         // reporting anything — see `UsdRead::texts`/`reals`.
         let times = reader.reals(&path, "lunco:path:aim:times");
         let modes = reader.texts(&path, "lunco:path:aim:modes");
+        let aim_blend_duration = reader.real(&path, "lunco:path:aim:blendDuration");
+        if aim_blend_duration.is_some_and(|duration| !duration.is_finite() || duration < 0.0) {
+            warn!(
+                "[camera-path] {} has invalid `lunco:path:aim:blendDuration`; refusing the path",
+                prim.path
+            );
+            continue;
+        }
         // The RAW rel paths, not entity lookups. A "target" key is authored
         // against a PRIM PATH, and the entity for that path is a moving target:
         // it may not have spawned yet (async reference), may be shadowed by a
@@ -624,6 +667,7 @@ pub fn resolve_camera_paths(
             camera,
             domain,
             aim,
+            aim_blend_duration,
             aim_sources,
             points,
             basis,
@@ -645,7 +689,11 @@ pub fn resolve_camera_paths(
         // keep it and take over the writes. (`Without<CameraPathDriven>` on the
         // mount systems is the steady-state guard; this is the catch-up for the
         // race, since a path resolves frames after its camera spawns.)
-        let Some(grid) = find_grid(camera, &q_parents, &q_is_grid) else {
+        // The camera path's frame is the curve's authored hierarchy, not the
+        // camera's pre-handoff hierarchy. A site scene is initially mounted on
+        // WorldGrid and is later atomically attached to its body-fixed ENU grid;
+        // looking up from the camera here would permanently capture WorldGrid.
+        let Some(grid) = find_grid(entity, &q_parents, &q_is_grid) else {
             continue; // grid not spawned yet — retry next frame
         };
         commands
@@ -659,7 +707,8 @@ pub fn resolve_camera_paths(
                 // Bind the camera to THIS path's clock, not the shared preview.
                 TimeBinding { domain },
                 CameraPathDriven {
-                    target_world: DVec3::ZERO,
+                    frame: entity,
+                    target_local: DVec3::ZERO,
                     target_rot: Quat::IDENTITY,
                     aim_owned: true,
                     primed: false,
@@ -670,7 +719,7 @@ pub fn resolve_camera_paths(
                 // the same `PostUpdate`, and write the same `Transform` — measured
                 // as a whole take recorded at the spawn heading while the path
                 // moved the eye. The marker is the cross-crate contract; the
-                // avatar side honours it (guards + strip system).
+                // avatar side honours it at every mode-transition boundary.
                 lunco_core::CinematicCameraLock,
             ));
         // `InteractionEased` is a second Transform owner: it interpolates
@@ -793,13 +842,12 @@ pub fn drive_camera_paths(
         let u = path_u(t, pb.start, pb.end);
 
         // Control points are the CURVE prim's own geometry, so they are in its
-        // local space. `world_pose` walks the grid hierarchy, giving the curve's
-        // GRID-ABSOLUTE pose — so the sample lands in the same frame the camera's
-        // `(cell, local)` is written in. Reading `GlobalTransform` here instead
-        // would be the render frame: the classic bug.
-        let Some((curve_pos, curve_rot)) =
-            lunco_core::coords::world_pose(curve_entity, &q_parents, &q_grids, &q_spatial)
-                .map(|(p, r)| (p.0, r.0))
+        // local space. Resolve the curve's live Grid and compose only within
+        // that frame. Do not route a body-fixed camera through the celestial
+        // root: the root representation legitimately changes as BigSpace
+        // rebases, while the authored site frame does not.
+        let Some((target_grid, _)) =
+            lunco_core::coords::ancestor_grid(curve_entity, &q_parents, &q_grids)
         else {
             // Transient during load (grid ancestry not spawned). If it
             // PERSISTS the camera is never primed and never driven — a whole
@@ -807,6 +855,18 @@ pub fn drive_camera_paths(
             warn_once!(
                 "[camera-path] curve {curve_entity:?} has no resolvable world pose — \
                  camera not driven"
+            );
+            continue;
+        };
+        let Some((curve_pos, curve_rot)) = lunco_core::coords::grid_relative_pose(
+            curve_entity,
+            target_grid,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            warn_once!(
+                "[camera-path] curve {curve_entity:?} has no resolvable pose in its live Grid"
             );
             continue;
         };
@@ -829,16 +889,23 @@ pub fn drive_camera_paths(
             continue;
         }
 
-        // Aim, per the track in force at this instant. Direction is a DIFFERENCE
-        // of two grid-absolute points, so it is small and safe in f32 — unlike the
-        // positions themselves.
+        // Aim, per the track in force at this instant. Both points are in the
+        // path frame, so the direction is a local-frame difference and remains
+        // small even when the site is millions of metres from the inertial root.
+        let aim_mode = path.aim_at(t);
         let mut invalid_target = false;
-        let look_dir = match path.aim_at(t) {
+        let look_dir = match aim_mode {
             AimMode::Target(e) => {
-                match lunco_core::coords::world_pose(e, &q_parents, &q_grids, &q_spatial) {
+                match lunco_core::coords::pose_in_grid(
+                    e,
+                    target_grid,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                ) {
                     Some((target, _)) => {
-                        let dir = (target.0 - world).as_vec3();
-                        if !target.0.is_finite() || !dir.is_finite() {
+                        let dir = (target - world).as_vec3();
+                        if !target.is_finite() || !dir.is_finite() {
                             invalid_target = true;
                             if faults.as_deref_mut().is_some_and(|faults| {
                                 faults.raise(
@@ -899,10 +966,83 @@ pub fn drive_camera_paths(
             continue;
         }
 
+        // A target track is normally a held mode track, so a key change is an
+        // intentional cut. When the USD path authors a blend duration, resolve
+        // the preceding target at this same eye position and interpolate the
+        // two complete look rotations. This keeps the path analytic and avoids
+        // the one-frame re-aim jump without introducing a render-history filter.
+        let blended_rotation =
+            path.aim_transition_at(t)
+                .and_then(|(previous_mode, current_mode, alpha)| {
+                    let previous_dir = match previous_mode {
+                        AimMode::Target(entity) => {
+                            let Some((target, _)) = lunco_core::coords::pose_in_grid(
+                                entity,
+                                target_grid,
+                                &q_parents,
+                                &q_grids,
+                                &q_spatial,
+                            ) else {
+                                warn_once!(
+                                "[camera-path] blend aim target {entity:?} has no resolvable pose"
+                            );
+                                invalid_target = true;
+                                return None;
+                            };
+                            Some((target - world).as_vec3())
+                        }
+                        AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
+                        AimMode::Manual => None,
+                    }?;
+                    // `aim_mode` is deliberately still the held preceding mode until
+                    // the key time. The blend endpoint must therefore resolve the
+                    // upcoming mode explicitly; using `look_dir` here would slerp
+                    // the old pose to itself and leave the key as a cut.
+                    let current_dir = match current_mode {
+                        AimMode::Target(entity) => {
+                            let Some((target, _)) = lunco_core::coords::pose_in_grid(
+                                entity,
+                                target_grid,
+                                &q_parents,
+                                &q_grids,
+                                &q_spatial,
+                            ) else {
+                                warn_once!(
+                                "[camera-path] blend aim target {entity:?} has no resolvable pose"
+                            );
+                                invalid_target = true;
+                                return None;
+                            };
+                            Some((target - world).as_vec3())
+                        }
+                        AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
+                        AimMode::Manual => None,
+                    }?;
+                    if !previous_dir.is_finite() || !current_dir.is_finite() {
+                        invalid_target = true;
+                        return None;
+                    }
+                    if previous_dir.length_squared() <= 1e-9 || current_dir.length_squared() <= 1e-9
+                    {
+                        return None;
+                    }
+                    let previous_rotation = Transform::default()
+                        .looking_to(previous_dir, Vec3::Y)
+                        .rotation;
+                    let current_rotation = Transform::default()
+                        .looking_to(current_dir, Vec3::Y)
+                        .rotation;
+                    Some(previous_rotation.slerp(current_rotation, alpha))
+                });
+
+        if invalid_target {
+            continue;
+        }
+
         if chatty {
             info!(
                 "[camera-path] drive t={t:.2} u={u:.3} eye={world:?} aim={:?} look={look_dir:?}",
-                path.aim_at(t)
+                aim_mode
             );
         }
         if let Ok(mut driven) = q_cams.get_mut(path.camera) {
@@ -910,9 +1050,11 @@ pub fn drive_camera_paths(
             // sample, so it carries no history and no dependence on when the frame
             // happened to land. That is what makes a recorded frame index reproduce
             // the identical transform across runs.
-            driven.target_world = world;
-            driven.aim_owned = !matches!(path.aim_at(t), AimMode::Manual);
-            if let Some(dir) = look_dir {
+            driven.target_local = world;
+            driven.aim_owned = !matches!(aim_mode, AimMode::Manual);
+            if let Some(rotation) = blended_rotation {
+                driven.target_rot = rotation;
+            } else if let Some(dir) = look_dir {
                 if dir.length_squared() > 1e-9 {
                     driven.target_rot = Transform::default().looking_to(dir, Vec3::Y).rotation;
                 }
@@ -954,7 +1096,15 @@ fn find_grid(
 /// every render frame — not from a filter.
 pub fn apply_camera_paths(
     q_grids: Query<&Grid>,
-    mut q: Query<(&mut CellCoord, &mut Transform, &ChildOf, &CameraPathDriven)>,
+    q_parents: Query<&ChildOf>,
+    mut q: Query<(
+        Entity,
+        &mut CellCoord,
+        &mut Transform,
+        &ChildOf,
+        &CameraPathDriven,
+    )>,
+    mut commands: Commands,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut tick: Local<u32>,
 ) {
@@ -963,37 +1113,59 @@ pub fn apply_camera_paths(
     }
     *tick = tick.wrapping_add(1);
     let chatty = (*tick).is_multiple_of(100);
-    for (mut cell, mut tf, child_of, driven) in q.iter_mut() {
+    for (camera, mut cell, mut tf, child_of, driven) in q.iter_mut() {
         if !driven.primed {
             continue;
         }
-        let Ok(grid) = q_grids.get(child_of.parent()) else {
+        let Some(target_grid) =
+            lunco_core::coords::ancestor_grid(driven.frame, &q_parents, &q_grids)
+                .map(|(entity, _)| entity)
+        else {
             if chatty {
-                warn!("[camera-path] apply: camera parent is not a grid — write skipped");
+                warn!("[camera-path] apply: path frame has no live Grid — write skipped");
             }
             continue;
         };
         if chatty {
             info!(
                 "[camera-path] apply world={:?} owned={} rot={:?}",
-                driven.target_world, driven.aim_owned, driven.target_rot
+                driven.target_local, driven.aim_owned, driven.target_rot
             );
         }
-        // Re-bin the GRID-ABSOLUTE position into `(cell, local)` — the same write-back
-        // `follow_mounted_cameras` does, and the reason the sample is kept absolute:
-        // a local `Transform` alone is meaningless across a cell boundary.
-        //
-        // Note this reads NOTHING from the camera's own current pose. The sample is
-        // the whole state, so there is no lag, no history, and no snap-vs-ease case —
-        // there is no "current" to be far away from.
-        let (new_cell, new_local) = grid.translation_to_grid(driven.target_world);
+        // The path sample is already in the path curve's live Grid frame. Split
+        // that frame-local coordinate into BigSpace's cell and local remainder;
+        // no celestial-root subtraction is involved.
+        let Ok(grid) = q_grids.get(target_grid) else {
+            if chatty {
+                warn!("[camera-path] apply: path frame Grid disappeared — write skipped");
+            }
+            continue;
+        };
+        let (new_cell, new_translation) = grid.translation_to_grid(driven.target_local);
+        let new_local =
+            Transform::from_translation(new_translation).with_rotation(driven.target_rot);
+
+        // The site frame can become live after this path has been discovered.
+        // Reparent the camera, cell and local transform as one BigSpace
+        // operation. Continuing with the old parent for even one write would
+        // expose the celestial-frame displacement as a visible jump.
+        if child_of.parent() != target_grid {
+            lunco_core::attach::migrate_to_grid(
+                &mut commands,
+                camera,
+                target_grid,
+                new_cell,
+                new_local,
+            );
+            continue;
+        }
         *cell = new_cell;
-        tf.translation = new_local;
+        tf.translation = new_local.translation;
 
         // Only when the path owns the aim — during a `Manual` stretch the user is
         // steering and writing a stale target would fight the mouse.
         if driven.aim_owned {
-            tf.rotation = driven.target_rot;
+            tf.rotation = new_local.rotation;
         }
     }
 }
@@ -1246,6 +1418,39 @@ mod tests {
             path_u(1.0, 4.0, 4.0).is_finite(),
             "degenerate span must stay finite"
         );
+    }
+
+    #[test]
+    fn aim_blend_is_entered_before_the_upcoming_key() {
+        let target = Entity::PLACEHOLDER;
+        let path = CameraPath {
+            camera: Entity::PLACEHOLDER,
+            domain: Entity::PLACEHOLDER,
+            aim: vec![
+                AimKey {
+                    t: 0.0,
+                    mode: AimMode::Tangent,
+                },
+                AimKey {
+                    t: 8.0,
+                    mode: AimMode::Target(target),
+                },
+            ],
+            aim_blend_duration: Some(1.5),
+            aim_sources: Vec::new(),
+            points: Vec::new(),
+            basis: CurveBasis::Linear,
+            periodic: false,
+        };
+
+        assert_eq!(path.aim_transition_at(6.4), None);
+        assert_eq!(
+            path.aim_transition_at(6.5),
+            Some((AimMode::Tangent, AimMode::Target(target), 0.0))
+        );
+        let (_, _, alpha) = path.aim_transition_at(7.25).unwrap();
+        assert!((alpha - 0.5).abs() < 1e-6);
+        assert_eq!(path.aim_transition_at(8.0), None);
     }
 
     #[test]

@@ -13,10 +13,10 @@ The repo has two, and they are not interchangeable. Pick by what the spring carr
 | | **Raycast vehicle suspension** | **Passive prismatic suspension** |
 | --- | --- | --- |
 | Use for | **wheels** on a wheeled vehicle | **struts and legs** — landing gear, dampers, deployables |
-| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `LunCoPrismaticSuspensionAPI` applied to a `PhysicsPrismaticJoint` |
-| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `lunco:prismaticSuspension:restPosition` / `:stiffness` / `:damping` / `:maxForce` |
+| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with `PhysicsDriveAPI:linear` |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `drive:linear:physics:stiffness` / `:damping` / `:targetPosition` / `:maxForce` |
 | Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
-| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | generic `lunco-cosim` passive-prismatic system, applying equal/opposite anchor forces before Avian solves the step |
+| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | Avian's native prismatic joint drive, after the USD loader converts the authored force law to its implicit spring-damper motor |
 | Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
 
 Both are legitimate; neither substitutes for the other. A raycast wheel has no
@@ -24,18 +24,18 @@ prismatic joint and its suspension force never appears as a joint reaction, so a
 strut's load cannot be read that way. Conversely a wheel driven by a prismatic
 drive loses the raycast model's ground-following behaviour.
 
-Sections 1–5 below specify the **raycast** mechanism. The passive joint mechanism
-is a plain `PhysicsPrismaticJoint` plus the explicit `LunCoPrismaticSuspensionAPI`:
-`physics:lowerLimit` / `:upperLimit` bound the stroke, `physics:localRot0` carries
-a non-cardinal axis (`physics:axis` names only cardinals), and anchors are left
-unauthored so the loader derives them from the transform hierarchy — which puts
-`displacement` at exactly 0 in the authored rest pose. The generic backend applies
-the spring only for negative displacement (compression), so it cannot pull a leg
-back out during rebound. Active mechanisms should use `UsdPhysicsDriveAPI:linear`
-and the commandable prismatic port instead.
-`assets/vessels/landers/descent_lander.usda`'s `Leg*_Spring` prims are the worked
-example. Anything downstream that needs the load — a strut's glow, a touchdown
-check — reads that `force` port, never a second copy of the spring law.
+Sections 1–5 below specify the **raycast** mechanism. A passive leg is a plain
+`PhysicsPrismaticJoint` with a standard `UsdPhysicsDriveAPI:linear` force drive:
+`physics:lowerLimit` / `:upperLimit` bound the stroke, `physics:localRot0`
+carries a non-cardinal axis (`physics:axis` names only cardinals), and anchors
+are left unauthored so the loader derives them from the transform hierarchy —
+which puts displacement at exactly 0 in the authored rest pose. The drive is
+converted to Avian's native implicit spring-damper motor; the joint owns the
+geometric constraint and the drive owns the authored force law. Active mechanisms
+may use the same standard drive with a commandable target. The worked example is
+`assets/vessels/landers/descent_lander.usda`'s `Leg*_Spring` prims. Anything
+downstream that needs the load reads the joint's derived `force` port, never a
+second copy of the spring law.
 
 ### 0.1 A joint-drive strut is only as good as its foot
 
@@ -89,7 +89,8 @@ and a nested body is attached by a **joint** or it falls off.
 
 The observable contract, and what `landing_legs_test` asserts: struts **compress**
 — negative `displacement`, since the axis points chassis→foot — by a comparable
-amount on every leg, and the feet still gimbal rather than riding their cone stops.
+amount on every leg, and the welded pads remain part of the leg body rather than
+introducing an unconstrained rotational state.
 Height and tilt distinguish nothing: a gear that absorbed a landing and one that
 bent under it both sit level at a plausible height.
 

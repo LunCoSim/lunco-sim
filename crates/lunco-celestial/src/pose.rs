@@ -188,9 +188,10 @@ fn placement_offset(
     if entity == placement {
         return Some(DVec3::ZERO);
     }
-    let (entity_pos, _) = lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial)?;
+    let (entity_pos, _) =
+        lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial).ok()?;
     let (placement_pos, _) =
-        lunco_core::coords::world_pose(placement, q_parents, q_grids, q_spatial)?;
+        lunco_core::coords::world_pose(placement, q_parents, q_grids, q_spatial).ok()?;
     Some(entity_pos.0 - placement_pos.0)
 }
 
@@ -291,6 +292,7 @@ pub fn update_solar_poses(
                     };
                     let Some((_, entity_rotation)) =
                         lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                            .ok()
                     else {
                         continue;
                     };
@@ -321,6 +323,7 @@ pub fn update_solar_poses(
                     };
                     let Some((_, entity_rotation)) =
                         lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                            .ok()
                     else {
                         continue;
                     };
@@ -353,6 +356,7 @@ pub fn update_solar_poses(
                     };
                     let Some((_, entity_rotation)) =
                         lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                            .ok()
                     else {
                         continue;
                     };
@@ -368,7 +372,7 @@ pub fn update_solar_poses(
         } else if let Some((site_body, frame)) = &site {
             // Scene-local: the position is wherever the transform hierarchy puts it.
             let Some((world_position, world_rotation)) =
-                lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
             else {
                 continue;
             };

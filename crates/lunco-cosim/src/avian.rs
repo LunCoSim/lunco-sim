@@ -285,10 +285,17 @@ fn contact_of_filtered(
             }
         }
     }
-    (
-        touching,
-        normal_impulse / (CONTACT_SOLVER_PASSES * physics_dt.max(1e-9)),
-    )
+    // An impulse can be converted to a force only for a completed, positive
+    // physics interval.  During teardown (and before the first tick) Avian's
+    // clock is zero; reporting impulse / 1e-9 there manufactures a 1e10-N
+    // touchdown load and poisons telemetry.  Contact remains true, but its
+    // force sample is explicitly unavailable for that interval.
+    let normal_force = if physics_dt.is_finite() && physics_dt > 0.0 {
+        normal_impulse / (CONTACT_SOLVER_PASSES * physics_dt)
+    } else {
+        0.0
+    };
+    (touching, normal_force)
 }
 
 /// [`contact_of`] for a caller holding only a `&World` — the port-read closures.
@@ -303,8 +310,7 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
     let dt = world
         .get_resource::<Time<Physics>>()
         .map(|t| t.delta_secs_f64())
-        .unwrap_or(0.0)
-        .max(1e-9);
+        .unwrap_or(0.0);
     contact_of_filtered(graph, dt, entity, |candidate| {
         world.get::<Sensor>(candidate).is_some()
     })

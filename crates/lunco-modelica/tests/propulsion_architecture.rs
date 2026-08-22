@@ -188,7 +188,9 @@ model PriorAllocator
 
   LunCo.Actuation.WrenchAllocator allocator(
     actuator_count = 2,
-    allocation_pinv = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0; 0.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+    allocation_iterations = 64,
+    allocation_step = 0.1,
+    wrench_matrix = [0.0, 0.0; 0.0, 0.0; 0.0, 0.0; 1.0, -1.0; 0.0, 0.0; 0.0, 0.0],
     lower_command = {0.0, 0.0},
     upper_command = {1.0, 1.0});
 equation

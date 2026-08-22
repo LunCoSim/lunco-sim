@@ -138,7 +138,7 @@ fn camera_distances<F: bevy::ecs::query::QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(f64, f64)> {
     let (_, cam) = q_cam.iter().find(|(c, _)| c.is_active)?;
-    let (camera_pos, _) = world_pose(cam, q_parents, q_grids, q_spatial)?;
+    let (camera_pos, _) = world_pose(cam, q_parents, q_grids, q_spatial).ok()?;
     Some((
         (camera_pos.0 - source_pos.0).length(),
         (camera_pos.0 - peer_pos.0).length(),
@@ -206,8 +206,8 @@ fn aim_link_beams(
         // A cached peer can outlive its entity between reconciles. Skip rather
         // than guess — the next reconcile either refreshes it or despawns us.
         let (Some((npos, nrot)), Some((ppos, _))) = (
-            world_pose(co.parent(), &q_parents, &q_grids, &q_spatial),
-            world_pose(inst.peer_entity, &q_parents, &q_grids, &q_spatial),
+            world_pose(co.parent(), &q_parents, &q_grids, &q_spatial).ok(),
+            world_pose(inst.peer_entity, &q_parents, &q_grids, &q_spatial).ok(),
         ) else {
             continue;
         };
@@ -425,7 +425,7 @@ fn reconcile_link_beams(
         }
         let wanted_ids: HashSet<u64> = wanted.iter().map(|(g, _)| *g).collect();
 
-        let Some((npos, nrot)) = world_pose(source, &q_parents, &q_grids, &q_spatial) else {
+        let Some((npos, nrot)) = world_pose(source, &q_parents, &q_grids, &q_spatial).ok() else {
             continue;
         };
         let nrot_inv = nrot.0.inverse();
@@ -440,7 +440,7 @@ fn reconcile_link_beams(
             let Some(&pe) = ent_of.get(&peer_gid) else {
                 continue;
             };
-            let Some((ppos, _)) = world_pose(pe, &q_parents, &q_grids, &q_spatial) else {
+            let Some((ppos, _)) = world_pose(pe, &q_parents, &q_grids, &q_spatial).ok() else {
                 continue;
             };
             let world_dir = ppos - npos;

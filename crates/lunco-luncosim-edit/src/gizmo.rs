@@ -232,14 +232,11 @@ pub fn drive_gizmo_kinematic_pose(
         let Ok((cell, tf)) = q_spatial.get(entity) else {
             continue;
         };
-        let (position, rotation) = lunco_core::coords::world_pose_seeded(
-            entity,
-            &cell.copied().unwrap_or_default(),
-            tf,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        );
+        let Ok((position, rotation)) = lunco_core::coords::world_pose_seeded(
+            entity, cell, tf, &q_parents, &q_grids, &q_spatial,
+        ) else {
+            continue;
+        };
         if let Ok(mut drive) = q_drives.get_mut(entity) {
             drive.set_pose(position.0, rotation.0);
         }
@@ -330,14 +327,12 @@ pub fn capture_gizmo_start(
         };
         captured_any = true;
         session.targets.insert(entity);
-        let (position, rotation) = lunco_core::coords::world_pose_seeded(
-            entity,
-            &cell.copied().unwrap_or_default(),
-            tf,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        );
+        let Ok((position, rotation)) = lunco_core::coords::world_pose_seeded(
+            entity, cell, tf, &q_parents, &q_grids, &q_spatial,
+        ) else {
+            session.targets.remove(&entity);
+            continue;
+        };
 
         info!(
             "GIZMO: drag started for {:?}, global_pos={:?}",
