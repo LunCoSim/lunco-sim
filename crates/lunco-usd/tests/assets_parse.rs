@@ -59,3 +59,25 @@ fn every_shipped_usda_parses() {
         failures.join("\n  ")
     );
 }
+
+#[test]
+fn shipped_assets_do_not_author_removed_or_schema_owned_spellings() {
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let mut files = Vec::new();
+    usda_files(&assets, &mut files);
+
+    for path in files {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert!(
+            !source.contains("lunco:telemetry:owner"),
+            "{} authors the removed telemetry owner relationship",
+            path.display()
+        );
+        assert!(
+            !source.contains("custom bool lunco:dome:skybox"),
+            "{} redeclares a property owned by LunCoDomeAPI",
+            path.display()
+        );
+    }
+}

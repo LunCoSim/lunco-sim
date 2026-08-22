@@ -807,7 +807,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
 `lunco:avatar`, `lunco:scenario`, `lunco:nextScene`, `lunco:triggerZone`, `lunco:waypoint`,
 `lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (behavior; the camera prim itself is
-`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`/`resolvedAsset`.
+`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`.
 These are genuine LunCo glue — keep the `lunco:` prefix, group consistently (`lunco:<domain>:<prop>`), and
 prefer a `ui:nodegraph:node:pos` (UsdUI) over any bespoke diagram-position attr.
 

@@ -61,7 +61,7 @@ def Xform "HdriTest" (
 
         # lunco extension: draw the sky (vs. light-only). Cubemap resolution is
         # renderer quality and comes from Graphics settings.
-        custom bool lunco:dome:skybox = true
+        bool lunco:dome:skybox = true
     }
 
     # The sun still exists as a real DistantLight: an HDRI gives soft ambient +

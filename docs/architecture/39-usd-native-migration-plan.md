@@ -41,8 +41,9 @@ Prove the "adopt USD-standard spelling" muscle on the safest items. All tier-1 p
   `openusd` has `usd/collection.rs`. *Verify:* grouping/visibility behavior unchanged.
 - **P0.3 — Author `kind`.** Add `kind="component"` to reusable part assets, `kind="assembly"` to composed
   vehicles/robots (doc 38 §8.4/§A6). *Verify:* `is_model`/`is_group` reflect it; no runtime change.
-- **P0.4 — Rename `lunco:scale` → `lunco:factor`** (SSP term; doc 38 §14.1). Pure rename across assets +
-  the reader; keep `lunco:offset`. *Verify:* wiring math identical. *Unblocks:* Phase 1 naming.
+- **P0.4 [in place] — Rename `lunco:scale` → `lunco:factor`** (SSP term; doc 38 §14.1). The shipped
+  assets and reader use `lunco:factor` with no legacy `lunco:scale` path; `lunco:offset` remains. Wiring
+  math is covered by the factor/offset derivation tests. *Unblocks:* Phase 1 naming.
 
 **Phase 0 done when:** four PRs merged, no behavior delta, team has seen a standard-schema adoption land.
 
