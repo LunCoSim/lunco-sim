@@ -63,7 +63,16 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // pre-validation, file dialogs) cannot disagree with the readers.
     let schemes = crate::scheme_registry::SchemeRegistry::default();
     schemes.register(crate::LUNCO_SCHEME, move |rel| {
-        crate::asset_path::is_safe_relative_path(rel).then(|| assets_dir.join(rel))
+        if !crate::asset_path::is_safe_relative_path(rel) {
+            return None;
+        }
+        let authored = assets_dir.join(rel);
+        #[cfg(not(target_arch = "wasm32"))]
+        if authored.exists() {
+            return crate::existing_path_within_root(&assets_dir, std::path::Path::new(rel))
+                .filter(|path| path.is_file());
+        }
+        Some(authored)
     });
     let roots = twin_roots.clone();
     schemes.register(crate::TWIN_SCHEME, move |rest| {
@@ -76,6 +85,12 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         let root = roots.root_of(name)?;
         let authored = root.join(rel);
         if authored.exists() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                return crate::existing_path_within_root(&root, std::path::Path::new(rel))
+                    .filter(|path| path.is_file());
+            }
+            #[cfg(target_arch = "wasm32")]
             return Some(authored);
         }
         // Same two-step the `twin://` READER uses: a Twin's downloaded assets
@@ -83,6 +98,13 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         // server can load is invisible to scenario sync / shader validation.
         let cached = crate::twin_cache_dir(&root).join(rel);
         if cached.exists() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let cache_root = crate::twin_cache_dir(&root);
+                return crate::existing_path_within_root(&cache_root, std::path::Path::new(rel))
+                    .filter(|path| path.is_file());
+            }
+            #[cfg(target_arch = "wasm32")]
             return Some(cached);
         }
         Some(authored)

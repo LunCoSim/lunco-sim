@@ -689,11 +689,23 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     }
     let authored = assets_dir_abs().join(rel);
     if authored.exists() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return existing_path_within_root(&assets_dir_abs(), Path::new(rel))
+                .filter(|path| path.is_file());
+        }
+        #[cfg(target_arch = "wasm32")]
         return Some(authored);
     }
     for root in cache_roots() {
         let candidate = root.join(rel);
         if candidate.exists() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                return existing_path_within_root(&root, Path::new(rel))
+                    .filter(|path| path.is_file());
+            }
+            #[cfg(target_arch = "wasm32")]
             return Some(candidate);
         }
     }

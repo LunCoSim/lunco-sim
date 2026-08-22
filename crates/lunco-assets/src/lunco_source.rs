@@ -100,6 +100,20 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
             format!("asset `{id}` has no resolvable native root"),
         )
     })?;
+    if let Some(rel) = parse_lunco_uri(id) {
+        let root = assets_root.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("asset `{id}` has no resolvable native root"),
+            )
+        })?;
+        if root.join(rel).exists() && existing_path_within_root(root, Path::new(rel)).is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("asset `{id}` resolves outside its library root"),
+            ));
+        }
+    }
     std::fs::read(path)
 }
 
@@ -152,14 +166,29 @@ pub fn read_asset_bytes_with_twin_root(
             ));
         }
         let relative = PathBuf::from(rel);
-        if let Some(path) = existing_path_within_root(root, &relative).filter(|p| p.is_file()) {
+        let authored = root.join(&relative);
+        if authored.exists() {
+            let path = existing_path_within_root(root, &relative)
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("Twin asset `{id}` resolves outside its root"),
+                    )
+                })?;
             return std::fs::read(path);
         }
         let cache_root = crate::twin_cache_dir(root);
         let cached = cache_root.join(&relative);
-        if let Some(path) =
-            existing_path_within_root(&cache_root, &relative).filter(|p| p.is_file())
-        {
+        if cached.exists() {
+            let path = existing_path_within_root(&cache_root, &relative)
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("Twin cached asset `{id}` resolves outside its cache root"),
+                    )
+                })?;
             return std::fs::read(path);
         }
         return std::fs::read(cached);
@@ -224,7 +253,26 @@ mod tests {
         let error =
             read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
                 .expect_err("Twin symlink must not escape its root");
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsafe_authored_twin_entry_cannot_fall_through_to_cache() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let outside = tempfile::tempdir().expect("temporary outside root");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "must not be read").expect("secret");
+        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+
+        let cache = crate::twin_cache_dir(root.path());
+        std::fs::create_dir_all(&cache).expect("cache root");
+        std::fs::write(cache.join("linked.txt"), "cache shadow").expect("cache file");
+
+        let error =
+            read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
+                .expect_err("an unsafe authored path must block cache fallback");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }
 
@@ -319,13 +367,34 @@ struct FallbackReader {
     roots: Vec<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn local_root_allows(root: &str, path: &Path) -> bool {
+    let root = Path::new(root);
+    let candidate = root.join(path);
+    !candidate.exists() || crate::existing_path_within_root(root, path).is_some()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn local_root_allows(_root: &str, _path: &Path) -> bool {
+    true
+}
+
 /// Try each root in order; the first non-`NotFound` answer wins.
 macro_rules! try_both {
     ($self:ident, $method:ident, $path:expr) => {{
         // `readers` is non-empty by construction (`assets/` is always first),
         // so the loop always assigns before the unwrap.
         let mut last = None;
-        for reader in &$self.readers {
+        for (reader, root) in $self.readers.iter().zip($self.roots.iter()) {
+            if !local_root_allows(root, $path) {
+                return Err(AssetReaderError::from(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "asset path `{}` escapes library root `{root}`",
+                        $path.display()
+                    ),
+                )));
+            }
             match reader.$method($path).await {
                 Err(AssetReaderError::NotFound(p)) => {
                     last = Some(Err(AssetReaderError::NotFound(p)))
