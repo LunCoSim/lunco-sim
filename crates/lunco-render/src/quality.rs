@@ -1350,6 +1350,19 @@ pub struct ShadowRangeAuthorship {
     pub maximum_distance: bool,
 }
 
+/// Records which photometric values came from Graphics defaults when a USD
+/// light was projected. Live Graphics edits may update only those values;
+/// authored USD intensity and range remain authoritative.
+///
+/// `intensity_scale` includes authored exposure and any UsdLux area-size
+/// scale, so changing a default preserves the light's authored interpretation.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct LightGraphicsDefaults {
+    pub intensity_uses_graphics_default: bool,
+    pub intensity_scale: f32,
+    pub range_uses_graphics_default: bool,
+}
+
 /// Conservative estimate for directional shadow textures and their views.
 pub fn estimate_directional_shadow_bytes(
     quality: RenderingQuality,

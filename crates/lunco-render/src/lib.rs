@@ -23,9 +23,9 @@ pub use camera::{
     GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
 };
 pub use quality::{
-    estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, RenderQualityProfile,
-    RenderingQuality, RenderingQualitySettings, ShadowMapSuppressed, ShadowMapSuppressionReason,
-    ShadowRangeAuthorship,
+    estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, LightGraphicsDefaults,
+    RenderQualityProfile, RenderingQuality, RenderingQualitySettings, ShadowMapSuppressed,
+    ShadowMapSuppressionReason, ShadowRangeAuthorship,
 };
 pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100};
 

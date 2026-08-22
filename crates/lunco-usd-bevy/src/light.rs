@@ -53,7 +53,9 @@
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use lunco_render::{LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship};
+use lunco_render::{
+    LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
+};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
@@ -553,13 +555,13 @@ fn read_light_range(
     path: &SdfPath,
     default: f32,
     convention: crate::units::ConventionTransform,
-) -> Result<f32, LightReadError> {
+) -> Result<(f32, bool), LightReadError> {
     match read_authored_real(reader, path, "lunco:light:range")? {
-        None | Some(0.0) => Ok(default),
+        None | Some(0.0) => Ok((default, true)),
         Some(r) if r > 0.0 => {
             let metres = convention.length(r as f64) as f32;
             if metres.is_finite() {
-                Ok(metres)
+                Ok((metres, false))
             } else {
                 error!(
                     "[usd-bevy] {} has an authored light range that is not finite after unit conversion",
@@ -675,11 +677,13 @@ pub(crate) fn instantiate_light_prim(
             // under Bevy's physically-based exposure — an unauthored
             // intensity almost certainly means "give me a sun", so default
             // to the calibrated 128 000 lx lunar sun and let authors override.
-            let Ok(illuminance_lux) = read_intensity_with_exposure(
-                reader,
-                sdf_path,
-                quality.distant_light_default_illuminance,
-            ) else {
+            let Ok((illuminance_lux, intensity_uses_graphics_default, intensity_scale)) =
+                resolve_intensity_with_exposure(
+                    reader,
+                    sdf_path,
+                    quality.distant_light_default_illuminance,
+                )
+            else {
                 return false;
             };
             let Ok(c) = read_light_color(reader, sdf_path) else {
@@ -783,6 +787,11 @@ pub(crate) fn instantiate_light_prim(
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
                 sun.directional_light(color, illuminance_lux, casts_shadows),
                 cascade_config,
+                LightGraphicsDefaults {
+                    intensity_uses_graphics_default,
+                    intensity_scale,
+                    range_uses_graphics_default: false,
+                },
                 ShadowRangeAuthorship {
                     first_cascade_far_bound: first_cascade_authored,
                     maximum_distance: maximum_authored,
@@ -869,11 +878,13 @@ pub(crate) fn instantiate_light_prim(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let Ok(base_lm) = read_intensity_with_exposure(
-                reader,
-                sdf_path,
-                quality.local_light_default_intensity,
-            ) else {
+            let Ok((base_lm, intensity_uses_graphics_default, exposure_scale)) =
+                resolve_intensity_with_exposure(
+                    reader,
+                    sdf_path,
+                    quality.local_light_default_intensity,
+                )
+            else {
                 return false;
             };
 
@@ -969,7 +980,7 @@ pub(crate) fn instantiate_light_prim(
             let Ok(shadow_maps_enabled) = read_shadow_enable(reader, sdf_path) else {
                 return false;
             };
-            let Ok(range) = read_light_range(
+            let Ok((range, range_uses_graphics_default)) = read_light_range(
                 reader,
                 sdf_path,
                 quality.local_light_default_range,
@@ -1043,6 +1054,11 @@ pub(crate) fn instantiate_light_prim(
                         outer_angle,
                         ..default()
                     },
+                    LightGraphicsDefaults {
+                        intensity_uses_graphics_default,
+                        intensity_scale: exposure_scale * area_scale,
+                        range_uses_graphics_default,
+                    },
                     lunco_core::PortSurfaceReady,
                 ));
                 debug!(
@@ -1078,6 +1094,11 @@ pub(crate) fn instantiate_light_prim(
                         shadow_map_near_z: quality.local_shadow_map_near_z,
                         ..default()
                     },
+                    LightGraphicsDefaults {
+                        intensity_uses_graphics_default,
+                        intensity_scale: exposure_scale * area_scale,
+                        range_uses_graphics_default,
+                    },
                     lunco_core::PortSurfaceReady,
                 ));
                 debug!(
@@ -1106,11 +1127,13 @@ pub(crate) fn instantiate_light_prim(
             // dimensionless scale, so it is read as lumens here; the larger
             // default simply reflects that an area light stands in for a panel
             // rather than a bulb.
-            let Ok(base_lm) = read_intensity_with_exposure(
-                reader,
-                sdf_path,
-                quality.rect_light_default_intensity,
-            ) else {
+            let Ok((base_lm, intensity_uses_graphics_default, exposure_scale)) =
+                resolve_intensity_with_exposure(
+                    reader,
+                    sdf_path,
+                    quality.rect_light_default_intensity,
+                )
+            else {
                 return false;
             };
             let Ok(c) = read_light_color(reader, sdf_path) else {
@@ -1152,7 +1175,7 @@ pub(crate) fn instantiate_light_prim(
                 );
                 return false;
             }
-            let Ok(range) = read_light_range(
+            let Ok((range, range_uses_graphics_default)) = read_light_range(
                 reader,
                 sdf_path,
                 quality.local_light_default_range,
@@ -1191,6 +1214,11 @@ pub(crate) fn instantiate_light_prim(
                 range,
                 width,
                 height,
+            });
+            commands.entity(entity).try_insert(LightGraphicsDefaults {
+                intensity_uses_graphics_default,
+                intensity_scale: exposure_scale * area_scale,
+                range_uses_graphics_default,
             });
             debug!(
                 "[usd-bevy] {} RectLight intensity={} lm (base {} x area {}), {}x{} m, normalize={}, range={} m",
@@ -1465,7 +1493,10 @@ def Xform "World"
         let lamp = SdfPath::new("/World/Lamp").unwrap();
         let convention = crate::units::stage_convention(&view).expect("valid stage convention");
 
-        assert_eq!(read_light_range(&view, &lamp, 30.0, convention), Ok(0.9));
+        assert_eq!(
+            read_light_range(&view, &lamp, 30.0, convention),
+            Ok((0.9, false))
+        );
         assert_eq!(
             convention.length(view.real_f32(&lamp, "inputs:radius").unwrap() as f64) as f32,
             0.02
