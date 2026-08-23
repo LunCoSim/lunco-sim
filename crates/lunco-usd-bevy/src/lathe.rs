@@ -285,7 +285,9 @@ impl LatheProfile {
 /// Authored in USD on the patch prim:
 ///
 /// ```usda
-/// def NurbsPatch "Nozzle"
+/// def NurbsPatch "Nozzle" (
+///     prepend apiSchemas = ["LunCoLatheAPI"]
+/// )
 /// {
 ///     uniform token lunco:lathe:profile = "bell"
 ///     float lunco:lathe:throatRadius = 0.35

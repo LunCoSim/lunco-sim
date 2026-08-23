@@ -24,6 +24,10 @@
 # doubled interior knots) is GENERATED, so the rim stays genuinely round rather
 # than an octagon.
 #
+# `LunCoLatheAPI` below is the explicit opt-in to this generator. A profile token
+# without that schema is not a lathe declaration; it is an authored NurbsPatch
+# with no control net and therefore has no surface to render.
+#
 # This geometry was the descent lander's `HighGainDish`, authored inline there and
 # nowhere else while every other antenna in the project drew a FLATTENED SPHERE.
 # One dish, one spelling: the lander, the base mast, the rovers and the Earth
