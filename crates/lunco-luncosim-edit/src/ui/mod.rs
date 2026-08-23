@@ -288,7 +288,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_perspective_help(
                 PerspectiveId("sandbox_view"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "View",
+                    title: "◉ View",
                     description: "Full-screen 3D observation & control mode. Fly the \
                                   camera around the scene and claim an endpoint's \
                                   public input ports. The live sections below show \
@@ -651,7 +651,9 @@ impl Perspective for ViewPerspective {
         PerspectiveId("sandbox_view")
     }
     fn title(&self) -> String {
-        "View".into()
+        // The icon belongs to the perspective tab beside Build and Lunica;
+        // the top-level View menu intentionally remains a plain menu label.
+        "◉ View".into()
     }
     fn restores_cached_layout(&self) -> bool {
         false

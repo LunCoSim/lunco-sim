@@ -245,6 +245,19 @@ fn model_signal_meta(
             .filter(|unit| !unit.is_empty())
     });
 
+    let model_class = modelica_provenance
+        .as_ref()
+        .and_then(|identity| identity.model_class.clone())
+        .or_else(|| (!model.model_name.is_empty()).then(|| model.model_name.clone()));
+    let model_variable = modelica_provenance
+        .as_ref()
+        .and_then(|identity| identity.model_variable.clone())
+        .or_else(|| (!name.is_empty()).then(|| name.to_string()));
+    let source_asset = modelica_provenance
+        .as_ref()
+        .and_then(|identity| identity.source_asset.clone())
+        .or_else(|| (!model.source_uri.is_empty()).then(|| model.source_uri.clone()));
+
     SignalMeta {
         description: projected
             .and_then(|entry| entry.description.clone())
@@ -262,15 +275,15 @@ fn model_signal_meta(
         exposure: layout
             .map(|layout| layout.exposure(name))
             .unwrap_or_default(),
-        model_class: modelica_provenance
-            .as_ref()
-            .and_then(|identity| identity.model_class.clone()),
-        model_variable: modelica_provenance
-            .as_ref()
-            .and_then(|identity| identity.model_variable.clone()),
-        source_asset: modelica_provenance
-            .as_ref()
-            .and_then(|identity| identity.source_asset.clone()),
+        // Generated participants provide authored member provenance through
+        // `ModelicaSignalLayout`. Standalone Modelica participants do not
+        // have that layout, but their runtime component still owns the
+        // authoritative model name, source URI, and solver variable name.
+        // Retain those facts here so every Modelica producer has inspectable
+        // metadata without a model-specific registration path.
+        model_class,
+        model_variable,
+        source_asset,
         canonical_name: modelica_provenance.and_then(|identity| identity.canonical_name),
     }
 }
@@ -296,6 +309,8 @@ mod tests {
     #[test]
     fn runtime_state_is_retained_without_a_plot_binding() {
         let mut model = ModelicaModel::default();
+        model.model_name = "LunCo.Test.Sensor".into();
+        model.source_uri = "lunco://models/LunCo/Test/Sensor.mo".into();
         model.current_time = 0.0;
         model.variables.insert("soc".to_string(), 0.95);
         let (mut app, entity) = app_with_model(model);
@@ -318,6 +333,17 @@ mod tests {
                 .provenance
                 .as_deref(),
             Some("modelica")
+        );
+        let meta = app
+            .world()
+            .resource::<SignalRegistry>()
+            .meta(&signal)
+            .unwrap();
+        assert_eq!(meta.model_class.as_deref(), Some("LunCo.Test.Sensor"));
+        assert_eq!(meta.model_variable.as_deref(), Some("soc"));
+        assert_eq!(
+            meta.source_asset.as_deref(),
+            Some("lunco://models/LunCo/Test/Sensor.mo")
         );
         assert!(app.world().entity(entity).contains::<SignalSource>());
     }

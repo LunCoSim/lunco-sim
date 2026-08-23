@@ -36,10 +36,11 @@ use std::hash::{Hash, Hasher};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualRegistry};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica::ui::commands::FocusDocumentByName;
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
@@ -432,6 +433,9 @@ impl Panel for UsdCanvasPanel {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
     }
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
+    }
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ctx.resource_scope::<UsdCanvasState, ()>(|ctx, state| {
             if !state.built {
@@ -444,10 +448,38 @@ impl Panel for UsdCanvasPanel {
             if state.schema_roots.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("No authored connection schema");
+                        ui.heading("Generated connections");
+                        ui.label("No authored USD connection schema is present.");
                         ui.label(
-                            "This scene has no prim marked lunco:ui:schemaRoot. Connections does not substitute the complete runtime topology.",
+                            "The executable topology is generated from the composed USD network and is available in the standard Modelica diagram.",
                         );
+                        let entries = ctx
+                            .resource::<lunco_modelica::state::GeneratedModelicaSources>()
+                            .map(|sources| sources.entries.clone())
+                            .unwrap_or_default();
+                        if entries.is_empty() {
+                            ui.label("No generated network is available for this scene yet.");
+                        } else {
+                            for entry in entries {
+                                let label = entry
+                                    .uri
+                                    .strip_prefix("generated://")
+                                    .unwrap_or(entry.uri.as_str());
+                                let label = label.strip_suffix(".mo").unwrap_or(label);
+                                if let Some(error) = entry.error {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        format!("{label}: {error}"),
+                                    );
+                                } else if entry.document.is_unassigned() {
+                                    ui.label(format!("{label}: document is still compiling"));
+                                } else if ui.button(format!("Open {label} diagram")).clicked() {
+                                    ctx.trigger(FocusDocumentByName {
+                                        pattern: label.to_string(),
+                                    });
+                                }
+                            }
+                        }
                     });
                 });
                 return;

@@ -43,7 +43,7 @@ def Xform "Rig"
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
         float inputs:demand.connect = </Rig/Electrical.inputs:drive_left>
-        float outputs:torque_out
+        float outputs:electrical_power
         custom token connectors:p
     }
 

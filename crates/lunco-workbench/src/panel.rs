@@ -273,6 +273,20 @@ pub enum PanelMenuGroup {
     Hidden,
 }
 
+/// How the workbench hosts a panel's body.
+///
+/// Ordinary panels get a vertical body scroll area from the workbench so a
+/// long inspector, browser, telemetry list, or spawn palette cannot overflow
+/// its dock leaf. Interactive canvases and render views opt out because they
+/// already own pan/zoom or pointer-wheel behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelScrollPolicy {
+    /// The workbench owns the panel body's vertical scrolling.
+    Vertical,
+    /// The panel owns its complete interaction surface and scrolling.
+    SelfManaged,
+}
+
 /// A dockable workbench panel.
 ///
 /// One implementor per panel kind, registered with [`WorkbenchLayout`] under a
@@ -348,6 +362,13 @@ pub trait Panel: Send + Sync + 'static {
         None
     }
 
+    /// Whether the workbench wraps this panel in its standard vertical body
+    /// scroll area. This is deliberately a safe default: panels that need a
+    /// fixed interactive canvas must explicitly opt into [`SelfManaged`].
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::Vertical
+    }
+
     /// Render the panel contents. The panel reads precomputed state via
     /// [`PanelCtx`] (view-model resources, selected-entity components) and
     /// emits user intent through [`PanelCtx::trigger`] and narrow resource
@@ -406,6 +427,13 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// background (defers to dock theme otherwise).
     fn transparent_background(&self) -> bool {
         false
+    }
+
+    /// Whether the workbench wraps this instance body in its standard vertical
+    /// scroll area. Document tabs that render a canvas or their own editor
+    /// surface should explicitly choose [`PanelScrollPolicy::SelfManaged`].
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::Vertical
     }
 
     /// Render one tab instance. See [`Panel::render`] — same `PanelCtx`

@@ -44,7 +44,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_assets::TwinRoots;
 use lunco_doc::DocumentOrigin;
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 
@@ -326,7 +326,7 @@ impl BrowserSection for SceneFilesSection {
             return;
         }
 
-        let mut clicked: Option<PathBuf> = None;
+        let mut clicked: Option<(PathBuf, SceneFileKind)> = None;
         for kind in SceneFileKind::ORDER {
             let group: Vec<&SceneFileRow> = rows.iter().filter(|r| r.kind == kind).collect();
             if group.is_empty() {
@@ -345,15 +345,18 @@ impl BrowserSection for SceneFilesSection {
                         } else {
                             row.label.clone()
                         };
-                        // Only the kinds a dispatcher actually handles are
-                        // clickable: `.usda` (USD document) and `.mo` (model tab,
-                        // where the diagram is projected — auto-laid-out when the
-                        // source carries no placement annotations). A shader or a
-                        // texture is LISTED because it is part of the scene, but
-                        // offering a click that silently does nothing would be
-                        // worse than a plain row.
+                        // Openable rows are routed through the normal typed
+                        // `OpenFile` surface. USD and Modelica have richer
+                        // editors; WGSL intentionally opens in the shared
+                        // read-only source viewer so the exact shader driving
+                        // the scene is inspectable from the scene closure.
                         let openable = !row.missing
-                            && matches!(row.kind, SceneFileKind::Layer | SceneFileKind::Modelica);
+                            && matches!(
+                                row.kind,
+                                SceneFileKind::Layer
+                                    | SceneFileKind::Modelica
+                                    | SceneFileKind::Shader
+                            );
                         let resp = if openable {
                             ui.selectable_label(false, label)
                         } else {
@@ -370,12 +373,12 @@ impl BrowserSection for SceneFilesSection {
                             resp.on_hover_text(row.path.to_string_lossy())
                         } else {
                             resp.on_hover_text(format!(
-                                "{} — part of the scene, no editor bound to this type",
+                                "{} — part of the scene; no editor is bound to this type",
                                 row.path.to_string_lossy()
                             ))
                         };
                         if openable && resp.clicked() {
-                            clicked = Some(row.path.clone());
+                            clicked = Some((row.path.clone(), row.kind));
                         }
                     }
                 });
@@ -392,13 +395,23 @@ impl BrowserSection for SceneFilesSection {
             );
         }
 
-        if let Some(path) = clicked {
-            // Absolute path: the domain dispatchers (`.mo` → Modelica model tab,
-            // `.usda` → USD) take it as-is rather than anchoring on the active
-            // Twin, because a scene's files routinely live outside it.
-            ctx.actions.push(BrowserAction::OpenFile {
-                relative_path: path,
-            });
+        if let Some((path, kind)) = clicked {
+            if kind == SceneFileKind::Shader {
+                // A shader is source text, not a USD/Modelica document. Send the
+                // typed source command directly so the shared text viewer owns
+                // the absolute scene-closure path; BrowserAction is intentionally
+                // reserved for domain document dispatchers.
+                ctx.trigger(OpenFile {
+                    path: path.to_string_lossy().into_owned(),
+                });
+            } else {
+                // Absolute path: the domain dispatchers (`.mo` → Modelica model
+                // tab, `.usda` → USD) take it as-is rather than anchoring on the
+                // active Twin, because a scene's files routinely live outside it.
+                ctx.actions.push(BrowserAction::OpenFile {
+                    relative_path: path,
+                });
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::model_tabs::ModelTabs;
@@ -144,6 +144,10 @@ impl InstancePanel for ModelViewPanel {
     }
     fn closable(&self) -> bool {
         true
+    }
+
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
     }
 
     fn title(&self, world: &World, instance: u64) -> String {

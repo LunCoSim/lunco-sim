@@ -3584,7 +3584,7 @@ fn bind_terrain_layers(
         (
             Entity,
             &lunco_usd::UsdPrimPath,
-            &MeshMaterial3d<lunco_render_bevy::ShaderMaterial>,
+            Option<&MeshMaterial3d<lunco_render_bevy::ShaderMaterial>>,
         ),
         (
             With<lunco_terrain_surface::DemTerrainSurface>,
@@ -3696,11 +3696,16 @@ fn bind_terrain_layers(
             continue;
         };
         let base_uri = format!("{source}://{root}");
-        // Wait for the material to exist before binding (created async by the USD
-        // shader system); retry next frame until it does.
-        let Some(mut material) = mats.get_mut(&mat3d.0) else {
+        // A streamed LOD terrain has no static mesh material. The terrain owner
+        // still has to publish the authored maps because the tile stream
+        // consumes that component. If a static material exists, bind it too;
+        // both paths receive the same handles from this one USD projection.
+        let mut material = mat3d.and_then(|mat3d| mats.get_mut(&mat3d.0));
+        if mat3d.is_some() && material.is_none() {
+            // The USD shader projection has not created the static material yet.
+            // Do not mark the terrain complete and lose that binding.
             continue;
-        };
+        }
 
         // PUBLISH alongside binding, because the static mesh is only half the
         // audience: a `lodViz = true` site draws streamed geomorph tiles, whose
@@ -3712,9 +3717,11 @@ fn bind_terrain_layers(
         for (role, rel, weight) in authored {
             let uri = format!("{base_uri}/{rel}");
             let handle: Handle<Image> = asset_server.load(&uri);
-            (role.set_slot)(&mut material, handle.clone());
-            for w in role.weights {
-                material.set(w, ParamValue::F32(weight));
+            if let Some(material) = material.as_deref_mut() {
+                (role.set_slot)(material, handle.clone());
+                for w in role.weights {
+                    material.set(w, ParamValue::F32(weight));
+                }
             }
             match role.name {
                 "albedo" => {

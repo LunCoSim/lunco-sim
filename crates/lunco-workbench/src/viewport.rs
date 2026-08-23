@@ -99,7 +99,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
-use crate::{Panel, PanelCtx, PanelId, PanelSlot};
+use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -613,6 +613,10 @@ impl Panel for ViewportPanel {
         // isn't in the active layout, so no 3D ever reaches the
         // framebuffer to leak.
         true
+    }
+
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

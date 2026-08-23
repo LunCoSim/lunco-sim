@@ -71,12 +71,10 @@ pub fn drain_browser_actions(world: &mut World) {
                     };
                     root.join(&relative_path)
                 };
-                // Open in a ModelView tab — same path as Modelica
-                // classes. For non-`.mo` content the parser produces
-                // no classes, so Canvas mode shows empty; the user
-                // toggles the 📝 Text mode in the tab toolbar to see
-                // raw source. (A future kind-aware default would
-                // pre-select Text for non-`.mo`; tracked separately.)
+                // This branch owns Modelica source files. Source-only text
+                // files are dispatched directly to the shared source viewer
+                // by their owning browser section, so they never become an
+                // empty Modelica tab.
                 let class = crate::class_ref::ClassRef::user_file(abs, Vec::<String>::new());
                 crate::ui::panels::package_browser::open_class(world, class, false);
             }

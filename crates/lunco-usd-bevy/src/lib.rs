@@ -5257,6 +5257,45 @@ def BasisCurves "WrongBasis"
         )
         .is_none());
     }
+
+    #[test]
+    fn rover_nurbs_antenna_geometry_is_tessellated_as_a_tube() {
+        // These are the authored structures used by the Summer Space School
+        // rover: a four-control-point order-four NurbsCurves prim with an
+        // explicit diameter.  Keep this as a renderer-path regression rather
+        // than replacing the curve with a special antenna mesh.
+        let stage = stage(
+            r#"#usda 1.0
+def NurbsCurves "MagnetometerBoom"
+{
+    int[] curveVertexCounts = [4]
+    int[] order = [4]
+    double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+    point3f[] points = [(0, 0.20, -0.82), (0, 0.19, -1.34), (0, 0.20, -1.80), (0, 0.21, -2.16)]
+    float[] widths = [0.025]
+}
+def NurbsCurves "FeedArm"
+{
+    int[] curveVertexCounts = [4]
+    int[] order = [4]
+    double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+    point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0, 0.38, 0)]
+    float[] widths = [0.03]
+}
+"#,
+        );
+        let reader = stage.view();
+        for path in ["/MagnetometerBoom", "/FeedArm"] {
+            let mesh = build_usd_curve_mesh(
+                &reader,
+                &SdfPath::new(path).unwrap(),
+                lunco_render::RenderingQuality::Balanced.profile(),
+            )
+            .unwrap_or_else(|| panic!("authored rover curve {path} must produce a tube"));
+            assert!(mesh.count_vertices() > 0);
+            assert!(mesh.indices().is_some(), "tube must have triangle indices");
+        }
+    }
 }
 
 #[cfg(test)]

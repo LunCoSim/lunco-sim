@@ -6,7 +6,7 @@
 //! while a boundary output still named it, which rejected the whole electrical
 //! domain of a rover that was otherwise fine — lived entirely here.
 
-use lunco_usd_sim::domain_projection::{emit_modelica, read_network, MemberClasses};
+use lunco_usd_sim::domain_projection::{network_facts, read_network, MemberClasses};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
@@ -36,7 +36,7 @@ fn fixture_classes() -> MemberClasses {
 }
 
 #[test]
-fn reads_a_composed_collection_into_one_generated_model() {
+fn reads_a_composed_collection_into_network_facts() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
@@ -61,30 +61,19 @@ fn reads_a_composed_collection_into_one_generated_model() {
         "an unconnected input is the model's parameter"
     );
 
-    // The generated root owns the public boundary and instantiates one
-    // synthesizer-owned child unit for this connected island. Member instances
-    // and their equations stay inside that unit; a member that lives OUTSIDE
-    // the scope's subtree (the normal shape — parts hang off the vessel, the
-    // scope only collects them) keeps its full path, spelled injectively.
-    let source = emit_modelica(&network, "Rig_Electrical_System");
-    assert!(source.contains("input Real drive_left;"));
-    assert!(source.contains("Unit_Rig_x2f_Battery unit_1_Rig_Battery"));
-    assert!(
-        source.contains("connect(Rig_x2f_Battery.p, Rig_x2f_Motor.p) annotation(Line(points="),
-        "acausal edge missing from:\n{source}"
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
+    assert_eq!(
+        facts.get("model_name").and_then(|value| value.as_str()),
+        Some("Rig_Electrical_System")
     );
-    assert!(
-        source.contains("Rig_x2f_Motor.demand = drive_left;"),
-        "boundary input equation missing from:\n{source}"
-    );
-    assert!(
-        source.contains("soc = Rig_x2f_Battery.soc_out;"),
-        "boundary output equation missing from:\n{source}"
-    );
-    assert!(
-        source.contains("LunCo.Electrical.Battery Rig_x2f_Battery(voltage_nom = 24)"),
-        "component instance + its authored parameter missing from:\n{source}"
-    );
+    assert!(matches!(
+        facts.get("connections"),
+        Some(lunco_hooks::HookValue::Array(edges)) if !edges.is_empty()
+    ));
+    assert!(matches!(
+        facts.get("boundary_links"),
+        Some(lunco_hooks::HookValue::Array(links)) if !links.is_empty()
+    ));
 }
 
 #[test]
@@ -109,7 +98,7 @@ fn a_boundary_output_published_through_an_omitted_part_drops_with_it() {
 }
 
 #[test]
-fn an_explicitly_resolved_source_class_is_used_for_emission() {
+fn an_explicitly_resolved_source_class_is_exposed_to_policy_facts() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
     let root = SdfPath::new("/Rig/Electrical").unwrap();
@@ -126,10 +115,19 @@ fn an_explicitly_resolved_source_class_is_used_for_emission() {
     let network = read_network(&view, &root, &classes)
         .expect("declaring a class is not an authoring error")
         .expect("still a network");
-    let source = emit_modelica(&network, "Rig_Electrical_System");
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&classes));
+    let Some(lunco_hooks::HookValue::Array(components)) = facts.get("components") else {
+        panic!("component facts");
+    };
+    let battery = components
+        .iter()
+        .find(|component| {
+            component.get("path").and_then(|value| value.as_str()) == Some("/Rig/Battery")
+        })
+        .expect("battery facts");
     assert!(
-        source.contains("Vendor.Power.Cell Rig_x2f_Battery"),
-        "the generated model must instantiate the resolved source class:\n{source}"
+        battery.get("class").and_then(|value| value.as_str()) == Some("Vendor.Power.Cell"),
+        "the resolved source class must reach the policy facts: {battery:?}"
     );
 }
 

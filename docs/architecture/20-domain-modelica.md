@@ -14,6 +14,7 @@
 
 - [1. Scope](#1-scope)
 - [2. Architecture in layers](#2-architecture-in-layers)
+- [2a. Generated network schemas](#2a-generated-network-schemas)
 - [3. Runtime architecture — background worker](#3-runtime-architecture--background-worker)
 - [4. Execution pipeline](#4-execution-pipeline)
 - [5. Document System integration](#5-document-system-integration)
@@ -62,6 +63,28 @@ The Modelica runtime is **rumoca**, our fork:
     - GraphsPanel (time-series plots)
     - PackageBrowser / LibraryBrowser (MSL + project models)
 ```
+
+### 2a. Generated network schemas
+
+An authored USD `CollectionAPI:components` network is projected through one
+generic reader. Rust supplies the composed facts — component identities and
+classes, constants, causal links, acausal connections, boundary ports, member
+outputs, and deterministic default placements — and validates the result. It
+does not classify components as battery, motor, solar, thermal, fluid, or any
+other domain.
+
+The shipped source and visual Modelica schema is the Rhai policy
+`assets/scripting/policy/synth_acausal_network.rhai`, registered as
+`synth.acausal-network`. `LunCoDomainSynthesisAPI`/`LunCoPolicy` can select or
+replace that seam without a Rust rebuild. The policy returns the Modelica
+source, composite-unit partition, and diagram layout; the Rust projector only
+checks that those outputs cover the composed USD graph and then sends the
+exact returned source to the compiler. A missing or invalid policy is an
+explicit projection error, never a compiled-schema fallback.
+
+`GeneratedModelicaSource` exposes the same source, member mapping, topology
+units, and layout to diagnostics and the workbench, so the visible diagram and
+the compiled simulation have one inspectable source of truth.
 
 ## 3. Runtime architecture — background worker
 
