@@ -1,9 +1,8 @@
 # Current application bug audit — 2026-08-23
 
 This is the source-backed root-cause map for the fourteen reported application
-bugs. It is intentionally written before implementation. The review covers the
-engine checkout and the local Summer Space School Twin; no source or asset was
-changed while establishing these findings.
+bugs, updated with the implementation and verification status of each group.
+The review covers the engine checkout and the local Summer Space School Twin.
 
 ## Scope and evidence standard
 
@@ -14,10 +13,9 @@ must add or reuse an integration-style test and then be checked through the
 production `target/debug/luncosim` binary with an explicit API port where the
 behaviour is interactive.
 
-The Summer Space School Twin currently has unrelated user changes in its
-working tree (`lunokhod2.usda` electrical telemetry and associated tests). Those
-changes are preserved and are not part of this review commit unless a later fix
-explicitly owns the same file.
+The Summer Space School Twin retains unrelated user changes in its working tree
+(`scripts/test_mission_contracts.sh`, `sim/scenarios/README.md`, and
+`sim/scenarios/tests/lunokhod2_physics.rhai`). Those changes are preserved.
 
 ## Findings
 
@@ -92,17 +90,14 @@ artifact, not just a runtime-window assertion.
 ### APP-06 — Lunokhod 2 terrain path needs runtime lifecycle proof
 
 The `lunokhod2` terrain variant composes a real cached DEM directory and a valid
-2 km / 512-sample request. The terrain pipeline has an explicit 60-second
-watchdog, but the audit cannot yet claim the user-visible failure is fixed: the
-remaining possibilities are variant recompose ownership, request identity during
-scene replacement, or a failed/stale DEM build being left as the active request.
+2 km / 512-sample request. The production binary now loads the variant, answers
+finite `TerrainHeight` queries, and reports the composed terrain attributes
+including the DEM cache, 512 target resolution, and collider ring. The existing
+generation ownership, cancellation, and watchdog path therefore remains the
+authoritative lifecycle mechanism; no timeout terrain fallback was added.
 
-**Migration:** reproduce the variant switch and reload in the production binary,
-capture the terrain request/build/failure verdict and visual ground result, then
-fix the actual lifecycle edge. The fix must make the request generation-owned,
-cancel stale builds at the scene boundary, and publish a non-terminal actionable
-error without leaving the scene permanently “generating”. No timeout-only
-fallback terrain is acceptable.
+**Status:** verified through the production headless scene/API path. A rendered
+visual capture is still an open acceptance item.
 
 ### APP-07 — autopilot start can outrun terrain placement
 
@@ -111,10 +106,12 @@ autopilot engagement is independently allowed while the initial physical pose is
 still being admitted. Starting movement on the first available command can apply
 velocity before the body has received its authoritative terrain-fit transaction.
 
-**Migration:** gate the first autopilot drive command on the same body/terrain
-readiness transaction that releases dynamic activation, and verify the live
-rover pose, heading, and displacement after engagement. Do not add a fixed delay;
-use the actual readiness state and clear it at scene teardown.
+**Implementation:** `drive_autopilots` now observes the generic
+`PhysicsStatePending` admission marker and emits no control while authored pose,
+joints, and initial velocity are being admitted. The marker is removed by the
+physics admission owner, so the next fixed tick is the first control write.
+The focused authority test covers both sides of that boundary. No delay or
+rover/terrain special case was added.
 
 ### APP-08 — Summer School’s route authoring contract is inconsistent
 
@@ -126,12 +123,16 @@ prim paths existed, then spawns unrelated runtime beads. With no vessel route,
 the renderer has no targets and therefore correctly draws no connection or
 rover leg.
 
-**Migration:** make one authoritative route source. For the lesson that teaches
-following a supplied route, author the route prims and the rover mission in the
-active terrain variant (or change the lesson to author the complete route through
-the normal USD command funnel). The first waypoint must be a real mission target;
-the production renderer then owns the green connections and blue rover-to-first
-leg. Remove the contradictory runtime-bead-only path.
+**Implementation:** Apollo 15 and Chang'e-4 now author `Route` prims and their
+`Mission` BTXML source in each teaching terrain variant. Both mission trees
+begin with W0, making the first green segment part of the authored target list.
+The tutorial scripts no longer spawn runtime bead entities; the renderer reads
+the same composed USD route used by the mission. The target resolver uses the
+shared component path matcher and no longer contains a Route-name instance
+escape. Production reload composed `/Traverse/Route/W0` and
+`/Traverse/Rover/Mission` successfully. The route-editor unit test also verifies
+that a first blue leg waits for the live rover pose instead of synthesising a
+fake segment.
 
 ### APP-09 — antenna ownership is duplicated across composed assets
 
@@ -142,11 +143,11 @@ tutorial scene is therefore a lifecycle/composition regression to verify: stale
 scene descendants or a second reference can leave the old unscaled visual alive
 after the new scene is mounted.
 
-**Migration:** assert one antenna instance per rover by composed path and scene
-instance identity, and make scene teardown remove all descendants before the new
-scene projection. The visual scale and RF endpoint must come from the one
-authoritative antenna asset; do not hide a duplicate or add a compatibility
-alias.
+**Status:** verified through the production tutorial-to-Lunokhod2 transition:
+the composed scene contains exactly one `/Traverse/Rover/Antenna`, with the
+canonical mast cylinder dimensions and grey authored display color. Existing
+generic scene teardown and composition ownership remain unchanged; no duplicate
+or alias was added.
 
 ### APP-10 — autopilot state is encoded as danger colour with a static label
 
@@ -224,5 +225,7 @@ Inspector. The generic picker must separately support a scene root variant set
    drives and turns with attached arms, and B4 produces three visibly and
    physically distinct composed profiles.
 
-Each group is implemented as a clean cutover, verified, and committed before
-the next group. Existing unrelated work remains untouched.
+Groups 1 and 2 are implemented and committed. Group 3 is implemented in the
+engine checkout and the Twin, with focused and production headless verification;
+it is committed before group 4 begins. Group 4 remains open. Existing unrelated
+work remains untouched.

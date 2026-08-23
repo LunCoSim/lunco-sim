@@ -4086,18 +4086,19 @@ fn resolve_behavior_targets(
         );
         for path in targets {
             let found = q_prims.iter().find(|(e, p)| {
-                let match_path = p.path == path || p.path.ends_with(&path) || path.ends_with(&p.path);
+                let match_path = lunco_core::paths::prim_path_matches(&p.path, &path);
                 let match_stage = vessel_path
                     .map(|vp| p.stage_handle == vp.stage_handle)
                     .unwrap_or(true);
-                let is_behavior = path.contains("/Route/");
                 let inst = instance_key(*e, &q_provenance, &q_gid, &q_instance_root);
-                let match_inst = is_behavior
-                    || inst.is_none()
+                let match_inst = inst.is_none()
                     || vessel_instance.is_none()
                     || inst == vessel_instance;
                 if match_path {
-                    debug!("[resolve_behavior_targets] candidate {:?} ({}) match_stage={} match_inst={} (is_behavior={})", e, p.path, match_stage, match_inst, is_behavior);
+                    debug!(
+                        "[resolve_behavior_targets] candidate {:?} ({}) match_stage={} match_inst={}",
+                        e, p.path, match_stage, match_inst
+                    );
                 }
                 match_path && match_stage && match_inst
             });

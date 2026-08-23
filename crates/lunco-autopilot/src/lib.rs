@@ -1670,6 +1670,11 @@ pub fn drive_autopilots(
     // The mirrored source spec on the VESSEL (see [`AutopilotBehaviorSpec`]) —
     // read here to learn which gids the tree's tracking leaves reference.
     q_specs: Query<&AutopilotBehaviorSpec>,
+    // USD physics admission owns this marker. A vessel remains kinematic while
+    // its authored terrain-fit pose, joints, and initial velocity are being
+    // admitted; autonomous control must not write into that transaction. The
+    // marker is generic and applies to every physical vessel.
+    q_physics_pending: Query<(), With<lunco_core::PhysicsStatePending>>,
     clearances: Option<Res<ClearanceField>>,
     mut prev: Local<PrevTargets>,
     mut commands: Commands,
@@ -1722,6 +1727,12 @@ pub fn drive_autopilots(
     let targets = std::sync::Arc::new(states);
     for (actor, ap, mut behavior, mut execution) in &mut q {
         if !ap.engaged {
+            continue;
+        }
+        if q_physics_pending.get(ap.vessel).is_ok() {
+            // Keep ownership while admission is pending, but emit no control
+            // value. Once USD removes the marker, the next fixed tick is the
+            // first autonomous command and the body is already placed.
             continue;
         }
         let Ok(gid) = q_gid.get(ap.vessel) else {
