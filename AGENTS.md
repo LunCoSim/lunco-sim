@@ -21,6 +21,8 @@ it with this one.
   preserve an obsolete contract. Policy and tutorial-specific assertions belong
   in Rhai when the architecture permits; Rust owns shared engine mechanisms,
   kinematics, dynamics, and hot paths.
+- Every new mechanism must identify its authoritative owner, real consumer, and
+  production-level test.
 - USD owns scene facts and standard fields (`doc`, `metersPerUnit`, `UsdShade`,
   `UsdPhysics`). Use composed USD reads for runtime behavior and authored-layer
   reads for authoring/document questions. A composed stage is inert: it does not
