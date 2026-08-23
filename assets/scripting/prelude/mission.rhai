@@ -286,7 +286,7 @@ fn timeline_step(s) {
     }
     if s.wait != () { return wait(s.wait); }
     if s.wait_event != () { return wait_for(s.wait_event); }
-    once(|m| { emit("TIMELINE_INVALID_STEP", 1); })
+    throw "timeline step operation is not implemented"
 }
 
 /// Lower a whole data timeline (array of data steps) to task leaves. Call ONCE

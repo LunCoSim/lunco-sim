@@ -8,7 +8,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",                        focus: (),                   title: "Automate Lunica",   body: "This tour IS a rhai script running live in the workbench. Anything you can click, a script can do. ◀ ▶ or arrow keys." },
+        #{ anchor: "",                        focus: (),                   title: "Automate Lunica",   body: "This tour IS a rhai script running live in the workbench. Anything you can click, a script can do. Use the Back and Next controls." },
         #{ anchor: "",                        focus: (),                   title: "One command bus",   body: "Use the live REPL or open Help in the top menu for the command surface. Dispatch one typed command, for example cmd(\"OpenClass\", #{ qualified: \"CascadedRCFilter\" }). Check the model view afterward; the UI and HTTP/API clients use the same command." },
         #{ anchor: "",                        focus: (),                   title: "HTTP API & MCP",    body: "Use the API/MCP guidance under Help. Send an ExecuteCommand request to /api/commands with a command and named params, then inspect the response. MCP exposes the same typed operation to an agent; it is not a separate simulation path." },
         #{ anchor: "panel.modelica_journal",  focus: "modelica_journal",   title: "Journal",           body: "Commands are dispatched through one typed bus. The document journal records authored document operations; it is not a universal replay log for every transient UI or runtime command." },

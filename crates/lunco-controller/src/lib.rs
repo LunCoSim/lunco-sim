@@ -8,7 +8,7 @@
 //!
 //! 1. **key → intent**: the possessed avatar's [`leafwing_input_manager`]
 //!    [`InputMap<UserIntent>`](leafwing_input_manager::prelude::InputMap)
-//!    (see [`get_avatar_input_map`]) turns keys/gamepad into semantic intents
+//!    ([`InputBindingsSettings::input_map`]) turns keys/gamepad into semantic intents
 //!    (`MoveForward`, `Action`, …). This is the ONLY place raw devices appear,
 //!    it's shared with avatar locomotion, and — being a leafwing InputMap — it's
 //!    serializable, so a saved keymap ("mapping file") rebinds every vessel.
@@ -38,6 +38,9 @@ use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Command, UserIntent};
+use lunco_settings::{AppSettingsExt, SettingsSection};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Intents forced held by [`SimulateIntent`], **keyed by the entity they drive** —
 /// a headless stand-in for the keyboard.
@@ -206,7 +209,9 @@ impl Plugin for LunCoControllerPlugin {
         // input for each replayed tick, so regenerating input from the live keyboard
         // mid-replay would overwrite the very history we are replaying (and mint new
         // seqs for ticks that already happened).
-        app.init_resource::<SimulatedIntents>();
+        app.init_resource::<SimulatedIntents>()
+            .register_type::<InputBindingsSettings>()
+            .register_settings_section::<InputBindingsSettings>();
         // The blackout table the authorization gate reads. Empty by default, so an
         // app that never declares one is byte-for-byte unchanged.
         app.init_resource::<lunco_core::session::ControlPathRegistry>();
@@ -244,6 +249,7 @@ impl Plugin for LunCoControllerPlugin {
             lunco_time::InteractionSchedule,
             drive_self_drivers.in_set(InteractionControlSet),
         );
+        app.add_systems(Update, refresh_live_input_maps);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -633,6 +639,115 @@ fn record_control_input(
 /// to its ports via its USD `Controls` profile.
 const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.json");
 
+fn default_look_button() -> String {
+    "Right".into()
+}
+
+/// The resolved semantic input map shared by avatar control, UI help, and
+/// tutorials.
+///
+/// The bundled keymap is the default value. A user may replace this typed
+/// settings section in settings.json; no consumer gets a separate copy of
+/// the bindings. The bundled JSON contains only settings data; explanatory
+/// text belongs in the asset and crate documentation rather than in the map.
+#[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[reflect(Resource)]
+pub struct InputBindingsSettings {
+    /// Semantic intent name → key names understood by Bevy.
+    #[serde(flatten)]
+    pub bindings: BTreeMap<String, Vec<KeyCode>>,
+    /// Pointer button activating the semantic look intent.
+    #[serde(default = "default_look_button")]
+    pub look_button: String,
+}
+
+impl Default for InputBindingsSettings {
+    fn default() -> Self {
+        serde_json::from_str(KEYBINDINGS_JSON)
+            .expect("assets/config/keybindings.json must be valid input settings")
+    }
+}
+
+impl SettingsSection for InputBindingsSettings {
+    const KEY: &'static str = "input_bindings";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if self.look_button_value().is_none() {
+            return Err(format!("invalid look_button '{}'", self.look_button));
+        }
+        for intent in self.bindings.keys() {
+            if lunco_core::parse_user_intent(intent).is_none() {
+                return Err(format!("unknown input intent '{intent}'"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl InputBindingsSettings {
+    /// Build the live leafwing map from the resolved settings section.
+    pub fn input_map(
+        &self,
+    ) -> Result<leafwing_input_manager::prelude::InputMap<UserIntent>, String> {
+        let bindings = self.key_bindings()?;
+        let Some(button) = self.look_button_value() else {
+            return Err(format!("invalid look_button '{}'", self.look_button));
+        };
+        Ok(build_input_map(bindings, button))
+    }
+
+    /// Return the resolved key bindings for help, tutorials, and input injection.
+    pub fn key_bindings(&self) -> Result<Vec<(UserIntent, Vec<KeyCode>)>, String> {
+        self.bindings
+            .iter()
+            .map(|(name, keys)| {
+                lunco_core::parse_user_intent(name)
+                    .map(|intent| (intent, keys.clone()))
+                    .ok_or_else(|| format!("unknown input intent '{name}'"))
+            })
+            .collect()
+    }
+
+    /// Resolve a compact or Bevy spelling against the current settings.
+    pub fn key_code(&self, label: &str) -> Result<Option<KeyCode>, String> {
+        let needle = label.trim();
+        Ok(self
+            .key_bindings()?
+            .into_iter()
+            .flat_map(|(_, keys)| keys.into_iter())
+            .find(|key| {
+                let debug = format!("{key:?}");
+                debug.eq_ignore_ascii_case(needle)
+                    || key_label(std::slice::from_ref(key)).eq_ignore_ascii_case(needle)
+            }))
+    }
+
+    /// Human-readable key or pointer labels for tutorial/help copy.
+    pub fn label(&self, binding: &str) -> Option<String> {
+        if binding == "look_button" {
+            self.look_button_value()?;
+            return Some(format!("{} mouse button", self.look_button.to_lowercase()));
+        }
+        let keys = self.bindings.get(binding)?;
+        (!keys.is_empty()).then(|| key_label(&keys))
+    }
+
+    /// Resolve the display label for a semantic intent used by a vessel.
+    pub fn label_for_intent(&self, intent: UserIntent) -> Result<String, String> {
+        let name = self
+            .key_bindings()?
+            .into_iter()
+            .find_map(|(candidate, keys)| (candidate == intent).then_some(keys))
+            .filter(|keys| !keys.is_empty())
+            .map_or_else(|| "unbound".to_owned(), |keys| key_label(&keys));
+        Ok(name)
+    }
+
+    fn look_button_value(&self) -> Option<MouseButton> {
+        parse_look_button(&self.look_button)
+    }
+}
+
 /// Read the pointer button that activates the semantic `Look` intent.
 ///
 /// Pointer bindings live beside the keyboard bindings because they are part of
@@ -641,59 +756,15 @@ const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.
 ///
 /// An omitted field is the documented semantic default. An invalid explicit
 /// value is rejected instead of silently changing the user's control scheme.
-pub fn look_button(json: &str) -> Option<MouseButton> {
-    let value = serde_json::from_str::<serde_json::Value>(json).ok()?;
-    let Some(raw) = value.get("look_button") else {
-        return Some(MouseButton::Right);
-    };
-    let Some(name) = raw.as_str().map(str::to_ascii_lowercase) else {
-        warn!("[input] look_button must be a pointer-button string");
-        return None;
-    };
-
-    match name.as_str() {
+pub fn parse_look_button(name: &str) -> Option<MouseButton> {
+    match name.trim().to_ascii_lowercase().as_str() {
         "left" => Some(MouseButton::Left),
         "middle" => Some(MouseButton::Middle),
         "back" => Some(MouseButton::Back),
         "forward" => Some(MouseButton::Forward),
         "right" => Some(MouseButton::Right),
-        unknown => {
-            warn!("[input] unknown look_button '{unknown}'; Look is unbound");
-            None
-        }
+        _ => None,
     }
-}
-
-/// The bundled default key → intent convention, as data suitable for help and
-/// accessibility surfaces. Port bindings remain per controlled entity.
-pub fn default_key_bindings() -> Vec<(UserIntent, Vec<KeyCode>)> {
-    parse_key_bindings(KEYBINDINGS_JSON)
-}
-
-/// Parse a key → intent convention from the same JSON shape as the bundled
-/// configuration. Keeping this one parser behind both the runtime input map and
-/// the Help surface prevents the two views of the convention from drifting.
-fn parse_key_bindings(json: &str) -> Vec<(UserIntent, Vec<KeyCode>)> {
-    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(json) else {
-        return Vec::new();
-    };
-    obj.iter()
-        .filter(|(name, _)| !name.starts_with('_'))
-        .filter_map(|(name, value)| {
-            Some((
-                lunco_core::parse_user_intent(name)?,
-                serde_json::from_value::<Vec<KeyCode>>(value.clone()).ok()?,
-            ))
-        })
-        .collect()
-}
-
-/// Compact user-facing spelling for a default key list.
-pub fn default_key_label(intent: UserIntent) -> String {
-    default_key_bindings()
-        .into_iter()
-        .find_map(|(candidate, keys)| (candidate == intent).then_some(keys))
-        .map_or_else(String::new, |keys| key_label(&keys))
 }
 
 /// Compact user-facing spelling for a key list from a data-driven convention.
@@ -709,37 +780,27 @@ pub fn key_label(keys: &[KeyCode]) -> String {
         .join(" / ")
 }
 
-/// Resolve a user-facing key label against the bundled keymap.
-///
-/// This is used by scripted input injection and the input overlay, so those
-/// surfaces cannot grow a second Rust-owned list of keys. Both the compact
-/// label (`W`) and Bevy's serialized/debug spelling (`KeyW`) are accepted.
-pub fn default_key_code(label: &str) -> Option<KeyCode> {
-    let needle = label.trim();
-    default_key_bindings()
-        .into_iter()
-        .flat_map(|(_, keys)| keys.into_iter())
-        .find(|key| {
-            let debug = format!("{key:?}");
-            debug.eq_ignore_ascii_case(needle)
-                || key_label(std::slice::from_ref(key)).eq_ignore_ascii_case(needle)
-        })
-}
-
 /// Build an avatar `InputMap<UserIntent>` from a key/pointer→intent JSON object
-/// (`{"forward":["KeyW"], "action":["KeyF"], "thrust":["Space"], …}`; keys are bevy
-/// `KeyCode` variant names, intents are canonical USD control names via
-/// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
-/// and unknown intents are skipped. `look_button` selects the button that
-/// chords the `Look` mouse axis; `Zoom` remains the standard scroll axis.
+/// (`{"forward":["KeyW"], "action":["KeyF"], "thrust":["Space"], …}`).
+/// Keys are Bevy `KeyCode` variant names, intents are canonical USD control
+/// names, and `look_button` selects the button that chords the `Look` axis.
 pub fn build_avatar_input_map(
     json: &str,
+) -> Result<leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent>, String> {
+    let settings: InputBindingsSettings =
+        serde_json::from_str(json).map_err(|error| format!("invalid input bindings: {error}"))?;
+    settings.input_map()
+}
+
+fn build_input_map(
+    bindings: Vec<(UserIntent, Vec<KeyCode>)>,
+    button: MouseButton,
 ) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
     use leafwing_input_manager::prelude::*;
     use lunco_core::UserIntent::{Look, Zoom};
 
     let mut input_map = InputMap::default();
-    for (intent, keys) in parse_key_bindings(json) {
+    for (intent, keys) in bindings {
         for key in keys {
             input_map.insert(intent, key);
         }
@@ -747,18 +808,30 @@ pub fn build_avatar_input_map(
     // This chord is the complete look binding. Camera behaviour consumes only
     // the resulting semantic axis, so no downstream system needs a raw button
     // gate.
-    if let Some(button) = look_button(json) {
-        input_map.insert_dual_axis(Look, DualAxislikeChord::new(button, MouseMove::default()));
-    }
+    input_map.insert_dual_axis(Look, DualAxislikeChord::new(button, MouseMove::default()));
     input_map.insert_axis(Zoom, MouseScrollAxis::Y);
     input_map
 }
 
-/// The avatar/vessel input map, built from the bundled [`KEYBINDINGS_JSON`] data
-/// file. Key bindings are data, not code — edit `assets/config/keybindings.json`
-/// to rebind.
-pub fn get_avatar_input_map() -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
-    build_avatar_input_map(KEYBINDINGS_JSON)
+/// Apply a changed settings section to every live local input surface.
+///
+/// Input maps are components because leafwing reads them from the same entity
+/// as its ActionState. The settings resource remains the owner; this observer
+/// only projects its current value and never maintains a second binding table.
+fn refresh_live_input_maps(
+    settings: Res<InputBindingsSettings>,
+    mut maps: Query<&mut leafwing_input_manager::prelude::InputMap<UserIntent>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let Ok(map) = settings.input_map() else {
+        error!("[input] refusing to project invalid input bindings settings");
+        return;
+    };
+    for mut live in &mut maps {
+        *live = map.clone();
+    }
 }
 
 #[cfg(test)]
@@ -966,7 +1039,8 @@ mod tests {
             .world_mut()
             .spawn((
                 ActionState::<UserIntent>::default(),
-                build_avatar_input_map(r#"{"look_button":"Middle"}"#),
+                build_avatar_input_map(r#"{"look_button":"Middle"}"#)
+                    .expect("valid pointer binding"),
             ))
             .id();
 
@@ -1013,7 +1087,10 @@ mod tests {
         ));
         let entity = app
             .world_mut()
-            .spawn((ActionState::<UserIntent>::default(), get_avatar_input_map()))
+            .spawn((
+                ActionState::<UserIntent>::default(),
+                InputBindingsSettings::default().input_map().unwrap(),
+            ))
             .id();
 
         MouseButton::Right.press(app.world_mut());
@@ -1033,22 +1110,21 @@ mod tests {
 
     #[test]
     fn invalid_pointer_binding_does_not_rebind_look() {
-        assert!(look_button(r#"{"look_button":"sideways"}"#).is_none());
-        assert!(build_avatar_input_map(r#"{"look_button":"sideways"}"#)
-            .get_dual_axislike(&UserIntent::Look)
-            .is_none());
+        assert!(parse_look_button("sideways").is_none());
+        assert!(build_avatar_input_map(r#"{"look_button":"sideways"}"#).is_err());
     }
 
     #[test]
     fn simulated_key_labels_are_resolved_from_the_keymap() {
-        assert_eq!(default_key_code("W"), Some(KeyCode::KeyW));
-        assert_eq!(default_key_code("KeyG"), Some(KeyCode::KeyG));
-        assert_eq!(default_key_code("not-bound"), None);
+        let settings = InputBindingsSettings::default();
+        assert_eq!(settings.key_code("W").unwrap(), Some(KeyCode::KeyW));
+        assert_eq!(settings.key_code("KeyG").unwrap(), Some(KeyCode::KeyG));
+        assert_eq!(settings.key_code("not-bound").unwrap(), None);
     }
 
     #[test]
     fn autopilot_action_is_separate_from_contextual_space_controls() {
-        let bindings = default_key_bindings();
+        let bindings = InputBindingsSettings::default().key_bindings().unwrap();
         let action = bindings
             .iter()
             .find(|(intent, _)| *intent == UserIntent::Action)
@@ -1065,7 +1141,7 @@ mod tests {
         assert_eq!(thrust, Some(vec![KeyCode::Space]));
         assert_eq!(brake, Some(vec![KeyCode::Space]));
 
-        let input_map = get_avatar_input_map();
+        let input_map = InputBindingsSettings::default().input_map().unwrap();
         assert_eq!(
             input_map.get_buttonlike(&UserIntent::Thrust).map(Vec::len),
             Some(1),
@@ -1088,9 +1164,6 @@ mod tests {
         let obj = v.as_object().expect("keybindings.json must be an object");
         let mut bound_keys = 0;
         for (name, val) in obj {
-            if name.starts_with('_') {
-                continue;
-            }
             if name == "look_button" {
                 assert_eq!(val.as_str(), Some("Right"));
                 continue;
@@ -1108,7 +1181,7 @@ mod tests {
             "expected the default control keys to be present"
         );
         // Builder runs end-to-end (also adds the mouse axes) without panicking.
-        let _ = get_avatar_input_map();
+        let _ = InputBindingsSettings::default().input_map().unwrap();
         let _ = UserIntent::MoveForward;
     }
 
@@ -1129,7 +1202,10 @@ mod tests {
         ));
         let entity = app
             .world_mut()
-            .spawn((ActionState::<UserIntent>::default(), get_avatar_input_map()))
+            .spawn((
+                ActionState::<UserIntent>::default(),
+                InputBindingsSettings::default().input_map().unwrap(),
+            ))
             .id();
 
         // Exercise the real transition order: W is already held when Q goes

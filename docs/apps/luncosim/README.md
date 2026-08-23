@@ -106,12 +106,17 @@ the compositor and the unfocused power-save throttle, not the renderer.
 
 ## Interactive Controls
 
-- **WASD / Arrow Keys**: Drive the possessed rover.
-- **Space**: Thrust the possessed lander or brake the possessed rover, according to the vessel's authored control profile.
-- **G key**: Translate mode (3-axis arrows) for selected objects.
-- **R key**: Rotate mode (3-axis rings) for selected objects.
-- **Ctrl+Z**: Undo spawns and transform changes.
-- **Escape**: Cancel current operation / Deselect.
+The active controls are user-configurable through the `input_bindings` section
+of `~/.lunco/settings.json`. The controller translates those bindings into
+semantic intents, and the in-app help/input overlay displays the resolved labels.
+Tutorials therefore describe actions such as forward, brake, thrust, cancel, or
+release rather than embedding physical keys. Editing or rebinding a setting is
+reflected by the live input map and by tutorial copy that uses
+`input_binding(...)`/`input_hint(...)`.
+
+Editor operations are available through the Command Deck and the relevant
+context menus; their action names, not physical shortcut guesses, are the
+stable documentation surface.
 
 ## See also
 

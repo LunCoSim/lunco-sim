@@ -36,8 +36,8 @@ Registered into the shared launcher by `lunica_tutorials()` in
 
 ## Launching
 
-The **🎓 Tutorials** menu (top of the lunica menu bar) lists every lesson; F1 (and
-the perspective help's "Show Tour") starts the Overview. All of these issue the
+The **🎓 Tutorials** menu (top of the lunica menu bar) lists every lesson, and
+the perspective help's "Show Tour" starts the Overview. All of these issue the
 same `StartTutorial{id}` command. First-run onboarding is decided by the boot
 policy (`assets/scripting/policy/boot.rhai`) — not Rust — and shows the Overview
 once (persisted in the canonical `tutorial_progress.onboarded` setting).

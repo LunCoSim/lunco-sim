@@ -866,6 +866,21 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         bridge_core::get_resource_field(&RhaiBuilder, path.as_str()).unwrap_or(Dynamic::UNIT)
     });
 
+    // input_binding("forward") -> "W" (or () when the intent is unbound).
+    // Tutorials read the controller's resolved settings resource directly, so
+    // authored copy and action policy follow user rebinding without a second
+    // tutorial-owned key table.
+    engine.register_fn("input_binding", |binding: ImmutableString| -> Dynamic {
+        bridge_core::with_world(|world| {
+            world
+                .get_resource::<lunco_controller::InputBindingsSettings>()
+                .and_then(|settings| settings.label(binding.as_str()))
+                .map(Dynamic::from)
+        })
+        .flatten()
+        .unwrap_or(Dynamic::UNIT)
+    });
+
     // set_setting("Resource.field", value) -> bool — write a GLOBAL setting (the
     // resource twin of set()). Makes every reflect-registered resource field
     // tunable from a scenario with no per-setting command. Host-authoritative.

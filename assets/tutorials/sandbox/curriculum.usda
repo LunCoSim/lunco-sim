@@ -48,7 +48,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
         string lunco:tutorial:title = "Sandbox Intro"
-        string lunco:tutorial:blurb = "An optional guided coach-mark tour of the workspace — viewport, browser, inspector and console."
+        string lunco:tutorial:blurb = "An optional guided coach-mark tour of the workspace — camera, viewport, browser, inspector and control authority."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
     }

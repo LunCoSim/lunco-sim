@@ -22,7 +22,7 @@ fn b1_driving_started(me) {
     clear_spotlight();
     focus_panel("telemetry_browser");
     spotlight("panel.side_browser", "Read speed and wheel signals in the left dock while you drive.");
-    hint("You're driving. W / S throttle forward and back, A / D steer, Space brakes. Read the telemetry while you roll onto the ramp.");
+    hint("You're driving. " + input_hint("forward") + " / " + input_hint("backward") + " throttle forward and back, " + input_hint("left") + " / " + input_hint("right") + " steer, " + input_hint("brake") + " brakes. Read the telemetry while you roll onto the ramp.");
 }
 
 fn b1_finished(me) {

@@ -556,6 +556,27 @@ impl StatusBus {
         }
     }
 
+    /// Wind down all live status state owned by the active Twin.
+    ///
+    /// The bus deliberately keeps its bounded history: that is an
+    /// application-level audit trail, not an active Twin resource. In-flight
+    /// progress, terminal outcomes, and mirror handles are live state and
+    /// cannot survive a Twin replacement. Clearing `by_id` also makes drops
+    /// from work that finishes after teardown harmless.
+    pub fn wind_down_twin(&mut self) {
+        let changed = !self.active_progress.is_empty()
+            || !self.by_id.is_empty()
+            || !self.mirror_handles.is_empty()
+            || !self.last_outcome.is_empty();
+        self.active_progress.clear();
+        self.by_id.clear();
+        self.mirror_handles.clear();
+        self.last_outcome.clear();
+        if changed {
+            self.seq = self.seq.wrapping_add(1);
+        }
+    }
+
     /// Most recent terminal outcome within `scope`, if any. Picks the
     /// latest by wall-clock timestamp. Returns the source key so
     /// callers can filter (e.g. "only show the projection error,
@@ -733,6 +754,18 @@ pub fn clear_outcomes_on_close_document(
     bus.clear_outcomes_for(BusyScope::Document(trigger.event().doc.0));
 }
 
+/// Active Twin replacement is the lifetime boundary for live workbench
+/// status. A non-active Twin can close without interrupting the current
+/// session's progress.
+pub fn wind_down_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut bus: ResMut<StatusBus>,
+) {
+    if trigger.event().was_active {
+        bus.wind_down_twin();
+    }
+}
+
 /// Source label for anything that arrives as a domain `TelemetryEvent`
 /// rather than through a workbench-native `push`. The event's own
 /// mnemonic leads the message, so the bar reads
@@ -808,6 +841,7 @@ impl Plugin for StatusBusPlugin {
         app.init_resource::<StatusBus>()
             .add_systems(PreUpdate, drain_busy_drops)
             .add_observer(clear_outcomes_on_close_document)
+            .add_observer(wind_down_on_twin_closed)
             .add_observer(surface_error_telemetry);
     }
 }
@@ -965,5 +999,27 @@ mod tests {
 
         bus.remove_progress("missing");
         assert_eq!(bus.seq, seq, "removing absent progress must be a no-op");
+    }
+
+    #[test]
+    fn active_twin_close_winds_down_live_status_without_erasing_history() {
+        let mut app = App::new();
+        app.add_plugins(StatusBusPlugin);
+        {
+            let mut bus = app.world_mut().resource_mut::<StatusBus>();
+            bus.push("session", StatusLevel::Info, "kept audit event");
+            bus.set_progress("scene", "loading", 1, 2);
+        }
+
+        app.world_mut().trigger(lunco_workspace::TwinClosed {
+            twin: lunco_workspace::TwinId::new(1),
+            root: std::path::PathBuf::from("/outgoing"),
+            was_active: true,
+        });
+
+        let bus = app.world().resource::<StatusBus>();
+        assert!(!bus.is_busy(BusyScope::Global));
+        assert!(bus.last_outcome(BusyScope::Global).is_none());
+        assert_eq!(bus.history().count(), 1);
     }
 }

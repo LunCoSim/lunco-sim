@@ -23,7 +23,7 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_controller::ControllerLink;
+use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{
     on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
     SessionProfiles, Spacecraft,
@@ -741,7 +741,8 @@ fn enforce_ownership(
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         register_camera_mode_hooks(app);
-        app.init_resource::<CameraDefaults>()
+        app.init_resource::<InputBindingsSettings>()
+            .init_resource::<CameraDefaults>()
             .init_resource::<SurfaceModeThreshold>();
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
         // spring arm follows the final rendered body pose in `PostUpdate` below. The
@@ -1109,8 +1110,12 @@ pub fn spawn_avatar_camera(
     grid_entity: Entity,
     initial_offset: DVec3,
     profile: lunco_render::RenderQualityProfile,
+    bindings: &InputBindingsSettings,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
+    let input_map = bindings
+        .input_map()
+        .expect("registered input bindings must satisfy their settings contract");
     // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
     // transform land atomically (same contract as `migrate_to_grid`).
     //
@@ -1150,7 +1155,7 @@ pub fn spawn_avatar_camera(
             LocalAvatar,
             IntentAnalogState::default(),
             ActionState::<lunco_core::UserIntent>::default(),
-            lunco_controller::get_avatar_input_map(),
+            input_map,
             CameraZoomInput::default(),
             Name::new("Avatar Camera"),
             ChildOf(grid_entity),

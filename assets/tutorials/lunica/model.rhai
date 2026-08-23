@@ -4,7 +4,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",                                  focus: (),                            title: "Open & View a Model", body: "We opened the CascadedRCFilter demo for you. Let's look at the ways to view and edit a Modelica model. ◀ ▶ or arrow keys." },
+        #{ anchor: "",                                  focus: (),                            title: "Open & View a Model", body: "We opened the CascadedRCFilter demo for you. Let's look at the ways to view and edit a Modelica model. Use the Back and Next controls." },
         #{ anchor: "model_view.view_toggles",           focus: (),                            title: "Four Views",          body: "Click Text, Diagram, Icon, and Docs in turn. Text shows declarations, Diagram shows connected components, Icon shows the reusable symbol, and Docs shows the model explanation." },
         #{ anchor: "panel.modelica_component_palette",  focus: "modelica_component_palette",  title: "Component Palette",   body: "In Diagram view, drag one component from the palette onto the canvas, then drag between compatible ports to create a connection. This is graphical composition." },
         #{ anchor: "panel.modelica_diagram_inspector",  focus: "modelica_diagram_inspector",  title: "Diagram Inspector",   body: "Select the component or connection you just placed. Edit one parameter or modifier here, then switch to Text to see the same authored model." },

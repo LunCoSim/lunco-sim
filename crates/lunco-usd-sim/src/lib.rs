@@ -65,7 +65,7 @@ pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageA
 // See docs/architecture/render-decoupling.md.
 use leafwing_input_manager::prelude::ActionState;
 use lunco_avatar::{AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, SpringArmCamera};
-use lunco_controller::get_avatar_input_map;
+use lunco_controller::InputBindingsSettings;
 use lunco_core::architecture::IntentAnalogState;
 use lunco_core::architecture::Port;
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
@@ -563,6 +563,7 @@ impl Plugin for UsdSimPlugin {
         // satisfy that system parameter; the plugin owns the system and must
         // establish its shared fault resource when used on its own.
         app.init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<InputBindingsSettings>();
         crate::shader_ports::build(app);
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
             .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
@@ -902,6 +903,7 @@ fn process_usd_sim_prims(
     // sun under a bright-tuned camera blacked the viewport). `Option` so the
     // loader still works in a stripped app without `EnvironmentPlugin`.
     active_sun: Option<Res<lunco_environment::LunarSun>>,
+    input_bindings: Res<InputBindingsSettings>,
     // Inserted by a headless (`--no-ui`) boot. When set, do NOT wait for visual
     // components (`Mesh3d` / `PbrLook` / `ShaderLook`) before building wheel
     // PHYSICS, and skip the visual-only wheel split.
@@ -914,6 +916,10 @@ fn process_usd_sim_prims(
     // `NoRenderVisuals` and `docs/architecture/render-decoupling.md`.
     no_render_visuals: Option<Res<NoRenderVisuals>>,
 ) {
+    let Ok(input_map) = input_bindings.input_map() else {
+        error!("[usd-sim] refusing to create avatar controllers from invalid input bindings");
+        return;
+    };
     // Whether visual components will ever arrive. `false` headless ⇒ build the
     // physics now and skip the visual-only split.
     let visuals_coming = no_render_visuals.is_none();
@@ -1011,6 +1017,7 @@ fn process_usd_sim_prims(
             &q_spatial,
             &q_existing_floating_origins,
             active_sun.as_deref(),
+            &input_map,
             &mut commands,
         );
     }
@@ -1444,6 +1451,7 @@ fn process_usd_sim_prim_read(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     active_sun: Option<&lunco_environment::LunarSun>,
+    input_map: &leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent>,
     commands: &mut Commands,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
@@ -1930,7 +1938,7 @@ fn process_usd_sim_prim_read(
                     LocalAvatar,
                     IntentAnalogState::default(),
                     ActionState::<lunco_core::UserIntent>::default(),
-                    get_avatar_input_map(),
+                    input_map.clone(),
                 ));
             }
             "orbit" => {
@@ -1952,7 +1960,7 @@ fn process_usd_sim_prim_read(
                     LocalAvatar,
                     IntentAnalogState::default(),
                     ActionState::<lunco_core::UserIntent>::default(),
-                    get_avatar_input_map(),
+                    input_map.clone(),
                 ));
             }
             "springarm" => {
@@ -1979,7 +1987,7 @@ fn process_usd_sim_prim_read(
                     LocalAvatar,
                     IntentAnalogState::default(),
                     ActionState::<lunco_core::UserIntent>::default(),
-                    get_avatar_input_map(),
+                    input_map.clone(),
                 ));
             }
             _ => {

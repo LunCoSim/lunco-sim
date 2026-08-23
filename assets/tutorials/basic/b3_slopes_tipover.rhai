@@ -126,8 +126,12 @@ fn task(me) {
         // a path nobody takes.
         step(Fn("b3_cross_grade"), Fn("b3_cross_grade_done")),
         // The task event is scoped to this lesson's authored Trigger Sensor.
-        #{ act: Fn("b3_climb"), event: "enter:waypoint", src: "/SlopeTest/Marker/Trigger" },
+        act_until_event(
+            Fn("b3_climb"),
+            "enter:waypoint",
+            "/SlopeTest/Marker/Trigger",
+        ),
         once(Fn("b3_report_tip")),
-        #{ act: Fn("b3_brake"), secs: 1.5 },
+        act_for(Fn("b3_brake"), 1.5),
     ])
 }

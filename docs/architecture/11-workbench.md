@@ -502,6 +502,7 @@ crates):
 | `modelica.editor` | `lunco-modelica` | Source editor word-wrap, tab width, auto-format-on-save |
 | `perf_hud` | `lunco-workbench` | Spike threshold, plot rolling window, Twin overlay toggles |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
+| `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
 
 #### 9b.3 Per-Twin overrides (planned)
 
@@ -530,13 +531,15 @@ returning `Vec<FieldDescriptor>` (label, doc-comment, default,
 control kind), and a single panel walks all registered sections via
 `Settings::iter()`. Hand-editing remains the escape hatch.
 
-## 10. Theming and keybinds
+## 10. Theming and input bindings
 
 - Theming via egui's visuals system. Built-in themes: Dark, Light, High
-  Contrast. Per-user customization via `theme.toml`.
-- Keybinds via a dedicated registry, each action declaring its default
-  binding. User overrides in `keybinds.toml`. Modeled loosely on VS Code's
-  keybind system.
+  Contrast. Per-user customization is a typed section in `settings.json`.
+- Avatar and vessel input bindings are owned by `lunco-controller` as the typed
+  `InputBindingsSettings` section in `~/.lunco/settings.json`. The bundled
+  defaults are the data in `assets/config/keybindings.json`; the same resolved
+  resource feeds the live input map, help surfaces, input injection, and Rhai
+  tutorial labels. There is no separate `keybinds.toml` registry.
 
 Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
 no novel design.

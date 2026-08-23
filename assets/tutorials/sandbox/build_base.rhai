@@ -76,7 +76,7 @@ fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
-    hint("Open Spawn in the right dock and find the new Structures group. Pick a part and drop it onto the ground, then click-drag its gizmo to place it. Fly the camera with right-mouse + WASD.");
+    hint("Open Spawn in the right dock and find the new Structures group. Pick a part and drop it onto the ground, then click-drag its gizmo to place it. Fly the camera with " + input_hint("look_button") + " and the active movement bindings.");
     spotlight("panel.right_inspector", "The Spawn panel's Structures group holds the habitat, power, comms, ISRU and the landing pad.");
 }
 

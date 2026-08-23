@@ -55,7 +55,7 @@ fn mission(me) {
             on_complete: Fn("authority_taken_message"),
         }),
         objective("release_control", #{
-            text: "Click Release or press Backspace to return control to the simulation",
+            text: "Click Release or use " + input_hint("cancel") + " to return control to the simulation",
             requires: ["take_control"],
             done: Fn("authority_is_released"),
             dwell: 0.2,
