@@ -2,7 +2,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{
+    icon_text_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon, WorkbenchAppExt,
+};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::{Avatar, CelestialBody};
@@ -51,10 +53,12 @@ impl Panel for CelestialTimePanel {
         let (paused, speed) = transport.unwrap_or((false, 1.0));
 
         ui.horizontal(|ui| {
-            if ui
-                .button(if paused { "▶ Play" } else { "⏸ Pause" })
-                .clicked()
-            {
+            let (icon, label, tooltip) = if paused {
+                (UiIcon::Play, "Play", "Resume simulation")
+            } else {
+                (UiIcon::Pause, "Pause", "Pause simulation")
+            };
+            if icon_text_button(ui, icon, label, tooltip).clicked() {
                 ctx.trigger(SetTimeTransport {
                     playing: Some(paused),
                     rate: None,

@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{icon_text_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon};
 
 use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
@@ -150,10 +150,12 @@ impl Panel for MissionControl {
             }
             if let Some((_, paused, speed)) = clock_state {
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(if paused { "▶ Play" } else { "⏸ Pause" })
-                        .clicked()
-                    {
+                    let (icon, label, tooltip) = if paused {
+                        (UiIcon::Play, "Play", "Resume simulation")
+                    } else {
+                        (UiIcon::Pause, "Pause", "Pause simulation")
+                    };
+                    if icon_text_button(ui, icon, label, tooltip).clicked() {
                         toggle_pause = true;
                     }
                 });

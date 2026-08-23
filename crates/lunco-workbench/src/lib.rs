@@ -4271,7 +4271,7 @@ fn render_layout(
                         } else {
                             "Connecting…"
                         };
-                        ui.label(format!("{state} → {}", status.endpoint));
+                        ui.label(format!("{state} -> {}", status.endpoint));
                         if ui.button("Disconnect").clicked() {
                             world.trigger(NetDisconnectRequest);
                             ui.close();

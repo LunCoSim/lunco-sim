@@ -18,7 +18,7 @@ use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 use lunco_doc::DocumentId;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_viz::viz::VizId;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{icon_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 
@@ -1191,7 +1191,7 @@ impl ExperimentsPanel {
 
         // Bounds + inputs live behind a collapsing chip so the table
         // area gets the panel's vertical space by default. The header
-        // already shows t_start→t_end inline so users see the active
+        // already shows the start-to-end interval inline so users see the active
         // bounds without expanding.
         let detail_label = if input_edits.is_empty() {
             "bounds".to_string()
@@ -1215,7 +1215,7 @@ impl ExperimentsPanel {
                     {
                         bounds_changed = true;
                     }
-                    ui.label("→");
+                    ui.label("to");
                     if ui
                         .add(egui::DragValue::new(&mut bounds.t_end).speed(0.1))
                         .changed()
@@ -1646,10 +1646,7 @@ impl ExperimentsPanel {
                                 }
                             }
                             if existing.is_some()
-                                && ui
-                                    .small_button("×")
-                                    .on_hover_text("Clear override")
-                                    .clicked()
+                                && icon_button(ui, UiIcon::Close, "Clear override").clicked()
                             {
                                 updates.push((path, None));
                             }

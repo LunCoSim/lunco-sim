@@ -379,7 +379,7 @@ impl Panel for TelemetryPanel {
             .and_then(|v| v.target_plot);
         let mut new_target: Option<Option<lunco_viz::viz::VizId>> = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("→").size(11.0).color(muted));
+            ui.label(egui::RichText::new("Plot:").size(11.0).color(muted));
             let label = match pinned {
                 None => "Active plot".to_string(),
                 Some(id) => plot_options
