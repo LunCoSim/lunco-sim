@@ -1,4 +1,4 @@
-# Current application bug audit — 2026-08-23
+# Current application bug audit — 2026-08-24
 
 This is the source-backed root-cause map for the fourteen reported application
 bugs, updated with the implementation and verification status of each group.
@@ -22,28 +22,35 @@ Those changes are preserved.
 
 ### APP-01 / APP-11 — solved battery flow is not the HUD contract
 
-The engine HUD producer (`lunco-luncosim/src/engine_exposure.rs`) finds state of
-charge, but its power lookup is limited to `battery_net_power` / `net_power_w`.
-The Summer School `Electrical` boundary previously exposed battery capacity by
-connecting `outputs:battery_capacity_ah` to `Battery.inputs:capacity`; that is a
-nameplate parameter, not solved charge/discharge flow. The dirty Twin change
-already moves that boundary toward the correct producer outputs, but the engine
-and HUD still need one canonical display contract for charge, discharge, and
-load power.
+The root cause had two independent parts. The HUD was selecting a domain-
+specific registry entry, and the domain projector dropped a causal connection
+when its source was an external boundary output (for example
+`/Rover.outputs:drive_left`) rather than another Modelica component. That let
+the mobility path move while the generated electrical motor demand stayed at
+zero.
 
-**Migration:** keep the existing USD/Modelica public-output projection as the
-authoritative exposure path. The HUD consumes authored telemetry channels from
-the shared `SignalRegistry`, whose ownership and exposure metadata come from
-the authored USD topology and `ModelicaSignalLayout`; it does not resolve
-electrical, hydraulic, thermal, or other output names in Rust. The existing
-`Parameter.target` indirection is now authorable through the standard
-`LunCoTelemetryAPI` target relationship, so one assembly can publish multiple
-operator channels without a second registry. Battery SOC is an authored
-percent output, and solved net/charge/discharge values are authored watt
-channels. Publish one generic, authored-signal summary line and remove the
-capacity-as-power interpretation and the split value/detail presentation. A
-missing public signal remains unavailable rather than being inferred from an
-unrelated value.
+The engine HUD producer (`lunco-luncosim/src/engine_exposure.rs`) therefore no
+longer performs a domain-specific power lookup.
+
+**Implementation:** the reusable Battery component now authors SOC,
+net-charge, and discharge telemetry declarations once; rover wrappers no
+longer duplicate them. The HUD reads the existing authored `Parameter`
+recording declarations and the shared `SignalRegistry`, without electrical,
+hydraulic, thermal, provenance, or magic-name logic. The generic domain
+projector now classifies a `*.outputs:*` target as causal only when that source
+is a member of the same generated network; otherwise it resolves the authored
+network boundary source and emits the boundary equation. No fallback value or
+legacy alias was added.
+
+**Production evidence:** the composed Summer School twin exposes all four
+authored Battery channels. With autopilot driving, generated Modelica contains
+the motor demand equations; motor demand is about `0.60`, motor electrical
+power is about `337–343 W` each, battery discharge is about `2372 W`, net power
+is negative, and SOC is below 100% and decreasing. A windowed production
+capture (`target/ui-summer-autopilot8.png`) shows the driven rover HUD with
+`AUTOPILOT ON` and one compact authored summary such as
+`Charging 0.0 W | Net -3199.3 W | SOC 98.0 % | Used 3199.3 W`. The full
+technical channel list remains available to the telemetry/API consumers.
 
 ### APP-02 — compositor ownership is only partially ordered
 
@@ -53,10 +60,14 @@ are not all part of one application overlay schedule. Help, update, tutorial,
 modal-host, networking, celestial, and waypoint surfaces can therefore be
 painted in a surprising order even though each one claims to be foreground.
 
-**Migration:** define one public application overlay render set and order all
-modal/interactive overlays through it. Keep world labels and route annotations
-below workbench chrome, and keep blocking dialogs/help/tutorial surfaces above
-all ordinary UI. Preserve egui-over-Bevy-HUI as the compositor boundary.
+**Implementation:** one public `ApplicationOverlayRenderSet` now orders the
+modal host, help, tutorial, update, recovery, networking, avatar, Modelica,
+and editor surfaces after the Workbench pass, with egui above authored Bevy
+UI. World labels and route annotations remain intentionally below the
+Workbench. The UI package check passes. The windowed tutorial capture
+(`target/ui-tutorial.png`) shows the tutorial card above the rendered world and
+the surrounding Workbench panels, confirming the authored overlay path in the
+production binary.
 
 ### APP-03 — Help reports a local stamp, not a public GitHub build
 
@@ -65,10 +76,10 @@ The Help menu renders that string, while the public source/release repository
 and exact source-build link are absent. The updater repository is intentionally
 machine-only and must not be used as the human build link.
 
-**Migration:** stamp the canonical public repository and source revision into
-the host identity, prefer the CI revision when present, and render a clickable
-exact GitHub commit/release link in Help. A dirty or non-Git local build must be
-labelled honestly; it must not masquerade as a published build.
+**Implementation:** the host build script stamps version, short source revision,
+dirty state, and the canonical public repository. Help renders the version and
+a clickable GitHub commit URL; dirty builds retain the dirty marker instead of
+pretending to be a release. The BuildIdentity unit test covers URL generation.
 
 ### APP-04 / APP-05 — Unicode glyphs were reintroduced and native icon output
 is incomplete
@@ -81,12 +92,13 @@ tofu cleanup: the fallback font is not the root fix. Separately,
 but no native executable resource is embedded; packaging the generated desktop
 assets cannot give a Windows PE executable its file icon.
 
-**Migration:** centralize the small UI icon vocabulary as vector-painted egui
-icons and replace icon-as-text usages, retaining actual authored user text only
-where it is semantic content. Embed the canonical Windows icon in the PE
-resource at build time and keep Linux/macOS launcher/package metadata sourced
-from the same canonical artwork. Add a build/package assertion for the native
-artifact, not just a runtime-window assertion.
+**Implementation:** all scanned UI control glyphs were replaced with the shared
+vector `UiIcon` vocabulary, including Mission Control, Celestial time, busy
+cancellation, and Modelica experiment controls. The executable build script
+renders the canonical SVG and embeds the Windows ICO resource; Linux/macOS
+launcher artwork is generated from the same SVG family. Linux source checks
+and the UI compile pass; a Windows PE/package inspection is still required for
+platform acceptance.
 
 ### APP-06 — Lunokhod 2 terrain path needs runtime lifecycle proof
 
@@ -152,15 +164,35 @@ or alias was added.
 
 ### APP-10 — autopilot state is encoded as danger colour with a static label
 
-The HUD producer changes `autopilot_color` to the error colour when autopilot is
-engaged, while the HUI label remains the static `AUTOPILOT`. This makes a normal
-active state look like a fault and leaves the user without an explicit active
-state.
+The state projection had been corrected to publish an active label and accent
+colour, but the HUI template still put the bound label directly in a
+`button`'s text content. HUI buttons render authored child `text` nodes; that
+content therefore had no visible text node, and the auto-sized button collapsed
+to a small empty control in the windowed path.
 
-**Implementation:** the HUD now publishes an explicit `AUTOPILOT ON`/`AUTOPILOT`
-label and uses the normal active/accent token while engaged. Red is reserved for
-fault/refusal presentation. This is driven by the same authored telemetry/HUD
-projection as the other vehicle status fields.
+**Implementation:** the HUD now renders `autopilot_label` through an authored
+child `text` node and gives the control an explicit interactive minimum size.
+The producer publishes `AUTOPILOT ON`/`AUTOPILOT` and uses the normal
+active/accent token while engaged; red is reserved for fault/refusal
+presentation. The final production capture shows the text visibly rendered.
+
+### APP-11 — battery status and current power use are not an operator summary
+
+The previous HUD displayed every selected channel with technical names and
+three decimal places. It also relied on unsupported `white-space` and
+`text-overflow` CSS properties, so the long string wrapped into a multi-line
+block. The electrical truth was present, but the operator could not scan it.
+
+**Implementation:** the existing standard USD `ui:displayName` authoring field
+is now the explicit membership and label for the compact operator summary. USD
+telemetry projection carries it through the existing `Callsign` marker; no
+domain names or numeric heuristics are added. Battery authors one child
+declaration per channel with `SOC`, `Charging`, `Net`, and `Used` labels. The
+HUD formats those authored values compactly on one line, while unpromoted
+channels remain in the full telemetry catalog/API. Unsupported CSS properties
+were removed, and the card has enough authored layout width for the compact
+contract. The production exposure and screenshot above verify charging power,
+net flow, SOC, and live discharge/use power while driving.
 
 ### APP-12 — a presentation contract error is treated as tutorial termination
 
@@ -173,10 +205,10 @@ invalid.
 **Implementation:** the lesson host and scene remain alive. The workbench now
 shows a topmost recovery surface with Continue/Retry/Stop actions, while the
 tutorial owner clears only the invalid target. Continue reuses the existing
-typed `cmd:TutorialNext` event for an active tour; Stop remains the explicit
-lifecycle command. The regression
+registered typed `TutorialNext` command for an active tour; Stop remains the
+explicit lifecycle command. The regression
 `missing_anchor_keeps_lesson_running_and_advances_on_continue` passes, and the
-change is committed as `a863b48b2`.
+change is committed in `a863b48b2` and `517a6853e`.
 
 ### APP-13 — articulated rover needs production physical/visual acceptance
 
@@ -238,10 +270,12 @@ profiles.
    drives and turns with attached arms, and B4 produces three visibly and
    physically distinct composed profiles.
 
-Groups 1 and 2 are implemented and committed. Group 3 is implemented in the
-engine checkout and the Twin, with focused and production headless verification;
-it is committed before group 4 begins. Group 4's tutorial-recovery portion is
-committed as `a863b48b2`; the authored steering/profile portion has passed its
-focused and production headless checks and is committed as `91f36cd06`.
-The remaining open item is rendered visual acceptance of the articulated rover;
-existing unrelated work remains untouched.
+Groups 1 and 2 are implemented and committed. The latest Group 1 HUD commit is
+`32b6330a8`; the preceding architecture commits are `517a6853e` (authored
+telemetry, overlay ordering, typed tutorial navigation), `9ecc142e6` (generic
+authored-domain boundary equations), `926798c88`, and `506a0c95c` (vector UI
+controls and glyph cleanup). Group 3 is implemented in the engine checkout and
+Twin with focused and production headless verification. Remaining acceptance is
+limited to the platform-native Windows icon inspection and any additional
+cross-platform window captures; existing unrelated Twin changes remain
+untouched.
