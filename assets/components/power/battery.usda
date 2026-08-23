@@ -47,22 +47,29 @@ def Xform "Battery" (
     float outputs:discharge_current_a
     custom token connectors:p
 
-    bool lunco:telemetry = true
-    token lunco:telemetry:port = "soc_percent"
-    token lunco:telemetry:name = "power.battery_soc"
-    token lunco:telemetry:unit = "%"
-    string lunco:telemetry:description = "Live battery state of charge in percent."
-
     # Every battery exposes the complete solved electrical state from the same
     # reusable component. Declaration prims are used because one prim may carry
     # only one LunCoTelemetryAPI channel; each declaration targets this battery
     # explicitly so the runtime parameter contract stays independent of the
     # enclosing vessel's domain wrapper.
+    def Scope "SocTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "SOC"
+        token lunco:telemetry:port = "soc_percent"
+        token lunco:telemetry:name = "power.battery_soc"
+        token lunco:telemetry:unit = "%"
+        string lunco:telemetry:description = "Live battery state of charge in percent."
+        rel lunco:telemetry:target = </Battery>
+    }
     def Scope "NetPowerTelemetry" (
         prepend apiSchemas = ["LunCoTelemetryAPI"]
     )
     {
         bool lunco:telemetry = true
+        string ui:displayName = "Net"
         token lunco:telemetry:port = "net_power_w"
         token lunco:telemetry:name = "power.battery_net"
         token lunco:telemetry:unit = "W"
@@ -74,6 +81,7 @@ def Xform "Battery" (
     )
     {
         bool lunco:telemetry = true
+        string ui:displayName = "Charging"
         token lunco:telemetry:port = "charge_power_w"
         token lunco:telemetry:name = "power.battery_charge"
         token lunco:telemetry:unit = "W"
@@ -85,6 +93,7 @@ def Xform "Battery" (
     )
     {
         bool lunco:telemetry = true
+        string ui:displayName = "Used"
         token lunco:telemetry:port = "discharge_power_w"
         token lunco:telemetry:name = "power.battery_discharge"
         token lunco:telemetry:unit = "W"

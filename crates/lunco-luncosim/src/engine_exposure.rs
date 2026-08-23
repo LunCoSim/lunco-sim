@@ -85,10 +85,11 @@ const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 /// One authored operator channel retained by the shared telemetry registry.
 ///
 /// The producer intentionally carries no electrical, thermal, hydraulic, or
-/// other domain vocabulary. The authored USD telemetry projection decides
-/// which values belong on this compact surface and supplies their
-/// operator-facing name and unit; the full public Modelica catalog remains
-/// available to the telemetry browser and API.
+/// other domain vocabulary. A declaration participates in this compact surface
+/// only when its authored USD prim has the standard `ui:displayName`; that
+/// existing authoring field is the explicit operator-view membership and label.
+/// The full public telemetry catalog remains available to the telemetry browser
+/// and API whether or not a channel is promoted to this surface.
 #[derive(Debug, Clone, PartialEq)]
 struct PublicTelemetryValue {
     label: String,
@@ -357,7 +358,11 @@ fn resolve_authored_telemetry(
     vessel: Entity,
     signals: &SignalRegistry,
     q_parents: &Query<&ChildOf>,
-    q_channels: &Query<(Entity, &lunco_core::telemetry::Parameter)>,
+    q_channels: &Query<(
+        Entity,
+        &lunco_core::telemetry::Parameter,
+        Option<&lunco_core::markers::Callsign>,
+    )>,
 ) -> Vec<PublicTelemetryValue> {
     // `Parameter` is the existing authored recording declaration. It is the
     // complete, domain-neutral boundary for USD telemetry channels and for
@@ -371,7 +376,8 @@ fn resolve_authored_telemetry(
     let mut seen = HashSet::new();
     let mut values = q_channels
         .iter()
-        .filter_map(|(channel_entity, parameter)| {
+        .filter_map(|(channel_entity, parameter, callsign)| {
+            let callsign = callsign?;
             if !parameter.enabled || parameter.name.is_empty() {
                 return None;
             }
@@ -395,7 +401,11 @@ fn resolve_authored_telemetry(
                 .then_some(parameter.unit.clone())
                 .or_else(|| signals.meta(&signal).and_then(|meta| meta.unit.clone()));
             Some(PublicTelemetryValue {
-                label: parameter.name.clone(),
+                // `ui:displayName` is the standard USD human-facing label and
+                // is projected onto the channel as Callsign. It also makes
+                // membership in this deliberately compact operator view
+                // explicit; a channel without it remains in the full catalog.
+                label: callsign.0.clone(),
                 value,
                 unit,
             })
@@ -641,7 +651,7 @@ mod exposure_tests {
 
         assert_eq!(
             format_telemetry_summary(&values),
-            "power.battery_soc 100.000 %  ·  power.battery_discharge 327.500 W"
+            "power.battery_soc 100.0 % | power.battery_discharge 327.5 W"
         );
     }
 }
@@ -739,7 +749,15 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
-    channels: Query<'w, 's, (Entity, &'static lunco_core::telemetry::Parameter)>,
+    channels: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static lunco_core::telemetry::Parameter,
+            Option<&'static lunco_core::markers::Callsign>,
+        ),
+    >,
     usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
 }
 
@@ -1941,8 +1959,8 @@ fn format_telemetry_summary(values: &[PublicTelemetryValue]) -> String {
                 .as_deref()
                 .filter(|unit| !unit.is_empty())
                 .map_or_else(String::new, |unit| format!(" {unit}"));
-            format!("{} {:.3}{}", value.label, value.value, unit)
+            format!("{} {:.1}{}", value.label, value.value, unit)
         })
         .collect::<Vec<_>>()
-        .join("  ·  ")
+        .join(" | ")
 }

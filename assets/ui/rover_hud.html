@@ -55,7 +55,9 @@
     <node id="rover-hud-nav">
       <node id="rover-hud-nav-heading">
         <text id="rover-hud-label">{label}</text>
-        <button id="rover-hud-autopilot" on_press="runtime_toggle_autopilot">{autopilot_label}</button>
+        <button id="rover-hud-autopilot" on_press="runtime_toggle_autopilot">
+          <text>{autopilot_label}</text>
+        </button>
       </node>
       <text id="rover-hud-frame">site frame · metres</text>
       <node id="rover-hud-altitude-block">

@@ -52,7 +52,7 @@
 
 #rover-hud-nav {
   right: 14px;
-  width: 250px;
+  width: 420px;
 }
 
 #rover-hud-attitude-title,
@@ -169,6 +169,9 @@
 }
 
 #rover-hud-autopilot {
+  min-width: 104px;
+  min-height: 24px;
+  flex-shrink: 0;
   color: var(--ui-autopilot-color);
   background-color: transparent;
   border-width: 1px;
@@ -220,8 +223,7 @@
 }
 
 #rover-hud-telemetry-summary {
+  width: 100%;
   color: var(--text-color);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }

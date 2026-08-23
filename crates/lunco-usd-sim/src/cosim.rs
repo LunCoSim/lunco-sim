@@ -758,6 +758,10 @@ fn project_usd_telemetry(
                 let name = read_authored_telemetry_string(&view, &path, "lunco:telemetry:name")?
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| source_name.to_string());
+                let display_name = view
+                    .text(&path, "ui:displayName")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| value.trim().to_owned());
                 let unit = read_authored_telemetry_string(&view, &path, "lunco:telemetry:unit")?
                     .unwrap_or_default();
                 let description =
@@ -790,19 +794,22 @@ fn project_usd_telemetry(
                     Some(value) if value > 0 => Some(usize::try_from(value).map_err(|_| ())?),
                     _ => return Err(()),
                 };
-                Ok(Parameter {
-                    name,
-                    unit,
-                    description,
-                    source,
-                    target: Some(target_entity),
-                    rate_hz,
-                    enabled,
-                    deadband,
-                    retention,
-                })
+                Ok((
+                    Parameter {
+                        name,
+                        unit,
+                        description,
+                        source,
+                        target: Some(target_entity),
+                        rate_hz,
+                        enabled,
+                        deadband,
+                        retention,
+                    },
+                    display_name,
+                ))
             })();
-            if let Ok(parameter) = declaration {
+            if let Ok((parameter, display_name)) = declaration {
                 // A generated domain root is projected one Update before its
                 // Modelica wrapper can publish SimComponent. Publish the typed
                 // lifecycle fact before the first FixedUpdate so the sampler
@@ -850,11 +857,14 @@ fn project_usd_telemetry(
                     source,
                     ..parameter
                 };
-                commands.spawn((
+                let mut channel = commands.spawn((
                     Name::new(format!("telemetry:{}", parameter.name)),
                     ChildOf(entity),
                     parameter,
                 ));
+                if let Some(display_name) = display_name {
+                    channel.insert(lunco_core::markers::Callsign(display_name));
+                }
             } else {
                 warn!(
                     "[usd-cosim] {} has invalid telemetry attributes; declaration ignored",
