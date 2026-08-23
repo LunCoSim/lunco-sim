@@ -12,7 +12,8 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, PrimaryEguiContext};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
-    CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, TemplateProperties, UiId,
+    CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress,
+    TemplateProperties, UiId,
 };
 use lunco_core::exposure::EngineExposures;
 use lunco_render::SceneCamera;
@@ -397,16 +398,17 @@ pub(crate) struct RuntimeUiSurface {
     gate: Option<String>,
     interactive: bool,
     mounted: bool,
-    /// Set after the retained tree has a camera target, a computed non-zero
-    /// render target, a computed layout, and an exposure snapshot projected
-    /// into HUI. This is a presentation lifecycle state, not a frame counter:
-    /// later exposure revisions update the mounted tree in place and must not
-    /// hide it while live values change.
+    /// For a surface required by offline recording, set after the retained tree
+    /// has a camera target, a computed non-zero render target, a computed
+    /// layout, and an exposure snapshot projected into HUI. This is a
+    /// presentation lifecycle state, not a frame counter: later exposure
+    /// revisions update the mounted tree in place and must not hide it while
+    /// live values change. Interactive surfaces do not wait for this
+    /// render-world acknowledgement.
     presentation_ready: bool,
     placement: RuntimeUiPlacement,
     applied_revision: u64,
     applied_placement: Option<ResolvedRuntimeUiPlacement>,
-    input_rect: Option<egui::Rect>,
 }
 
 impl RuntimeUiSurface {
@@ -429,7 +431,6 @@ impl RuntimeUiSurface {
             placement: (&definition.placement).into(),
             applied_revision: 0,
             applied_placement: None,
-            input_rect: None,
         }
     }
 }
@@ -994,10 +995,6 @@ pub(crate) fn apply_runtime_ui_exposures(
             if placement_changed {
                 apply_placement(&mut node, placement.rect);
             }
-            surface.input_rect =
-                (surface.interactive && placement.rect.is_positive()).then_some(placement.rect);
-        } else {
-            surface.input_rect = None;
         }
         surface.applied_placement = placement;
 
@@ -1012,9 +1009,6 @@ pub(crate) fn apply_runtime_ui_exposures(
         } else {
             Visibility::Hidden
         };
-        if !matches!(*visibility, Visibility::Visible) {
-            surface.input_rect = None;
-        }
 
         let Some(mut properties) = properties else {
             // The root is intentionally unmounted until its exposure becomes
@@ -1140,13 +1134,6 @@ pub(crate) fn apply_runtime_ui_placement_after_style(
         let placement = resolve_placement(&surface.placement, rects.as_deref(), target, window);
         if surface.applied_placement != placement {
             surface.applied_placement = placement;
-            surface.input_rect = if surface.interactive {
-                placement
-                    .filter(|placement| placement.rect.is_positive())
-                    .map(|placement| placement.rect)
-            } else {
-                None
-            };
         }
         let Some(placement) = placement else {
             continue;
@@ -1198,21 +1185,94 @@ fn apply_runtime_ui_property(
     }
 }
 
-/// Add the visible interactive runtime surfaces to the existing workbench
+/// Add the visible interactive runtime controls to the existing workbench
 /// scene/chrome gate. This is intentionally a bridge into `ScenePickGate`, not
-/// a second hit-test implementation: egui dock cards and runtime UI cards are
-/// resolved by the same press latch and scene ownership state machine.
+/// a second hit-test implementation: egui dock cards and runtime UI controls
+/// are resolved by the same press latch and scene ownership state machine.
+///
+/// The surface root is a layout container, not an input target. In particular,
+/// a `viewport` surface is intentionally full-window, so registering its
+/// placement rectangle would make the complete 3D scene non-interactive. HUI's
+/// explicit `OnUiPress` marker is the input contract; Bevy's computed node
+/// geometry supplies the actual child hit rectangle.
 pub(crate) fn register_runtime_ui_input_regions(
-    roots: Query<(&RuntimeUiSurface, &Visibility)>,
+    roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
+    controls: Query<(
+        Entity,
+        &ComputedNode,
+        &UiGlobalTransform,
+        Option<&InheritedVisibility>,
+        Option<&OnUiPress>,
+    )>,
+    parents: Query<&ChildOf>,
     mut gate: ResMut<ScenePickGate>,
 ) {
-    for (surface, visibility) in &roots {
-        if matches!(*visibility, Visibility::Visible) && surface.interactive {
-            if let Some(rect) = surface.input_rect {
-                gate.record_chrome_panel(rect, rect);
-            }
+    let interactive_roots: HashSet<Entity> = roots
+        .iter()
+        .filter_map(|(entity, surface, visibility)| {
+            (surface.interactive && matches!(*visibility, Visibility::Visible)).then_some(entity)
+        })
+        .collect();
+
+    if interactive_roots.is_empty() {
+        return;
+    }
+
+    for (entity, node, transform, inherited_visibility, press) in &controls {
+        if press.is_none()
+            || !inherited_visibility.is_some_and(|visibility| visibility.get())
+            || !is_descendant_of_runtime_surface(entity, &interactive_roots, &parents)
+        {
+            continue;
+        }
+        if let Some(rect) = runtime_ui_input_rect(node, transform) {
+            gate.record_chrome_panel(rect, rect);
         }
     }
+}
+
+fn is_descendant_of_runtime_surface(
+    entity: Entity,
+    roots: &HashSet<Entity>,
+    parents: &Query<&ChildOf>,
+) -> bool {
+    let mut current = entity;
+    loop {
+        if roots.contains(&current) {
+            return true;
+        }
+        let Ok(child_of) = parents.get(current) else {
+            return false;
+        };
+        current = child_of.parent();
+    }
+}
+
+fn runtime_ui_input_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Option<egui::Rect> {
+    if node.is_empty() || !node.inverse_scale_factor.is_finite() || node.inverse_scale_factor <= 0.0
+    {
+        return None;
+    }
+
+    let local = node.border_box();
+    let corners = [
+        local.min,
+        Vec2::new(local.max.x, local.min.y),
+        local.max,
+        Vec2::new(local.min.x, local.max.y),
+    ];
+    let mut min = Vec2::splat(f32::INFINITY);
+    let mut max = Vec2::splat(f32::NEG_INFINITY);
+    for corner in corners {
+        let point = transform.affine().transform_point2(corner) * node.inverse_scale_factor;
+        if !point.is_finite() {
+            return None;
+        }
+        min = min.min(point);
+        max = max.max(point);
+    }
+    (max.x > min.x && max.y > min.y)
+        .then(|| egui::Rect::from_min_max(egui::pos2(min.x, min.y), egui::pos2(max.x, max.y)))
 }
 
 fn resolve_placement(
@@ -1300,6 +1360,7 @@ fn apply_placement(node: &mut Node, rect: egui::Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_workbench::EguiPointerState;
 
     #[test]
     fn manifest_accepts_viewport_dock_and_window_surfaces() {
@@ -1363,6 +1424,81 @@ mod tests {
     }
 
     #[test]
+    fn runtime_ui_input_rect_uses_computed_control_geometry() {
+        let node = ComputedNode {
+            size: Vec2::new(80.0, 20.0),
+            inverse_scale_factor: 0.5,
+            ..Default::default()
+        };
+        let transform = UiGlobalTransform::from_xy(100.0, 60.0);
+
+        assert_eq!(
+            runtime_ui_input_rect(&node, &transform),
+            Some(egui::Rect::from_min_max(
+                egui::pos2(30.0, 25.0),
+                egui::pos2(70.0, 35.0)
+            ))
+        );
+    }
+
+    #[test]
+    fn viewport_surface_does_not_blanket_scene_input() {
+        let mut app = App::new();
+        app.init_resource::<ScenePickGate>();
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                RuntimeUiSurface {
+                    namespace: "hud".to_owned(),
+                    required_for_recording: false,
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    interactive: true,
+                    mounted: true,
+                    presentation_ready: false,
+                    placement: RuntimeUiPlacement::Viewport,
+                    applied_revision: 0,
+                    applied_placement: None,
+                },
+                Visibility::Visible,
+            ))
+            .id();
+        app.world_mut().spawn((
+            Node::default(),
+            ComputedNode {
+                size: Vec2::new(80.0, 20.0),
+                inverse_scale_factor: 1.0,
+                ..Default::default()
+            },
+            UiGlobalTransform::from_xy(100.0, 60.0),
+            InheritedVisibility::VISIBLE,
+            OnUiPress(vec!["runtime_action".to_owned()]),
+            ChildOf(root),
+        ));
+        app.add_systems(Update, register_runtime_ui_input_regions);
+        app.update();
+
+        let mut gate = app.world_mut().remove_resource::<ScenePickGate>().unwrap();
+        gate.mark_rendered();
+        gate.resolve(EguiPointerState {
+            hover_pos: Some(egui::pos2(0.0, 0.0)),
+            ..Default::default()
+        });
+        assert!(gate.over_main_scene());
+
+        gate.mark_rendered();
+        gate.resolve(EguiPointerState {
+            hover_pos: Some(egui::pos2(100.0, 60.0)),
+            ..Default::default()
+        });
+        assert!(!gate.over_main_scene());
+    }
+
+    #[test]
     fn non_recording_surface_does_not_wait_for_render_acknowledgement() {
         let mut app = App::new();
         let mut exposures = EngineExposures::default();
@@ -1404,7 +1540,6 @@ mod tests {
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: initial_revision,
                     applied_placement: None,
-                    input_rect: None,
                 },
                 Visibility::Visible,
             ))
@@ -1466,7 +1601,6 @@ mod tests {
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: revision,
                     applied_placement: None,
-                    input_rect: None,
                 },
                 Visibility::Visible,
             ))

@@ -107,7 +107,7 @@ The fields are:
 | `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, or `overlay.terrain.dismiss`). |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
-| `interactive` | Registers the resolved rectangle with the existing chrome/scene pick gate. |
+| `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
@@ -233,9 +233,13 @@ The three placement modes are:
 | `dock_panel` | Surface aligned to a workbench panel, using its authoritative `PanelRects` rectangle and an optional logical-point `inset`. |
 | `window` | Fixed logical-point rectangle anchored at a window corner or center, with an offset and explicit width/height. |
 
-Set `interactive: true` only when the surface should own pointer input. Its
-resolved rectangle is registered with the same scene/chrome press latch as egui
-dock cards, so the scene does not receive clicks through the surface.
+Set `interactive: true` only when the surface contains controls that should own
+pointer input. A control becomes an input owner by declaring HUI
+`on_press="callback"`; the runtime uses that explicit marker plus Bevy's
+computed layout rectangle and registers it with the same scene/chrome press
+latch as egui dock cards. The surface root is never registered: a full-window
+HUD therefore remains transparent to scene clicks and camera drags everywhere
+except on its authored buttons.
 
 The manifest owns the outer rectangle; CSS owns the internal layout. HUI
 replaces a template root's `Node` while building, so placement is applied after

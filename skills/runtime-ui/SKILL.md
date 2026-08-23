@@ -152,11 +152,15 @@ Placement modes:
 - `dock_panel` uses the workbench's authoritative `PanelRects` plus an inset;
 - `window` uses logical-point width/height, a corner/center anchor, and an offset.
 
-`interactive: true` registers the surface rectangle with the existing
-`ScenePickGate`. Do not add a parallel pointer/interception system. Do not add
-per-frame position correction; placement is applied after HUI/Flair style work
-with change detection, and the startup resolver ignores a zero-sized target in
-favor of the live primary window dimensions.
+`interactive: true` enables input ownership for visible HUI controls that carry
+an authored `on_press` action. The runtime feeds each control's computed Bevy UI
+rectangle into the existing `ScenePickGate`; it never registers the surface root
+or a full-window `viewport` rectangle. This keeps HUDs transparent to camera
+dragging and scene clicks outside their explicit controls. Do not add a parallel
+pointer/interception system. Do not add per-frame position correction; placement
+is applied after HUI/Flair style work with change detection, and the startup
+resolver ignores a zero-sized target in favor of the live primary window
+dimensions.
 
 ### 4. Map actions through the existing command path
 
