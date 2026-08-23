@@ -1440,7 +1440,9 @@ def Xform "DescentLander" (
     # walks the bell contour from throat to exit — (0.35, 0) → (0.52, -0.55) →
     # (0.86, -1.15) → (1.35, -1.90).
     def NurbsPatch "Nozzle" (
-        prepend apiSchemas = ["LunCoForceActuatorAPI", "MaterialBindingAPI"]
+        prepend apiSchemas = [
+            "LunCoForceActuatorAPI", "LunCoLatheAPI", "MaterialBindingAPI"
+        ]
     )
     {
         # Same thin-shell reasoning as the dish: a bell is a contoured skin, and

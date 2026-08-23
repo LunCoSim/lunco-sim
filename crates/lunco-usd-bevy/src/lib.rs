@@ -6158,6 +6158,50 @@ def NurbsPatch "Nozzle" (
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shipped_parametric_assets_apply_their_lathe_schema() {
+        let antenna = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/components/comms/antenna.usda");
+        let stage = compose_file_to_stage(&antenna).expect("compose antenna.usda");
+        let view = StageView::new(&stage);
+        let reflector =
+            SdfPath::new("/CommsAntenna/YawHead/DishGimbal/DishHead/Reflector").unwrap();
+        assert!(
+            view.has_api_schema(&reflector, "LunCoLatheAPI"),
+            "the shipped reflector must opt into the parametric lathe contract"
+        );
+        let (surface, Some(lathe)) = read_patch_surface(&view, &reflector)
+            .expect("the shipped reflector must produce a surface")
+        else {
+            panic!("the shipped reflector must retain its lathe parameters")
+        };
+        assert_eq!(surface.u_count, 9);
+        assert_eq!(surface.v_count, 4);
+        assert!(matches!(
+            lathe.profile,
+            lathe::LatheProfile::Paraboloid { .. }
+        ));
+
+        let lander = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/vessels/landers/descent_lander.usda");
+        let stage = compose_file_to_stage(&lander).expect("compose descent_lander.usda");
+        let view = StageView::new(&stage);
+        let nozzle = SdfPath::new("/DescentLander/Nozzle").unwrap();
+        assert!(
+            view.has_api_schema(&nozzle, "LunCoLatheAPI"),
+            "the shipped nozzle must opt into the parametric lathe contract"
+        );
+        let (surface, Some(lathe)) =
+            read_patch_surface(&view, &nozzle).expect("the shipped nozzle must produce a surface")
+        else {
+            panic!("the shipped nozzle must retain its lathe parameters")
+        };
+        assert_eq!(surface.u_count, 9);
+        assert_eq!(surface.v_count, 4);
+        assert!(matches!(lathe.profile, lathe::LatheProfile::Bell { .. }));
+    }
+
     #[test]
     fn authored_patch_requires_standard_sampling_fields() {
         let recipe = canonical::StageRecipe::from_source(

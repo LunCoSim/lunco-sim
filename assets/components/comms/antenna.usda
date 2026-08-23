@@ -157,7 +157,9 @@ def Xform "CommsAntenna" (
         # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
         # axis is a degenerate row whose normal is a zero cross product, and a NaN
         # normal renders as a black hole at the vertex of the dish.
-                def NurbsPatch "Reflector"
+                def NurbsPatch "Reflector" (
+                    prepend apiSchemas = ["LunCoLatheAPI"]
+                )
                 {
             uniform bool doubleSided = true
             uniform token lunco:lathe:profile = "paraboloid"
