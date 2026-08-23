@@ -165,32 +165,13 @@ pub fn read_asset_bytes_with_twin_root(
                 format!("Twin asset `{id}` escapes its root"),
             )
         })?;
-        let authored = root.join(&relative);
-        if authored.exists() {
-            let path = existing_path_within_root(root, &relative)
-                .filter(|path| path.is_file())
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("Twin asset `{id}` resolves outside its root"),
-                    )
-                })?;
-            return std::fs::read(path);
-        }
-        let cache_root = crate::twin_cache_dir(root);
-        let cached = cache_root.join(&relative);
-        if cached.exists() {
-            let path = existing_path_within_root(&cache_root, &relative)
-                .filter(|path| path.is_file())
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("Twin cached asset `{id}` resolves outside its cache root"),
-                    )
-                })?;
-            return std::fs::read(path);
-        }
-        return std::fs::read(cached);
+        let path = crate::twin_source::resolve_twin_relative(root, &relative).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("Twin asset `{id}` resolves outside its authored tree or cache"),
+            )
+        })?;
+        return std::fs::read(path);
     }
     read_asset_bytes(id, assets_root)
 }
@@ -203,11 +184,23 @@ mod tests {
     fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
         let root = tempfile::tempdir().expect("temporary Twin root");
         std::fs::write(root.path().join("lesson.rhai"), "40 + 2").expect("lesson");
+        let cached = crate::twin_cache_dir(root.path());
+        std::fs::create_dir_all(&cached).expect("cache root");
+        std::fs::write(cached.join("downloaded.rhai"), "20 + 22").expect("cached lesson");
 
         let id = "twin://example/lesson.rhai";
         assert_eq!(
             read_asset_bytes_with_twin_root(id, None, Some(root.path())).expect("authored file"),
             b"40 + 2"
+        );
+        assert_eq!(
+            read_asset_bytes_with_twin_root(
+                "twin://example/downloaded.rhai",
+                None,
+                Some(root.path())
+            )
+            .expect("cached file"),
+            b"20 + 22"
         );
         for id in [
             "twin://example/../outside.rhai",

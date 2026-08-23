@@ -6,16 +6,15 @@
 //!   maps are texture layers on it, so `lunco-terrain-surface` binds nothing and
 //!   `shader_look.rs` does the work. That path is fully decoupled.
 //! - the **static mesh** — its material is NOT authored by the terrain crate at
-//!   all: `lunco-usd-sim`'s `apply_usd_shader_materials` mints a `ShaderMaterial`
-//!   on the terrain prim asynchronously (`materialType="shader"`). There is no
-//!   intent component to edit — the material *is* the authority — so filling its
-//!   empty map slots means naming `MeshMaterial3d<ShaderMaterial>`.
+//!   all: `horizon_shade::ensure_terrain_materials` creates the terrain's semantic
+//!   `ShaderMaterial` on the static mesh. There is no intent component to edit —
+//!   the material *is* the authority — so filling its empty map slots means naming
+//!   `MeshMaterial3d<ShaderMaterial>`.
 //!
 //! That is why this system lives here and not in `lunco-terrain-surface`: it is
-//! material *binding*, and this crate is the only one allowed to do that. Moving it
-//! is what let the terrain crate stop naming a material. It retries every frame
-//! until the async USD material exists, then marks the terrain `DerivedLayersBuilt`
-//! and stops scanning.
+//! material *binding*, and this crate is the only one allowed to do that. It retries
+//! every frame until the semantic material exists, then marks the terrain
+//! `DerivedLayersBuilt` and stops scanning.
 
 use crate::shader_material::ShaderMaterial;
 use bevy::pbr::MeshMaterial3d;

@@ -79,35 +79,8 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         // `twin://<name>/<rel>` — the name selects the root, so this handler is
         // stateful where `lunco://`'s is constant.
         let (name, rel) = crate::split_twin_rel(rest)?;
-        if !crate::asset_path::is_safe_relative_path(rel) {
-            return None;
-        }
-        let root = roots.root_of(name)?;
         let rel = crate::asset_path::relative_path(rel)?;
-        let authored = root.join(&rel);
-        if authored.exists() {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                return crate::existing_path_within_root(&root, &rel).filter(|path| path.is_file());
-            }
-            #[cfg(target_arch = "wasm32")]
-            return Some(authored);
-        }
-        // Same two-step the `twin://` READER uses: a Twin's downloaded assets
-        // live in its own `.cache`. Both sides must agree, or a file the asset
-        // server can load is invisible to scenario sync / shader validation.
-        let cached = crate::twin_cache_dir(&root).join(&rel);
-        if cached.exists() {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let cache_root = crate::twin_cache_dir(&root);
-                return crate::existing_path_within_root(&cache_root, &rel)
-                    .filter(|path| path.is_file());
-            }
-            #[cfg(target_arch = "wasm32")]
-            return Some(cached);
-        }
-        Some(authored)
+        roots.resolve_path(name, &rel)
     });
     app.insert_resource(schemes);
 
