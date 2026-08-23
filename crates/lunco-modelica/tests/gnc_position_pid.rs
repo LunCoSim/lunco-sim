@@ -51,7 +51,11 @@ fn position_pid3d_compiles_with_live_actuator_outputs() {
     let mut compiler = ModelicaCompiler::new();
     let source = position_pid_source();
     let dae = compiler
-        .compile_str("PositionPID3D", &source, "lunco://models/LunCo/GNC/PositionPID3D.mo")
+        .compile_str(
+            "PositionPID3D",
+            &source,
+            "lunco://models/LunCo/GNC/PositionPID3D.mo",
+        )
         .expect("sensor-driven PositionPID3D must be structurally balanced");
 
     let outputs: Vec<String> = dae
