@@ -443,6 +443,17 @@ fn lander_asset_wiring_migrated() {
 
 #[test]
 fn lander_actuator_projection_uses_all_authored_force_geometry() {
+    // This test invokes the domain synthesizer directly rather than booting the
+    // production scripting plugin.  Establish the same authored policy contract
+    // that production startup registers before asking it to project the stage.
+    lunco_hooks_rhai::register_rhai_hook(
+        "synth.actuator-wrench",
+        "synthesize",
+        lunco_assets::scripting::policy("synth_actuator_wrench").expect("shipped actuator policy"),
+        true,
+    )
+    .expect("actuator policy compiles");
+
     let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/vessels/landers/descent_lander.usda");
     let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose descent_lander.usda");
