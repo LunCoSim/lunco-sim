@@ -677,7 +677,17 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                         .unwrap_or_default();
                     rebuild_scene_from_composed(world, scene_id, &cs);
                 }
-                Some(ops) if ops.iter().any(op_needs_rebuild) => {
+                Some(ops)
+                    if ops.iter().any(|op| {
+                        let waypoint = match op {
+                            UsdOp::SetActive { path, .. } => {
+                                is_waypoint_prim(world, scene_id, path)
+                            }
+                            _ => false,
+                        };
+                        op_needs_rebuild(op, waypoint)
+                    }) =>
+                {
                     let cs = world
                         .resource::<DocumentRegistry<UsdDocument>>()
                         .host(doc)
@@ -743,14 +753,14 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// correctly. This is not the hot path: `AttachComponent` emits neither, so
 /// building a vehicle from parts stays rebuild-free.
 ///
-/// `SetActive` has ONE carve-out: a waypoint marker prim (authored at
-/// `/<vessel>/Route/W<n>`, see `author_marker_ops`). A marker is purely visual —
-/// a translucent dome (`physics:collisionEnabled = false`) plus an overlap-only
-/// non-solid Sensor, never a rigid body — so deactivating it only needs its visual
-/// subtree gone, which `refresh_prim_subtree` reconciles. Every other `SetActive`
-/// (a rover part, a joint) still rebuilds, since hiding a physics prim must drop
-/// its body/collider, which the visual-only refresh cannot express.
-fn op_needs_rebuild(op: &UsdOp) -> bool {
+/// `SetActive` has ONE carve-out: a prim carrying `LunCoWaypointAPI`. The marker
+/// contract is purely visual — a translucent dome (`physics:collisionEnabled =
+/// false`) plus an overlap-only non-solid Sensor, never a rigid body — so
+/// deactivating it only needs its visual subtree gone, which
+/// `refresh_prim_subtree` reconciles. Every other `SetActive` (a vehicle part, a
+/// joint, or any other physical prim) still rebuilds, since hiding a physics prim
+/// must drop its body/collider, which the visual-only refresh cannot express.
+fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
     // A mission program API only changes how the owning vessel's existing mission
     // metadata is interpreted; unlike physics APIs it does not add/remove bodies,
     // colliders or entities. It has a live-stage author below and is refreshed at
@@ -760,8 +770,8 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
     }
     // A waypoint-marker hide reconciles incrementally (see the doc comment); any
     // other `SetActive` is a physics-presence change and must rebuild.
-    if let UsdOp::SetActive { path, .. } = op {
-        return !is_waypoint_marker_path(path);
+    if matches!(op, UsdOp::SetActive { .. }) {
+        return !is_waypoint;
     }
     matches!(
         op,
@@ -775,23 +785,18 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
     )
 }
 
-/// Whether `path` is a waypoint marker prim — the visual-only pin authored at
-/// `/<vessel>/Route/W<n>` (`ROUTE_SCOPE = "Route"`, leaf name `W<n>`). This is the
-/// marker identity contract from `author_marker_ops`, and the signal that a
-/// `SetActive` op may reconcile incrementally instead of rebuilding. Purely a
-/// path-shape check: no stage access, so it stays safe to call from
-/// [`op_needs_rebuild`]. A non-conforming path (anything not ending in
-/// `/Route/W<digits>`) returns `false` and keeps the rebuild guard intact.
-fn is_waypoint_marker_path(path: &str) -> bool {
-    // `W<n>` is the authored leaf name (the first free `W0`, `W1`, … a scene
-    // author would have written by hand); `Route` is the fixed scope under the
-    // vessel root that holds them.
-    let leaf = path.rsplit('/').next().unwrap_or("");
-    let rest = path.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
-    leaf.starts_with('W')
-        && leaf[1..].chars().all(|c| c.is_ascii_digit())
-        && !leaf[1..].is_empty()
-        && rest.ends_with("/Route")
+/// Whether `path` is a waypoint marker according to the composed USD stage.
+/// The marker's `LunCoWaypointAPI` is the authored identity contract; names and
+/// hierarchy are intentionally irrelevant so scene authors can organize routes
+/// without changing Rust behavior.
+fn is_waypoint_prim(world: &World, scene_id: AssetId<UsdStageAsset>, path: &str) -> bool {
+    let Ok(path) = openusd::sdf::Path::new(path) else {
+        return false;
+    };
+    world
+        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .and_then(|stages| stages.get(scene_id))
+        .is_some_and(|stage| stage.view().has_api_schema(&path, "LunCoWaypointAPI"))
 }
 
 /// A program child is a BT program when its generic `LunCoProgramAPI` source
@@ -1108,7 +1113,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 }
             }
         }
-        UsdOp::SetActive { path, active, .. } if is_waypoint_marker_path(path) => {
+        UsdOp::SetActive { path, active, .. } if is_waypoint_prim(world, scene_id, path) => {
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
@@ -1740,84 +1745,117 @@ mod tests {
     fn op_rebuild_routing_matches_the_incremental_authors() {
         let et = LayerId::root();
         // Incremental now — a joint's two `physics:body` rels and a cosim wire.
-        assert!(!op_needs_rebuild(&UsdOp::SetRelationship {
-            edit_target: et.clone(),
-            path: "/J".into(),
-            name: "physics:body0".into(),
-            targets: vec![],
-        }));
-        assert!(!op_needs_rebuild(&UsdOp::SetConnection {
-            edit_target: et.clone(),
-            path: "/B".into(),
-            name: "inputs:v".into(),
-            type_name: "float".into(),
-            sources: vec![],
-        }));
+        assert!(!op_needs_rebuild(
+            &UsdOp::SetRelationship {
+                edit_target: et.clone(),
+                path: "/J".into(),
+                name: "physics:body0".into(),
+                targets: vec![],
+            },
+            false
+        ));
+        assert!(!op_needs_rebuild(
+            &UsdOp::SetConnection {
+                edit_target: et.clone(),
+                path: "/B".into(),
+                name: "inputs:v".into(),
+                type_name: "float".into(),
+                sources: vec![],
+            },
+            false
+        ));
         // Physical apiSchema / active REBUILD: their effect is a prim's ECS
         // component set / entity presence, which the visual-only subtree refresh
         // can't reconcile.
-        assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
-            edit_target: et.clone(),
-            path: "/W".into(),
-            schemas: vec!["PhysicsRigidBodyAPI".into()],
-        }));
+        assert!(op_needs_rebuild(
+            &UsdOp::SetApiSchemas {
+                edit_target: et.clone(),
+                path: "/W".into(),
+                schemas: vec!["PhysicsRigidBodyAPI".into()],
+            },
+            false
+        ));
         // A program API is metadata on an existing `Mission` scope. Its consumer
         // is the vessel's BehaviorXml projection, never the physical rover
         // topology, so it must remain on the live incremental path.
-        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
-            edit_target: et.clone(),
-            path: "/W/Mission".into(),
-            schemas: vec!["LunCoProgramAPI".into()],
-        }));
+        assert!(!op_needs_rebuild(
+            &UsdOp::SetApiSchemas {
+                edit_target: et.clone(),
+                path: "/W/Mission".into(),
+                schemas: vec!["LunCoProgramAPI".into()],
+            },
+            false
+        ));
         // A `SetActive` on a physics prim (a rover part) rebuilds: it changes
         // entity presence / physics component set, which the visual-only subtree
         // refresh can't reconcile.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
-            edit_target: et.clone(),
-            path: "/Rover/Chassis".into(),
-            active: false,
-        }));
-        // A `SetActive` on a WAYPOINT MARKER (`/<vessel>/Route/W<n>`) reconciles
+        assert!(op_needs_rebuild(
+            &UsdOp::SetActive {
+                edit_target: et.clone(),
+                path: "/Rover/Chassis".into(),
+                active: false,
+            },
+            false
+        ));
+        // A `SetActive` on a prim carrying `LunCoWaypointAPI` reconciles
         // incrementally: the marker is purely visual (a non-colliding dome + an
         // overlap-only Sensor), so hiding/revealing it only needs its visual
         // subtree dropped/rebuilt. Deactivation must NOT reload the scene.
-        assert!(!op_needs_rebuild(&UsdOp::SetActive {
-            edit_target: et.clone(),
-            path: "/Rover/Route/W3".into(),
-            active: false,
-        }));
+        assert!(!op_needs_rebuild(
+            &UsdOp::SetActive {
+                edit_target: et.clone(),
+                path: "/Rover/Route/W3".into(),
+                active: false,
+            },
+            true
+        ));
         // Reactivation is symmetric — also incremental.
-        assert!(!op_needs_rebuild(&UsdOp::SetActive {
-            edit_target: et.clone(),
-            path: "/Apollo15/Route/W0".into(),
-            active: true,
-        }));
-        // The marker carve-out is path-shaped: a prim that merely looks marker-ish
-        // but is not under `/Route` still rebuilds.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
-            edit_target: et.clone(),
-            path: "/Rover/Wheels/W0".into(),
-            active: false,
-        }));
+        assert!(!op_needs_rebuild(
+            &UsdOp::SetActive {
+                edit_target: et.clone(),
+                path: "/Apollo15/Route/W0".into(),
+                active: true,
+            },
+            true
+        ));
+        // A normal prim without the authored waypoint schema still rebuilds,
+        // regardless of its name or hierarchy.
+        assert!(op_needs_rebuild(
+            &UsdOp::SetActive {
+                edit_target: et.clone(),
+                path: "/Rover/Wheels/W0".into(),
+                active: false,
+            },
+            false
+        ));
         // Composition-arc edits also rebuild — value resolution recomposes the
         // subtree, which the incremental sink can't express.
-        assert!(op_needs_rebuild(&UsdOp::SetVariantSelection {
-            edit_target: et.clone(),
-            path: "/R".into(),
-            variant_set: "drivetrain".into(),
-            variant: "physical".into(),
-        }));
-        assert!(op_needs_rebuild(&UsdOp::SetPayload {
-            edit_target: et.clone(),
-            path: "/H".into(),
-            asset_paths: vec![],
-        }));
+        assert!(op_needs_rebuild(
+            &UsdOp::SetVariantSelection {
+                edit_target: et.clone(),
+                path: "/R".into(),
+                variant_set: "drivetrain".into(),
+                variant: "physical".into(),
+            },
+            false
+        ));
+        assert!(op_needs_rebuild(
+            &UsdOp::SetPayload {
+                edit_target: et.clone(),
+                path: "/H".into(),
+                asset_paths: vec![],
+            },
+            false
+        ));
         // Pre-existing coarse ops unchanged.
-        assert!(op_needs_rebuild(&UsdOp::MovePrim {
-            edit_target: et,
-            from_path: "/a".into(),
-            to_path: "/b".into(),
-        }));
+        assert!(op_needs_rebuild(
+            &UsdOp::MovePrim {
+                edit_target: et,
+                from_path: "/a".into(),
+                to_path: "/b".into(),
+            },
+            false
+        ));
     }
 
     /// A material/shader/node-graph attribute edit fans out through
@@ -2002,24 +2040,5 @@ mod tests {
             composed.contains("@lunco://vessels/rovers/skid_rover.usda@"),
             "and its asset reference (resolved by the async loader at the twin:// anchor)"
         );
-    }
-
-    #[test]
-    fn waypoint_marker_path_shape_is_detected() {
-        // Authored marker identity: `/<vessel>/Route/W<n>`.
-        assert!(is_waypoint_marker_path("/Rover/Route/W0"));
-        assert!(is_waypoint_marker_path("/Apollo15/Route/W12"));
-        assert!(is_waypoint_marker_path("/Moonbase/Rover/Route/W3"));
-        // A non-`Route` parent is NOT a marker, even with a `W<n>` leaf — the
-        // carve-out must not swallow a wheel or any other coincidentally-named prim.
-        assert!(!is_waypoint_marker_path("/Rover/Wheels/W0"));
-        assert!(!is_waypoint_marker_path("/Rover/W0"));
-        // A `Route` scope whose leaf is not `W<n>` is not a marker.
-        assert!(!is_waypoint_marker_path("/Rover/Route/Start"));
-        assert!(!is_waypoint_marker_path("/Rover/Route/W"));
-        // Bare / edge inputs.
-        assert!(!is_waypoint_marker_path("/Route"));
-        assert!(!is_waypoint_marker_path("/"));
-        assert!(!is_waypoint_marker_path(""));
     }
 }
