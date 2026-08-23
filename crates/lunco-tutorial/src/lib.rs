@@ -41,7 +41,8 @@ use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
 use lunco_workbench::tutorial_overlay::{
-    TutorialHud, TutorialStopRequested, TutorialTargetUnavailable,
+    TutorialHud, TutorialRecovery, TutorialRecoveryContinueRequested,
+    TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
 };
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
@@ -601,6 +602,7 @@ fn reset_hud<H: std::ops::DerefMut<Target = TutorialHud>>(hud: Option<H>) {
     hud.spotlight = None;
     hud.tour = None;
     hud.reported_missing_anchor = None;
+    hud.recovery = None;
 }
 
 /// Headless hosts have no presentation to reset.
@@ -888,10 +890,46 @@ fn on_tutorial_stop_requested(_trigger: On<TutorialStopRequested>, mut commands:
 }
 
 #[cfg(feature = "ui")]
+fn on_tutorial_recovery_continue(
+    _trigger: On<TutorialRecoveryContinueRequested>,
+    hud: Option<ResMut<TutorialHud>>,
+    mut commands: Commands,
+) {
+    let Some(mut hud) = hud else { return };
+    let was_tour = hud.tour.is_some();
+    hud.recovery = None;
+    hud.spotlight = None;
+    hud.tour = None;
+    hud.reported_missing_anchor = None;
+    if was_tour {
+        // Guided tours already use this typed event-bus contract for their
+        // Next button. Continue therefore advances the authored step instead
+        // of silently abandoning the current tour.
+        commands.trigger(TelemetryEvent {
+            name: "cmd:TutorialNext".into(),
+            source: 0,
+            severity: Severity::Info,
+            data: TelemetryValue::Bool(true),
+            timestamp: 0.0,
+        });
+    }
+}
+
+#[cfg(feature = "ui")]
+fn on_tutorial_recovery_retry(
+    _trigger: On<TutorialRecoveryRetryRequested>,
+    hud: Option<ResMut<TutorialHud>>,
+) {
+    let Some(mut hud) = hud else { return };
+    hud.recovery = None;
+    hud.reported_missing_anchor = None;
+}
+
+#[cfg(feature = "ui")]
 fn on_tutorial_target_unavailable(
     trigger: On<TutorialTargetUnavailable>,
     progress: Res<TutorialProgress>,
-    mut commands: Commands,
+    hud: Option<ResMut<TutorialHud>>,
 ) {
     let Some(id) = progress.current.as_deref() else {
         return;
@@ -901,8 +939,13 @@ fn on_tutorial_target_unavailable(
         id,
         trigger.event().anchor
     );
-    commands.trigger(tutorial_failed(detail));
-    commands.trigger(SkipTutorial {});
+    warn!("[tutorial] presentation degraded: {detail}");
+    if let Some(mut hud) = hud {
+        hud.recovery = Some(TutorialRecovery {
+            anchor: trigger.event().anchor.clone(),
+            detail,
+        });
+    }
 }
 
 /// On `MISSION_COMPLETE`, record the completion and advance the chain by starting
@@ -1800,6 +1843,10 @@ impl Plugin for TutorialCorePlugin {
         #[cfg(feature = "ui")]
         app.add_observer(on_tutorial_stop_requested);
         #[cfg(feature = "ui")]
+        app.add_observer(on_tutorial_recovery_continue);
+        #[cfg(feature = "ui")]
+        app.add_observer(on_tutorial_recovery_retry);
+        #[cfg(feature = "ui")]
         app.add_observer(on_tutorial_target_unavailable);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, surface_boot_curriculum_failures);
@@ -2018,6 +2065,84 @@ mod tests {
                 .resource::<WorkbenchLayout>()
                 .active_perspective(),
             Some(lunco_workbench::PerspectiveId("view"))
+        );
+    }
+
+    /// A missing presentation anchor is recoverable: the active lesson host and
+    /// its scene ownership remain alive, and a guided step can advance through
+    /// the same event contract as the coach card's Next button.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn missing_anchor_keeps_lesson_running_and_advances_on_continue() {
+        #[derive(Resource, Default)]
+        struct Seen(Vec<String>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.init_resource::<TutorialHud>();
+        app.init_resource::<Seen>();
+        app.add_observer(|trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>| {
+            if trigger.event().name == "cmd:TutorialNext" {
+                seen.0.push(trigger.event().name.clone());
+            }
+        });
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/RecoverableTour".into(),
+            title: "Recoverable tour".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Tour,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/RecoverableTour".into(),
+        });
+        app.update();
+        app.world_mut().resource_mut::<TutorialHud>().tour =
+            Some(lunco_workbench::tutorial_overlay::TourStep {
+                index: 0,
+                total: 2,
+                anchor: "missing_panel".into(),
+                title: "Step".into(),
+                body: "Body".into(),
+            });
+
+        app.world_mut().trigger(TutorialTargetUnavailable {
+            anchor: "missing_panel".into(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/RecoverableTour")
+        );
+        assert!(app.world().resource::<TutorialHud>().recovery.is_some());
+
+        app.world_mut().trigger(TutorialRecoveryContinueRequested);
+        app.update();
+        assert!(app.world().resource::<TutorialHud>().recovery.is_none());
+        assert!(app.world().resource::<TutorialHud>().tour.is_none());
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec!["cmd:TutorialNext".to_string()]
+        );
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("/Test/RecoverableTour")
         );
     }
 

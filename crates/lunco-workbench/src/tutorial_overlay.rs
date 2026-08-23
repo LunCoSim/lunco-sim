@@ -51,6 +51,20 @@ pub struct TutorialHud {
     /// Last named anchor reported as unavailable. Prevents one render pass
     /// from publishing the same authored UI contract failure every frame.
     pub reported_missing_anchor: Option<String>,
+    /// Recoverable presentation error shown above the lesson instead of
+    /// tearing down its host or the loaded world.
+    pub recovery: Option<TutorialRecovery>,
+}
+
+/// A tutorial presentation problem that does not invalidate the simulation.
+/// The owning tutorial decides what Continue means; the workbench only presents
+/// the recovery action and emits the typed request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TutorialRecovery {
+    /// Authored help-anchor key that could not be resolved.
+    pub anchor: String,
+    /// Human-readable explanation displayed in the recovery surface.
+    pub detail: String,
 }
 
 /// The authored tutorial target could not be resolved in the current workbench
@@ -150,6 +164,15 @@ pub struct ClearTour {}
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct TutorialStopRequested;
 
+/// Continue the current lesson after dismissing a recoverable presentation
+/// problem. The tutorial launcher advances a guided step when one is active.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct TutorialRecoveryContinueRequested;
+
+/// Retry resolving the current authored presentation target.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct TutorialRecoveryRetryRequested;
+
 #[on_command(SetHint)]
 fn on_set_hint(trigger: On<SetHint>, mut hud: ResMut<TutorialHud>) {
     hud.hint = cmd.text.clone();
@@ -164,12 +187,14 @@ fn on_set_objectives(trigger: On<SetObjectives>, mut hud: ResMut<TutorialHud>) {
 fn on_spotlight(trigger: On<Spotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = Some((cmd.anchor.clone(), cmd.text.clone()));
     hud.reported_missing_anchor = None;
+    hud.recovery = None;
 }
 
 #[on_command(ClearSpotlight)]
 fn on_clear_spotlight(trigger: On<ClearSpotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = None;
     hud.reported_missing_anchor = None;
+    hud.recovery = None;
 }
 
 #[on_command(SetTourStep)]
@@ -182,12 +207,14 @@ fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<TutorialHud>) {
         body: cmd.body.clone(),
     });
     hud.reported_missing_anchor = None;
+    hud.recovery = None;
 }
 
 #[on_command(ClearTour)]
 fn on_clear_tour(trigger: On<ClearTour>, mut hud: ResMut<TutorialHud>) {
     hud.tour = None;
     hud.reported_missing_anchor = None;
+    hud.recovery = None;
 }
 
 register_commands!(
@@ -268,6 +295,140 @@ fn draw_tutorial_hud(
                     }
                 });
         });
+}
+
+/// Draw a blocking but non-terminal recovery surface for an unavailable
+/// authored tutorial target. It owns input until the learner chooses an action,
+/// while leaving the lesson host, simulation, and loaded scene alive.
+fn draw_tutorial_recovery(
+    mut egui_ctx: EguiContexts,
+    hud: Res<TutorialHud>,
+    theme: Option<Res<lunco_theme::Theme>>,
+    mut commands: Commands,
+) {
+    let Some(recovery) = hud.recovery.clone() else {
+        return;
+    };
+    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
+    let screen = ctx.viewport_rect();
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let card_fill = {
+        let [r, g, b, _] = theme.tokens.surface_raised.to_array();
+        egui::Color32::from_rgba_unmultiplied(r, g, b, 252)
+    };
+    let card_w = 480.0_f32.min(screen.width() - 32.0).max(280.0);
+    let card_pos = egui::pos2(
+        (screen.center().x - card_w * 0.5).max(screen.left() + 16.0),
+        (screen.center().y - 150.0).max(screen.top() + 48.0),
+    );
+
+    // This scrim is interactive so clicks cannot leak into the scene or the
+    // underlying workbench while the learner chooses a recovery action.
+    egui::Area::new(egui::Id::new("lunco_tutorial_recovery_scrim"))
+        .order(egui::Order::Tooltip)
+        .interactable(true)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter()
+                .rect_filled(rect, 0.0, theme.tokens.scrim.linear_multiply(0.84));
+        });
+
+    let mut continue_lesson = false;
+    let mut retry = false;
+    let mut stop = false;
+    egui::Area::new(egui::Id::new("lunco_tutorial_recovery_card"))
+        .order(egui::Order::Tooltip)
+        .interactable(true)
+        .fixed_pos(card_pos)
+        .show(ctx, |ui| {
+            ui.set_width(card_w);
+            egui::Frame::new()
+                .fill(card_fill)
+                .corner_radius(12.0)
+                .stroke(egui::Stroke::new(1.5, theme.tokens.warning))
+                .inner_margin(egui::Margin::symmetric(20, 16))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (icon_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(28.0, 28.0),
+                            egui::Sense::hover(),
+                        );
+                        crate::paint_icon(
+                            ui.painter(),
+                            crate::UiIcon::Warning,
+                            icon_rect,
+                            theme.tokens.warning,
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Tutorial view unavailable")
+                                    .strong()
+                                    .size(17.0),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "The lesson is still running; only this presentation target is missing.",
+                                )
+                                .color(theme.tokens.text_subdued)
+                                .small(),
+                            );
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(&recovery.detail);
+                    ui.label(
+                        egui::RichText::new(format!("Authored target: {}", recovery.anchor))
+                            .color(theme.tokens.text_subdued)
+                            .small(),
+                    );
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if crate::icon_text_button(
+                            ui,
+                            crate::UiIcon::Forward,
+                            "Continue",
+                            "Continue the lesson without this view",
+                        )
+                        .clicked()
+                        {
+                            continue_lesson = true;
+                        }
+                        if crate::icon_text_button(
+                            ui,
+                            crate::UiIcon::Refresh,
+                            "Retry",
+                            "Try resolving the authored view again",
+                        )
+                        .clicked()
+                        {
+                            retry = true;
+                        }
+                        if crate::icon_text_button(
+                            ui,
+                            crate::UiIcon::Stop,
+                            "Stop",
+                            "Stop the tutorial and clear its owned scene",
+                        )
+                        .clicked()
+                        {
+                            stop = true;
+                        }
+                    });
+                });
+        });
+
+    if continue_lesson {
+        commands.trigger(TutorialRecoveryContinueRequested);
+    }
+    if retry {
+        commands.trigger(TutorialRecoveryRetryRequested);
+    }
+    if stop {
+        commands.trigger(TutorialStopRequested);
+    }
 }
 
 /// The workbench menu bar occupies the first 30 px of the viewport. Keep
@@ -912,7 +1073,8 @@ impl Plugin for TutorialOverlayPlugin {
         );
         app.add_systems(
             EguiPrimaryContextPass,
-            (draw_spotlight, draw_tour).in_set(crate::ApplicationOverlayRenderSet),
+            (draw_spotlight, draw_tour, draw_tutorial_recovery)
+                .in_set(crate::ApplicationOverlayRenderSet),
         );
     }
 }
