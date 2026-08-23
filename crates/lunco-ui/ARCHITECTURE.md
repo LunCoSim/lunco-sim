@@ -87,7 +87,7 @@ commands.spawn((
 
 ### Diagram Widgets
 
-**Time-series charts** — `time_series_plot()` is a pure rendering function. Zero data copies: the domain panel borrows its data, wraps it in `ChartSeries` references, and passes to the widget.
+**Time-series charts** — `time_series_plot()` is a pure rendering function. Domain panels borrow data where the widget API permits it; for `egui_plot` paths that require owned points, the visualization owner retains a history-fingerprint cache and rebuilds it only when samples change.
 
 ```rust
 // Domain panel borrows data, no copying

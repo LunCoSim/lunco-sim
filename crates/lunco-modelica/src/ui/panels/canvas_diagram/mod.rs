@@ -441,6 +441,10 @@ pub struct CanvasDiagramState {
     /// saved viewport is moved onto it; the initial projection then
     /// `snap_to`s it instead of fitting.
     pending_view_restore: std::collections::HashMap<lunco_doc::DocumentId, lunco_canvas::Viewport>,
+    /// Reusable slow-frame phase buffer. Diagnostics are continuous render
+    /// work too; retain the capacity rather than allocating a new Vec for
+    /// every canvas paint that crosses a phase threshold.
+    pub(crate) phase_log: Vec<(&'static str, f64)>,
 }
 
 impl CanvasDiagramState {

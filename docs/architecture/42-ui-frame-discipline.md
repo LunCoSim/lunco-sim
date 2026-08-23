@@ -98,6 +98,24 @@ package — none of these belong on the UI thread every frame. Patterns:
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.
 
+The same ownership rule applies to the measured presentation paths:
+
+- **USD telemetry projection** keeps its generated-wrapper port map and
+  domain-member index in a projection-owned resource. The projector is
+  scheduled only while an unprojected prim or a changed generated wrapper
+  exists; steady frames do not rebuild maps or clone authored path keys.
+- **Graphs** retain the history-to-plot point buffer in the visualization
+  owner, keyed by the history fingerprint. A plot host may clone points at the
+  `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
+  ring buffer merely because the panel painted again.
+- **Canvas edges** retain projected screen geometry by scene generation and
+  viewport key. Scene edits, viewport movement, and panel resizing invalidate
+  that geometry; selection and tool state remain live draw inputs and do not
+  force a route rebuild.
+- **Dock anchors** publish all authored slot unions from one dock-tree walk.
+  Adding another anchor group must extend that pass rather than add another
+  full layout traversal.
+
 ## 4. How to decide
 Quick checklist before you write a `Update` system:
 

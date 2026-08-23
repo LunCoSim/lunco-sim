@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 use bevy_egui::egui::{self, PointerButton};
+use smallvec::SmallVec;
 
 use crate::event::{InputEvent, Modifiers, MouseButton, SceneEvent};
 use crate::layer::{EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer};
@@ -81,6 +82,12 @@ pub struct Canvas {
     /// commit. Set per-frame by the embedding app (typically wired
     /// to a Settings toggle).
     pub snap: Option<SnapSettings>,
+
+    /// Input events are transient and bounded by the number of pointer/key
+    /// signals egui can report in one frame. Retain the buffer and keep the
+    /// common no-heap path on the stack instead of allocating a fresh vector
+    /// for every canvas paint.
+    input_events: SmallVec<[InputEvent; 8]>,
 }
 
 impl Canvas {
@@ -106,6 +113,7 @@ impl Canvas {
             last_pointer_screen: None,
             read_only: false,
             snap: None,
+            input_events: SmallVec::new(),
         }
     }
 
@@ -115,6 +123,7 @@ impl Canvas {
     /// a right-click menu using egui's native popup machinery.
     pub fn ui(&mut self, ui: &mut egui::Ui) -> (egui::Response, Vec<SceneEvent>) {
         let mut events: Vec<SceneEvent> = Vec::new();
+        self.input_events.clear();
 
         // `Sense::click_and_drag()` covers primary interactions;
         // `| Sense::click()` adds secondary-click detection so egui
@@ -156,8 +165,6 @@ impl Canvas {
         // can fire simultaneously on the same frame (click + double-
         // click + drag_started); translate each into its own
         // InputEvent and dispatch in a deterministic order.
-        let mut input_events: Vec<InputEvent> = Vec::new();
-
         // Primary button press / move / release via **raw input**.
         // `response.drag_started_by(Primary)` only fires when the
         // press turns into a drag — plain clicks (press + release
@@ -191,7 +198,7 @@ impl Canvas {
                 if let Some(p) = pointer {
                     let screen = Pos::new(p.x, p.y);
                     let world = self.viewport.screen_to_world(screen, screen_rect);
-                    input_events.push(InputEvent::PointerDown {
+                    self.input_events.push(InputEvent::PointerDown {
                         button: MouseButton::Primary,
                         world,
                         screen,
@@ -216,7 +223,7 @@ impl Canvas {
                     let cy = p.y.clamp(rect.min.y, rect.max.y);
                     let screen = Pos::new(cx, cy);
                     let world = self.viewport.screen_to_world(screen, screen_rect);
-                    input_events.push(InputEvent::PointerMove {
+                    self.input_events.push(InputEvent::PointerMove {
                         world,
                         screen,
                         modifiers,
@@ -286,7 +293,7 @@ impl Canvas {
                 let cy = p.y.clamp(rect.min.y, rect.max.y);
                 let screen = Pos::new(cx, cy);
                 let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::PointerUp {
+                self.input_events.push(InputEvent::PointerUp {
                     button: MouseButton::Primary,
                     world,
                     screen,
@@ -341,7 +348,7 @@ impl Canvas {
             {
                 let screen = Pos::new(p.x, p.y);
                 let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::DoubleClick {
+                self.input_events.push(InputEvent::DoubleClick {
                     world,
                     screen,
                     modifiers,
@@ -363,7 +370,7 @@ impl Canvas {
             ];
             for (name, key) in key_names {
                 if ui.ctx().input(|i| i.key_pressed(*key)) {
-                    input_events.push(InputEvent::Key { name, modifiers });
+                    self.input_events.push(InputEvent::Key { name, modifiers });
                 }
             }
         }
@@ -376,7 +383,7 @@ impl Canvas {
             if scroll.abs() > 0.0 {
                 if let Some(screen) = self.last_pointer_screen {
                     let world = self.viewport.screen_to_world(screen, screen_rect);
-                    input_events.push(InputEvent::Scroll {
+                    self.input_events.push(InputEvent::Scroll {
                         delta_y: scroll,
                         screen,
                         modifiers,
@@ -387,7 +394,11 @@ impl Canvas {
         }
 
         // ── Event dispatch ────────────────────────────────────────
-        for ev in &input_events {
+        for index in 0..self.input_events.len() {
+            // Clone the small, value-only input record so navigation can
+            // mutably borrow the Canvas after tool dispatch without keeping
+            // an immutable borrow into the retained input buffer alive.
+            let ev = self.input_events[index].clone();
             let outcome = {
                 let mut ops = CanvasOps {
                     scene: &mut self.scene,
@@ -397,10 +408,10 @@ impl Canvas {
                     read_only: self.read_only,
                     snap: self.snap,
                 };
-                self.tool.handle(ev, &mut ops)
+                self.tool.handle(&ev, &mut ops)
             };
             if outcome == ToolOutcome::Passthrough {
-                self.handle_navigation(ev, screen_rect);
+                self.handle_navigation(&ev, screen_rect);
             }
         }
 
@@ -452,14 +463,13 @@ impl Canvas {
             // `Option<ToolPreview>` so the layer can distinguish
             // "no preview" from "zero-length preview".
             let preview: Option<crate::tool::ToolPreview> = self.tool.preview();
-            let extras: Box<dyn std::any::Any> = Box::new(preview);
             for layer in &mut self.layers {
                 let mut ctx = DrawCtx {
                     ui,
                     viewport: &self.viewport,
                     screen_rect,
                     time,
-                    extras: &*extras,
+                    extras: &preview,
                 };
                 layer.draw(&mut ctx, &self.scene, &self.selection);
             }

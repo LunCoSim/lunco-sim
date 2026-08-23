@@ -3066,28 +3066,48 @@ fn first_leaf(surface: &mut egui_dock::Tree<TabId>) -> Option<NodeIndex> {
 }
 
 /// Return the screen rect occupied by the dock leaves containing any panel in
-/// `ids`. Generic tutorial anchors describe the authored workbench slot, not a
-/// particular tab, so a stacked slot is represented by the union of its
-/// leaves.
-fn dock_group_rect(dock: &egui_dock::DockState<TabId>, ids: &[PanelId]) -> Option<egui::Rect> {
-    if ids.is_empty() {
-        return None;
+/// each requested group. Generic tutorial anchors describe authored
+/// workbench slots, not particular tabs, so a stacked slot is represented by
+/// the union of its leaves. The dock tree is walked once for all three groups;
+/// anchor publication must not turn one layout pass into three full scans.
+fn dock_group_rects(
+    dock: &egui_dock::DockState<TabId>,
+    side_browser: &[PanelId],
+    right_inspector: &[PanelId],
+    bottom: &[PanelId],
+) -> (Option<egui::Rect>, Option<egui::Rect>, Option<egui::Rect>) {
+    if side_browser.is_empty() && right_inspector.is_empty() && bottom.is_empty() {
+        return (None, None, None);
     }
 
-    let mut rect = None;
+    let mut side_rect = None;
+    let mut right_rect = None;
+    let mut bottom_rect = None;
     for node in dock.main_surface().iter() {
         let egui_dock::Node::Leaf(leaf) = node else {
             continue;
         };
-        let contains_group_tab = leaf.tabs.iter().any(|tab| match tab {
-            TabId::Singleton(id) => ids.contains(id),
-            TabId::Instance { kind, .. } => ids.contains(kind),
-        });
-        if contains_group_tab {
-            rect = Some(rect.map_or(leaf.rect, |current: egui::Rect| current.union(leaf.rect)));
+        let contains = |ids: &[PanelId]| {
+            !ids.is_empty()
+                && leaf.tabs.iter().any(|tab| match tab {
+                    TabId::Singleton(id) => ids.contains(id),
+                    TabId::Instance { kind, .. } => ids.contains(kind),
+                })
+        };
+        if contains(side_browser) {
+            side_rect =
+                Some(side_rect.map_or(leaf.rect, |current: egui::Rect| current.union(leaf.rect)));
+        }
+        if contains(right_inspector) {
+            right_rect =
+                Some(right_rect.map_or(leaf.rect, |current: egui::Rect| current.union(leaf.rect)));
+        }
+        if contains(bottom) {
+            bottom_rect =
+                Some(bottom_rect.map_or(leaf.rect, |current: egui::Rect| current.union(leaf.rect)));
         }
     }
-    rect
+    (side_rect, right_rect, bottom_rect)
 }
 
 /// First leaf containing any tab for which `pred` returns `true`.
@@ -4715,13 +4735,15 @@ fn render_layout(
             // perspective uses egui_dock.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.center", screen);
-                if let Some(rect) = dock_group_rect(dock, side_browser) {
+                let (side_rect, right_rect, bottom_rect) =
+                    dock_group_rects(dock, side_browser, right_inspector, bottom);
+                if let Some(rect) = side_rect {
                     a.set("panel.side_browser", rect);
                 }
-                if let Some(rect) = dock_group_rect(dock, right_inspector) {
+                if let Some(rect) = right_rect {
                     a.set("panel.right_inspector", rect);
                 }
-                if let Some(rect) = dock_group_rect(dock, bottom) {
+                if let Some(rect) = bottom_rect {
                     a.set("panel.bottom", rect);
                 }
             }

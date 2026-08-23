@@ -7203,6 +7203,7 @@ dependencies = [
  "lunco-theme",
  "serde",
  "serde_json",
+ "smallvec",
  "smol_str 0.3.6",
 ]
 

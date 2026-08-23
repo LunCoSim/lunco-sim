@@ -159,6 +159,11 @@ pub struct EdgesLayer {
     /// swapped-in scene can never coincidentally match a value this
     /// layer has already observed.
     incidence_gen: u64,
+    /// Screen-space edge geometry is derived from the scene revision and the
+    /// current viewport. Retain it while neither changed; stable Canvas
+    /// frames then draw cached waypoints instead of allocating/projecting a
+    /// vector for every edge.
+    screen_cache: std::collections::HashMap<crate::scene::EdgeId, CachedEdgeGeometry>,
 }
 
 /// Cached, already-built edge visual plus its build identity (CQ-202).
@@ -168,6 +173,25 @@ struct CachedEdgeVisual {
     visual: Box<dyn crate::visual::EdgeVisual>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EdgeScreenKey {
+    scene_generation: u64,
+    rect_min_x: u32,
+    rect_min_y: u32,
+    rect_max_x: u32,
+    rect_max_y: u32,
+    center_x: u32,
+    center_y: u32,
+    zoom: u32,
+}
+
+struct CachedEdgeGeometry {
+    key: EdgeScreenKey,
+    from: crate::scene::Pos,
+    to: crate::scene::Pos,
+    waypoints: Vec<crate::scene::Pos>,
+}
+
 impl EdgesLayer {
     pub fn new(registry: std::sync::Arc<VisualRegistry>) -> Self {
         Self {
@@ -175,6 +199,7 @@ impl EdgesLayer {
             visual_cache: std::collections::HashMap::new(),
             incidence: std::collections::HashMap::new(),
             incidence_gen: u64::MAX,
+            screen_cache: std::collections::HashMap::new(),
         }
     }
 }
@@ -182,6 +207,16 @@ impl EdgesLayer {
 impl Layer for EdgesLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, scene: &Scene, selection: &Selection) {
         let sr = ctx.screen_rect;
+        let screen_key = EdgeScreenKey {
+            scene_generation: scene.generation(),
+            rect_min_x: sr.min.x.to_bits(),
+            rect_min_y: sr.min.y.to_bits(),
+            rect_max_x: sr.max.x.to_bits(),
+            rect_max_y: sr.max.y.to_bits(),
+            center_x: ctx.viewport.center.x.to_bits(),
+            center_y: ctx.viewport.center.y.to_bits(),
+            zoom: ctx.viewport.zoom.to_bits(),
+        };
         // Pre-pass: count edge incidences per (node, port) endpoint
         // so we know which ports host a junction (≥3 wires meet
         // there) — Dymola/OMEdit draw a small filled circle at
@@ -212,7 +247,7 @@ impl Layer for EdgesLayer {
         // Split borrows so the per-edge visual cache (mutated below) and the
         // registry (read) don't alias.
         let registry = &self.registry_handle;
-        let visual_cache = &mut self.visual_cache;
+        let (visual_cache, screen_cache) = (&mut self.visual_cache, &mut self.screen_cache);
         for (eid, edge) in scene.edges() {
             let Some(from_node) = scene.node(edge.from.node) else {
                 continue;
@@ -283,28 +318,43 @@ impl Layer for EdgesLayer {
                 );
             }
             let selected = selection.contains(crate::selection::SelectItem::Edge(*eid));
-            // Project the live waypoints (mid-drag this is what the
-            // tool just mutated) into screen space, with the same
-            // pixel-snap as the endpoints so the polyline stays
-            // aligned across zoom levels.
-            let waypoints_screen: Vec<crate::scene::Pos> = edge
-                .waypoints
-                .iter()
-                .map(|w| {
+            let geometry = screen_cache.entry(*eid).or_insert_with(|| {
+                let waypoints = edge
+                    .waypoints
+                    .iter()
+                    .map(|w| {
+                        let s = ctx.viewport.world_to_screen(*w, sr);
+                        crate::scene::Pos::new(s.x.round(), s.y.round())
+                    })
+                    .collect();
+                CachedEdgeGeometry {
+                    key: screen_key,
+                    from: from_s,
+                    to: to_s,
+                    waypoints,
+                }
+            });
+            if geometry.key != screen_key {
+                geometry.key = screen_key;
+                geometry.from = from_s;
+                geometry.to = to_s;
+                geometry.waypoints.clear();
+                geometry.waypoints.extend(edge.waypoints.iter().map(|w| {
                     let s = ctx.viewport.world_to_screen(*w, sr);
                     crate::scene::Pos::new(s.x.round(), s.y.round())
-                })
-                .collect();
+                }));
+            }
             visual_cache.get(eid).unwrap().visual.draw(
                 ctx,
-                from_s,
-                to_s,
-                &waypoints_screen,
+                geometry.from,
+                geometry.to,
+                &geometry.waypoints,
                 selected,
             );
         }
         // Evict visuals for edges that no longer exist (CQ-202).
         visual_cache.retain(|id, _| scene.edge(*id).is_some());
+        screen_cache.retain(|id, _| scene.edge(*id).is_some());
         // Post-pass: junction dots. A small filled circle at any
         // port that hosts ≥3 incident wires. Drawn on top of the
         // edges (last in this layer) but still under the nodes
