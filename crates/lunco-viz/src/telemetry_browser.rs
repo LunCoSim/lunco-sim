@@ -88,9 +88,9 @@ pub struct TelemetryBrowserView {
 /// Presentation-only preferences for the telemetry browser.
 ///
 /// These settings never change samples, deadbands, units, or plot data. They
-/// control only the compact latest-value cells in this panel, so the operator
-/// can suppress numerical noise without losing the underlying state in the
-/// shared registry or API.
+/// control only the telemetry browser presentation, so the operator can
+/// suppress numerical noise or historical rows without losing the underlying
+/// state in the shared registry or API.
 #[derive(Resource, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TelemetryDisplaySettings {
     /// Number of significant digits used in a compact value cell.
@@ -103,6 +103,11 @@ pub struct TelemetryDisplaySettings {
     /// unchanged.
     #[serde(default)]
     pub show_generated_names: bool,
+    /// Include retained channels whose publisher no longer exists.  Current
+    /// scene telemetry stays live-only by default; history remains available
+    /// through the explicit telemetry/API history surfaces.
+    #[serde(default)]
+    pub show_archived: bool,
 }
 
 impl Default for TelemetryDisplaySettings {
@@ -111,6 +116,7 @@ impl Default for TelemetryDisplaySettings {
             significant_digits: 4,
             zero_threshold: 1.0e-4,
             show_generated_names: false,
+            show_archived: false,
         }
     }
 }
@@ -333,13 +339,15 @@ fn model_state_identity(row: &Row) -> Option<ModelStateIdentity> {
     })
 }
 
-/// Prefer the public channel, then the exact canonical authored channel. A
+/// Prefer a live channel, then the public channel, then the exact canonical
+/// authored channel. A
 /// generated wrapper may expose one authored value through several public or
 /// internal paths; only the path named by `canonical_name` is the
 /// operator-facing address. This is presentation selection only: all other
 /// signal identities remain in the registry and remain valid plot/API sources.
-fn model_state_priority(row: &Row) -> (u8, u8) {
+fn model_state_priority(row: &Row) -> (u8, u8, u8) {
     (
+        (row.active) as u8,
         (row.exposure == SignalExposure::Public) as u8,
         (row.canonical_name.as_deref() == Some(row.sig.path.as_str())) as u8,
     )
@@ -660,10 +668,12 @@ fn row_visible(
     row: &Row,
     scoped: bool,
     show_model_variables: bool,
+    show_archived: bool,
     filter: &str,
     label: &str,
 ) -> bool {
-    (show_model_variables || row.exposure == SignalExposure::Public)
+    (show_archived || row.active)
+        && (show_model_variables || row.exposure == SignalExposure::Public)
         && (!scoped || row.in_focus)
         && filter_match(
             filter,
@@ -713,15 +723,30 @@ fn tree_any_row(node: &TreeNode, predicate: impl Fn(&Row) -> bool + Copy) -> boo
             .any(|child| tree_any_row(child, predicate))
 }
 
-fn visible_count(node: &TreeNode, scoped: bool, show_model_variables: bool, filter: &str) -> usize {
+fn visible_count(
+    node: &TreeNode,
+    scoped: bool,
+    show_model_variables: bool,
+    show_archived: bool,
+    filter: &str,
+) -> usize {
     node.rows
         .iter()
-        .filter(|r| row_visible(r, scoped, show_model_variables, filter, &node.label))
+        .filter(|r| {
+            row_visible(
+                r,
+                scoped,
+                show_model_variables,
+                show_archived,
+                filter,
+                &node.label,
+            )
+        })
         .count()
         + node
             .children
             .values()
-            .map(|c| visible_count(c, scoped, show_model_variables, filter))
+            .map(|c| visible_count(c, scoped, show_model_variables, show_archived, filter))
             .sum::<usize>()
 }
 
@@ -743,13 +768,14 @@ fn render_tree_node(
     theme: &lunco_theme::Theme,
     scoped: bool,
     show_model_variables: bool,
+    show_archived: bool,
     display_settings: &TelemetryDisplaySettings,
     filter: &str,
     selected: Option<&SignalRef>,
     depth: usize,
     clicked: &mut Option<SignalRef>,
 ) {
-    let visible = visible_count(node, scoped, show_model_variables, filter);
+    let visible = visible_count(node, scoped, show_model_variables, show_archived, filter);
     if visible == 0 {
         return;
     }
@@ -767,6 +793,7 @@ fn render_tree_node(
                 theme,
                 scoped,
                 show_model_variables,
+                show_archived,
                 display_settings,
                 filter,
                 selected,
@@ -779,11 +806,16 @@ fn render_tree_node(
             .striped(true)
             .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
             .show(ui, |ui| {
-                for row in node
-                    .rows
-                    .iter()
-                    .filter(|r| row_visible(r, scoped, show_model_variables, filter, &node.label))
-                {
+                for row in node.rows.iter().filter(|r| {
+                    row_visible(
+                        r,
+                        scoped,
+                        show_model_variables,
+                        show_archived,
+                        filter,
+                        &node.label,
+                    )
+                }) {
                     let latest = registry
                         .scalar_history(&row.sig)
                         .and_then(|h| h.samples.back())
@@ -1161,6 +1193,12 @@ impl Panel for TelemetryBrowserPanel {
                      Canonical USD-facing channels remain visible; implementation rows are \
                      marked internal and keep their generated identity.",
                 );
+            ui.checkbox(&mut display_settings.show_archived, "Archived histories")
+                .on_hover_text(
+                    "Include retained channels whose publisher no longer exists. Current \
+                     scene telemetry stays live-only by default; history remains available \
+                     through the telemetry/API history surfaces.",
+                );
             ui.menu_button("Display", |ui| {
                 ui.label("Latest-value formatting");
                 ui.add(
@@ -1269,7 +1307,11 @@ impl Panel for TelemetryBrowserPanel {
         // channels" case below needs to know the difference between "no channels"
         // and "none in scope".
         let scoped = self.focus_only && !focus.is_empty();
-        if scoped && !tree_any_row(&self.catalog.root, |row| row.in_focus) {
+        if scoped
+            && !tree_any_row(&self.catalog.root, |row| {
+                row.in_focus && (row.active || display_settings.show_archived)
+            })
+        {
             ui.label(
                 egui::RichText::new(
                     "The selection publishes no telemetry yet — start its simulation or untick \
@@ -1283,6 +1325,7 @@ impl Panel for TelemetryBrowserPanel {
             &self.catalog.root,
             scoped,
             self.show_model_variables,
+            display_settings.show_archived,
             &self.filter,
         ) == 0
         {
@@ -1297,8 +1340,20 @@ impl Panel for TelemetryBrowserPanel {
         }
 
         if !self.show_model_variables {
-            let public_count = visible_count(&self.catalog.root, scoped, false, &self.filter);
-            let complete_count = visible_count(&self.catalog.root, scoped, true, &self.filter);
+            let public_count = visible_count(
+                &self.catalog.root,
+                scoped,
+                false,
+                display_settings.show_archived,
+                &self.filter,
+            );
+            let complete_count = visible_count(
+                &self.catalog.root,
+                scoped,
+                true,
+                display_settings.show_archived,
+                &self.filter,
+            );
             let hidden_count = complete_count.saturating_sub(public_count);
             if hidden_count > 0 {
                 ui.label(
@@ -1330,6 +1385,7 @@ impl Panel for TelemetryBrowserPanel {
                         &theme,
                         scoped,
                         self.show_model_variables,
+                        display_settings.show_archived,
                         &display_settings,
                         &self.filter,
                         self.selected.as_ref(),
@@ -1347,6 +1403,10 @@ impl Panel for TelemetryBrowserPanel {
         let Some(sel) = self.selected.clone() else {
             return;
         };
+        if !display_settings.show_archived && !registry.is_active(&sel) {
+            self.selected = None;
+            return;
+        }
         ui.separator();
         let metadata = registry.meta(&sel);
         if !self.show_model_variables
@@ -1514,6 +1574,50 @@ mod tests {
     #[test]
     fn telemetry_browser_starts_with_complete_model_state_visible() {
         assert!(TelemetryBrowserPanel::default().show_model_variables);
+        assert!(!TelemetryDisplaySettings::default().show_archived);
+    }
+
+    #[test]
+    fn archived_rows_are_hidden_without_erasing_their_history() {
+        let entity = ent(1);
+        let signal = SignalRef::new(entity, "old_state");
+        let mut reg = SignalRegistry::default();
+        reg.push_scalar(signal.clone(), 0.0, 1.0);
+        reg.deactivate_signal(&signal);
+
+        let rows = deduplicated_rows(&reg);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].active);
+        assert!(reg.scalar_history(&signal).is_some());
+        assert!(!row_visible(&rows[0], false, true, false, "", "Rover"));
+        assert!(row_visible(&rows[0], false, true, true, "", "Rover"));
+    }
+
+    #[test]
+    fn live_model_state_wins_over_an_archived_alias() {
+        let entity = ent(1);
+        let archived = SignalRef::new(entity, "old_state");
+        let live = SignalRef::new(entity, "new_state");
+        let mut reg = SignalRegistry::default();
+        for signal in [&archived, &live] {
+            reg.push_scalar(signal.clone(), 0.0, 1.0);
+            reg.update_meta(
+                signal.clone(),
+                crate::signal::SignalMeta {
+                    group_path: Some("/Traverse/Rover/Motor".into()),
+                    model_class: Some("LunCo.Electrical.Motor".into()),
+                    model_variable: Some("power_w".into()),
+                    exposure: SignalExposure::Internal,
+                    ..Default::default()
+                },
+            );
+        }
+        reg.deactivate_signal(&archived);
+
+        let rows = deduplicated_rows(&reg);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sig, live);
+        assert!(rows[0].active);
     }
 
     #[test]

@@ -29,6 +29,11 @@ the boundary channel is the single public representation; its generated member a
 internal so one physical value cannot appear twice. The alias remains retained and queryable for
 diagnostics, with the canonical relationship shown in its metadata.
 
+Retained history whose publisher has disappeared is not part of the normal live telemetry
+tree. The browser defaults to current publishers and exposes archived history only through
+an explicit display setting; `ListTelemetryChannels` keeps the `active` field so API clients
+can make the same live-versus-history choice without guessing from names.
+
 All operator-facing channel labels go through `lunco_viz::signal::display_channel_label`, which
 uses the same identifier humanizer and ownership-relative shortening in the telemetry browser,
 plot controls, legends, and exports. The generated-name setting only selects the presentation

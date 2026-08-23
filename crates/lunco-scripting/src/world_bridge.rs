@@ -374,16 +374,6 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// same alias for different modules would silently shadow each other. Per-scenario
 /// state must not be stored on a shared engine.
 ///
-/// # Known gap
-///
-/// This covers the LIFECYCLE hooks (`on_start`/`on_tick`/`on_stop`/`on_event`),
-/// which is where scenarios live. It does not cover a closure invoked through
-/// `FnPtr::call` by the native task tree (`tick_native_task`) or the prelude
-/// drivers: `FnPtr::call` takes an `AST` but has no `eval_ast` switch, so there is
-/// no place to re-run the imports. A closure that references an imported alias
-/// still throws `Module not found`, and the author must `import` inside it. Fixing
-/// that needs a different lever than this one.
-///
 /// # Extraction
 ///
 /// `AST::statements()` is behind rhai's `internals` feature, which this workspace
@@ -391,9 +381,9 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// small scanner that tracks string/comment state and brace depth. Only depth-0
 /// statements whose first token is `import` are taken — an `import` inside a `fn`
 /// is already visible to that `fn` and must not be hoisted. Anything the scanner
-/// mis-reads shows up as a parse failure of the extracted snippet, which the
-/// caller treats as "no imports to hoist" (today's behaviour), never as a
-/// corrupted program.
+/// mis-reads shows up as a parse failure of the extracted snippet. The compile
+/// path reports that failure at authoring time; it never falls back to a second,
+/// semantically different execution path.
 ///
 /// # Why `const` is hoisted alongside `import`
 ///
@@ -538,31 +528,20 @@ fn top_level_hoist_source(source: &str) -> Option<String> {
 /// takes its functions without its statements, so merging gives exactly
 /// `imports + every callable`, which is what a hook call needs.
 ///
-/// Returns `None` — meaning "hoist nothing, behave as before" — when the script
-/// has no top-level imports or consts, or when the extracted snippet does not
-/// parse. The
-/// latter can only happen if the text scanner mis-read the source; failing soft
-/// keeps a scanner bug from turning a working scenario into a compile error, and
-/// the warning names the snippet so it is diagnosable.
+/// Returns `Ok(None)` when the script has no top-level imports or consts. If the
+/// extracted snippet does not parse, compilation fails: silently returning the
+/// old AST would make the authored script fail later, inside a hook, with a
+/// misleading missing-module/global error.
 fn build_hoisted_ast(
     engine: &Engine,
     source: &str,
     full: &AST,
     asset_id: Option<&str>,
-) -> Option<AST> {
-    let hoisted = top_level_hoist_source(source)?;
-    let head = match engine.compile(&hoisted) {
-        Ok(a) => a,
-        Err(e) => {
-            warn!(
-                "[rhai] could not hoist top-level imports/consts into function scope \
-                 ({e}); a `fn` referring to an imported alias will fail with \
-                 `Module not found`, and one reading `global::X` with \
-                 `Variable not found`. Extracted snippet:\n{hoisted}"
-            );
-            return None;
-        }
+) -> Result<Option<AST>, rhai::ParseError> {
+    let Some(hoisted) = top_level_hoist_source(source) else {
+        return Ok(None);
     };
+    let head = engine.compile(&hoisted)?;
     let mut merged = head.merge(&full.clone_functions_only());
     // `AST::merge` adopts the RIGHT operand's source and drops both if it has
     // none, so set the id on the RESULT rather than relying on either input —
@@ -571,7 +550,36 @@ fn build_hoisted_ast(
     if let Some(id) = asset_id {
         merged.set_source(id);
     }
-    Some(merged)
+    Ok(Some(merged))
+}
+
+/// The only script executed for a native task leaf. Passing the [`FnPtr`] into
+/// a tiny Rhai function is deliberate: a direct `FnPtr::call` creates its own
+/// runtime state and has no `eval_ast` option, so top-level imports are absent
+/// while a closure body runs. Calling the pointer from this function keeps it in
+/// the same evaluation whose task AST loaded the scenario's imports.
+const TASK_INVOKER_FN: &str = "__luncosim_invoke_task";
+const TASK_INVOKER_SOURCE: &str = "fn __luncosim_invoke_task(f, me) { f.call(me) }";
+
+/// Build the AST used by native task leaves. It contains the same callable
+/// functions as the scenario, the authored imports/consts when there are any,
+/// and the small invoker above. It has no world-touching top-level statements
+/// other than the imports/consts intentionally hoisted for this call.
+fn build_task_ast(
+    engine: &Engine,
+    full: &AST,
+    imports: Option<&AST>,
+    asset_id: Option<&str>,
+) -> Result<AST, rhai::ParseError> {
+    let invoker = engine.compile(TASK_INVOKER_SOURCE)?;
+    let base = imports
+        .cloned()
+        .unwrap_or_else(|| full.clone_functions_only());
+    let mut merged = base.merge(&invoker);
+    if let Some(id) = asset_id {
+        merged.set_source(id);
+    }
+    Ok(merged)
 }
 
 fn compile_prelude_set(
@@ -1224,6 +1232,10 @@ struct CompiledProgram {
     /// `None` when the script imports nothing. See [`top_level_hoist_source`] for
     /// why this is the shape of the fix.
     imports_ast: Option<AST>,
+    /// Callable task invoker plus the same import/const body as `imports_ast`.
+    /// This is separate from the lifecycle target because native task leaves
+    /// need a Rhai call context while lifecycle hooks need a named function.
+    task_ast: AST,
     mask: ProgramMask,
 }
 
@@ -1239,6 +1251,10 @@ impl CompiledProgram {
             Some(a) => (a, true),
             None => (&self.ast, false),
         }
+    }
+
+    fn task_target(&self) -> (&AST, bool) {
+        (&self.task_ast, self.imports_ast.is_some())
     }
 }
 
@@ -1477,10 +1493,36 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast = build_hoisted_ast(&self.engine, source, &ast, asset_id);
+                        let imports_ast =
+                            match build_hoisted_ast(&self.engine, source, &ast, asset_id) {
+                                Ok(ast) => ast,
+                                Err(e) => {
+                                    error!(
+                                    "[rhai] entity {entity:?} generated import scope failed: {e}"
+                                );
+                                    let d = rhai_diagnostic(e.to_string(), e.position());
+                                    self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                    return CompileOutcome::Failed(d);
+                                }
+                            };
+                        let task_ast = match build_task_ast(
+                            &self.engine,
+                            &ast,
+                            imports_ast.as_ref(),
+                            asset_id,
+                        ) {
+                            Ok(ast) => ast,
+                            Err(e) => {
+                                error!("[rhai] entity {entity:?} generated task scope failed: {e}");
+                                let d = rhai_diagnostic(e.to_string(), e.position());
+                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                return CompileOutcome::Failed(d);
+                            }
+                        };
                         let p = Arc::new(CompiledProgram {
                             ast,
                             imports_ast,
+                            task_ast,
                             mask,
                         });
                         self.compiled.insert(key, CacheEntry::Ok(p.clone()));
@@ -1808,12 +1850,17 @@ fn call_event_hook(
 /// that live in the prelude, so the AST-presence gate in [`call_hook`] would skip
 /// them. A missing function (a custom prelude without the driver) is benign.
 /// One tick's world access for the native task tree: leaves call script
-/// closures through the entity's own program AST (closures carry their
-/// captures by currying — same visibility the retired rhai engine gave them;
-/// named-fn pointers resolve against the merged prelude+user AST).
+/// closures through a tiny invoker in the entity's task AST. Closures carry
+/// their captures by currying, while the invoker keeps top-level imports and
+/// constants in the same Rhai evaluation as the closure body.
 struct RhaiTaskCtx {
     engine: std::sync::Arc<Engine>,
     program: Arc<CompiledProgram>,
+    /// Persistent per-entity scope moved into the task context for the tick.
+    /// It is returned to `RhaiScenarioState` after the kernel advances, so task
+    /// closures observe the same top-level globals as lifecycle hooks without
+    /// borrowing the state through the `'static` task-tree context.
+    scope: rhai::Scope<'static>,
     /// Host gid, passed to every leaf closure (the `|m| …` argument).
     me: i64,
     now: f64,
@@ -1831,6 +1878,20 @@ impl RhaiTaskCtx {
             self.error = Some((e.to_string(), e.position()));
         }
     }
+
+    fn call_fn(&mut self, f: &FnPtr) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+        let (ast, eval_ast) = self.program.task_target();
+        let options = rhai::CallFnOptions::new()
+            .eval_ast(eval_ast)
+            .rewind_scope(false);
+        self.engine.call_fn_with_options(
+            options,
+            &mut self.scope,
+            ast,
+            TASK_INVOKER_FN,
+            [Dynamic::from(f.clone()), Dynamic::from_int(self.me)],
+        )
+    }
 }
 
 impl crate::task_tree::TaskCtx for RhaiTaskCtx {
@@ -1844,7 +1905,7 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
         bridge_core::find(path)
     }
     fn call_action(&mut self, f: &FnPtr) -> Result<(), crate::task_tree::TaskCallbackError> {
-        match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
+        match self.call_fn(f) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.note(e);
@@ -1853,7 +1914,7 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
         }
     }
     fn call_pred(&mut self, f: &FnPtr) -> Result<bool, crate::task_tree::TaskCallbackError> {
-        match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
+        match self.call_fn(f) {
             Ok(d) => d.as_bool().map_err(|t| {
                 error!("[rhai] task predicate returned `{t}`, expected bool");
                 if self.error.is_none() {
@@ -1945,19 +2006,25 @@ fn tick_native_task(
     }
 
     let program = st.program.clone();
-    let ct = st.task.as_mut()?;
+    let Some(ct) = st.task.as_mut() else {
+        return None;
+    };
     if ct.done {
         return None;
     }
+    let scope = std::mem::take(&mut st.scope);
     let mut ctx = RhaiTaskCtx {
         engine: engine.clone(),
         program,
+        scope,
         me: self_gid,
         now: bridge_core::elapsed_seconds(),
         events,
         error: None,
     };
     let status = ct.tree.tick(&mut ctx);
+    let task_error = ctx.error;
+    st.scope = ctx.scope;
     match status {
         lunco_behavior::Status::Running => {}
         lunco_behavior::Status::Success => {
@@ -1970,7 +2037,7 @@ fn tick_native_task(
             bridge_core::emit("TASK_FAILED", TelemetryValue::I64(0));
         }
     }
-    ctx.error
+    task_error
 }
 
 fn call_prelude_driver(
@@ -2155,11 +2222,12 @@ mod tests {
         );
 
         // The line under test. Before the fix: panic → app down.
+        let deferred_generation = rt.tool_gen;
         rt.maintain();
 
         assert_eq!(
-            rt.tool_gen, rt.tool_gen,
-            "survived the contended maintain (a panic here is the bug)"
+            deferred_generation, rt.tool_gen,
+            "contended maintain must return without changing the generation"
         );
         assert_ne!(
             rt.tool_gen, bumped,
@@ -2360,6 +2428,7 @@ mod tests {
         // The fix: hook calls run against imports-only + all functions.
         let imports_ast =
             super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
+                .expect("hoisted imports must parse")
                 .expect("script has a top-level import, so an imports AST must be built");
         let mut scope = rhai::Scope::new();
         let got = engine
@@ -2376,6 +2445,48 @@ mod tests {
         assert_eq!(got, 7);
     }
 
+    /// Native task leaves use the same import contract as lifecycle hooks. A
+    /// closure is created in the scenario's evaluation, then invoked from the
+    /// native kernel; the task invoker must preserve the top-level module scope
+    /// instead of requiring authors to repeat the import inside every closure.
+    #[test]
+    fn native_task_closure_sees_top_level_import() {
+        let engine = engine_with_sibling("twin://ep1/shot_camera.rhai", "fn framing() { 7 }");
+        let src = r#"
+            import "shot_camera" as cam;
+            fn make_action() { |me| cam::framing() + me }
+        "#;
+
+        let mut full = super::compile_with_script_consts(&engine, src).unwrap();
+        full.set_source("twin://ep1/main.rhai");
+        let imports = super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
+            .expect("hoisted imports must parse")
+            .expect("the scenario has a top-level import");
+        let task_ast =
+            super::build_task_ast(&engine, &full, Some(&imports), Some("twin://ep1/main.rhai"))
+                .expect("task invoker must compile");
+
+        let action: rhai::FnPtr = engine
+            .call_fn_with_options(
+                rhai::CallFnOptions::new().eval_ast(true),
+                &mut rhai::Scope::new(),
+                &imports,
+                "make_action",
+                (),
+            )
+            .expect("closure factory must run");
+        let result: i64 = engine
+            .call_fn_with_options(
+                rhai::CallFnOptions::new().eval_ast(true),
+                &mut rhai::Scope::new(),
+                &task_ast,
+                super::TASK_INVOKER_FN,
+                [rhai::Dynamic::from(action), rhai::Dynamic::from_int(3)],
+            )
+            .expect("native task invoker must preserve imports");
+        assert_eq!(result, 10);
+    }
+
     /// No top-level imports ⇒ no second AST ⇒ hook calls keep using the full
     /// program with `eval_ast(false)`, i.e. today's behaviour and cost.
     #[test]
@@ -2383,7 +2494,9 @@ mod tests {
         let engine = super::build_world_engine(Default::default());
         let src = "fn on_tick(me) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(super::build_hoisted_ast(&engine, src, &full, None).is_none());
+        assert!(super::build_hoisted_ast(&engine, src, &full, None)
+            .unwrap()
+            .is_none());
     }
 
     /// The extractor takes only DEPTH-0 imports, and is not fooled by imports
@@ -2502,6 +2615,7 @@ mod tests {
         "#;
         let full = super::compile_with_script_consts(&engine, src).unwrap();
         let hoisted = super::build_hoisted_ast(&engine, src, &full, None)
+            .expect("hoisted const must parse")
             .expect("a top-level const must produce a hoist AST");
 
         let mut scope = rhai::Scope::new();
