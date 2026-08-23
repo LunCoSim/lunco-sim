@@ -1085,6 +1085,14 @@ pub struct WorkbenchLayout {
     pub(crate) instance_panels: HashMap<PanelId, Box<dyn InstancePanel>>,
     pub(crate) perspectives: Vec<Box<dyn Perspective>>,
     pub(crate) active_perspective: Option<PerspectiveId>,
+    /// Presentation-owned perspective required by an active guided flow.
+    ///
+    /// A tutorial may point at view-local `HelpAnchors`. While that flow is
+    /// active, switching to a perspective that cannot publish those anchors
+    /// would turn an ordinary user action into a tutorial failure. The
+    /// tutorial sets this at its launch boundary and clears it when the flow
+    /// ends; every perspective entry point is then constrained in one place.
+    required_perspective: Option<String>,
     pub(crate) activity_bar: bool,
 
     // Slot intent — kept so perspectives can rebuild the dock when activated.
@@ -1239,6 +1247,7 @@ impl Default for WorkbenchLayout {
             instance_panels: HashMap::new(),
             perspectives: Vec::new(),
             active_perspective: None,
+            required_perspective: None,
             activity_bar: false,
             side_browser: Vec::new(),
             side_browser_bottom: Vec::new(),
@@ -1801,6 +1810,21 @@ impl WorkbenchLayout {
     /// inherit the outgoing one's tabs (the old "VSCode never closes
     /// editors" merge is what made Build show Design's tabs).
     pub fn activate_perspective(&mut self, id: PerspectiveId) {
+        // Guided presentations own their authored chrome for the duration of
+        // the flow. This applies equally to the title-bar switcher, the typed
+        // API command, and internal callers because they all converge here.
+        // An unknown/stale requirement is ignored so it cannot make ordinary
+        // perspective switching unusable after a provider disappears.
+        let id = self
+            .required_perspective
+            .as_deref()
+            .and_then(|required| {
+                self.perspectives
+                    .iter()
+                    .find(|perspective| perspective.id().as_str() == required)
+                    .map(|perspective| perspective.id())
+            })
+            .unwrap_or(id);
         // Validate the target before mutating — an unknown id is a no-op
         // and must not snapshot/restore anything.
         if !self.perspectives.iter().any(|w| w.id() == id) {
@@ -1897,6 +1921,17 @@ impl WorkbenchLayout {
         self.active_perspective
     }
 
+    /// Require a registered perspective while a presentation owns the
+    /// workbench. Passing `None` returns perspective selection to the user.
+    ///
+    /// The value is intentionally a runtime string: curriculum providers
+    /// author perspective ids, while [`PerspectiveId`] is a static registry
+    /// key. The requirement is resolved against the registered perspectives
+    /// at activation time and never persisted as workspace state.
+    pub fn set_required_perspective(&mut self, id: Option<&str>) {
+        self.required_perspective = id.map(str::to_owned);
+    }
+
     /// Whether the host registered a perspective with this authored id.
     ///
     /// This is a read-only validation seam for data-driven callers. They can
@@ -1934,7 +1969,17 @@ impl WorkbenchLayout {
     /// inherit the user's current perspective or any cached per-perspective
     /// tabs and splits.
     pub fn reset_to_default_perspective(&mut self) {
-        let Some(id) = self.perspectives.first().map(|p| p.id()) else {
+        let Some(id) = self
+            .required_perspective
+            .as_deref()
+            .and_then(|required| {
+                self.perspectives
+                    .iter()
+                    .find(|perspective| perspective.id().as_str() == required)
+                    .map(|perspective| perspective.id())
+            })
+            .or_else(|| self.perspectives.first().map(|p| p.id()))
+        else {
             return;
         };
         self.dock_cache.clear();
@@ -3018,6 +3063,31 @@ fn first_leaf(surface: &mut egui_dock::Tree<TabId>) -> Option<NodeIndex> {
         }
     }
     None
+}
+
+/// Return the screen rect occupied by the dock leaves containing any panel in
+/// `ids`. Generic tutorial anchors describe the authored workbench slot, not a
+/// particular tab, so a stacked slot is represented by the union of its
+/// leaves.
+fn dock_group_rect(dock: &egui_dock::DockState<TabId>, ids: &[PanelId]) -> Option<egui::Rect> {
+    if ids.is_empty() {
+        return None;
+    }
+
+    let mut rect = None;
+    for node in dock.main_surface().iter() {
+        let egui_dock::Node::Leaf(leaf) = node else {
+            continue;
+        };
+        let contains_group_tab = leaf.tabs.iter().any(|tab| match tab {
+            TabId::Singleton(id) => ids.contains(id),
+            TabId::Instance { kind, .. } => ids.contains(kind),
+        });
+        if contains_group_tab {
+            rect = Some(rect.map_or(leaf.rect, |current: egui::Rect| current.union(leaf.rect)));
+        }
+    }
+    rect
 }
 
 /// First leaf containing any tab for which `pred` returns `true`.
@@ -4522,6 +4592,9 @@ fn render_layout(
             panels,
             instance_panels,
             dock,
+            side_browser,
+            right_inspector,
+            bottom,
             ..
         } = &mut *layout;
         let mut viewer = PanelTabViewer {
@@ -4634,11 +4707,23 @@ fn render_layout(
                     _ => None,
                 })
             });
-            // After the dock has laid itself out, publish the area
-            // rect under a generic "panel.center" anchor so the help
-            // tour can spotlight the dock content as a whole.
+
+            // Publish generic slot anchors from the laid-out dock tree. The
+            // alternate explicit-panel renderer below publishes these from
+            // egui::Panel responses; docked perspectives need the same
+            // contract or a tutorial would fail merely because its authored
+            // perspective uses egui_dock.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.center", screen);
+                if let Some(rect) = dock_group_rect(dock, side_browser) {
+                    a.set("panel.side_browser", rect);
+                }
+                if let Some(rect) = dock_group_rect(dock, right_inspector) {
+                    a.set("panel.right_inspector", rect);
+                }
+                if let Some(rect) = dock_group_rect(dock, bottom) {
+                    a.set("panel.bottom", rect);
+                }
             }
             if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
                 g.set_dock_rect(dock_rect);
@@ -6240,6 +6325,31 @@ mod tests {
             .iter_all_tabs()
             .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
+    }
+
+    #[test]
+    fn required_perspective_keeps_guided_presentations_in_their_authored_layout() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("view"),
+            title: "View",
+            marker: PanelId("view_panel"),
+        });
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("build"),
+            title: "Build",
+            marker: PanelId("build_panel"),
+        });
+
+        layout.set_required_perspective(Some("build"));
+        layout.activate_perspective(PerspectiveId("view"));
+
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("build")));
+        assert_eq!(layout.side_browser, [PanelId("build_panel")]);
+
+        layout.set_required_perspective(None);
+        layout.activate_perspective(PerspectiveId("view"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
     }
 
     /// A NaN split fraction (egui_dock poisons the tree from inside `show`)

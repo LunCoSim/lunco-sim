@@ -577,6 +577,17 @@ fn clear_tutorial_hud(world: &mut World) {
     reset_hud(world.get_resource_mut::<TutorialHud>());
 }
 
+/// Clear presentation state owned by the active tutorial, including the
+/// temporary perspective requirement that keeps view-local coach anchors
+/// available while the lesson is running.
+#[cfg(feature = "ui")]
+fn clear_tutorial_presentation(world: &mut World) {
+    clear_tutorial_hud(world);
+    if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+        layout.set_required_perspective(None);
+    }
+}
+
 /// WHAT "the overlay" is — the single field list, so the two callers cannot
 /// drift. Generic over the smart pointer because one caller holds a `ResMut`
 /// (an observer) and the other a `Mut` (an exclusive world closure); both deref
@@ -743,7 +754,10 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         // launches all get the same perspective and layout semantics. The
         // authored id was validated above, before this mutating boundary.
         #[cfg(feature = "ui")]
+        clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
         if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+            layout.set_required_perspective(perspective.as_deref());
             layout.reset_to_default_perspective();
         }
         #[cfg(feature = "ui")]
@@ -763,7 +777,6 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 return;
             }
         }
-        clear_tutorial_hud(world);
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
         world.resource_mut::<TutorialProgress>().current = None;
@@ -814,7 +827,8 @@ fn on_skip_tutorial(_t: On<SkipTutorial>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let clear_world = world.resource::<TutorialSession>().world.is_some()
             || world.resource::<PendingTutorialStart>().0.is_some();
-        clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
+        clear_tutorial_presentation(world);
         stop_tutorial_host(world);
         world.resource_mut::<TutorialProgress>().current = None;
         world.resource_mut::<PendingAdvance>().0 = None;
@@ -932,6 +946,10 @@ fn on_mission_complete(
     // for review. The host is not allowed to keep ticking against a completed
     // lesson or leak its interpreter state into the next one.
     commands.queue(|world: &mut World| {
+        #[cfg(feature = "ui")]
+        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
+            layout.set_required_perspective(None);
+        }
         stop_tutorial_host(world);
     });
     if !progress.is_completed(&id) {
@@ -985,7 +1003,8 @@ fn on_scene_transition_started(
     progress.current = None;
     session.world = None;
     commands.queue(|world: &mut World| {
-        clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
+        clear_tutorial_presentation(world);
         stop_tutorial_host(world);
     });
 }
@@ -1095,7 +1114,8 @@ fn pending_tutorial_watchdog(
     pending_advance.0 = None;
     session.world = None;
     commands.queue(|world: &mut World| {
-        clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
+        clear_tutorial_presentation(world);
         stop_tutorial_host(world);
     });
     commands.trigger(tutorial_failed(format!(
@@ -1158,7 +1178,8 @@ fn on_scene_transition_failed(
         pending_advance.0 = None;
         session.world = None;
         commands.queue(|world: &mut World| {
-            clear_tutorial_hud(world);
+            #[cfg(feature = "ui")]
+            clear_tutorial_presentation(world);
             stop_tutorial_host(world);
         });
         commands.trigger(tutorial_failed(format!(
@@ -1189,7 +1210,8 @@ fn on_scene_transition_failed(
     pending_advance.0 = None;
     session.world = None;
     commands.queue(|world: &mut World| {
-        clear_tutorial_hud(world);
+        #[cfg(feature = "ui")]
+        clear_tutorial_presentation(world);
         stop_tutorial_host(world);
     });
     error!(
@@ -1802,6 +1824,27 @@ impl Plugin for TutorialPlugin {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "ui")]
+    struct TutorialPerspective {
+        id: &'static str,
+        marker: &'static str,
+    }
+
+    #[cfg(feature = "ui")]
+    impl lunco_workbench::Perspective for TutorialPerspective {
+        fn id(&self) -> lunco_workbench::PerspectiveId {
+            lunco_workbench::PerspectiveId(self.id)
+        }
+
+        fn title(&self) -> String {
+            self.id.into()
+        }
+
+        fn apply(&self, layout: &mut WorkbenchLayout) {
+            layout.set_side_browser(Some(PanelId(self.marker)));
+        }
+    }
+
     /// The execution core runs and stops a lesson with no UI plugin present.
     ///
     /// The lesson is registered HERE rather than taken from the shipped
@@ -1860,6 +1903,88 @@ mod tests {
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
+    }
+
+    /// A learner changing perspectives during a guided lesson is ordinary UI
+    /// input, not a tutorial failure. The authored track presentation owns the
+    /// workbench until the lesson is stopped, then normal switching resumes.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn guided_lesson_requires_and_releases_its_authored_perspective() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.init_resource::<WorkbenchLayout>();
+        {
+            let mut layout = app.world_mut().resource_mut::<WorkbenchLayout>();
+            layout.register_perspective(TutorialPerspective {
+                id: "view",
+                marker: "view_panel",
+            });
+            layout.register_perspective(TutorialPerspective {
+                id: "build",
+                marker: "build_panel",
+            });
+        }
+        app.world_mut()
+            .resource_mut::<TutorialRegistry>()
+            .tracks
+            .insert(
+                "/Test".into(),
+                TrackMeta {
+                    label: "Test".into(),
+                    perspective: Some("build".into()),
+                    order: 0,
+                },
+            );
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/Lesson".into(),
+            title: "Test".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Tour,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/Lesson".into(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WorkbenchLayout>()
+                .active_perspective(),
+            Some(lunco_workbench::PerspectiveId("build"))
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkbenchLayout>()
+            .activate_perspective_by_str("view");
+        assert_eq!(
+            app.world()
+                .resource::<WorkbenchLayout>()
+                .active_perspective(),
+            Some(lunco_workbench::PerspectiveId("build"))
+        );
+
+        app.world_mut().trigger(SkipTutorial {});
+        app.update();
+        app.world_mut()
+            .resource_mut::<WorkbenchLayout>()
+            .activate_perspective_by_str("view");
+        assert_eq!(
+            app.world()
+                .resource::<WorkbenchLayout>()
+                .active_perspective(),
+            Some(lunco_workbench::PerspectiveId("view"))
+        );
     }
 
     /// The public recovery command clears only persisted progress; it must not

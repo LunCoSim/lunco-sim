@@ -116,8 +116,11 @@ toolbar are outside the coach card's content rectangle, so a step that teaches
 `Time`, `Network`, `Help`, or the pause button must use `anchor: ""` and name
 the exact menu/action in its body. Do not invent `panel.<instance>` anchors.
 
-An authored non-empty anchor is required to resolve to a visible widget; a
-missing anchor fails the active lesson instead of moving the card to a hidden
-or centred card. An empty anchor is the explicit choice for a centred card.
-Headless Rhai tests verify lesson policy and state, so they do not require an
-interactive focus panel.
+An authored non-empty anchor is required to resolve to a visible widget. While
+a lesson is active, its track's authored perspective is temporarily required,
+so switching to another perspective automatically returns to the lesson's
+presentation before the next card is painted. A missing anchor still fails
+when the required perspective itself cannot publish it; that is an authored
+UI contract problem, not a user navigation problem. An empty anchor is the
+explicit choice for a centred card. Headless Rhai tests verify lesson policy
+and state, so they do not require an interactive focus panel.

@@ -240,6 +240,21 @@ keyboard if needed.
 Users can customize any layout and save as a named workspace. Ship workspaces
 are just the defaults; everything is editable.
 
+### Guided presentation ownership
+
+A guided tutorial may author a required perspective on its curriculum track.
+While that tutorial is active, `WorkbenchLayout` temporarily owns that
+presentation: every perspective entry point is constrained to the required
+registered perspective. This includes the title-bar switcher, the typed
+`ActivatePerspective` command, and internal callers because they all converge
+on `activate_perspective`.
+
+This is a runtime presentation constraint, not persisted workspace state. The
+tutorial launcher clears it on completion, skip, scene teardown, or failure,
+so ordinary user perspective switching resumes immediately afterward. The
+purpose is to keep view-local `HelpAnchors` visible; a learner must not be
+turned into a failed tutorial merely by selecting a full-screen perspective.
+
 ## 5. Panel system
 
 Panels live inside side docks or bottom docks. Each panel implements a
