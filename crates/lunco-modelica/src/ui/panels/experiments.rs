@@ -1141,7 +1141,7 @@ impl ExperimentsPanel {
                          settings.json `experiments.max_parallel`."
                     ));
                 }
-                ui.label(format!("t: {:.2}→{:.2}s", bounds.t_start, bounds.t_end));
+                ui.label(format!("t: {:.2} to {:.2}s", bounds.t_start, bounds.t_end));
             });
         });
         // Commit the class pick (if any) as the explicit run target. Next
