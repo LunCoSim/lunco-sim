@@ -437,7 +437,7 @@ impl Panel for ExperimentsPanel {
                     overrides: String::new(),
                     status: format!(
                         "{} {:.2}s",
-                        if m.paused { "⏸" } else { "▶" },
+                        if m.paused { "Paused" } else { "Running" },
                         m.current_time
                     ),
                     duration_ms: None,
@@ -485,7 +485,7 @@ impl Panel for ExperimentsPanel {
                     "Fast Run — batch simulate a model end-to-end with chosen \
                      bounds and parameter overrides; each run is recorded \
                      below and can be overlaid in plots. For live tweaking \
-                     while the model runs, use 🚀 Compile on the model \
+                     while the model runs, use Compile on the model \
                      toolbar (Interactive realtime mode).",
                 );
                 ui.add_space(8.0);
@@ -494,18 +494,18 @@ impl Panel for ExperimentsPanel {
                     (None, _) => {
                         ui.weak("① Open a model — pick one in the Files panel,");
                         ui.weak("   or use File → New / Open Example.");
-                        ui.weak("② A ⏩ Run button appears above once a model is active.");
+                        ui.weak("② A Run button appears above once a model is active.");
                     }
                     (Some(_), false) => {
                         ui.weak(
                             "Active document has no model class yet. Switch to \
                              the 📝 Text view and add a `model Foo … end Foo;`,",
                         );
-                        ui.weak("then return here to set bounds and click ⏩ Run.");
+                        ui.weak("then return here to set bounds and click Run.");
                     }
                     (Some(_), true) => {
                         ui.weak(
-                            "▶ Press ⏩ Run above (or the ⏩ Fast button on the \
+                            "Press Run above (or the Fast Run button on the \
                              model toolbar) to start your first experiment.",
                         );
                         ui.add_space(2.0);
@@ -533,21 +533,21 @@ impl Panel for ExperimentsPanel {
                     // means queued (waiting for a scheduler slot).
                     let (txt, color) = match r.progress {
                         Some(t) => (
-                            format!("▶ {} running (t={:.0})", r.name, t),
+                            format!("{} running (t={:.0})", r.name, t),
                             col_success,
                         ),
-                        None => (format!("⏳ {} queued", r.name), col_subdued),
+                        None => (format!("{} queued", r.name), col_subdued),
                     };
                     ui.label(egui::RichText::new(txt).color(color).strong());
                 }
             } else if let Some(last) = rows.iter().rev().find(|r| r.is_terminal) {
                 ui.separator();
                 let (txt, color) = if let Some(_err) = &last.error {
-                    (format!("⚠ {} failed", last.name), col_error)
+                    (format!("{} failed", last.name), col_error)
                 } else if let Some(ms) = last.duration_ms {
-                    (format!("✓ {} done in {} ms", last.name, ms), col_success)
+                    (format!("{} done in {} ms", last.name, ms), col_success)
                 } else {
-                    (format!("⊘ {} cancelled", last.name), col_subdued)
+                    (format!("{} cancelled", last.name), col_subdued)
                 };
                 ui.label(egui::RichText::new(txt).color(color).strong());
             }
@@ -673,13 +673,27 @@ impl Panel for ExperimentsPanel {
                                     load_into_draft = Some(row.id);
                                 }
                                 name_resp.context_menu(|ui| {
-                                    if ui.button("✏ Rename").on_hover_text("Give this run a new name").clicked() {
+                                        if lunco_workbench::icon_text_button(
+                                            ui,
+                                            lunco_workbench::UiIcon::Edit,
+                                            "Rename",
+                                            "Give this run a new name",
+                                        )
+                                        .clicked()
+                                        {
                                         start_rename = Some((row.id, row.name.clone()));
                                         ui.close();
                                     }
                                     ui.separator();
                                     if row.is_terminal {
-                                        if ui.button("▶ Re-run with same setup").on_hover_text("Run again with identical bounds and parameter overrides").clicked() {
+                                        if lunco_workbench::icon_text_button(
+                                            ui,
+                                            lunco_workbench::UiIcon::Play,
+                                            "Re-run with same setup",
+                                            "Run again with identical bounds and parameter overrides",
+                                        )
+                                        .clicked()
+                                        {
                                             rerun = Some(row.id);
                                             ui.close();
                                         }
@@ -700,11 +714,25 @@ impl Panel for ExperimentsPanel {
                                             ui.close();
                                         }
                                         ui.separator();
-                                        if ui.button("✕ Delete").on_hover_text("Remove this run from the list").clicked() {
+                                        if lunco_workbench::icon_text_button(
+                                            ui,
+                                            lunco_workbench::UiIcon::Delete,
+                                            "Delete",
+                                            "Remove this run from the list",
+                                        )
+                                        .clicked()
+                                        {
                                             delete = Some(row.id);
                                             ui.close();
                                         }
-                                    } else if ui.button("⊘ Cancel run").on_hover_text("Stop this in-progress run").clicked() {
+                                    } else if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Stop,
+                                        "Cancel run",
+                                        "Stop this in-progress run",
+                                    )
+                                    .clicked()
+                                    {
                                         cancel = Some(row.id);
                                         ui.close();
                                     }
@@ -761,14 +789,22 @@ impl Panel for ExperimentsPanel {
                             ));
                         }
                         if row.is_terminal {
-                            if ui.small_button("✕").on_hover_text("Delete").clicked() {
+                            if lunco_workbench::icon_button(
+                                ui,
+                                lunco_workbench::UiIcon::Delete,
+                                "Delete",
+                            )
+                            .clicked()
+                            {
                                 delete = Some(row.id);
                             }
                         } else if !row.id.is_live()
-                            && ui
-                                .small_button("⊘")
-                                .on_hover_text("Cancel run")
-                                .clicked()
+                            && lunco_workbench::icon_button(
+                                ui,
+                                lunco_workbench::UiIcon::Stop,
+                                "Cancel run",
+                            )
+                            .clicked()
                         {
                             cancel = Some(row.id);
                         }
@@ -1047,10 +1083,13 @@ impl ExperimentsPanel {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if any_in_flight
-                    && ui
-                        .small_button("⊘ Cancel")
-                        .on_hover_text("Cancel the most recently started run.")
-                        .clicked()
+                    && lunco_workbench::icon_text_button(
+                        ui,
+                        lunco_workbench::UiIcon::Stop,
+                        "Cancel",
+                        "Cancel the most recently started run.",
+                    )
+                    .clicked()
                 {
                     cancel_active = true;
                 }
@@ -1058,7 +1097,16 @@ impl ExperimentsPanel {
                 // Run is never blocked by an in-flight run now — extra runs
                 // queue behind the concurrency cap. Only invalid bounds
                 // disable it.
-                let btn = ui.add_enabled(valid, egui::Button::new("⏩ Run"));
+                let btn = ui
+                    .add_enabled_ui(valid, |ui| {
+                        lunco_workbench::icon_text_button(
+                            ui,
+                            lunco_workbench::UiIcon::Play,
+                            "Run",
+                            "Run this experiment",
+                        )
+                    })
+                    .inner;
                 let btn = if !valid {
                     btn.on_disabled_hover_text(
                         "Bounds invalid — t_end must be greater than t_start.",
@@ -1081,11 +1129,11 @@ impl ExperimentsPanel {
                 if btn.clicked() {
                     run_clicked = true;
                 }
-                // Live concurrency chip: "▶ 2/4 · ⏳ 3" (running/limit · queued).
+                // Live concurrency chip: "2/4 · 3 queued" (running/limit · queued).
                 if any_in_flight || queued_now > 0 {
-                    let mut chip = format!("▶ {running_now}/{max_par}");
+                    let mut chip = format!("{running_now}/{max_par} running");
                     if queued_now > 0 {
-                        chip.push_str(&format!(" · ⏳ {queued_now}"));
+                        chip.push_str(&format!(" · {queued_now} queued"));
                     }
                     ui.label(chip).on_hover_text(format!(
                         "{running_now} run(s) executing (limit {max_par}), \
@@ -1104,7 +1152,7 @@ impl ExperimentsPanel {
         }
         if bounds.t_end <= bounds.t_start {
             ui.label(
-                egui::RichText::new("⚠ t_end must be greater than t_start")
+                egui::RichText::new("t_end must be greater than t_start")
                     .color(col_error)
                     .size(11.0),
             );
@@ -1117,7 +1165,7 @@ impl ExperimentsPanel {
         if msl_pending && (run_clicked || any_in_flight || queued_now > 0) {
             ui.label(
                 egui::RichText::new(
-                    "⏳ Modelica Standard Library still loading — this run \
+                    "Modelica Standard Library still loading — this run \
                      will start automatically once MSL is ready.",
                 )
                 .color(col_accent)
@@ -1131,7 +1179,7 @@ impl ExperimentsPanel {
             if any_in_flight || queued_now > 0 {
                 ui.label(
                     egui::RichText::new(format!(
-                        "⚠ Modelica Standard Library failed to load — a run that \
+                        "Modelica Standard Library failed to load — a run that \
                          needs MSL can't complete. Reinstall MSL, then run again. \
                          ({err})"
                     ))
@@ -1440,7 +1488,7 @@ impl ExperimentsPanel {
         }
 
         egui::CollapsingHeader::new(format!(
-            "⚙ Parameter overrides ({})",
+            "Parameter overrides ({})",
             detected.iter().filter(|p| p.supportable).count()
         ))
         .id_salt("experiments_parameter_overrides")
@@ -2122,7 +2170,12 @@ fn render_experiments_plot_inner(
                                     .desired_width(150.0),
                             );
                             if !var_filter.is_empty()
-                                && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                                && lunco_workbench::icon_button(
+                                    ui,
+                                    lunco_workbench::UiIcon::Close,
+                                    "Clear filter",
+                                )
+                                .clicked()
                             {
                                 var_filter.clear();
                             }
@@ -2263,16 +2316,18 @@ fn render_experiments_plot_inner(
                     log_y_toggle = Some(!log_y_now);
                 }
                 if scrub_time.is_some() {
-                    if ui
-                        .small_button("↻")
-                        .on_hover_text("Drop scrub cursor")
-                        .clicked()
+                    if lunco_workbench::icon_button(
+                        ui,
+                        lunco_workbench::UiIcon::Close,
+                        "Drop scrub cursor",
+                    )
+                    .clicked()
                     {
                         reset_clicked = true;
                     }
                     if let Some(t) = scrub_time {
                         ui.label(
-                            egui::RichText::new(format!("⏱ {t:.3}s"))
+                            egui::RichText::new(format!("t={t:.3}s"))
                                 .size(11.0)
                                 .monospace(),
                         );
@@ -2280,7 +2335,7 @@ fn render_experiments_plot_inner(
                 }
                 if shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1 {
                     ui.label(
-                        egui::RichText::new("⚠ mixed units")
+                        egui::RichText::new("Mixed units")
                             .size(11.0)
                             .color(col_warning),
                     )
@@ -2613,7 +2668,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
-            console.info(format!("✓ Exported experiment to {file_stem}.csv"));
+            console.info(format!("Exported experiment to {file_stem}.csv"));
         }
     }
 }
@@ -2846,11 +2901,11 @@ fn format_overrides_summary(
 fn status_label(s: &RunStatus) -> String {
     match s {
         RunStatus::Pending => "⌛ Pending".into(),
-        RunStatus::Queued => "⏳ Queued".into(),
-        RunStatus::Running { t_current } => format!("▶ {t_current:.2}s"),
-        RunStatus::Done { wall_time_ms } => format!("✓ Done ({wall_time_ms} ms)"),
-        RunStatus::Failed { .. } => "⚠ Failed".into(),
-        RunStatus::Cancelled => "⊘ Cancelled".into(),
+        RunStatus::Queued => "Queued".into(),
+        RunStatus::Running { t_current } => format!("Running at {t_current:.2}s"),
+        RunStatus::Done { wall_time_ms } => format!("Done ({wall_time_ms} ms)"),
+        RunStatus::Failed { .. } => "Failed".into(),
+        RunStatus::Cancelled => "Cancelled".into(),
     }
 }
 

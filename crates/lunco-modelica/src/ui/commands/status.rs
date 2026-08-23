@@ -72,8 +72,8 @@ pub fn update_status_bar(
     let text = match active_doc {
         None => format_ready_files(&ready_files),
         Some(doc) => match compile_states.state_of(doc) {
-            lunco_doc::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
-            lunco_doc::CompileState::Error => format!("⚠ Compile error in {model_name}"),
+            lunco_doc::CompileState::Compiling => format!("Compiling {model_name}…"),
+            lunco_doc::CompileState::Error => format!("Compile error in {model_name}"),
             lunco_doc::CompileState::Ready => format_ready_files(&ready_files),
             lunco_doc::CompileState::Idle => format!("● {model_name}"),
         },

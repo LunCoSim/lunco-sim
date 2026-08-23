@@ -188,16 +188,37 @@ impl Panel for TelemetryPanel {
             let mut reset_clicked = false;
             ui.horizontal(|ui| {
                 if is_paused {
-                    if ui.button("▶ Play").clicked() {
+                    if lunco_workbench::icon_text_button(
+                        ui,
+                        lunco_workbench::UiIcon::Play,
+                        "Play",
+                        "Resume the model",
+                    )
+                    .clicked()
+                    {
                         run_clicked = true;
                     }
-                } else if ui.button("⏸ Pause").clicked() {
+                } else if lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Pause,
+                    "Pause",
+                    "Pause the model",
+                )
+                .clicked()
+                {
                     pause_clicked = true;
                 }
                 ui.label(format!("Time: {current_time:.4} s"));
 
                 ui.add_space(ui.available_width() - 70.0);
-                if ui.button("🔄 Reset").clicked() {
+                if lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Refresh,
+                    "Reset",
+                    "Reset the model",
+                )
+                .clicked()
+                {
                     reset_clicked = true;
                 }
             });
@@ -325,7 +346,9 @@ impl Panel for TelemetryPanel {
             if resp.changed() {
                 filter_changed = true;
             }
-            if ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+            if lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Close, "Clear filter")
+                .clicked()
+            {
                 filter_text.clear();
                 filter_changed = true;
             }
@@ -616,7 +639,7 @@ fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelC
         ui.label(egui::RichText::new(msg).color(muted).size(11.0));
         if let Some(doc) = active_doc {
             if ui
-                .small_button("🚀 Compile")
+                .small_button("Compile")
                 .on_hover_text("Compile the active model and start the stepper (F5)")
                 .clicked()
             {
@@ -1203,7 +1226,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
             return;
         };
         let rows = &vm.rows;
-        egui::CollapsingHeader::new(format!("⚙ Parameters ({})", rows.len()))
+        egui::CollapsingHeader::new(format!("Parameters ({})", rows.len()))
             .id_salt("active_class_parameters")
             .default_open(true)
             .show(ui, |ui| {

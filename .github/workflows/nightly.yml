@@ -141,6 +141,7 @@ jobs:
       # Keep all matrix builds tied to one release identity.
       LUNCO_BUILD_TIMESTAMP: ${{ needs.meta.outputs.timestamp }}
       LUNCO_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+      LUNCO_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
 
     steps:
       - uses: actions/checkout@v4

@@ -413,7 +413,7 @@ pub(crate) fn render_fast_run_setup(
                     ),
                 );
             } else {
-                ui.weak("Tip: open the Experiments panel → ⚙ Overrides + Bounds to override parameters.");
+                ui.weak("Tip: open the Experiments panel, then Overrides + Bounds to override parameters.");
             }
             }); // end scrollable setup body
             ui.add_space(8.0);
@@ -421,12 +421,16 @@ pub(crate) fn render_fast_run_setup(
             // Validation
             let valid = entry.bounds.t_end > entry.bounds.t_start;
             ui.horizontal(|ui| {
-                let run = ui.add_enabled(
-                    valid,
-                    egui::Button::new(
-                        egui::RichText::new("⏩ Run").strong(),
-                    ),
-                );
+                let run = ui
+                    .add_enabled_ui(valid, |ui| {
+                        lunco_workbench::icon_text_button(
+                            ui,
+                            lunco_workbench::UiIcon::Play,
+                            "Run",
+                            "Run with these bounds",
+                        )
+                    })
+                    .inner;
                 if run.clicked() {
                     confirmed = true;
                 }
@@ -1925,7 +1929,7 @@ fn dispatch_experiment(
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
             console.info(format!(
-                "▶ Run: '{}' (t={:.2}→{:.2}s)",
+                "Run: '{}' (t={:.2} to {:.2}s)",
                 model_name, exp.bounds.t_start, exp.bounds.t_end
             ));
         }
@@ -1944,7 +1948,7 @@ fn refuse_run(who: &str, why: String, commands: &mut Commands) {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
-            console.error(format!("✗ Run refused: {why}"));
+            console.error(format!("Run refused: {why}"));
         }
     });
 }

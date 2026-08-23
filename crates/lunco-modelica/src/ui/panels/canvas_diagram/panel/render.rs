@@ -211,8 +211,8 @@ pub(crate) fn render_diagram_canvas(
             let mut y = response.rect.bottom() - 8.0;
             // First line: icons-pending + live load progress when available.
             let first_line = match &msl_detail {
-                Some(d) => format!("⏳ {d} · icons update when ready"),
-                None => "⏳ Icons will be updated when MSL loaded".to_string(),
+                Some(d) => format!("{d} · icons update when ready"),
+                None => "Icons will be updated when MSL loaded".to_string(),
             };
             painter.text(
                 egui::pos2(response.rect.left() + 10.0, y),
@@ -224,9 +224,9 @@ pub(crate) fn render_diagram_canvas(
             // Second line: deferred-action notice (compile takes priority
             // over run since it's doc-scoped and more specific).
             let deferred = if compile_pending {
-                Some("⏳ Compilation will run when MSL is ready")
+                Some("Compilation will run when MSL is ready")
             } else if run_pending {
-                Some("⏳ Simulation will start when MSL is ready")
+                Some("Simulation will start when MSL is ready")
             } else {
                 None
             };

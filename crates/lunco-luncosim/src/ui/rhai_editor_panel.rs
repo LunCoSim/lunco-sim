@@ -32,7 +32,7 @@ use lunco_scene_commands::SelectedEntities;
 use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::ScriptRegistry;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, UiIcon};
 
 use crate::SaveScenario;
 
@@ -167,8 +167,15 @@ impl Panel for RhaiEditorPanel {
                         do_revert = true;
                     }
                 });
-                let (txt, col) = status_label(&vm.state, &vm.diagnostics, &theme);
-                ui.label(egui::RichText::new(txt).color(col));
+                let (icon, txt, col) = status_label(&vm.state, &vm.diagnostics, &theme);
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(18.0, 18.0),
+                        egui::Sense::hover(),
+                    );
+                    lunco_workbench::paint_icon(ui.painter(), icon, rect, col);
+                    ui.label(egui::RichText::new(txt).color(col));
+                });
                 if vm.dirty {
                     ui.label(egui::RichText::new("● unsaved").color(theme.tokens.warning));
                 }
@@ -212,7 +219,17 @@ impl Panel for RhaiEditorPanel {
                                 (Some(l), None) => format!("{l}"),
                                 _ => "—".to_string(),
                             };
-                            let text = format!("{}  {}  {}", severity_glyph(d.severity), loc, d.message);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(18.0, 18.0),
+                                egui::Sense::hover(),
+                            );
+                            lunco_workbench::paint_icon(
+                                ui.painter(),
+                                severity_icon(d.severity),
+                                rect,
+                                col,
+                            );
+                            let text = format!("{loc}  {}", d.message);
                             let hit = ui.add(
                                 egui::Label::new(egui::RichText::new(text).color(col).monospace())
                                     .sense(egui::Sense::click()),
@@ -280,7 +297,7 @@ fn status_label(
     state: &CompileState,
     diags: &[Diagnostic],
     theme: &lunco_theme::Theme,
-) -> (String, egui::Color32) {
+) -> (UiIcon, String, egui::Color32) {
     let errors = diags
         .iter()
         .filter(|d| d.severity == DiagnosticSeverity::Error)
@@ -290,20 +307,19 @@ fn status_label(
         .filter(|d| d.severity == DiagnosticSeverity::Warning)
         .count();
     match state {
-        CompileState::Ready => ("✓ compiled".to_string(), theme.tokens.success),
+        CompileState::Ready => (UiIcon::Check, "compiled".to_string(), theme.tokens.success),
         CompileState::Error if errors > 0 => (
-            format!("✗ {errors} error{}", if errors == 1 { "" } else { "s" }),
+            UiIcon::Error,
+            format!("{errors} error{}", if errors == 1 { "" } else { "s" }),
             theme.tokens.error,
         ),
-        CompileState::Error => ("✗ error".to_string(), theme.tokens.error),
+        CompileState::Error => (UiIcon::Error, "error".to_string(), theme.tokens.error),
         _ if warnings > 0 => (
-            format!(
-                "⚠ {warnings} warning{}",
-                if warnings == 1 { "" } else { "s" }
-            ),
+            UiIcon::Warning,
+            format!("{warnings} warning{}", if warnings == 1 { "" } else { "s" }),
             theme.tokens.warning,
         ),
-        _ => ("—".to_string(), theme.tokens.text_subdued),
+        _ => (UiIcon::Info, "idle".to_string(), theme.tokens.text_subdued),
     }
 }
 
@@ -316,12 +332,12 @@ fn severity_color(s: DiagnosticSeverity, theme: &lunco_theme::Theme) -> egui::Co
     }
 }
 
-fn severity_glyph(s: DiagnosticSeverity) -> &'static str {
+fn severity_icon(s: DiagnosticSeverity) -> UiIcon {
     match s {
-        DiagnosticSeverity::Error => "✗",
-        DiagnosticSeverity::Warning => "⚠",
-        DiagnosticSeverity::Info => "ℹ",
-        DiagnosticSeverity::Hint => "·",
+        DiagnosticSeverity::Error => UiIcon::Error,
+        DiagnosticSeverity::Warning => UiIcon::Warning,
+        DiagnosticSeverity::Info => UiIcon::Info,
+        DiagnosticSeverity::Hint => UiIcon::Check,
     }
 }
 

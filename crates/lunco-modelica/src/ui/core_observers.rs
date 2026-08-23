@@ -414,7 +414,7 @@ pub fn project_run_results_to_ui(
 
         if let Some(c) = console.as_mut() {
             c.info(format!(
-                "✓ {run_name} done: {n_samples} samples × {n_vars} vars in {wall} ms"
+                "{run_name} done: {n_samples} samples x {n_vars} vars in {wall} ms"
             ));
         }
 
@@ -449,7 +449,7 @@ pub fn project_run_results_to_ui(
             .map(|e| e.name.clone())
             .unwrap_or_else(|| "Fast Run".into());
         if let Some(c) = console.as_mut() {
-            c.error(format!("⚠ {run_name} FAILED: {}", ev.error));
+            c.error(format!("{run_name} FAILED: {}", ev.error));
         }
     }
 
@@ -459,7 +459,7 @@ pub fn project_run_results_to_ui(
             .map(|e| e.name.clone())
             .unwrap_or_else(|| "Fast Run".into());
         if let Some(c) = console.as_mut() {
-            c.info(format!("⊘ {run_name} cancelled"));
+            c.info(format!("{run_name} cancelled"));
         }
     }
 }

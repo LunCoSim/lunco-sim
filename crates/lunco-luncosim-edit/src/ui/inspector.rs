@@ -1606,10 +1606,19 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 ) {
                     (Some(part), Some(leaf), Some(placement), Some(rotate)) => {
                         ui.horizontal(|ui| {
-                            let btn = egui::Button::new(format!("⟳ Snap {leaf}"));
-                            let resp = ui.add_enabled(!item.aligned, btn).on_disabled_hover_text(
-                                "This part is already aligned to its socket",
-                            );
+                            let resp = ui
+                                .add_enabled_ui(!item.aligned, |ui| {
+                                    lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Refresh,
+                                        &format!("Snap {leaf}"),
+                                        "Align this part to its socket",
+                                    )
+                                })
+                                .inner
+                                .on_disabled_hover_text(
+                                    "This part is already aligned to its socket",
+                                );
                             if resp.clicked() {
                                 snap = Some((
                                     part.clone(),
@@ -1771,16 +1780,33 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let playing = matches!(pb.mode, TransportMode::Playing);
 
     ui.horizontal(|ui| {
-        if ui
-            .button(if playing { "⏸ Pause" } else { "▶ Play" })
-            .clicked()
-        {
+        let (icon, label, tooltip) = if playing {
+            (
+                lunco_workbench::UiIcon::Pause,
+                "Pause",
+                "Pause the animation preview",
+            )
+        } else {
+            (
+                lunco_workbench::UiIcon::Play,
+                "Play",
+                "Play the animation preview",
+            )
+        };
+        if lunco_workbench::icon_text_button(ui, icon, label, tooltip).clicked() {
             ctx.trigger(ControlAnimation {
                 playing: Some(!playing),
                 ..Default::default()
             });
         }
-        if ui.button("⏮ Rewind").clicked() {
+        if lunco_workbench::icon_text_button(
+            ui,
+            lunco_workbench::UiIcon::Back,
+            "Rewind",
+            "Rewind the animation preview",
+        )
+        .clicked()
+        {
             ctx.trigger(ControlAnimation {
                 seek_secs: Some(0.0),
                 ..Default::default()
@@ -1819,7 +1845,7 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         });
     }
 
-    ui.label("Animation only — the physics clock is the toolbar ⏸.");
+    ui.label("Animation only — the physics clock is the toolbar pause control.");
 }
 
 fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -2311,7 +2337,7 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     }
     if j.wired {
         ui.label(
-            egui::RichText::new("⚠ driven by a wire — setpoint is transient")
+            egui::RichText::new("Driven by a wire — setpoint is transient")
                 .small()
                 .weak(),
         );

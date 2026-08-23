@@ -743,11 +743,15 @@ fn draw_tour(
                             // Buttons.
                             ui.horizontal(|ui| {
                                 if ui
-                                    .add_enabled(
-                                        step.index > 0,
-                                        egui::Button::new("◀  Back")
-                                            .min_size(egui::vec2(80.0, 28.0)),
-                                    )
+                                    .add_enabled_ui(step.index > 0, |ui| {
+                                        crate::icon_text_button(
+                                            ui,
+                                            crate::UiIcon::Back,
+                                            "Back",
+                                            "Go to the previous step",
+                                        )
+                                    })
+                                    .inner
                                     .on_disabled_hover_text("Already at the first step")
                                     .clicked()
                                 {
@@ -769,17 +773,12 @@ fn draw_tour(
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        let label = if last { "Done ✓" } else { "Next  ▶" };
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new(label)
-                                                        .strong()
-                                                        .color(accent_text),
-                                                )
-                                                .fill(accent)
-                                                .min_size(egui::vec2(90.0, 28.0)),
-                                            )
+                                        let (icon, label, tooltip) = if last {
+                                            (crate::UiIcon::Check, "Done", "Finish the tutorial")
+                                        } else {
+                                            (crate::UiIcon::Forward, "Next", "Go to the next step")
+                                        };
+                                        if crate::icon_text_button(ui, icon, label, tooltip)
                                             .clicked()
                                         {
                                             next = true;
@@ -909,11 +908,11 @@ impl Plugin for TutorialOverlayPlugin {
         // follows the authored track perspective and its anchors are view-local.
         app.add_systems(
             EguiPrimaryContextPass,
-            draw_tutorial_hud.after(crate::WorkbenchRenderSet),
+            draw_tutorial_hud.in_set(crate::ApplicationOverlayRenderSet),
         );
         app.add_systems(
             EguiPrimaryContextPass,
-            (draw_spotlight, draw_tour).after(crate::WorkbenchRenderSet),
+            (draw_spotlight, draw_tour).in_set(crate::ApplicationOverlayRenderSet),
         );
     }
 }

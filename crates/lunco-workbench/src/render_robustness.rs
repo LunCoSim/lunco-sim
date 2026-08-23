@@ -252,16 +252,18 @@ pub(crate) fn draw_render_recovery_banner(
     let theme = theme
         .map(|theme| theme.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-    let (title, message, color, fill) = if let Some(gave_up) = gave_up {
+    let (icon, title, message, color, fill) = if let Some(gave_up) = gave_up {
         (
-            "⚠  PRESENTATION STOPPED",
+            crate::UiIcon::Error,
+            "PRESENTATION STOPPED",
             gave_up.reason.clone(),
             theme.tokens.error,
             theme.tokens.alert_backdrop,
         )
     } else if let Some(warning) = warning {
         (
-            "⚠  RENDERING DEGRADED",
+            crate::UiIcon::Warning,
+            "RENDERING DEGRADED",
             warning.message.clone(),
             theme.tokens.warning,
             theme.tokens.overlay_backdrop,
@@ -285,7 +287,12 @@ pub(crate) fn draw_render_recovery_banner(
                 .show(ui, |ui| {
                     ui.set_max_width(420.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new(title).color(color).strong());
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            crate::paint_icon(ui.painter(), icon, rect, color);
+                            ui.label(egui::RichText::new(title).color(color).strong());
+                        });
                         ui.label(egui::RichText::new(message).color(theme.tokens.text));
                     });
                 });

@@ -61,72 +61,8 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
-#[derive(Clone, Copy)]
-enum WindowControlIcon {
-    Close,
-    Maximize,
-    Restore,
-    Minimize,
-}
-
-/// Draw a titlebar control as vector geometry. Unicode glyphs are not a
-/// reliable icon source: on Linux a missing font glyph becomes a tofu square,
-/// which makes a destructive control ambiguous. The control remains an egui
-/// button, so hover/keyboard/click semantics stay in the workbench layer.
-fn window_control_button(
-    ui: &mut egui::Ui,
-    icon: WindowControlIcon,
-    tooltip: &str,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
-    let visuals = ui.visuals();
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 4.0, visuals.widgets.hovered.bg_fill);
-    }
-    let stroke = egui::Stroke::new(1.4, visuals.widgets.inactive.fg_stroke.color);
-    let inset = 8.0;
-    let left = rect.left() + inset;
-    let right = rect.right() - inset;
-    let top = rect.top() + 6.0;
-    let bottom = rect.bottom() - 6.0;
-    match icon {
-        WindowControlIcon::Close => {
-            ui.painter()
-                .line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
-            ui.painter()
-                .line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
-        }
-        WindowControlIcon::Maximize => {
-            ui.painter().rect_stroke(
-                egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
-                0.0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        WindowControlIcon::Restore => {
-            let back = egui::Rect::from_min_max(
-                egui::pos2(left + 3.0, top),
-                egui::pos2(right, bottom - 3.0),
-            );
-            let front = egui::Rect::from_min_max(
-                egui::pos2(left, top + 3.0),
-                egui::pos2(right - 3.0, bottom),
-            );
-            ui.painter()
-                .rect_stroke(back, 0.0, stroke, egui::StrokeKind::Inside);
-            ui.painter()
-                .rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
-        }
-        WindowControlIcon::Minimize => {
-            let y = (top + bottom) * 0.5;
-            ui.painter()
-                .line_segment([egui::pos2(left, y), egui::pos2(right, y)], stroke);
-        }
-    }
-    response.on_hover_text(tooltip)
-}
+pub mod icons;
+pub use icons::{icon_button, icon_text_button, paint_icon, UiIcon};
 
 mod editor_tabs;
 mod menu;
@@ -206,6 +142,12 @@ pub use panel::{
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WorkbenchRenderSet;
 
+/// System set for application-owned transient surfaces that must be rendered
+/// after the workbench and authored Bevy UI. The egui order of each surface
+/// still controls modal-vs-nonmodal precedence inside this final UI pass.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ApplicationOverlayRenderSet;
+
 /// Authoritative version and build identity supplied by the host application.
 ///
 /// Workbench is shared by multiple binaries, so its own package metadata is
@@ -217,20 +159,40 @@ pub struct BuildIdentity {
     pub version: String,
     /// Build identifier, normally the short source revision.
     pub build: String,
+    /// Canonical GitHub repository containing the source revision.
+    pub repository: String,
 }
 
 impl BuildIdentity {
     /// Create an identity from the host application's stamped values.
-    pub fn new(version: impl Into<String>, build: impl Into<String>) -> Self {
+    pub fn new(
+        version: impl Into<String>,
+        build: impl Into<String>,
+        repository: impl Into<String>,
+    ) -> Self {
         Self {
             version: version.into(),
             build: build.into(),
+            repository: repository.into(),
         }
     }
 
     /// Format the canonical version line shared by Help and Settings.
     pub fn version_label(&self) -> String {
         format!("Version {} ({})", self.version, self.build)
+    }
+
+    /// Return the exact source revision URL when the build has a known SHA.
+    pub fn source_url(&self) -> Option<String> {
+        let revision = self.build.strip_suffix("-dirty").unwrap_or(&self.build);
+        if revision.is_empty() || revision == "unknown" {
+            return None;
+        }
+        Some(format!(
+            "{}/commit/{}",
+            self.repository.trim_end_matches('/'),
+            revision
+        ))
     }
 }
 
@@ -849,7 +811,11 @@ impl Plugin for WorkbenchPlugin {
         }
         app.add_systems(
             EguiPrimaryContextPass,
-            render_robustness::draw_render_recovery_banner,
+            render_robustness::draw_render_recovery_banner.in_set(ApplicationOverlayRenderSet),
+        );
+        app.configure_sets(
+            EguiPrimaryContextPass,
+            ApplicationOverlayRenderSet.after(WorkbenchRenderSet),
         );
         // Egui host + viewport-geometry sync + invariant sentinels.
         // See `viewport.rs` doc-comment for the layered full-window scene
@@ -4184,6 +4150,15 @@ fn render_layout(
                         running_app_name(),
                         identity.version_label()
                     ));
+                    if let Some(source_url) = identity.source_url() {
+                        ui.hyperlink_to("View source commit on GitHub", source_url);
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Source commit unavailable")
+                                .weak()
+                                .italics(),
+                        );
+                    }
                 }
                 let callbacks = std::mem::take(&mut layout.help_menu);
                 if !callbacks.is_empty() {
@@ -4446,12 +4421,12 @@ fn render_layout(
                 let paused = world
                     .get_resource::<lunco_time::TimeTransport>()
                     .is_some_and(|t| matches!(t.mode, lunco_time::TransportMode::Paused));
-                let (glyph, hover) = if paused {
-                    ("▶", "Resume simulation")
+                let (icon, hover) = if paused {
+                    (UiIcon::Play, "Resume simulation")
                 } else {
-                    ("⏸", "Pause simulation")
+                    (UiIcon::Pause, "Pause simulation")
                 };
-                let btn_resp = ui.button(glyph).on_hover_text(hover);
+                let btn_resp = icon_button(ui, icon, hover);
                 anchor_rects.push(("toolbar.run", btn_resp.rect));
                 if btn_resp.clicked() {
                     world.trigger(lunco_time::SetTimeTransport {
@@ -4478,19 +4453,19 @@ fn render_layout(
                         .get_resource::<window_command::WindowMaximized>()
                         .map(|s| s.0)
                         .unwrap_or(false);
-                    if window_control_button(ui, WindowControlIcon::Close, "Close").clicked() {
+                    if icon_button(ui, UiIcon::Close, "Close").clicked() {
                         world.trigger(window_command::CloseWindow {});
                     }
                     let max_icon = if is_max {
-                        WindowControlIcon::Restore
+                        UiIcon::Restore
                     } else {
-                        WindowControlIcon::Maximize
+                        UiIcon::Maximize
                     };
                     let max_hover = if is_max { "Restore" } else { "Maximize" };
-                    if window_control_button(ui, max_icon, max_hover).clicked() {
+                    if icon_button(ui, max_icon, max_hover).clicked() {
                         world.trigger(window_command::MaximizeWindow { maximized: None });
                     }
-                    if window_control_button(ui, WindowControlIcon::Minimize, "Minimize").clicked() {
+                    if icon_button(ui, UiIcon::Minimize, "Minimize").clicked() {
                         world.trigger(window_command::MinimizeWindow {});
                     }
                     ui.separator();
@@ -6004,11 +5979,19 @@ mod tests {
 
     #[test]
     fn build_identity_formats_the_shared_version_label() {
-        let identity = BuildIdentity::new("0.6.0-nightly.37.1", "abc12345-dirty");
+        let identity = BuildIdentity::new(
+            "0.6.0-nightly.37.1",
+            "abc12345-dirty",
+            "https://github.com/LunCoSim/lunco-sim",
+        );
 
         assert_eq!(
             identity.version_label(),
             "Version 0.6.0-nightly.37.1 (abc12345-dirty)"
+        );
+        assert_eq!(
+            identity.source_url().as_deref(),
+            Some("https://github.com/LunCoSim/lunco-sim/commit/abc12345")
         );
     }
 

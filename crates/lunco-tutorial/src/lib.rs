@@ -1288,7 +1288,14 @@ fn draw_advance_prompt(
                 ui.label(format!("Continue to “{next_title}”?"));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Continue →").clicked() {
+                    if lunco_workbench::icon_text_button(
+                        ui,
+                        lunco_workbench::UiIcon::Forward,
+                        "Continue",
+                        "Start the next tutorial",
+                    )
+                    .clicked()
+                    {
                         proceed = true;
                     }
                     if ui.button("Stay here").clicked() {
@@ -1619,7 +1626,14 @@ fn register_tutorials_menu(world: &mut World) {
                 .resource::<TutorialHud>()
                 .is_some_and(|hud| !hud.title.is_empty());
         ui.add_enabled_ui(running, |ui| {
-            if ui.button("⏹ Stop tutorial").clicked() {
+            if lunco_workbench::icon_text_button(
+                ui,
+                lunco_workbench::UiIcon::Stop,
+                "Stop tutorial",
+                "Stop this tutorial",
+            )
+            .clicked()
+            {
                 ctx.trigger(SkipTutorial {});
                 ui.close();
             }
@@ -1670,7 +1684,7 @@ impl Panel for TutorialsPanel {
         ui.heading("Tutorials");
         ui.label(
             egui::RichText::new(
-                "Tours explain the UI · exercises require simulator evidence · ✓ completed.",
+                "Tours explain the UI · exercises require simulator evidence · completed.",
             )
             .weak()
             .small(),
@@ -1691,9 +1705,16 @@ impl Panel for TutorialsPanel {
                 .unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!("▶ Running: {title}")).color(theme.tokens.accent),
+                    egui::RichText::new(format!("Running: {title}")).color(theme.tokens.accent),
                 );
-                if ui.small_button("Stop").clicked() {
+                if lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Stop,
+                    "Stop",
+                    "Stop this tutorial",
+                )
+                .clicked()
+                {
                     ctx.trigger(SkipTutorial {});
                 }
             });
@@ -1706,10 +1727,13 @@ impl Panel for TutorialsPanel {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if done {
-                            ui.label(
-                                egui::RichText::new("✓")
-                                    .color(theme.tokens.success)
-                                    .strong(),
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            lunco_workbench::paint_icon(
+                                ui.painter(),
+                                lunco_workbench::UiIcon::Check,
+                                rect,
+                                theme.tokens.success,
                             );
                         }
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
@@ -1822,7 +1846,10 @@ impl Plugin for TutorialPlugin {
         }
         app.add_systems(Startup, register_tutorials_menu);
         app.add_systems(Update, consume_tour_request);
-        app.add_systems(EguiPrimaryContextPass, draw_advance_prompt);
+        app.add_systems(
+            EguiPrimaryContextPass,
+            draw_advance_prompt.in_set(lunco_workbench::ApplicationOverlayRenderSet),
+        );
         app.register_panel(TutorialsPanel);
     }
 }

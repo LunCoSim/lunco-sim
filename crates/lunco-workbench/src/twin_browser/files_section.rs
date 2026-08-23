@@ -222,18 +222,13 @@ impl BrowserSection for FilesSection {
                             needs_focus: true,
                         });
                     }
-                    // Close (✕) control — closes the document, its
+                    // Close control — closes the document, its
                     // tabs, and (on wasm) its localStorage autosave
                     // entry. Without this a restored draft has no
                     // delete path from the UI and resurrects on every
                     // reload. Right-aligned so it doesn't crowd names.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close = ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("✕").size(10.0))
-                                    .frame(false)
-                                    .small(),
-                            )
+                        let close = crate::icon_button(ui, crate::UiIcon::Close, "Close document")
                             .on_hover_text(
                                 "Close document (discards unsaved \
                                      changes)",

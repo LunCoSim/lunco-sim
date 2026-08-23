@@ -103,7 +103,13 @@ impl Panel for RhaiReplPanel {
         );
         let key_submit = editor.has_focus()
             && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-        let btn_submit = ui.button("Run ▶  (Ctrl/Cmd+Enter)").clicked();
+        let btn_submit = lunco_workbench::icon_text_button(
+            ui,
+            lunco_workbench::UiIcon::Play,
+            "Run  (Ctrl/Cmd+Enter)",
+            "Run the script",
+        )
+        .clicked();
 
         if (key_submit || btn_submit) && !self.input.trim().is_empty() {
             let code = std::mem::take(&mut self.input);
