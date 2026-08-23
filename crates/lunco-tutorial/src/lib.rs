@@ -925,16 +925,23 @@ fn on_mission_complete(
         warn!("[tutorial] ignored MISSION_COMPLETE without an active tutorial host");
         return;
     };
-    let Some(api_entities) = api_entities else {
-        warn!("[tutorial] ignored MISSION_COMPLETE without entity identity registry");
-        return;
-    };
-    let Some(host_source) = api_entities.api_id_for(host).map(|id| id.get()) else {
-        warn!("[tutorial] ignored MISSION_COMPLETE from an unidentified tutorial host");
-        return;
-    };
-    if event.source != host_source {
-        return;
+    match api_entities
+        .as_ref()
+        .and_then(|entities| entities.api_id_for(host))
+    {
+        Some(host_source) if event.source == host_source.get() => {}
+        Some(_) => return,
+        None if event.source == 0 => {
+            // TutorialHost is intentionally local and therefore has no
+            // GlobalEntityId in the normal app. The scripting runtime uses
+            // source 0 for that explicit global/local case; accepting it here
+            // keeps Rust-owned tutorial lifecycle separate from authored Rhai
+            // step logic without inventing a network identity for the host.
+        }
+        None => {
+            warn!("[tutorial] ignored MISSION_COMPLETE from an unidentified tutorial host");
+            return;
+        }
     }
     // Attribute the completion only to the scenario host that emitted it. The
     // telemetry bus is intentionally broadcast, so a matching name from any
@@ -2432,6 +2439,69 @@ mod tests {
         assert_eq!(
             app.world().resource::<TutorialProgress>().completed,
             vec!["/Test/Source"]
+        );
+    }
+
+    #[test]
+    fn local_tutorial_host_completion_opens_the_successor_prompt() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.insert_resource(lunco_api::ApiEntityRegistry::default());
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/First".into(),
+            title: "First".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Tour,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: Some("/Test/Second".into()),
+            source: CurriculumSource::Bundled,
+        });
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/Second".into(),
+            title: "Second".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            format: curriculum::LessonFormat::Exercise,
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/Test/First".into(),
+        });
+        app.update();
+        assert!(app.world().resource::<TutorialHost>().0.is_some());
+
+        // A local TutorialHost intentionally has no API identity. The
+        // scripting runtime therefore emits its lifecycle event with source 0.
+        app.world_mut().trigger(TelemetryEvent {
+            name: "MISSION_COMPLETE".into(),
+            source: 0,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(0.0),
+            timestamp: 0.0,
+        });
+        app.update();
+
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
+        assert_eq!(
+            app.world().resource::<PendingAdvance>().0.as_deref(),
+            Some("/Test/Second")
+        );
+        assert_eq!(
+            app.world().resource::<TutorialProgress>().completed,
+            vec!["/Test/First"]
         );
     }
 

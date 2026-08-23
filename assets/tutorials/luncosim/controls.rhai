@@ -66,8 +66,8 @@ fn mission(me) {
 
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
-        hint("Next: drive a rover over a gentle ramp, read its telemetry, and feel what the terrain does to the vehicle.");
-        notify_kind("Authority Handoff complete", "success");
+        hint("Authority handoff complete. Click Continue in the Tutorial complete dialog to begin Moon Driving Basics.");
+        notify_kind("Authority Handoff complete — choose Continue for Moon Driving Basics", "success");
     }
 }
 

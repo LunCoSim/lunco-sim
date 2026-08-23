@@ -448,7 +448,11 @@ impl Default for Fsm {
             attempted_generation: None,
             started: false,
             compiled: false,
-            gid: -1,
+            // `0` is the telemetry bus' explicit global/no-entity source. A
+            // local script host has no GlobalEntityId, so using `-1` here
+            // leaked `u64::MAX` into emitted events and made lifecycle
+            // consumers unable to recognise a legitimate local emission.
+            gid: 0,
         }
     }
 }
@@ -608,7 +612,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .resource::<ApiEntityRegistry>()
                     .api_id_for(entity)
                     .map(|g| g.get() as i64)
-                    .unwrap_or(-1);
+                    .unwrap_or(0);
                 work.push((entity, raw, gid, generation, maybe_src, authority));
             }
         }
