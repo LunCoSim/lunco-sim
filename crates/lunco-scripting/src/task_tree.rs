@@ -707,39 +707,33 @@ mod tests {
         assert!(compile_node(&map(&[("items", Dynamic::from_array(vec![]))])).is_err()); // missing kind
         assert!(compile_node(&tagged("warp", &[])).is_err()); // unknown kind
         assert!(compile_node(&tagged("once", &[("act", Dynamic::from_int(5))])).is_err()); // act not a closure
-        assert!(
-            compile_node(&tagged(
-                "act_for",
-                &[
-                    ("act", Dynamic::from_int(5)),
-                    ("secs", Dynamic::from_float(1.0))
-                ],
-            ))
-            .is_err()
-        ); // act_for still requires a closure
+        assert!(compile_node(&tagged(
+            "act_for",
+            &[
+                ("act", Dynamic::from_int(5)),
+                ("secs", Dynamic::from_float(1.0))
+            ],
+        ))
+        .is_err()); // act_for still requires a closure
         assert!(compile_node(&tagged("wait", &[("secs", Dynamic::from_float(-1.0))])).is_err());
-        assert!(
-            compile_node(&tagged(
-                "once",
-                &[
-                    ("act", Dynamic::from_int(5)),
-                    ("secs", Dynamic::from_float(1.0))
-                ],
-            ))
-            .is_err()
-        ); // fields from another kind are rejected
-        assert!(
-            compile_node(&tagged(
-                "repeat",
-                &[
-                    ("n", Dynamic::from_int(-1)),
-                    (
-                        "body",
-                        tagged("wait", &[("secs", Dynamic::from_float(0.0))])
-                    )
-                ],
-            ))
-            .is_err()
-        ); // counts are explicit, never clamped as a fallback
+        assert!(compile_node(&tagged(
+            "once",
+            &[
+                ("act", Dynamic::from_int(5)),
+                ("secs", Dynamic::from_float(1.0))
+            ],
+        ))
+        .is_err()); // fields from another kind are rejected
+        assert!(compile_node(&tagged(
+            "repeat",
+            &[
+                ("n", Dynamic::from_int(-1)),
+                (
+                    "body",
+                    tagged("wait", &[("secs", Dynamic::from_float(0.0))])
+                )
+            ],
+        ))
+        .is_err()); // counts are explicit, never clamped as a fallback
     }
 }

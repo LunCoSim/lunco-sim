@@ -346,14 +346,12 @@ mod tests {
         }
 
         // Hooks present.
-        assert!(
-            data["hooks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|h| h["name"].as_str())
-                .any(|name| name == "on_tick")
-        );
+        assert!(data["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|h| h["name"].as_str())
+            .any(|name| name == "on_tick"));
         for entry in ["task", "mission"] {
             assert!(
                 data["hooks"]
