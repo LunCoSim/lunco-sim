@@ -14,8 +14,9 @@ production `target/debug/luncosim` binary with an explicit API port where the
 behaviour is interactive.
 
 The Summer Space School Twin retains unrelated user changes in its working tree
-(`scripts/test_mission_contracts.sh`, `sim/scenarios/README.md`, and
-`sim/scenarios/tests/lunokhod2_physics.rhai`). Those changes are preserved.
+(`scripts/test_mission_contracts.sh`, `sim/rovers/lunokhod2.usda`,
+`sim/scenarios/README.md`, and `sim/scenarios/tests/lunokhod2_physics.rhai`).
+Those changes are preserved.
 
 ## Findings
 
@@ -156,9 +157,10 @@ engaged, while the HUI label remains the static `AUTOPILOT`. This makes a normal
 active state look like a fault and leaves the user without an explicit active
 state.
 
-**Migration:** publish a semantic active/inactive label and status style. The
-active state should read explicitly (for example `AUTOPILOT ON`) and use the
-normal active/accent token; danger is reserved for a fault or refusal.
+**Implementation:** the HUD now publishes an explicit `AUTOPILOT ON`/`AUTOPILOT`
+label and uses the normal active/accent token while engaged. Red is reserved for
+fault/refusal presentation. This is driven by the same authored telemetry/HUD
+projection as the other vehicle status fields.
 
 ### APP-12 — a presentation contract error is treated as tutorial termination
 
@@ -168,11 +170,13 @@ normal active/accent token; danger is reserved for a fault or refusal.
 is recoverable presentation state, not evidence that the lesson simulation is
 invalid.
 
-**Migration:** retain the lesson host and scene, clear only the invalid
-spotlight/tour target, and show a persistent non-blocking recovery dialog with
-Continue/Retry/Stop actions. Continue must advance the current authored step;
-Stop remains the explicit lifecycle command. Other genuinely terminal scene or
-script faults keep their existing terminal handling.
+**Implementation:** the lesson host and scene remain alive. The workbench now
+shows a topmost recovery surface with Continue/Retry/Stop actions, while the
+tutorial owner clears only the invalid target. Continue reuses the existing
+typed `cmd:TutorialNext` event for an active tour; Stop remains the explicit
+lifecycle command. The regression
+`missing_anchor_keeps_lesson_running_and_advances_on_continue` passes, and the
+change is committed as `a863b48b2`.
 
 ### APP-13 — articulated rover needs production physical/visual acceptance
 
@@ -183,11 +187,16 @@ focused motion tests, but a source review cannot establish that the current
 visual arm transforms, joint admission, wheel contact, and turning all agree in
 the interactive tutorial path.
 
-**Migration:** select the canonical tutorial rover, remove any duplicate
-visual-only arm or inferred wheel mapping, and make the authored body/joint/wheel
-topology the sole source for both rendering and physics. Add a production scene
-verdict covering all six wheel contacts, arm attachment, straight travel, and
-signed yaw under steer. Do not repair a visual symptom with a render-only offset.
+**Implementation:** the canonical articulated rover already has authored rigid
+rocker/bogie bodies, hinges, arm links, wheel attachments, and motor-to-wheel
+relationships. The actual missing control topology was the front-wheel
+`inputs:steer.connect` on both rocker wheels; those connections are now authored
+to the rover's steering output. Rust remains topology-driven and unchanged.
+Production headless verdicts now pass for both `SIX WHEEL` (18.24 m straight
+travel, 47.83° yaw under steer) and `ROCKER BOGIE DRIVE` (39.04 m net travel,
+31.44° steer yaw, 5 checks). A rendered visual capture is still open because
+this acceptance used the supported no-UI production binary; no render-only
+offset or physics workaround was added.
 
 ### APP-14 — tutorial “variants” mix profile assets with inspector variant sets
 
@@ -199,12 +208,16 @@ reference to `rocker_bogie`; if catalog publication, default prim mounting, or
 nested override composition fails, B4 can show three names without three
 composed vehicles.
 
-**Migration:** choose one tutorial contract: profile assets for the three
-spawnable rovers, or one selected prim with an explicit variant-set picker. For
-B4, keep profiles as the authored source, validate catalog entries and composed
-overrides at runtime, and show the actual selected profile/parameters in the
-Inspector. The generic picker must separately support a scene root variant set
-(such as `Traverse.terrain`) rather than pretending a child prim owns it.
+**Implementation:** B4 now uses one authored USD payload that references the
+three profile assets before the tutorial script starts. The script no longer
+races asynchronous catalog publication with `SpawnEntity`; the existing generic
+Inspector remains responsible for authored `doc` and parameter values, while
+the profile files remain ordinary USD spawnable assets rather than fake child
+variant sets. Production `ListEntities` composed
+`/RoverVariants/ExplorerLT`, `/RoverVariants/Rover`, and
+`/RoverVariants/Hauler`. `QueryUsdPrim` confirmed distinct authored livery
+colors (green/amber/red) and motor stall torque (0.9/0.9/0.4) on the composed
+profiles.
 
 ## Implementation groups and acceptance
 
@@ -227,5 +240,8 @@ Inspector. The generic picker must separately support a scene root variant set
 
 Groups 1 and 2 are implemented and committed. Group 3 is implemented in the
 engine checkout and the Twin, with focused and production headless verification;
-it is committed before group 4 begins. Group 4 remains open. Existing unrelated
-work remains untouched.
+it is committed before group 4 begins. Group 4's tutorial-recovery portion is
+committed as `a863b48b2`; the authored steering/profile portion has passed its
+focused and production headless checks and is committed as `91f36cd06`.
+The remaining open item is rendered visual acceptance of the articulated rover;
+existing unrelated work remains untouched.

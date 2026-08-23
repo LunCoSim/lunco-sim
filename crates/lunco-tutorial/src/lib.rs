@@ -605,10 +605,6 @@ fn reset_hud<H: std::ops::DerefMut<Target = TutorialHud>>(hud: Option<H>) {
     hud.recovery = None;
 }
 
-/// Headless hosts have no presentation to reset.
-#[cfg(not(feature = "ui"))]
-fn clear_tutorial_hud(_world: &mut World) {}
-
 /// Spawn (once) and return the host entity that tutorial scenarios attach to.
 fn ensure_host(world: &mut World) -> Entity {
     if let Some(e) = world.resource::<TutorialHost>().0 {

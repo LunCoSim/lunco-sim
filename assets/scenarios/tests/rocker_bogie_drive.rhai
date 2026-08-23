@@ -4,6 +4,7 @@
 
 const SETTLE_S = 3.0;
 const DRIVE_S = 8.0;
+const STEER_S = 6.0;
 const MIN_TRAVEL_M = 2.0;
 
 fn on_start(me) {
@@ -17,6 +18,9 @@ fn on_start(me) {
     this.prev = ();
     this.travel = 0.0;
     this.samples = 0;
+    this.fprev = ();
+    this.yaw_steer = 0.0;
+    this.yaw_samples = 0;
     print("[rb-drive] rover gid=" + this.rover);
 }
 
@@ -47,12 +51,29 @@ fn on_tick(me) {
         return;
     }
 
-    drive(this.rover, 1.0, 0.0);
-    this.travel += seg(this.prev, p);
-    this.prev = p;
-    this.samples += 1;
+    if this.phase == "drive" {
+        drive(this.rover, 1.0, 0.0);
+        this.travel += seg(this.prev, p);
+        this.prev = p;
+        this.samples += 1;
+        if this.t >= SETTLE_S + DRIVE_S {
+            this.phase = "steer";
+            this.phase_start = this.t;
+            this.fprev = world_forward(this.rover);
+            print("[rb-drive] steering leg started; positive steer must change heading");
+        }
+        return;
+    }
 
-    if this.t >= SETTLE_S + DRIVE_S {
+    drive(this.rover, 1.0, 0.6);
+    let fwd = world_forward(this.rover);
+    if this.fprev != () && fwd != () {
+        this.yaw_steer += yaw_delta_deg(this.fprev, fwd);
+        this.yaw_samples += 1;
+    }
+    if fwd != () { this.fprev = fwd; }
+
+    if this.t >= SETTLE_S + DRIVE_S + STEER_S {
         brake(this.rover);
         this.phase = "done";
         let net = seg(this.start, p);
@@ -61,7 +82,12 @@ fn on_tick(me) {
         fails.push(t_true(this.samples > 100,
             "drive phase produced only " + this.samples + " samples"));
         fails.push(t_moved(net, MIN_TRAVEL_M, "rocker-bogie net travel"));
-        print("[rb-drive] net=" + r2(net) + " m path=" + r2(this.travel) + " m");
+        fails.push(t_true(this.yaw_samples > 20,
+            "steering phase produced only " + this.yaw_samples + " heading samples"));
+        fails.push(t_true(this.yaw_steer.abs() > 5.0,
+            "positive steer changed heading by only " + r2(this.yaw_steer) + " deg"));
+        print("[rb-drive] net=" + r2(net) + " m path=" + r2(this.travel) +
+              " m steer_yaw=" + r2(this.yaw_steer) + " deg");
         report_verdict(fails, "ROCKER BOGIE DRIVE", "ROCKER_BOGIE_DRIVE");
     }
 }

@@ -52,7 +52,7 @@ def Scope "Basic" (
 
     def Scope "RoverVariants" (
         prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
-        prepend payload = @lunco://tutorials/basic/driving_basics.usda@
+        prepend payload = @lunco://tutorials/basic/rover_variants.usda@
     )
     {
         uniform asset info:sourceAsset = @lunco://tutorials/basic/b4_rover_variants.rhai@

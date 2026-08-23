@@ -2,9 +2,9 @@
 //!
 //! A coach tour that puts the three rovers side by side on the practice yard so
 //! the student can compare what centre of mass, motor torque and grip do.
-//! `on_start` spawns the easy and awful variants flanking the medium rover already
-//! in the scene; the cards explain each, and the student may possess and drive
-//! any of them between cards.
+//! The B4 payload authors the easy and awful variants flanking the medium rover;
+//! the cards explain each, and the student may possess and drive any of them
+//! between cards.
 
 fn steps() {
     [
@@ -25,10 +25,9 @@ fn show(s, i) {
 fn on_start(me) {
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
-    // The medium rover is already in the scene; flank it with the easy and awful
-    // variants so all three are lined up at the SW corner.
-    cmd("SpawnEntity", #{ entry_id: "rover_easy",  position: [-35.0, 1.0, -9.0] });
-    cmd("SpawnEntity", #{ entry_id: "rover_awful", position: [-35.0, 1.0,  9.0] });
+    // All three profile references are composed by the curriculum payload before
+    // this script starts. The script owns lesson state only; scene composition
+    // stays in USD and cannot be lost to catalog-load timing.
     this.i = 0;
     notify_kind("Basic · Rover Variants", "info");
     show(steps(), 0);
