@@ -20,6 +20,8 @@ pub mod doc;
 /// ids come from `lunco_assets::script_source::ScriptSources`.
 #[cfg(feature = "rhai")]
 pub mod module_resolver;
+#[cfg(feature = "rhai")]
+mod names;
 /// Runtime policy activation for every rhai hook seam, including generated
 /// Modelica synthesis policies.
 #[cfg(feature = "rhai")]
@@ -417,18 +419,20 @@ impl Plugin for LunCoScriptingPlugin {
             // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
             // registration rides the RegisterToolLibrary command.
             tool_libs::register_queries(app);
-            // Twin persistence: load every `<twin>/tools/*.rhai` shared tool
-            // library when a Twin opens, so file-authored tools survive restarts
-            // (native only — no filesystem on wasm).
-            #[cfg(not(target_arch = "wasm32"))]
-            app.add_observer(tool_libs::load_tools_on_twin_added);
+            // Twin persistence: load the active Twin's shared tool libraries
+            // when it opens, and retire that scope on close. The observer is
+            // installed on every target so the lifecycle reset also exists on
+            // wasm, where there is no native directory scan.
+            app.init_resource::<tool_libs::TwinToolLibraries>();
+            app.add_observer(tool_libs::sync_tools_on_twin_added);
+            app.add_observer(tool_libs::wind_down_tools_on_twin_closed);
             // Named mission timelines: in-memory store + `<twin>/timelines/*.json`
             // discovery (ListTimelines/GetTimeline), loaded on Twin open. The
             // RegisterTimeline/RunStoredTimeline commands ride this store.
             app.init_resource::<timelines::TimelineStore>();
             timelines::register_queries(app);
-            #[cfg(not(target_arch = "wasm32"))]
-            app.add_observer(timelines::load_timelines_on_twin_added);
+            app.add_observer(timelines::sync_timelines_on_twin_added);
+            app.add_observer(timelines::wind_down_timelines_on_twin_closed);
             diagnostics::register_queries(app);
             // Authoring catalog: ScriptingCatalog aggregates the full callable
             // surface (verbs + commands + queries + tools + prelude) for editor

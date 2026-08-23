@@ -1,34 +1,30 @@
 //! Sandbox Onboarding Tour — guided COACH-MARK tour with live action progression.
 //!
-//! Employs interactive progression: the Rhai event policy listens for the
-//! authored raw command/input names (camera cycle, flight locomotion,
-//! selection, spawn, possess, release) and advances automatically, while
-//! retaining "Back" / "Skip" and "Next" controls.
+//! Employs interactive progression for actions that have a public event
+//! contract (selection, spawn, possession, and release), while camera guidance
+//! uses the shared Next control. The current avatar camera is free-flight; its
+//! controls come from the authored keymap, not from a tutorial-owned binding.
 
 fn steps() {
     [
         // 0
         #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "Welcome! This is the Sandbox, a 3D digital twin of the solar system. Let's learn the basics: camera navigation, selecting, spawning, avatars, and agentic workflows. Click Next to begin.", require: "cmd:TutorialNext" },
         // 1
-        #{ anchor: "panel.center",          focus: (),             title: "Moving: Orbit & Zoom",  body: "Let's look around! In Avatar mode (orbit rig by default), hold RIGHT MOUSE BUTTON and drag to orbit the target, or scroll the MOUSE WHEEL to zoom. Click Next when done.", require: "cmd:TutorialNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Free-flight camera",    body: "The lesson starts in the authored free-flight camera. Hold " + input_hint("look_button") + " and drag to look around; use the mouse wheel to dolly along your look direction. Click Next after trying both.", require: "cmd:TutorialNext" },
         // 2
-        #{ anchor: "panel.center",          focus: (),             title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Double-click an object to focus the camera on it. Click Next.", require: "cmd:TutorialNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Locomotion",            body: "Use the authored avatar keymap to move through the scene: " + input_hint("forward") + "/" + input_hint("backward") + " move forward and backward, " + input_hint("left") + "/" + input_hint("right") + " strafe, and " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + " move down and up. Click Next after moving around the rover.", require: "cmd:TutorialNext" },
         // 3
-        #{ anchor: "panel.center",          focus: (),             title: "Camera Cycling",        body: "You can cycle perspectives. Press the C key to switch camera views (Avatar, Follow, First-Person). Press C now!", require: "key:KeyC" },
+        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it, or select it in the Entities panel. The selected object becomes the subject of the Inspector.", require: "cmd:SelectEntity" },
         // 4
-        #{ anchor: "panel.center",          focus: (),             title: "Locomotion: Flight",    body: "In Avatar flight mode, RMB drag looks around, and WASD keys fly you through space (hold Shift to boost speed x10). Pan and Zoom do not apply here. Try flying with W, A, S, or D now!", require: ["key:KeyW", "key:KeyA", "key:KeyS", "key:KeyD"] },
+        #{ anchor: "panel.right_inspector", focus: "spawn",          title: "Spawning Objects",      body: "Open Spawn in the right dock. Click a catalogued rover, prop, or structure, then place it in the scene. Cancel placement with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
         // 5
-        #{ anchor: "panel.side_browser",    focus: (),             title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it (or click multiple to extend selection). Or click it in the Entities panel (left dock). Hold Shift and select now!", require: "cmd:SelectEntity" },
+        #{ anchor: "panel.right_inspector", focus: (),             title: "Taking control",        body: "Select the rover, then click Possess in the Inspector or Command Deck. Possession grants the avatar's mapped driving inputs to that vessel.", require: "cmd:PossessVessel" },
         // 6
-        #{ anchor: "panel.right_inspector", focus: "spawn_palette", title: "Spawning Objects",      body: "Open Spawn in the right dock. Click on any catalogued rover, prop, or structure to spawn it. Spawn something now!", require: "cmd:SpawnEntity" },
+        #{ anchor: "panel.right_inspector", focus: (),             title: "Releasing control",      body: "Use " + input_hint("cancel") + " to release possession and return to free-flight. This is the shared Cancel intent, so it also closes an active placement interaction first.", require: "cmd:ReleaseVessel" },
         // 7
-        #{ anchor: "panel.right_inspector", focus: (),             title: "What is the Avatar?",   body: "Click the rover in the viewport or Entities panel, then click Possess in the Inspector or Command Deck. Possess a vehicle now!", require: "cmd:PossessVessel" },
+        #{ anchor: "",                      focus: (),             title: "Agentic workflows",      body: "Open Help for command and automation guidance. Rhai scenarios, the HTTP API, and MCP clients use the same typed command surface as the UI.", require: "cmd:TutorialNext" },
         // 8
-        #{ anchor: "panel.right_inspector", focus: (),             title: "Releasing Control",     body: "This links your keyboard controls directly to it. Press BACKSPACE to release control and return to Avatar mode. Press Backspace now!", require: "key:Backspace" },
-        // 9
-        #{ anchor: "",                      focus: (),             title: "Agentic Workflows",     body: "Open Help in the top menu for the command and automation guidance. You can write scripts using Rhai, run co-simulations, or connect external AI coding agents via the HTTP API and MCP tools. Click Next to complete.", require: "cmd:TutorialNext" },
-        // 10
-        #{ anchor: "",                      focus: (),             title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Choose First Drive or Moon Driving Basics from the Tutorials menu when you want to practise.", require: "cmd:TutorialNext" },
+        #{ anchor: "",                      focus: (),             title: "You're ready!",         body: "Now you know the current camera, input, selection, spawn, and authority surfaces. Choose First Drive or Moon Driving Basics from Tutorials to practise rover mechanics.", require: "cmd:TutorialNext" },
     ]
 }
 

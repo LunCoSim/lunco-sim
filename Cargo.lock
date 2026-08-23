@@ -7265,7 +7265,9 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-core",
  "lunco-cosim",
+ "lunco-settings",
  "lunco-time",
+ "serde",
  "serde_json",
 ]
 
@@ -7792,6 +7794,7 @@ dependencies = [
  "lunco-assets",
  "lunco-behavior",
  "lunco-celestial",
+ "lunco-controller",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

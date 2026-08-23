@@ -15,8 +15,10 @@ lunco-cosim = { path = "../lunco-cosim" }
 # step the free avatar's self-drive runs on, so pausing the sim doesn't freeze the
 # user's own movement.
 lunco-time = { path = "../lunco-time" }
+lunco-settings = { path = "../lunco-settings" }
 # Key→intent bindings are DATA (`assets/config/keybindings.json`), parsed into the
 # leafwing `InputMap` — no keys hardcoded in Rust.
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

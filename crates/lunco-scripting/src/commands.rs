@@ -461,6 +461,7 @@ pub struct RegisterToolLibrary {
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn on_register_tool_library(
     _t: On<RegisterToolLibrary>,
+    mut scoped: ResMut<crate::tool_libs::TwinToolLibraries>,
     // Optional: present only when the workspace plugin is installed. Used to
     // persist the library to the active Twin's `tools/` dir. `None` (headless /
     // no-twin) just keeps the in-memory registration.
@@ -472,25 +473,45 @@ fn on_register_tool_library(
     // (which calls `register_tool_library` directly, not this command).
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
-    if cmd.name.is_empty() {
-        return Err("RegisterToolLibrary: `name` must not be empty".to_string());
+    crate::names::validate_file_stem(&cmd.name)
+        .map_err(|error| format!("RegisterToolLibrary: {error}"))?;
+    let active_twin = match ws.as_deref() {
+        Some(workspace) => {
+            let id = workspace
+                .active_twin
+                .ok_or_else(|| "RegisterToolLibrary: no active Twin".to_string())?;
+            if workspace.twin(id).is_none() {
+                return Err("RegisterToolLibrary: active Twin is not registered".to_string());
+            }
+            Some(id)
+        }
+        None => None,
+    };
+    // Persist first. A failed write must not publish a library that the Twin
+    // cannot recover on its next open.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(twin_id) = active_twin {
+        let root = ws
+            .as_ref()
+            .and_then(|workspace| workspace.twin(twin_id))
+            .map(|twin| twin.root.clone())
+            .expect("active Twin was validated above");
+        crate::tool_libs::save_tool_library_file(&root, &cmd.name, &cmd.source).map_err(
+            |error| format!("RegisterToolLibrary: could not persist Twin file: {error}"),
+        )?;
     }
-    crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+    if let Some(twin_id) = active_twin {
+        scoped.ensure_active(twin_id);
+        scoped
+            .register(twin_id, &cmd.name, &cmd.source)
+            .map_err(|error| format!("RegisterToolLibrary: {error}"))?;
+    } else {
+        // Explicit headless/session scope. A present Workspace always
+        // produces an active Twin above; it never falls back to this path.
+        crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+    }
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
-    }
-    // Twin persistence: mirror the in-memory registration to
-    // `<twin>/tools/<name>.rhai` so it survives a restart (loaded back by the
-    // TwinAdded observer). Native only — no filesystem on wasm.
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(root) = ws
-        .as_ref()
-        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)))
-        .map(|twin| twin.root.clone())
-    {
-        if let Err(e) = crate::tool_libs::save_tool_library_file(&root, &cmd.name, &cmd.source) {
-            warn!("[tool_libs] could not persist '{}' to Twin: {e}", cmd.name);
-        }
     }
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({
@@ -771,24 +792,28 @@ fn on_register_timeline(
     // fires for LOCAL registrations only (remote ones arrive via the replay leg).
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
-    if cmd.name.is_empty() {
-        return Err("RegisterTimeline: `name` must not be empty".to_string());
-    }
+    crate::names::validate_file_stem(&cmd.name)
+        .map_err(|error| format!("RegisterTimeline: {error}"))?;
     // Reject malformed timelines at store time, not at run time.
     parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;
-    store.insert(cmd.name.clone(), cmd.timeline.clone());
+    let owner = crate::timelines::active_owner(ws.as_deref())
+        .map_err(|e| format!("RegisterTimeline: cannot register without an active scope: {e}"))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let crate::timelines::TimelineOwner::Twin(twin_id) = owner {
+        let root = ws
+            .as_ref()
+            .and_then(|workspace| workspace.twin(twin_id))
+            .map(|twin| twin.root.clone())
+            .ok_or_else(|| "RegisterTimeline: active Twin is not registered".to_string())?;
+        crate::timelines::save_timeline_file(&root, &cmd.name, &cmd.timeline)
+            .map_err(|error| format!("RegisterTimeline: could not persist Twin file: {error}"))?;
+    }
+    store.ensure_scope(owner);
+    store
+        .insert_for(owner, cmd.name.clone(), cmd.timeline.clone())
+        .map_err(|_| "RegisterTimeline: timeline store ownership changed".to_string())?;
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_timeline(journal, &cmd.name, &cmd.timeline);
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(root) = ws
-        .as_ref()
-        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)))
-        .map(|twin| twin.root.clone())
-    {
-        if let Err(e) = crate::timelines::save_timeline_file(&root, &cmd.name, &cmd.timeline) {
-            warn!("[timelines] could not persist '{}' to Twin: {e}", cmd.name);
-        }
     }
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({ "name": cmd.name, "timelines": store.names() });
@@ -812,12 +837,22 @@ pub struct RunStoredTimeline {
 fn on_run_stored_timeline(
     _t: On<RunStoredTimeline>,
     store: Res<crate::timelines::TimelineStore>,
+    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptRegistry>,
     mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
+    let owner = crate::timelines::active_owner(ws.as_deref())
+        .map_err(|e| format!("RunStoredTimeline: cannot run without an active scope: {e}"))?;
+    if store.owner() != Some(owner) {
+        return Err(format!(
+            "RunStoredTimeline: timeline store belongs to {:?}, current scope is {:?}",
+            store.owner(),
+            owner
+        ));
+    }
     // Own the JSON so the store borrow is released before we touch the registry.
     let timeline = store
         .get(&cmd.name)

@@ -6,7 +6,7 @@
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_controller::{default_key_bindings, default_key_code, key_label};
+use lunco_controller::{key_label, InputBindingsSettings};
 use lunco_core::{on_command, register_commands, Command};
 use std::collections::HashSet;
 
@@ -78,24 +78,30 @@ fn on_toggle_input_overlay(
 }
 
 #[on_command(SimulateInput)]
-fn on_simulate_input(trigger: On<SimulateInput>, mut simulated: ResMut<SimulatedInputs>) {
+fn on_simulate_input(
+    trigger: On<SimulateInput>,
+    bindings: Res<InputBindingsSettings>,
+    mut simulated: ResMut<SimulatedInputs>,
+) {
     let cmd = trigger.event();
-    // Resolve through the same bundled keymap that builds the real semantic
-    // input map and draws the overlay. There is one input vocabulary, not a
-    // second Rust-only simulation list.
-    let code = default_key_code(&cmd.key).or_else(|| {
-        warn!(
-            "[input-overlay] SimulateInput: key {:?} is not in the keymap — ignored",
-            cmd.key
-        );
-        None
-    });
-    if let Some(c) = code {
-        if cmd.pressed {
-            simulated.keys.insert(c);
-        } else {
-            simulated.keys.remove(&c);
+    let code = match bindings.key_code(&cmd.key) {
+        Ok(Some(code)) => code,
+        Ok(None) => {
+            warn!(
+                "[input-overlay] SimulateInput: key {:?} is not in the active keymap",
+                cmd.key
+            );
+            return;
         }
+        Err(error) => {
+            error!("[input-overlay] active keymap is invalid: {error}");
+            return;
+        }
+    };
+    if cmd.pressed {
+        simulated.keys.insert(code);
+    } else {
+        simulated.keys.remove(&code);
     }
 }
 
@@ -159,6 +165,7 @@ fn emit_injected_pointer(
 pub fn draw_input_overlay(
     mut egui_ctx: EguiContexts,
     settings: Res<InputOverlaySettings>,
+    bindings: Res<InputBindingsSettings>,
     simulated: Res<SimulatedInputs>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -225,7 +232,11 @@ pub fn draw_input_overlay(
                         };
 
                         ui.label(egui::RichText::new("⌨").size(15.0).weak());
-                        for (_, binding) in default_key_bindings() {
+                        let Ok(bindings) = bindings.key_bindings() else {
+                            error!("[input-overlay] active keymap is invalid");
+                            return;
+                        };
+                        for (_, binding) in bindings {
                             let label = key_label(&binding);
                             let pressed = binding
                                 .iter()
@@ -292,6 +303,7 @@ register_commands!(
 /// Offscreen/headless scenario runners still receive the shared command surface.
 pub fn register_input_overlay_commands(app: &mut App) {
     app.init_resource::<InputOverlaySettings>();
+    app.init_resource::<InputBindingsSettings>();
     app.init_resource::<SimulatedInputs>();
     app.add_message::<InjectedPointer>();
     app.init_resource::<lunco_core::markers::FlightAuthority>();

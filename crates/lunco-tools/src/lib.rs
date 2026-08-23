@@ -87,6 +87,20 @@ pub fn register(tool: Arc<dyn Tool>) {
     generation_cell().fetch_add(1, Ordering::Relaxed);
 }
 
+/// Remove a registered tool by name and bump the binding generation.
+///
+/// Removal is a real lifecycle operation: a tool authored by a closed Twin
+/// must not remain callable just because the registry is process-global. The
+/// caller that owns a scope is responsible for restoring any tool it shadowed
+/// before calling this.
+pub fn unregister(name: &str) -> Option<Arc<dyn Tool>> {
+    let removed = registry().write().unwrap().remove(name);
+    if removed.is_some() {
+        generation_cell().fetch_add(1, Ordering::Relaxed);
+    }
+    removed
+}
+
 /// Monotonic registry generation — changes on every [`register`]. A runtime
 /// adapter compares this against its last-bound value to detect new/changed
 /// tools (hot-reload).

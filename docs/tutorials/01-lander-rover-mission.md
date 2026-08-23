@@ -137,9 +137,9 @@ model MyLander
   // You never set this — it is WIRED from the vehicle's possession state (Step 4).
   input Real piloted = 0.0;
   input Real external_throttle = 0.0;     // the pilot's stick, when there is a pilot
-  input Real pitch = 0.0;                 // W / S
-  input Real roll = 0.0;                  // A / D
-  input Real yaw = 0.0;                   // Q / E
+  input Real pitch = 0.0;                 // `forward` / `backward` intents
+  input Real roll = 0.0;                  // `left` / `right` intents
+  input Real yaw = 0.0;                   // the vessel profile's yaw mapping
 
   output Real thrust;                     // N, along the lander's OWN +Y
   output Real torque_x;
@@ -319,8 +319,11 @@ Notice what's *not* here: no position. A vehicle asset never says where it is.
 
 Anything can be possessed — there is no marker for it; who may hold a thing is
 decided by the authority layer. What it can then DO is its CAPABILITY, and the
-`Controls` reference is that: it says what the keys do once you have it — Space thrusts, W/S pitch, A/D roll,
-Q/E yaw. Those land on the model inputs of the same name from Step 2.
+`Controls` reference is that: it says which semantic inputs are available once
+you have it — thrust, brake, pitch/roll-style steering, and yaw. Their physical
+labels come from the active `input_bindings` settings section (the bundled
+defaults are Space, W/S, A/D, and Q/E); the `Controls` profile maps those
+semantic intents to the model inputs of the same name from Step 2.
 `info:sourceAsset` names your `.mo` file and runs it — a program is a prim,
 and here the prim it lives on is the vessel itself, because a lander without its flight
 software is not a lander with no autopilot, it is a lander with no engine. And
@@ -563,7 +566,8 @@ means — shorter, narrower and dimmer as it drops, nothing at all at zero.
 
 Nothing here is animated. `throttle` is *wired* to the shader with a USD
 connection, so the plume is a consequence of the engine's real output: it honestly
-shows nothing when the engine is off or out of fuel, even if you're mashing Space.
+shows nothing when the engine is off or out of fuel, even if the active thrust
+binding is held.
 
 Add two cones as children of `MyLander` — a soft outer plume and a hot inner core:
 
@@ -974,8 +978,8 @@ the moment the player wants the wheel, get out of the way.
 
 "The moment the player wants the wheel" is where autopilots usually go wrong, so
 let's be precise. The player is asking for the rover if they possess the rover.
-They are *not* asking for the rover when they press W while flying the lander — that
-W belongs to the lander. An autopilot that grabs possession on any keypress will rip
+They are *not* asking for the rover when they use a drive intent while flying the
+lander — that intent belongs to the lander. An autopilot that grabs possession on any keypress will rip
 the camera off the lander mid-descent, which is a genuinely baffling thing to
 experience. Authority is a question you *ask*, never one you assume.
 
@@ -1055,7 +1059,7 @@ or give each waypoint a time limit and fail the mission if it's missed.
   `radius`, `PhysicsCollisionAPI`, `physics:collisionEnabled = true`, and
   `lunco:triggerZone = "waypoint"`; the invisible ground-anchored `Trigger` sphere
   supplies the Sensor footprint while the lifted `Dome` remains visual (Step 8).
-- Possessed the vehicle, and only Space does anything? Your model has no `pitch` /
+- Possessed the vehicle, and only the thrust binding does anything? Your model has no `pitch` /
   `roll` / `yaw` inputs, so the `Controls` profile is writing ports nobody reads.
   Ports bind by NAME — a typo is silence, not an error.
 - Tilting the vehicle doesn't steer the thrust? You wired `force_y` (world up)

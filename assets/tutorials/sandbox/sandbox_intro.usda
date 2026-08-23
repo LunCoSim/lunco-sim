@@ -7,9 +7,10 @@
 
 # ── Tutorial: Sandbox Intro (guided coach-mark TOUR) ─────────────────────────
 # A UI walkthrough of the workspace — the "guided tour" kind of tutorial (vs. the
-# interactive First Drive). All logic is in tour.rhai (a step-cursor coach tour);
+# interactive First Drive). All logic is in sandbox_intro.rhai (a step-cursor coach tour);
 # this scene is just a light backdrop so the viewport step has something to show.
-# On completion it chains to First Drive via lunco:nextScene.
+# On completion the curriculum's `lunco:tutorial:next` relationship can chain to
+# First Drive.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/sandbox_intro.usda
 # or start it from the Tutorials panel.

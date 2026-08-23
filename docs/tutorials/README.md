@@ -3,7 +3,7 @@
 Two things share this name — don't confuse them:
 
 - **In-app tutorials** — the interactive lessons that ship *inside* each app
-  (the **🎓 Tutorials** menu / F1). Coach-mark tours that spotlight widgets and
+  (the **🎓 Tutorials** menu and its configured tutorial entry point). Coach-mark tours that spotlight widgets and
   advance as you act. See [§ The in-app tutorial system](#the-in-app-tutorial-system).
 - **Authoring walkthroughs** — these docs: build-something-real guides where you
   edit data files under `assets/` (`.usda` / `.mo` / `.rhai`), reload, and watch
@@ -22,8 +22,8 @@ HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   `luncosim/…`). Native reads them fresh from disk each launch (edit → replay, no
   rebuild); wasm serves an embedded copy. Loader:
   `lunco_assets::tutorials::tutorial_source`.
-- **Launch**: every entry point (🎓 menu, F1 via `EditorIntent::ShowTutorial`, the
-  HTTP API, MCP, other scripts) funnels through one `StartTutorial{id}` command.
+- **Launch**: every entry point (🎓 menu, the configured tutorial intent, the
+  HTTP API, MCP, and other scripts) funnels through one `StartTutorial{id}` command.
 - **Onboarding is a policy, not Rust**: on a first interactive run, the boot hook
   (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
@@ -33,6 +33,7 @@ HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 - **A lesson's world is DECLARED**: the launcher mounts the `payload` through the scene lifecycle before running the script. A lesson with no payload deliberately leaves the viewport alone — absent is a statement, not a missing value.
 - **Presentation is authored**: a track may set `lunco:track:perspective` to the identifier registered by the host. The launcher resolves it through the normal perspective registry; there is no app-specific tutorial hook, and an unknown identifier fails the launch.
 - **Dynamic Twin-scoped lessons**: a Twin contributes on exactly the same terms — one `sim/tutorials/curriculum.usda` (the *Space School Seminar* track, SS1–SS4), composed when the Twin opens and dropped when it closes. No twin-specific manifest, no second parse.
+- **Resolved input labels**: tutorial copy uses the controller-owned `input_bindings` settings section through Rhai `input_binding(...)` / `input_hint(...)`; lessons do not embed physical key names. Progression listens to semantic commands or authoritative state, not raw key events.
 - **Add one — data, not Rust**: drop `assets/tutorials/<track>/<name>.rhai` and declare a prim for it in that track's `curriculum.usda`. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
 
 ### Runtime tutorial tests

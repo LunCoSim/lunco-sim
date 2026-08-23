@@ -9,6 +9,12 @@
 fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }
 /// Clear the hint line.
 fn clear_hint()                { cmd("SetHint", #{ text: "" }) }
+/// Resolve a user-facing control label for tutorial copy. An unbound intent is
+/// explicit state, not a hardcoded key or a guessed default.
+fn input_hint(binding)          {
+    let label = input_binding(binding);
+    if label == () { "unbound" } else { label }
+}
 /// Focus a singleton workbench panel when an interactive host exists.
 /// Headless lesson gates verify policy and state without a panel to focus.
 fn focus_panel(id)              { if !is_unattended() { cmd("FocusPanel", #{ id: id }) } }

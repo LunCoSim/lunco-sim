@@ -15,7 +15,7 @@ fn on_start(me) {
 }
 
 fn first_drive_possessed(me) {
-    hint("Now use W / A / S / D to drive to the glowing flag.");
+    hint("Now use " + input_hint("forward") + " / " + input_hint("left") + " / " + input_hint("backward") + " / " + input_hint("right") + " to drive to the glowing flag.");
 }
 
 fn first_drive_finished(me) {

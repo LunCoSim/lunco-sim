@@ -88,14 +88,15 @@ Adding *lessons* after that never touches Rust — the curriculum layer + a `.rh
 
 That's it. `StartTutorial{id}` mounts the declared world, then loads the script —
 **disk on native** (edit + replay, no rebuild) / **embedded on wasm** — and runs
-it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch it.
+it. The 🎓 Tutorials panel and the host's configured tutorial entry point launch
+the same command.
 
 ## Two kinds of lesson
 
 - **Coach-mark tour** (narrated slideshow) — `coach_step(steps, i)` (or
   `coach(...)`) in `on_start`, advanced by an `on_event` cursor. A tour may use
   the card's `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip` events,
-  or authored action requirements such as `key:KeyC` and `cmd:SpawnEntity`.
+  or authored semantic action requirements such as `cmd:SpawnEntity`.
   **Guaranteed completable** means that every required action is documented and
   observable; it does not mean that every step must accept Next. End by
   `emit("MISSION_COMPLETE", 0)`. Reference:
@@ -119,9 +120,9 @@ fn mission(me) {
     let flag  = "/FirstDrive/Flag";
     [
         objective("possess", #{
-            text: "Click the rover (or press F) to take control",
+            text: "Select the rover to take control",
             requires_event: "cmd:PossessVessel",         // advances on a REAL action
-            on_complete: |m| hint("Now use W/A/S/D to drive to the flag."),
+            on_complete: |m| hint("Now use " + input_hint("forward") + ", " + input_hint("left") + ", " + input_hint("backward") + ", and " + input_hint("right") + " to drive to the flag."),
         }),
         objective("reach_flag", #{
             text: "Drive to the glowing flag",
@@ -153,6 +154,13 @@ and emits `MISSION_COMPLETE`.
 | `coach_step(steps, i)` | a guided coach-mark tour step — advance the cursor `i` in `on_event` |
 | `objectives_hud(list)` | manual checklist (or just declare `mission(me)` and let it auto-publish) |
 | `notify_kind(msg, "info"\|"warn"\|"error"\|"success")` | toast |
+
+**Dynamic controls:** `input_binding(name)` returns the resolved user-facing
+label or `()` for an explicitly unbound intent. `input_hint(name)` is the copy
+helper that renders that state as `unbound`; it never selects a key or drives
+the simulation. Use these for labels, and gate progress on semantic commands
+or authoritative state rather than raw key names. The settings owner is the
+`input_bindings` section in `~/.lunco/settings.json`.
 
 **Advancing objectives — always on a real action, never a timer:**
 - `requires_event: "cmd:<Name>"` — any command dispatch lands on the bus as

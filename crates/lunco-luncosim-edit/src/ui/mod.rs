@@ -156,12 +156,12 @@ pub fn usd_selection_view_changed(
 /// binding into the existing View Help popup. This is presentation only: it
 /// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
+    bindings: Res<lunco_controller::InputBindingsSettings>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_names: Query<Ref<Name>>,
     q_bindings: Query<Ref<ControlBinding>>,
     q_inputs: Query<Ref<InputPorts>>,
     mut help: ResMut<LiveHelpSections>,
-    mut global_rows: Local<Option<Vec<(String, String)>>>,
     mut last_target: Local<Option<Entity>>,
     mut published: Local<bool>,
 ) {
@@ -174,19 +174,23 @@ fn refresh_view_help_controls(
                 .is_ok_and(|binding| binding.is_changed())
             || q_inputs.get(entity).is_ok_and(|inputs| inputs.is_changed())
     });
-    if *published && !target_changed && !endpoint_changed {
+    if *published && !bindings.is_changed() && !target_changed && !endpoint_changed {
         return;
     }
 
-    let global_rows = global_rows.get_or_insert_with(|| {
-        lunco_controller::default_key_bindings()
+    let global_rows = match bindings.key_bindings() {
+        Ok(rows) => rows
             .into_iter()
             .map(|(intent, keys)| (lunco_controller::key_label(&keys), intent.to_string()))
-            .collect()
-    });
+            .collect(),
+        Err(error) => {
+            error!("[view-help] active keymap is invalid: {error}");
+            return;
+        }
+    };
     let mut sections = vec![LiveHelpSection {
         title: "Global key → intent bindings".into(),
-        rows: global_rows.clone(),
+        rows: global_rows,
     }];
 
     if let Some(target) = target {
@@ -194,21 +198,19 @@ fn refresh_view_help_controls(
             .get(target)
             .map(|name| name.as_str().to_owned())
             .unwrap_or_else(|_| "controlled endpoint".into());
-        let mut rows = q_bindings
-            .get(target)
-            .map(|binding| {
-                binding
-                    .binds
-                    .iter()
-                    .map(|(intent, port, scale)| {
-                        (
-                            lunco_controller::default_key_label(*intent),
-                            format!("{port}  ({scale:+})"),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut rows = Vec::new();
+        if let Ok(binding) = q_bindings.get(target) {
+            for (intent, port, scale) in &binding.binds {
+                let label = match bindings.label_for_intent(*intent) {
+                    Ok(label) => label,
+                    Err(error) => {
+                        error!("[view-help] active keymap is invalid: {error}");
+                        return;
+                    }
+                };
+                rows.push((label, format!("{port}  ({scale:+})")));
+            }
+        }
         if rows.is_empty() {
             if let Ok(inputs) = q_inputs.get(target) {
                 rows = inputs

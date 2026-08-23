@@ -2,7 +2,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",                              focus: (),                       title: "Plots & Results",  body: "A simulation is only as good as what you can read off it. Let's tour the output surfaces. ◀ ▶ or arrow keys." },
+        #{ anchor: "",                              focus: (),                       title: "Plots & Results",  body: "A simulation is only as good as what you can read off it. Let's tour the output surfaces. Use the Back and Next controls." },
         #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",           body: "Select two signals, put fast and slow signals on separate axes, and snapshot the run. Then overlay a later run to make the comparison visible." },
         #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Diagnostics",      body: "Compile the model, open a diagnostic with a severity, and click it. The source view should jump to the reported line when a source location is available." },
         #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Console",          body: "Read compile progress, solver messages, and script output here. Use the message context to decide whether a problem is in source, setup, or runtime." },

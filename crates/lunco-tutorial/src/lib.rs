@@ -1016,6 +1016,32 @@ fn on_scene_transition_started(
     });
 }
 
+/// A Twin replacement invalidates any tutorial host and pending lesson
+/// transaction that was running in the outgoing active session. The USD scene
+/// owner has its own teardown observer; this observer closes the scripting/UI
+/// side even for headless hosts or while the replacement scene is still being
+/// scanned. A non-active Twin close does not affect the active lesson.
+fn on_active_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingTutorialStart>,
+    mut session: ResMut<TutorialSession>,
+    mut pending_advance: ResMut<PendingAdvance>,
+    mut commands: Commands,
+) {
+    if !trigger.event().was_active {
+        return;
+    }
+    progress.current = None;
+    pending.0 = None;
+    session.world = None;
+    pending_advance.0 = None;
+    commands.queue(|world: &mut World| {
+        clear_tutorial_hud(world);
+        stop_tutorial_host(world);
+    });
+}
+
 /// Attach a declared tutorial scenario only after its scene transaction has
 /// completed. This closes the old race where the script started while the
 /// viewport was still empty or still belonged to the outgoing scene.
@@ -1771,6 +1797,7 @@ impl Plugin for TutorialCorePlugin {
         register_all_commands(app);
         app.add_observer(on_mission_complete);
         app.add_observer(on_scene_transition_started);
+        app.add_observer(on_active_twin_closed);
         app.add_observer(on_scene_transition_completed);
         app.add_observer(on_scene_transition_failed);
         #[cfg(feature = "ui")]

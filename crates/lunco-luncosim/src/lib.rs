@@ -1328,11 +1328,23 @@ fn replay_scenario_journal_tools(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let Some(journal) = journal else {
         return;
     };
+    let Some(workspace) = workspace.as_deref() else {
+        return;
+    };
+    let Some(active) = workspace.active_twin else {
+        return;
+    };
+    let Some(mut scoped) = scoped else {
+        return;
+    };
+    scoped.ensure_active(active);
     let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
@@ -1353,7 +1365,9 @@ fn replay_scenario_journal_tools(
         if let Some((name, source)) =
             lunco_scripting::registration_journal::replay_tool_library(&op)
         {
-            lunco_scripting::tool_libs::register_tool_library(&name, &source);
+            if let Err(error) = scoped.register(active, &name, &source) {
+                warn!("[tool_libs] ignored journal replay outside its active scope: {error}");
+            }
         }
         applied.insert(id);
     }
@@ -1368,12 +1382,20 @@ fn replay_scenario_journal_timeline(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let (Some(journal), Some(mut store)) = (journal, store) else {
         return;
     };
+    let Ok(owner) = lunco_scripting::timelines::active_owner(workspace.as_deref()) else {
+        return;
+    };
+    if !matches!(owner, lunco_scripting::timelines::TimelineOwner::Twin(_)) {
+        return;
+    }
+    store.ensure_scope(owner);
     let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
@@ -1393,7 +1415,9 @@ fn replay_scenario_journal_timeline(
     for (id, op) in pending {
         if let Some((name, timeline)) = lunco_scripting::registration_journal::replay_timeline(&op)
         {
-            store.insert(name, timeline);
+            if let Err(error) = store.insert_for(owner, name, timeline) {
+                warn!("[timeline] ignored journal replay outside its active scope: {error:?}");
+            }
         }
         applied.insert(id);
     }

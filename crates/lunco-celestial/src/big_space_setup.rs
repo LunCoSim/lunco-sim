@@ -242,7 +242,12 @@ pub fn setup_big_space_hierarchy(
     q_world_grid: Query<Entity, (With<lunco_core::WorldGrid>, With<Grid>)>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
+    bindings: Res<lunco_controller::InputBindingsSettings>,
 ) {
+    let Ok(input_map) = bindings.input_map() else {
+        error!("[celestial] refusing to create the observer from invalid input bindings");
+        return;
+    };
     let sun_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
@@ -734,7 +739,7 @@ pub fn setup_big_space_hierarchy(
             GlobalTransform::default(),
             lunco_core::Avatar,
             lunco_core::IntentState::default(),
-            lunco_controller::get_avatar_input_map(),
+            input_map,
             lunco_core::IntentAnalogState::default(),
             Name::new("Observer Camera"),
             ChildOf(earth_inertial),

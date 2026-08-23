@@ -75,6 +75,11 @@ pub struct TwinClosed {
     /// The root that was removed. Consumers use this to retire external
     /// registries keyed by filesystem root before a replacement is opened.
     pub root: std::path::PathBuf,
+    /// Whether this Twin was the active workspace Twin immediately before it
+    /// was removed. Consumers that own active-session state use this edge for
+    /// teardown; closing a non-active workspace Twin must not interrupt the
+    /// active session.
+    pub was_active: bool,
 }
 
 /// A Document was just opened (registered in the Workspace). The

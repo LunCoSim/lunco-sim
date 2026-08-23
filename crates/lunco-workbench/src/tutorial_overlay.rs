@@ -270,13 +270,16 @@ fn draw_tutorial_hud(
         });
 }
 
-/// The workbench menu bar occupies the first 30 px of the viewport. Keep
-/// spotlight scrims, coach cards, and their placement candidates below it so a
-/// tutorial can never cover the menu it is asking the user to use.
-fn tutorial_content_rect(ctx: &egui::Context) -> egui::Rect {
-    let mut rect = ctx.viewport_rect();
-    rect.min.y += 34.0;
-    rect
+/// Derive the tutorial content region from the workbench's published menu-bar
+/// geometry. The menu owns its height; the tutorial overlay must not duplicate
+/// that layout constant or drift when the chrome changes.
+fn tutorial_content_rect(ctx: &egui::Context, anchors: &crate::HelpAnchors) -> Option<egui::Rect> {
+    let viewport = ctx.viewport_rect();
+    let menu = anchors.get("menu.bar")?;
+    Some(egui::Rect::from_min_max(
+        egui::pos2(viewport.left(), menu.bottom()),
+        viewport.max,
+    ))
 }
 
 fn tutorial_anchor_rect(
@@ -319,7 +322,9 @@ fn draw_spotlight(
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = tutorial_content_rect(ctx);
+    let Some(screen) = tutorial_content_rect(ctx, &anchors) else {
+        return;
+    };
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
@@ -490,7 +495,9 @@ fn draw_tour(
 ) {
     let Some(step) = hud.tour.clone() else { return };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let screen = tutorial_content_rect(ctx);
+    let Some(screen) = tutorial_content_rect(ctx, &anchors) else {
+        return;
+    };
 
     let theme = theme
         .map(|t| t.clone())

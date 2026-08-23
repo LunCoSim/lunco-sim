@@ -4,7 +4,7 @@
 
 fn steps() {
     [
-        #{ anchor: "",                         focus: (),                     title: "Your Workspace",   body: "This lesson shows where your models live and how to find examples to learn from. ◀ ▶ or the arrow keys; Esc to leave." },
+        #{ anchor: "",                         focus: (),                     title: "Your Workspace",   body: "This lesson shows where your models live and how to find examples to learn from. Use the Back and Next controls; Stop leaves the lesson." },
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Twin Browser",     body: "A Twin is a folder of .mo files plus a manifest. Expand it, select a model, and open it in the model view; this browser is the source of your workspace documents." },
         #{ anchor: "panel.lunco.workbench.twin_browser", focus: "lunco.workbench.twin_browser",   title: "Read-only libraries", body: "Bundled demos and the Modelica Standard Library are read-only. Right-click a class and choose Duplicate when you need an editable copy in your Twin." },
         #{ anchor: "panel.modelica_welcome",   focus: "modelica_welcome",     title: "Learning Paths",   body: "Open a path such as Circuits, Control, or Mechanics, choose a class, and run it. Each step names a concrete signal or behavior to inspect." },

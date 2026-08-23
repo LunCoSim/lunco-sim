@@ -13,6 +13,24 @@ only (coaching, objectives, action predicates, and semantic event emission).
 Rhai does not open scenes, choose perspectives, or start another lesson; it
 uses the small prelude surface exposed for those lesson-level concerns.
 
+## Current input labels
+
+The controller owns the resolved user keymap in the persisted
+`input_bindings` section of `~/.lunco/settings.json`. Tutorial copy must read
+semantic labels from that resource instead of spelling physical keys:
+
+```rhai
+hint("Drive with " + input_hint("forward") + " and " + input_hint("brake") + ".")
+```
+
+`input_binding("forward")` is the raw lookup: it returns the current user-facing
+label or `()` when the intent is unbound. Use it when a lesson needs to inspect
+or branch on binding state. `input_hint("forward")` is presentation sugar for
+tutorial copy: it converts an unbound result into the explicit text `unbound`.
+It does not choose a key or provide a control path. Lesson progression should
+listen for semantic command events or authoritative state, never for a raw key
+event. The bundled defaults are in `assets/config/keybindings.json`.
+
 ## Layout
 
 ```

@@ -61,6 +61,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "READ. Reflection read of a global Resource field — settings/config live in resources, not components. () if absent.",
     ),
     (
+        "input_binding",
+        "input_binding(\"forward\")",
+        "string | ()",
+        "READ. Resolve a semantic input binding from the active user settings. Tutorials use this for current labels; () means the intent is unbound.",
+    ),
+    (
         "set_setting",
         "set_setting(\"Resource.field\", value)",
         "bool",

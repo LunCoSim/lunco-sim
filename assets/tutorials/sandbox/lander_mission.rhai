@@ -54,7 +54,7 @@ fn lander_deployed_message(me) {
 }
 
 fn lander_human_takeover(me) {
-    hint("You have the rover. Drive it through the glowing waypoint gates with W / A / S / D.");
+    hint("You have the rover. Drive it through the glowing waypoint gates with " + input_hint("forward") + " / " + input_hint("left") + " / " + input_hint("backward") + " / " + input_hint("right") + ".");
 }
 
 fn lander_human_has_control(me) {

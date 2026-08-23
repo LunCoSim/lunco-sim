@@ -4,12 +4,19 @@ Input mapping and controller translation for LunCoSim vessels.
 
 ## What This Crate Does
 
-This crate translates raw user input (Keyboard, Gamepad, Mouse) into typed command events that the Flight Software (FSW) can consume.
+This crate resolves user input (Keyboard, Gamepad, Mouse) from the persisted
+`InputBindingsSettings` section and translates it into typed command events that
+Flight Software (FSW) can consume.
 
-- **Input Mapping** — Standard WASD + F/Space mapping for rovers and landers via `leafwing-input-manager`; F is the autopilot action, while Space is interpreted by the authored vessel profile as lander thrust or rover brake.
-- **Intent Translation** — Translates abstract human actions (e.g., `DriveForward`) into the shared `SetPorts` command surface.
-- **Control Latching** — Implements "cruise control" behavior (`Shift + Axis`) to toggle sticky setpoints for hands-free operation.
-- **Context Awareness** — Supports modifier-gated input (e.g., `Ctrl` for free-look camera mode) to prevent command flow during inspection.
+- **Input Mapping** — `assets/config/keybindings.json` supplies the bundled
+  semantic defaults; user overrides live under `input_bindings` in
+  `~/.lunco/settings.json`. The resolved resource is projected into every live
+  avatar input map when it changes.
+- **Intent Translation** — Maps semantic `UserIntent` actions into the shared
+  `SetPorts` command surface and authored per-vessel `ControlBinding`s.
+- **Context Awareness** — UI focus and session authority gates are applied at
+  the shared controller boundary, so input cannot fight a text field,
+  autopilot, or another owning session.
 
 ## Architecture
 
@@ -17,19 +24,11 @@ The controller acts as the **Human-Machine Interface (HMI)** layer, decoupling r
 
 ```
 lunco-controller/
-  ├── VesselIntent      — Enum of abstract actions (Drive, Steer, Brake)
-  ├── VesselIntentState — Action state resource for polling
+  ├── InputBindingsSettings — persisted semantic key/pointer map
+  ├── UserIntent            — shared abstract action vocabulary
   ├── ControllerLink    — Component linking a controller entity to a vessel
-  └── systems.rs        — Translation logic and latching state
+  └── lib.rs             — translation, authority, and input projection
 ```
-
-### The Latch Pattern
-
-To facilitate long-distance surface travel, the controller supports latched axis setpoints:
-- `Shift + W/S`: Toggles forward/reverse throttle latch.
-- `Shift + A/D`: Toggles steering lock.
-- `Space (Thrust)`: Drives the possessed lander's authored engine input; it does not toggle autopilot.
-- `Space (Brake)`: Drives the possessed rover's authored brake input; the lander profile consumes the same key as `Thrust` instead.
 
 ## Usage
 
@@ -38,13 +37,15 @@ app.add_plugins(LunCoControllerPlugin);
 
 // Assign a controller to a rover
 commands.spawn((
-    InputManagerBundle::<VesselIntent> {
-        action_state: ActionState::default(),
-        input_map: get_default_input_map(),
-    },
+    ActionState::<UserIntent>::default(),
+    InputBindingsSettings::default().input_map().expect("bundled keymap"),
     ControllerLink { vessel_entity: rover_id },
 ));
 ```
+
+Tutorials use `input_binding("forward")` / `input_hint("forward")` through the
+Rhai bridge, so their labels follow the same resolved settings resource rather
+than copying physical key names.
 
 ## See Also
 

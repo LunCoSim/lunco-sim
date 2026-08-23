@@ -235,8 +235,13 @@ fn close_all_open_folders(
         let Some(root) = workspace.twin(id).map(|twin| twin.root.clone()) else {
             continue;
         };
+        let was_active = workspace.active_twin == Some(id);
         workspace.close_twin(id);
-        commands.trigger(TwinClosed { twin: id, root });
+        commands.trigger(TwinClosed {
+            twin: id,
+            root,
+            was_active,
+        });
         info!("[{log_tag}] closed pre-existing Twin {:?}", id);
     }
 }
