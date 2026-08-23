@@ -946,7 +946,15 @@ pub(crate) fn apply_runtime_ui_exposures(
             && perspective_visible
             && gate_visible
             && placement.is_some();
-        let presentation_visible = should_be_visible && surface.presentation_ready;
+        // Only recording surfaces need to wait for the cross-world render
+        // acknowledgement. Ordinary runtime UI remains a live presentation
+        // surface once its exposure, placement, and authored visibility rules
+        // allow it. `presentation_ready` is intentionally maintained only for
+        // the recording contract; applying it to every surface leaves normal
+        // HUDs hidden forever because `report_runtime_ui_readiness` does not
+        // arm non-recording surfaces.
+        let presentation_visible =
+            should_be_visible && (!surface.required_for_recording || surface.presentation_ready);
         // Scene teardown and HUI template rebuilds can reset the root's Bevy
         // visibility without changing the engine exposure revision. The
         // revision remains the property/style fast path, but visibility is a
@@ -1355,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn live_exposure_revision_does_not_hide_ready_surface() {
+    fn non_recording_surface_does_not_wait_for_render_acknowledgement() {
         let mut app = App::new();
         let mut exposures = EngineExposures::default();
         {
@@ -1389,7 +1397,10 @@ mod tests {
                     gate: None,
                     interactive: false,
                     mounted: true,
-                    presentation_ready: true,
+                    // This surface is not part of the offline recording
+                    // contract, so it must be visible before any render-world
+                    // acknowledgement exists.
+                    presentation_ready: false,
                     placement: RuntimeUiPlacement::Viewport,
                     applied_revision: initial_revision,
                     applied_placement: None,
