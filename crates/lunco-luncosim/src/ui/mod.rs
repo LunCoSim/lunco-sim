@@ -23,6 +23,8 @@ use lunco_workbench::{CurrentSceneName, CurrentScenePath, MenuCtx};
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
 mod code_panel;
+/// Generic consent window for missing Twin datasets.
+mod dataset_provisioning;
 mod models_palette;
 /// Which floating viewport overlays are shown (persisted, off by default).
 mod overlays;
@@ -160,6 +162,11 @@ impl Plugin for SandboxUiPlugin {
         }
 
         add_runtime_ui_layer(app);
+        app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
+            .add_observer(dataset_provisioning::on_dataset_scope_ready)
+            .add_observer(dataset_provisioning::on_dataset_scope_removed)
+            .add_observer(dataset_provisioning::on_twin_closed)
+            .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
         app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
             // so scene selection / possession / spawn-placement run as click observers.
@@ -720,7 +727,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
                     lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
                     lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
                 };
-                (e.key.clone(), owner, e.name.clone(), e.state.clone())
+                (e.id.clone(), owner, e.name.clone(), e.state.clone())
             })
             .collect();
         // Registration order already groups by owner; sorting makes that a
@@ -728,7 +735,11 @@ fn register_downloadable_assets_settings(world: &mut World) {
         // emitted on change instead of buffering the whole list.
         let mut rows = rows;
         rows.sort_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
-        let mut requested: Option<String> = None;
+        enum DatasetAction {
+            Request(String),
+            Cancel(String),
+        }
+        let mut requested: Option<DatasetAction> = None;
         // One stable section per existing owner keeps Settings compact without
         // inventing a second categorisation system for generic datasets.
         let mut index = 0;
@@ -757,21 +768,38 @@ fn register_downloadable_assets_settings(world: &mut World) {
                             ui.label(name);
                             match state {
                                 DatasetState::Installed => {
-                                    ui.label(egui::RichText::new("✔ cached").weak());
+                                    ui.label(egui::RichText::new("✔ ready · cached").weak());
                                 }
                                 DatasetState::Downloading {
                                     bytes_done,
                                     bytes_total,
                                 } => {
-                                    ui.label(format!(
-                                        "⬇ {:.1}/{:.1} MB",
-                                        *bytes_done as f64 / 1_048_576.0,
-                                        *bytes_total as f64 / 1_048_576.0
-                                    ));
+                                    if *bytes_total == 0 {
+                                        ui.label("⬇ downloading…");
+                                    } else {
+                                        ui.label(format!(
+                                            "⬇ {:.1}/{:.1} MB",
+                                            *bytes_done as f64 / 1_048_576.0,
+                                            *bytes_total as f64 / 1_048_576.0
+                                        ));
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        requested = Some(DatasetAction::Cancel(key.clone()));
+                                    }
                                 }
-                                DatasetState::Missing | DatasetState::Failed(_) => {
+                                DatasetState::Processing { kind } => {
+                                    ui.label(format!("⚙ processing {kind}…"));
+                                }
+                                DatasetState::Missing => {
+                                    ui.label(egui::RichText::new("not installed").weak());
                                     if ui.button("⬇ Download").clicked() {
-                                        requested = Some(key.clone());
+                                        requested = Some(DatasetAction::Request(key.clone()));
+                                    }
+                                }
+                                DatasetState::Failed(error) => {
+                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                                    if ui.button("Retry").clicked() {
+                                        requested = Some(DatasetAction::Request(key.clone()));
                                     }
                                 }
                             }
@@ -779,8 +807,15 @@ fn register_downloadable_assets_settings(world: &mut World) {
                     }
                 });
         }
-        if let Some(key) = requested {
-            ctx.trigger(lunco_assets::datasets::RequestDataset { key });
+        if let Some(action) = requested {
+            match action {
+                DatasetAction::Request(id) => {
+                    ctx.trigger(lunco_assets::datasets::RequestDataset { id });
+                }
+                DatasetAction::Cancel(id) => {
+                    ctx.trigger(lunco_assets::datasets::CancelDataset { id });
+                }
+            }
         }
     });
 }

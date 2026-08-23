@@ -151,6 +151,7 @@ lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, optional = true }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-twin = { path = "../lunco-twin" }
 # Canonical Twin change-journal (`TwinJournalPlugin` / `JournalResource`), added
@@ -174,6 +175,7 @@ lunco-materials = { path = "../lunco-materials", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-ui = { path = "../lunco-ui", optional = true }
 bevy_egui = { workspace = true, optional = true }
 bevy_hui = { workspace = true, optional = true }
 bevy_flair = { workspace = true, optional = true }
@@ -245,6 +247,7 @@ ui = [
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
+    "dep:lunco-ui",
     "lunco-tutorial/ui",
     "dep:lunco-materials",
     "dep:lunco-theme",

@@ -1605,6 +1605,15 @@ fn bridge_usd_dem_terrain(
         let scene_dir = asset_path
             .as_ref()
             .and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
+        let scene_twin_name = asset_path.as_ref().and_then(|p| {
+            matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)).then(|| {
+                p.path()
+                    .components()
+                    .next()
+                    .and_then(|c| c.as_os_str().to_str())
+                    .map(str::to_owned)
+            })?
+        });
         let scene_root = asset_path
             .as_ref()
             .filter(|p| matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)))
@@ -1622,6 +1631,8 @@ fn bridge_usd_dem_terrain(
             prim_path,
             &sdf,
             scene_root.as_deref(),
+            scene_twin_name.as_deref(),
+            &twins,
             &registry,
             obstacle_spec.bypass_change_detection(),
             &mut commands,
@@ -1641,6 +1652,8 @@ fn bridge_dem_prim_read(
     prim_path: &lunco_usd::UsdPrimPath,
     sdf: &openusd::sdf::Path,
     scene_root: Option<&std::path::Path>,
+    scene_twin_name: Option<&str>,
+    twins: &lunco_assets::twin_source::TwinRoots,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -1688,11 +1701,11 @@ fn bridge_dem_prim_read(
     };
     // Resolve the DEM source to a byte-readable URI.
     //
-    // `demSource` is relative to the root the SCENE came from, and `scene_root` is
-    // that root — resolved once by the caller from the scene's own asset path.
-    // There is no per-origin branch here: a local twin and a downloaded scenario
-    // are both `twin://<name>/<rel>`, and `TwinRoots` maps that name to wherever
-    // THIS peer keeps the bytes (a checkout, or the scenario cache dir).
+    // `demSource` is relative to the root the SCENE came from. Named Twin scenes
+    // resolve through `TwinRoots`, whose canonical resolver checks the authored
+    // tree and then the Twin cache; an autoloaded scene with no Twin authority
+    // uses `scene_root` directly. Both paths preserve the scene's own asset
+    // identity rather than consulting whichever Twin happens to be open.
     //
     // Deliberately NO fallback to "whichever twin is open": a client usually has
     // an unrelated local twin open, which would capture the lookup and resolve a
@@ -1704,9 +1717,18 @@ fn bridge_dem_prim_read(
         warn!("[usd-dem] cannot resolve DEM source '{rel}': the scene has no root directory");
         return;
     };
-    // Native gives an absolute path; the web autoload path keeps it
-    // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
-    let uri = lunco_assets::asset_path::slashed(root.join(&rel));
+    // Named Twin scenes resolve through the asset boundary, which checks the
+    // authored tree before the Twin's `.cache`. A direct `root.join(rel)` would
+    // miss downloaded Twin assets and force every scene to author `.cache`.
+    let uri = if let Some(name) = scene_twin_name {
+        let Some(path) = twins.resolve_file(name, std::path::Path::new(&rel)) else {
+            warn!("[usd-dem] cannot resolve DEM source '{rel}' for Twin '{name}'");
+            return;
+        };
+        lunco_assets::asset_path::slashed(path)
+    } else {
+        lunco_assets::asset_path::slashed(root.join(&rel))
+    };
     let window_m = match dem_attrs
         .as_ref()
         .map(|a| a.authored_f32("windowM"))
@@ -2070,6 +2092,8 @@ def Xform \"Traverse\"\n{\n}\n"
                 &prim_path,
                 &sdf,
                 Some(std::path::Path::new("/twin/moonbase")),
+                None,
+                &lunco_assets::twin_source::TwinRoots::default(),
                 &registry,
                 &mut spec,
                 &mut commands,

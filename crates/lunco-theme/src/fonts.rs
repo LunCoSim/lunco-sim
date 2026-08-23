@@ -22,9 +22,9 @@
 //! Technical — in a single file. This is why Godot and Blender
 //! ship DejaVu for the same purpose.
 //!
-//! The file lives under the workspace's `assets/fonts/` dir (see
-//! [`lunco_assets::fonts_dir`]) so every crate reads the same
-//! authoritative source.
+//! The file is an engine asset named `fonts/DejaVuSans.ttf`. Native builds
+//! resolve it through the shared asset roots, including the packed cache in a
+//! release bundle; web builds fetch the copy staged by `build_web.sh`.
 //!
 //! # Fallback order
 //!
@@ -43,9 +43,9 @@ pub struct FontsInstalled(pub bool);
 /// Idempotent installer. Native reads the font from the cache dir;
 /// wasm callers must hand in pre-fetched bytes via
 /// [`install_fallback_fonts_with_bytes`] (see [`crate::spawn_wasm_font_fetch`]).
-/// Silently no-ops if the font file is missing — the app still runs,
-/// just without the expanded glyph coverage. A warning is logged so the
-/// missing-font condition is visible.
+/// If the font file is missing the app still runs, but logs a visible warning
+/// and keeps the default egui fonts. Release packaging rejects that state
+/// before producing a bundle.
 // Native-only (the wasm path hands in pre-fetched bytes via
 // `install_fallback_fonts_with_bytes`), one-shot font load at startup —
 // a direct `std::fs::read` is correct here, so the `disallowed_methods`
@@ -59,8 +59,8 @@ pub fn install_fallback_fonts(ctx: &egui::Context) {
         Err(e) => {
             bevy::log::warn!(
                 "[lunco-theme] DejaVu Sans not found at {}: {e} — math \
-                 / Greek / arrow glyphs will tofu. Copy the font into \
-                 assets/fonts/ (or from /usr/share/fonts/truetype/dejavu/).",
+                 / Greek / arrow glyphs will tofu. Populate the asset cache \
+                 before launching a packaged build.",
                 lunco_assets::dejavu_sans_path().display()
             );
             return;

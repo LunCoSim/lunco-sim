@@ -73,7 +73,7 @@ pub mod twin_source;
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
-pub use asset_sources::register_lunco_asset_sources;
+pub use asset_sources::{register_lunco_asset_sources, TwinRootsPlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
 #[cfg(not(target_arch = "wasm32"))]

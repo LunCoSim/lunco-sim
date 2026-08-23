@@ -88,7 +88,7 @@ pub(crate) struct PendingBodyImagery {
     /// reached [`MAX_IMAGERY_ATTEMPTS`] is never re-issued — the give-up path
     /// this map exists for.
     ///
-    /// Keyed by dataset key, not by globe entity: the bytes are what failed,
+    /// Keyed by globally unique dataset id, not by globe entity: the bytes are what failed,
     /// and they fail the same way for whichever globe asks next. A scene
     /// reload therefore does NOT reset a give-up (it is a property of the
     /// file), and the give-up stands for the rest of the session. The entry is
@@ -378,11 +378,11 @@ pub(crate) fn bind_dataset_body_imagery(
     // fresh budget. Done here (not on the `is_installed` continue below) so it
     // also runs on the frame a dataset is uninstalled.
     if !pending.attempts.is_empty() {
-        pending.attempts.retain(|key, _| {
+        pending.attempts.retain(|id, _| {
             registry
                 .entries()
                 .iter()
-                .any(|e| &e.key == key && e.state.is_installed())
+                .any(|e| &e.id == id && e.state.is_installed())
         });
     }
     if q_globes.is_empty() {
@@ -407,7 +407,7 @@ pub(crate) fn bind_dataset_body_imagery(
         // so the next frame re-issued the same doomed load forever.
         if pending
             .attempts
-            .get(&entry.key)
+            .get(&entry.id)
             .is_some_and(|n| *n >= MAX_IMAGERY_ATTEMPTS)
         {
             continue;
@@ -430,7 +430,7 @@ pub(crate) fn bind_dataset_body_imagery(
         // file shipped with the build or was downloaded a moment ago.
         pending.inflight.push(PendingBodyImage {
             naif_id,
-            dataset_key: entry.key.clone(),
+            dataset_key: entry.id.clone(),
             image: load_body_image(&asset_server, entry.artifact_uri()),
         });
     }

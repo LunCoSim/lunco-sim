@@ -80,7 +80,8 @@ impl RenderProfile {
 ///   `ShaderMaterial` and the `StandardMaterial` darkening of shadowed props (from
 ///   `lunco-environment`);
 /// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
-/// - `terrain_maps` — the derived-layer bind onto the async USD terrain material.
+/// - `terrain_maps` — the derived-layer bind onto the semantic static-terrain
+///   material created by `horizon_shade`.
 ///
 /// **Screenshots deliberately do NOT live here** — they live in
 /// `lunco_workbench::screenshot`. This crate is the 3D *material* binder, and `lunica`

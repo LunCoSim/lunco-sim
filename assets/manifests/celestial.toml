@@ -9,9 +9,8 @@
 #
 # `dest` is resolved against the shared engine cache (`lunco_assets::cache_dir`)
 # and holds the SOURCE download; `[*.process]` derives the file the renderer
-# actually samples. Both roots are on the `lunco://` lookup chain, so a packaged
-# build that ships `assets/.cache/textures/earth.png` resolves it with no cache
-# and no network at all.
+# actually samples. The processed files live in the shared user cache and are
+# offered by the first-run resource prompt; they are not release-package data.
 #
 # The `[*.body]` sub-table is DOMAIN metadata: it names the body these pixels
 # belong to, by NAIF id, so `bind_dataset_body_imagery` can apply an installed
@@ -25,6 +24,7 @@ name = "Earth Blue Marble (NASA Next Generation)"
 url = "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-topography-bathymetry/december/world.topo.bathy.200412.3x5400x2700.jpg"
 dest = "textures/earth_source.jpg"
 sha256 = "a9f0088972dee0254610af851c4d6838ca3f2cf79176987e0a5713e2c15ec042"
+recommended = true
 
 [earth.process]
 kind = "texture"
@@ -41,6 +41,7 @@ name = "Moon Color Map (NASA CGI Moon Kit)"
 url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
 dest = "textures/moon_source.tif"
 sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
+recommended = true
 
 [moon.process]
 kind = "texture"

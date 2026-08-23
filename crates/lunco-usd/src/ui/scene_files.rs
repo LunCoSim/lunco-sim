@@ -158,10 +158,8 @@ fn resolve_scheme(
         return Some(assets_root?.join(rel));
     }
     if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
-        if !lunco_assets::asset_path::is_safe_relative_path(rel) {
-            return None;
-        }
-        return Some(twins?.root_of(name)?.join(rel));
+        let relative = lunco_assets::asset_path::relative_path(rel)?;
+        return twins?.resolve_file(name, &relative);
     }
     None
 }

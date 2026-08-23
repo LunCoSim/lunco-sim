@@ -16,9 +16,9 @@
 //!   rims / AO / tonal variation at distances where tile geometry and the procedural
 //!   FBM have LOD'd away;
 //! - the **static-mesh path** binds them onto the terrain's own `ShaderMaterial`
-//!   (`terrain_layered.wgsl` slots). That material is authored asynchronously by
-//!   `lunco-usd-sim`, so there is no intent component to restate — filling its slots
-//!   means naming `MeshMaterial3d`, and that lives in `lunco-render-bevy`
+//!   (`terrain_layered.wgsl` slots). That semantic material is created by
+//!   `lunco-render-bevy`, so there is no intent component to restate — filling its
+//!   slots means naming `MeshMaterial3d`, and that lives in `lunco-render-bevy`
 //!   (`terrain_maps.rs`), the one crate allowed to. It is why this crate can publish
 //!   the maps without linking `bevy_pbr`.
 //!

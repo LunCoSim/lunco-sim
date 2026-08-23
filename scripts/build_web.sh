@@ -602,7 +602,8 @@ generate_bindings() {
         cp "$dejavu_src" "$dist_dir/fonts/DejaVuSans.ttf"
         info "Copied DejaVu Sans → $dist_dir/fonts/"
     else
-        warn "DejaVu Sans not found — math/arrow glyphs will tofu in browser."
+        error "DejaVu Sans is required in the web bundle; populate the fonts cache and rebuild."
+        exit 1
     fi
 
     # luncosim loads scene files via the bevy AssetServer over HTTP
@@ -674,7 +675,7 @@ generate_bindings() {
     # `lunco://textures/<tex>`. On wasm every root of that scheme is an HTTP root,
     # so staging into `assets/.cache/textures/` — the PACKED cache, exactly where
     # `build_native.sh` puts it — serves them same-origin with no web-only path.
-    if [ "$binary" = "luncosim" ] || [ "$binary" = "luncosim" ]; then
+    if [ "$binary" = "luncosim" ]; then
         local missing_celestial=0
         for tex in earth.png moon.png; do
             local tex_found=0

@@ -114,6 +114,17 @@ pub struct ProcessConfig {
     #[serde(default = "default_dem_pixel_scale_m")]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub pixel_scale_m: f64,
+    /// Vertical unit conversion for the source samples. NASA's floating LOLA
+    /// TIFFs are kilometres relative to the lunar reference radius, so their
+    /// manifest uses `2000.0` to produce metres relative to that radius.
+    #[serde(default = "default_dem_height_scale")]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub source_height_scale_m_per_unit: f64,
+    /// Vertical offset applied after [`Self::source_height_scale_m_per_unit`].
+    /// Nodata values remain non-finite and are not transformed.
+    #[serde(default)]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub source_height_offset_m: f64,
     /// Geographic extent of the SOURCE DTM, used to map the author's ROI
     /// (center + window) onto source pixels. These are the `MIN/MAX_LATITUDE`
     /// / `EASTERNMOST/WESTERNMOST_LONGITUDE` values from the DTM's PDS3
@@ -156,6 +167,10 @@ fn default_output_root() -> String {
 
 fn default_dem_pixel_scale_m() -> f64 {
     2.0
+}
+
+fn default_dem_height_scale() -> f64 {
+    1.0
 }
 
 /// Processes a single source asset according to `process.kind`.
@@ -544,7 +559,12 @@ fn process_dem(
     output_dir: &Path,
     cfg: &ProcessConfig,
 ) -> Result<(), std::io::Error> {
-    let src = decode_gray_source(source)?;
+    let mut src = decode_gray_source(source)?;
+    apply_dem_height_units(
+        &mut src.samples,
+        cfg.source_height_scale_m_per_unit,
+        cfg.source_height_offset_m,
+    )?;
     let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, &src, "dem")?;
     let (out_n, win) = (roi.out_n, roi.win);
     // Sanity ceiling only. A DEM's voids are FILLED below, not avoided — this
@@ -614,6 +634,36 @@ fn process_dem(
     // raster's geo tags; source URL and checksum in `Assets.toml`; site id in the
     // folder name. See `docs/architecture/57-dem-georeferencing.md`.
 
+    Ok(())
+}
+
+/// Convert the source DEM's declared vertical units into metres relative to the
+/// body's reference surface. The source declaration owns this conversion; the
+/// raster reader and the terrain runtime consume metres and never guess units.
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_dem_height_units(
+    samples: &mut [f64],
+    scale_m_per_unit: f64,
+    offset_m: f64,
+) -> Result<(), std::io::Error> {
+    if !scale_m_per_unit.is_finite() || scale_m_per_unit == 0.0 {
+        return Err(io_err(
+            "dem source height scale must be finite and non-zero".into(),
+        ));
+    }
+    if !offset_m.is_finite() {
+        return Err(io_err("dem source height offset must be finite".into()));
+    }
+    for value in samples {
+        if value.is_finite() {
+            *value = *value * scale_m_per_unit + offset_m;
+            if !value.is_finite() {
+                return Err(io_err(
+                    "dem source height conversion produced a non-finite elevation".into(),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1374,6 +1424,17 @@ mod tests {
         assert!(fill_dem_voids(&mut v, n, "dem").is_err());
     }
 
+    #[test]
+    fn dem_source_height_units_are_converted_before_sampling() {
+        let mut samples = vec![1.25, f64::NAN, -2.0];
+        apply_dem_height_units(&mut samples, 2000.0, 0.0).expect("valid conversion");
+        assert_eq!(samples[0], 2500.0);
+        assert!(samples[1].is_nan(), "nodata must remain non-finite");
+        assert_eq!(samples[2], -4000.0);
+        assert!(apply_dem_height_units(&mut samples, 0.0, 0.0).is_err());
+        assert!(apply_dem_height_units(&mut samples, 1.0, f64::INFINITY).is_err());
+    }
+
     /// PDS orthorectified products are footprints PADDED to a rectangle with
     /// `CORE_NULL`, so the raster's width is not the width of the data. Clamping a
     /// crop to `0..w` therefore lands in the padding while looking perfectly legal.
@@ -1477,6 +1538,8 @@ mod tests {
             center_lon: Some(0.0),
             window_m: Some(8.0), // 8 m ÷ 2 m/px = 4 px half → 9px square window
             pixel_scale_m: 2.0,
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
             // Source extent: lat/lon each span [-1, 1] over the 12×8 raster, so
             // (0,0) maps to the centre column/row.
             src_min_lat: Some(-1.0),
@@ -1565,7 +1628,9 @@ mod tests {
             center_lon: Some(0.0),
             window_m: Some(8.0),
             pixel_scale_m: 2.0, // serde default — label's MAP_SCALE governs
-            src_min_lat: None,  // absent on purpose: label extent must serve
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
+            src_min_lat: None, // absent on purpose: label extent must serve
             src_max_lat: None,
             src_min_lon: None,
             src_max_lon: None,
@@ -1616,6 +1681,8 @@ mod tests {
             center_lon: Some(0.0),
             window_m: Some(16.0),
             pixel_scale_m: 1.0,
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
             src_min_lat: Some(-1.0),
             src_max_lat: Some(1.0),
             src_min_lon: Some(-1.0),
@@ -1670,6 +1737,8 @@ mod tests {
             center_lon: Some(0.0),
             window_m: Some(16.0),
             pixel_scale_m: 1.0,
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
             src_min_lat: Some(-1.0),
             src_max_lat: Some(1.0),
             src_min_lon: Some(-1.0),

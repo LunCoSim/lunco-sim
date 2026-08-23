@@ -22,6 +22,10 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 # Twin and a downloaded scenario are served uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }
+# Twin open/close events are the lifecycle boundary for the shared `twin://`
+# source and its scoped dataset registry. The asset layer owns that binding so
+# a host does not need a domain-specific plugin just to mount a Twin.
+lunco-workspace = { path = "../lunco-workspace" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and
 # `warn!`/`error!` is not surfacing — the workbench fans an Error-severity
 # `lunco_core::TelemetryEvent` to the status bar and Diagnostics. Plain

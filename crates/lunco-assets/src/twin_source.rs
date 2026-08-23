@@ -104,6 +104,53 @@ fn canonical_root(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
+/// Resolve a Twin-relative file with the same authored-first, cache-second
+/// policy used by the `twin://` reader. The AssetServer, dataset registry, and
+/// native runtime consumers must agree on which bytes a logical Twin path names.
+pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option<PathBuf> {
+    if !crate::asset_path::is_safe_relative_components(relative) {
+        return None;
+    }
+    let authored = root.join(relative);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) =
+        crate::existing_path_within_root(root, relative).filter(|path| path.is_file())
+    {
+        return Some(path);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if authored.exists() {
+        return Some(authored.clone());
+    }
+    if authored.exists() {
+        // A present entry that failed canonical containment is either an
+        // escaping symlink or an entry the native filesystem refused to
+        // canonicalize. Do not hand it to the storage backend.
+        return None;
+    }
+
+    let cache_root = crate::twin_cache_dir(root);
+    let cached = cache_root.join(relative);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) =
+        crate::existing_path_within_root(&cache_root, relative).filter(|path| path.is_file())
+    {
+        return Some(path);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if cached.exists() {
+        return Some(cached.clone());
+    }
+    if cached.exists() {
+        // The cache entry failed containment; never turn a remote Twin
+        // reference into an arbitrary host filesystem read.
+        return None;
+    }
+    // Preserve the reader's useful missing-file diagnostic: authored is the
+    // logical location a Twin-relative reference names.
+    Some(authored)
+}
+
 impl TwinRoots {
     fn clear_overlays_for_names(&self, names: &[String]) {
         if let Ok(mut overlays) = self.overlays.write() {
@@ -210,6 +257,21 @@ impl TwinRoots {
         self.roots.read().ok().and_then(|m| m.get(name).cloned())
     }
 
+    /// Return the authority assigned to an open Twin root.
+    ///
+    /// Names can be disambiguated when two open folders share the same
+    /// authored/folder name, so consumers must resolve the assigned authority
+    /// instead of reconstructing it from the manifest again.
+    pub fn name_for_root(&self, root: impl AsRef<Path>) -> Option<String> {
+        let target = canonical_root(root.as_ref());
+        self.roots.read().ok().and_then(|roots| {
+            roots
+                .iter()
+                .find(|(_, existing)| canonical_root(existing) == target)
+                .map(|(name, _)| name.clone())
+        })
+    }
+
     /// Names of all currently-open Twins, sorted (deterministic order — the
     /// map's own iteration order isn't).
     pub fn names(&self) -> Vec<String> {
@@ -227,6 +289,16 @@ impl TwinRoots {
     /// Absolute root folder for an open Twin by name.
     pub fn root_of(&self, name: &str) -> Option<PathBuf> {
         self.root_for(name)
+    }
+
+    /// Resolve a Twin-relative file using the same authored-first, cache-second
+    /// policy as the `twin://` AssetReader. Native consumers that need a concrete
+    /// filesystem path must use this boundary rather than joining a Twin root
+    /// themselves, because downloaded Twin assets live in `.cache`. Existing
+    /// directories are rejected; every current consumer resolves asset bytes.
+    pub fn resolve_file(&self, name: &str, relative: &Path) -> Option<PathBuf> {
+        let root = self.root_for(name)?;
+        resolve_twin_relative_file(&root, relative)
     }
 
     /// The "primary" open Twin as `(name, root)` — the alphabetically-first
@@ -341,49 +413,13 @@ impl TwinReader {
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
-        if !crate::asset_path::is_safe_relative_components(path) {
-            return None;
-        }
         let mut comps = path.components();
         let name = comps.next()?.as_os_str().to_str()?;
-        let root = self.roots.root_for(name)?;
         let mut rel = PathBuf::new();
         for comp in comps {
             rel.push(comp.as_os_str());
         }
-        let authored = root.join(&rel);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = crate::existing_path_within_root(&root, &rel) {
-            return Some(path);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if authored.exists() {
-            return Some(authored.clone());
-        }
-        if authored.exists() {
-            // A present entry that failed canonical containment is either an
-            // escaping symlink or an entry the native filesystem refused to
-            // canonicalize. Do not hand it to the storage backend.
-            return None;
-        }
-        let cache_root = crate::twin_cache_dir(&root);
-        let cached = cache_root.join(&rel);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = crate::existing_path_within_root(&cache_root, &rel) {
-            return Some(path);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if cached.exists() {
-            return Some(cached.clone());
-        }
-        if cached.exists() {
-            // See the authored-tree guard above; a cache entry is not allowed
-            // to turn a remote Twin reference into a host filesystem read.
-            return None;
-        }
-        // Neither exists — return the authored path so the error names where
-        // the file was expected, not where it was cached.
-        Some(authored)
+        self.roots.resolve_file(name, &rel)
     }
 }
 
@@ -543,6 +579,32 @@ mod tests {
         assert_eq!(first, "moonbase");
         assert_eq!(again, first, "reopen must reuse the existing name");
         assert_eq!(roots.names().len(), 1, "no duplicate registration");
+    }
+
+    #[test]
+    fn resolve_file_finds_downloaded_twin_assets_without_exposing_cache_in_authored_paths() {
+        let twin = tempfile::tempdir().expect("temporary Twin root");
+        let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
+        std::fs::create_dir_all(cached.parent().expect("cached parent")).expect("cache directory");
+        std::fs::write(&cached, b"cached terrain").expect("cached asset");
+        let roots = TwinRoots::default();
+        let name = roots.register("luna2", twin.path());
+
+        assert_eq!(
+            roots.resolve_file(&name, Path::new("terrain/luna2")),
+            Some(cached.clone()),
+            "logical Twin paths must resolve downloaded assets through the cache"
+        );
+
+        let authored = twin.path().join("terrain/luna2");
+        std::fs::create_dir_all(authored.parent().expect("authored parent"))
+            .expect("authored directory");
+        std::fs::write(&authored, b"authored terrain").expect("authored asset");
+        assert_eq!(
+            roots.resolve_file(&name, Path::new("terrain/luna2")),
+            Some(authored),
+            "authored Twin files take precedence over materialized cache files"
+        );
     }
 
     #[test]

@@ -969,10 +969,9 @@ pub mod fonts;
 
 /// Plugin to register theme resources.
 ///
-/// Also installs fallback fonts (Noto Sans + Noto Sans Symbols 2)
-/// on the egui context once the context is live — Modelica icons
-/// use math / Greek / arrow glyphs that egui's default font
-/// doesn't cover, so we append Noto as a fallback in the
+/// Also installs the bundled DejaVu Sans fallback on the egui context once
+/// the context is live. Modelica icons use math / Greek / arrow glyphs that
+/// egui's default font does not cover, so DejaVu is appended in the
 /// `Proportional` / `Monospace` font families.
 pub struct ThemePlugin;
 
@@ -1014,7 +1013,7 @@ fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>
     }
 }
 
-/// Install Noto fallback fonts the first time the egui context is
+/// Install the bundled DejaVu fallback font the first time the egui context is
 /// available, then mark the resource as installed so subsequent
 /// frames short-circuit. Lives here (not in an `on_startup` system)
 /// because the egui context is created on the first render pass —

@@ -49,6 +49,7 @@ pub(crate) fn build(app: &mut App) {
         (
             sync_horizon_quality_settings
                 .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+            ensure_terrain_materials,
             wire_terrain_materials,
             wire_sun_for_non_terrain_materials,
         )
@@ -73,7 +74,9 @@ fn sync_horizon_quality_settings(
     let profile = match settings.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
-            warn!("invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration");
+            warn!(
+                "invalid Graphics horizon-shadow settings: {reason}; preserving current horizon configuration"
+            );
             return;
         }
     };
@@ -90,14 +93,18 @@ fn sync_horizon_quality_settings(
 /// Keeps every horizon terrain's `ShaderMaterial` wired: heightfield
 /// texture, static size/resolution, the per-frame sun direction, and the
 /// **shadow cache** binding + `shadow_cache_on` flag.
-/// A terrain with no authored shader gets the default `terrain_layered.wgsl`
-/// (albedo from its already-resolved `StandardMaterial`). Idempotent and
-/// self-healing against later material swaps; steady-state cost is a uniform
-/// compare per terrain (writes only when the sun moves or the cache swaps).
+/// A terrain with no concrete material gets the semantic default
+/// `terrain_layered.wgsl`. A static DEM mesh is created by the terrain domain
+/// after the USD Xform has been projected, so it cannot rely on the ordinary
+/// USD mesh-material projection to create a `StandardMaterial`. If a standard
+/// material is already present, its authored albedo is preserved; otherwise the
+/// shader's documented default is authoritative. Idempotent and self-healing
+/// against later material swaps; steady-state cost is a uniform compare per
+/// terrain (writes only when the sun moves or the cache swaps).
 ///
-/// A pending or missing standard-material asset is not replaced with a guessed
-/// colour. The appearance binder may not have resolved the USD look yet; taking
-/// over the entity at that point would permanently erase the authored look.
+/// A pending standard-material asset is not replaced. A terrain with no standard
+/// material is a different, valid state: the terrain projection owns its
+/// semantic shader and the shader's default albedo is the documented result.
 fn resolved_terrain_albedo(
     material: Option<&MeshMaterial3d<StandardMaterial>>,
     materials: &Assets<StandardMaterial>,
@@ -105,22 +112,75 @@ fn resolved_terrain_albedo(
     material.and_then(|handle| materials.get(&handle.0).map(|material| material.base_color))
 }
 
-#[allow(clippy::type_complexity)]
-pub fn wire_terrain_materials(
+/// Give every static DEM mesh its semantic material as soon as the mesh exists.
+///
+/// This is intentionally independent of the sun and horizon cache. A material is
+/// the terrain's geometry contract; lighting is a later uniform projection. Keeping
+/// the two separate means a scene with a malformed, delayed, or absent light still
+/// has visible terrain and reports its lighting problem through the light path.
+fn ensure_terrain_materials(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
+    std_mats: Res<Assets<StandardMaterial>>,
+    terrains: Query<
+        (Entity, Option<&MeshMaterial3d<StandardMaterial>>),
+        (
+            With<lunco_terrain_surface::DemTerrainSurface>,
+            With<Mesh3d>,
+            Without<RenderLayers>,
+            Without<MeshMaterial3d<ShaderMaterial>>,
+        ),
+    >,
+) {
+    let Some(mut shader_mats) = shader_mats else {
+        return;
+    };
+
+    for (entity, std_mat) in &terrains {
+        // A pending StandardMaterial asset belongs to the ordinary USD appearance
+        // projection. Wait for that authoritative asset instead of replacing it.
+        // With no StandardMaterial at all, this terrain's semantic WGSL default is
+        // the authoritative appearance.
+        if std_mat.is_some() && resolved_terrain_albedo(std_mat, &std_mats).is_none() {
+            continue;
+        }
+
+        let mut material = ShaderMaterial {
+            shader: asset_server.load(DEFAULT_TERRAIN_SHADER_PATH),
+            ..Default::default()
+        };
+        if let Some(albedo) = resolved_terrain_albedo(std_mat, &std_mats) {
+            let a = albedo.to_linear();
+            material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
+        }
+        let handle = shader_mats.add(material);
+        info!("[terrain] applied {DEFAULT_TERRAIN_SHADER_PATH} to {entity:?}");
+
+        // The terrain takes the SHADER path: drop any PbrLook intent with the
+        // StandardMaterial it bound, or the mesh would carry two materials and draw
+        // twice. The next frame's uniform system owns the same shader material.
+        commands
+            .entity(entity)
+            .try_remove::<MeshMaterial3d<StandardMaterial>>()
+            .remove::<lunco_render::PbrLook>()
+            .try_insert(MeshMaterial3d(handle));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub fn wire_terrain_materials(
     cfg: Res<HorizonShadowCacheConfig>,
     sun: SunQuery,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
-    std_mats: Res<Assets<StandardMaterial>>,
     terrains: Query<
         (
             Entity,
             Ref<GlobalTransform>,
             Option<&HorizonMap>,
             Option<&HorizonShadowCache>,
+            Option<&Mesh3d>,
             Option<&MeshMaterial3d<ShaderMaterial>>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
         ),
         (
             With<lunco_terrain_surface::DemTerrainSurface>,
@@ -162,7 +222,13 @@ pub fn wire_terrain_materials(
     let to_sun_world: Vec3 = sun_gt.back().into();
     let cache_quality_valid = cfg.quality_is_valid();
 
-    for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
+    for (entity, terrain_gt, map, shadow_cache, mesh, shader_mat) in &terrains {
+        // A streamed terrain owner has no mesh: its visible materials live on
+        // the LOD tile children. Only the static-mesh path needs an owner
+        // material here.
+        if mesh.is_none() && shader_mat.is_none() {
+            continue;
+        }
         // The world→terrain inverse only moves when the terrain does; `sun_local`
         // is still derived every frame (the sun moves continuously) but from the
         // cached matrix, not a fresh inversion.
@@ -249,78 +315,49 @@ pub fn wire_terrain_materials(
             ]);
         };
 
-        if let Some(handle) = shader_mat {
-            // Compare before `get_mut` — a blind `get_mut` re-uploads the
-            // asset every frame. Sun direction + heightfield identity + csm
-            // bound + cache handle/flag cover everything that changes.
-            //
-            // `sun_dir` compares via `get_vec3`, NOT `get_vec4`. It is written as a
-            // `Vec3` (see `write_engine`) and `get_vec4` matches only
-            // `ParamValue::Vec4` — so it answered `None` for a value that was
-            // present and correct, `needs` was permanently true, and EVERY terrain
-            // material was re-uploaded every frame.
-            //
-            // EPSILON, not exact equality, for the same reason the scalars beside it
-            // use one. An exact compare is only quiet while the sun is BIT-identical
-            // frame to frame — true for a parked sun, false the moment the celestial
-            // clock runs, and then every terrain material repacks every frame again:
-            // the original cost, re-entered through a different door. At the lunar
-            // rate (360° / 29.5 d) `SUN_DIR_EPSILON` coalesces the write to roughly
-            // once every ten seconds, and the direction error it tolerates (~0.006°)
-            // is far below anything a shadow direction can show.
-            let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-                m.height_map != height_map_handle
-                    || m.shadow_cache != cache_image
-                    || m.get_scalar("shadow_cache_on")
-                        .is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get_vec3("sun_dir")
-                        .is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
-                    || m.get_vec3("sun_dir_world")
-                        .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
-                    || m.get_scalar("hf_res")
-                        .is_none_or(|r| (r - hf_res).abs() > 1e-3)
-                    || m.get_scalar("csm_far")
-                        .is_none_or(|c| (c - csm_far).abs() > 1e-3)
-                    || m.get_scalar("horizon_march_steps")
-                        .is_none_or(|s| (s - horizon_march_steps).abs() > 1e-3)
-            });
-            if needs {
-                if let Some(mut m) = shader_mats.get_mut(&handle.0) {
-                    write_engine(&mut m);
-                }
+        let Some(handle) = shader_mat else {
+            // Material creation belongs to `ensure_terrain_materials` and is
+            // deliberately independent of sun discovery. A static mesh without a
+            // material is only visible after that system has inserted one.
+            continue;
+        };
+        // Compare before `get_mut` — a blind `get_mut` re-uploads the asset every
+        // frame. Sun direction + heightfield identity + csm bound + cache handle/flag
+        // cover everything that changes.
+        //
+        // `sun_dir` compares via `get_vec3`, NOT `get_vec4`. It is written as a
+        // `Vec3` (see `write_engine`) and `get_vec4` matches only `ParamValue::Vec4` —
+        // so it answered `None` for a value that was present and correct, `needs` was
+        // permanently true, and EVERY terrain material was re-uploaded every frame.
+        //
+        // EPSILON, not exact equality, for the same reason the scalars beside it use
+        // one. An exact compare is only quiet while the sun is BIT-identical frame to
+        // frame — true for a parked sun, false the moment the celestial clock runs,
+        // and then every terrain material repacks every frame again: the original
+        // cost, re-entered through a different door. At the lunar rate (360° / 29.5 d)
+        // `SUN_DIR_EPSILON` coalesces the write to roughly once every ten seconds, and
+        // the direction error it tolerates (~0.006°) is far below anything a shadow
+        // direction can show.
+        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
+            m.height_map != height_map_handle
+                || m.shadow_cache != cache_image
+                || m.get_scalar("shadow_cache_on")
+                    .is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
+                || m.get_vec3("sun_dir")
+                    .is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
+                || m.get_vec3("sun_dir_world")
+                    .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
+                || m.get_scalar("hf_res")
+                    .is_none_or(|r| (r - hf_res).abs() > 1e-3)
+                || m.get_scalar("csm_far")
+                    .is_none_or(|c| (c - csm_far).abs() > 1e-3)
+                || m.get_scalar("horizon_march_steps")
+                    .is_none_or(|s| (s - horizon_march_steps).abs() > 1e-3)
+        });
+        if needs {
+            if let Some(mut m) = shader_mats.get_mut(&handle.0) {
+                write_engine(&mut m);
             }
-        } else {
-            // No authored shader: apply the semantic DEM terrain material,
-            // carrying the displayColor albedo over. This is the same shader
-            // contract consumed by the authored layer-map projection below;
-            // using a shadow-only material here would make the real orthophoto
-            // topology unreachable and silently render gray terrain.
-            // The StandardMaterial may be absent for one or more frames while
-            // the PbrLook observer resolves the authored appearance. Do not
-            // turn that transient state into an irreversible shader takeover
-            // with an arbitrary gray colour.
-            let Some(albedo) = resolved_terrain_albedo(std_mat, &std_mats) else {
-                continue;
-            };
-            let a = albedo.to_linear();
-            let mut material = ShaderMaterial {
-                shader: asset_server.load(DEFAULT_TERRAIN_SHADER_PATH),
-                height_map: height_map_handle.clone(),
-                shadow_cache: cache_image.clone(),
-                ..Default::default()
-            };
-            material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
-            write_engine(&mut material);
-            let handle = shader_mats.add(material);
-            info!("[horizon] applied {DEFAULT_TERRAIN_SHADER_PATH} to {entity:?}");
-            // The terrain takes the SHADER path: drop any `PbrLook` intent with the
-            // `StandardMaterial` it bound, or the mesh would carry two materials and
-            // draw twice (the contract in `rebind_changed_pbr_look`).
-            commands
-                .entity(entity)
-                .try_remove::<MeshMaterial3d<StandardMaterial>>()
-                .remove::<lunco_render::PbrLook>()
-                .try_insert(MeshMaterial3d(handle));
         }
     }
 }
@@ -412,6 +449,17 @@ mod tests {
         // destructive, not idempotent).
         app.init_asset::<ShaderMaterial>();
         app.add_systems(Update, wire_sun_for_non_terrain_materials);
+        app
+    }
+
+    fn terrain_material_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<ShaderMaterial>();
+        app.init_asset::<bevy::shader::Shader>();
+        app.init_asset::<StandardMaterial>();
+        app.add_systems(Update, ensure_terrain_materials);
         app
     }
 
@@ -659,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn terrain_shader_waits_for_a_resolved_material_instead_of_guessing_gray() {
+    fn terrain_shader_uses_its_documented_default_without_standard_material() {
         assert_eq!(
             DEFAULT_TERRAIN_SHADER_PATH, "shaders/terrain_layered.wgsl",
             "the default terrain material must expose the authored layer-map contract"
@@ -669,5 +717,39 @@ mod tests {
 
         assert_eq!(resolved_terrain_albedo(None, &materials), None);
         assert_eq!(resolved_terrain_albedo(Some(&missing), &materials), None);
+    }
+
+    /// Material ownership must not depend on lighting discovery. A terrain with
+    /// no sun still receives its semantic shader; the separate uniform system can
+    /// report the missing light without making the geometry disappear.
+    #[test]
+    fn static_terrain_gets_its_material_without_a_sun() {
+        let mut app = terrain_material_app();
+        let entity = app
+            .world_mut()
+            .spawn((
+                GlobalTransform::IDENTITY,
+                Mesh3d(Handle::<Mesh>::default()),
+                lunco_terrain_surface::DemTerrainSurface,
+            ))
+            .id();
+
+        app.update();
+
+        let material = app
+            .world()
+            .get::<MeshMaterial3d<ShaderMaterial>>(entity)
+            .expect("static terrain must receive a semantic material without a sun");
+        assert!(
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&material.0)
+                .is_some_and(|material| material.shader != Handle::default()),
+            "terrain material must point at the authoritative layered terrain shader"
+        );
+        assert!(!app
+            .world()
+            .get::<MeshMaterial3d<StandardMaterial>>(entity)
+            .is_some());
     }
 }

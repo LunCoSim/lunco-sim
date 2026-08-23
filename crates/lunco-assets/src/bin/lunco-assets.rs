@@ -192,12 +192,13 @@ fn process_filtered(
     }
 
     let mut processed = 0;
+    let twin_cache = twin_root.map(lunco_assets::twin_cache_dir);
     for (key, entry) in &manifest.assets {
         if only_key.is_some_and(|k| k != key) {
             continue;
         }
         if let Some(ref proc_cfg) = entry.process {
-            let source_path = download::entry_dest_path(entry, twin_root);
+            let source_path = download::entry_dest_path(entry, twin_cache.as_deref());
             if !source_path.exists() {
                 println!(
                     "  ⚠ {} source not found at {}, skipping",

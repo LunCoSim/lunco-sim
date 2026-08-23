@@ -10,25 +10,7 @@
 # This is the "define data to download via assets" surface: add a [<name>] table
 # (url/dest/sha256) + optional [<name>.process] to pull another real raster.
 
-# Real lunar surface colour — NASA CGI Moon Kit (LROC-derived global colour,
-# 16-bit sRGB). Same source the celestial sim uses, so the content-addressed
-# cache dedupes the actual download. Used as a base albedo/detail TINT sampled by
-# the terrain's planar UV (the south-pole window is near-uniform highland grey in
-# the global equirect map → a realistic tint, not pixel-accurate site detail).
-# Site-accurate polar albedo (LOLA 1064 nm reflectance / LROC polar mosaic,
-# reprojected to the DEM window) is a deferred upgrade — see the IMPL doc.
-[lunar_color]
-name = "Moon Color Map (NASA CGI Moon Kit) — terrain albedo tint"
-url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
-dest = "textures/lunar_color_source.tif"
-sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
-# UNUSED as of 2026-07-18: nothing reads `terrain_albedo.png`. The runtime
-# DERIVES its albedo from relief instead (`derived_layers::albedo_map` packs a
-# tone scalar into the normal-map alpha), so this entry downloads and processes
-# a 4K raster no consumer samples. Kept for the layered-colour pipeline in the
-# design doc above; wire a consumer or drop the entry.
-
-[lunar_color.process]
-kind = "texture"
-target_resolution = [2048, 1024]
-output = "textures/terrain_albedo.png"
+# Site-accurate polar albedo remains a future dataset only when a terrain
+# material consumes it. The current runtime derives its albedo from relief;
+# an unconsumed declaration would waste bandwidth and cache space, so it is
+# intentionally absent here.
