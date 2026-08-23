@@ -785,8 +785,10 @@ pub fn network_facts(
                         target_instance.clone(),
                         input.clone(),
                     ));
+                    continue;
                 }
-            } else if let Some(boundary) = target.strip_prefix(&boundary_prefix).or_else(|| {
+            }
+            if let Some(boundary) = target.strip_prefix(&boundary_prefix).or_else(|| {
                 network
                     .input_sources
                     .iter()

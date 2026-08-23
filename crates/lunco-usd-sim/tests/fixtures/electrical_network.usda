@@ -10,11 +10,13 @@
 # boundary output published through it.
 def Xform "Rig"
 {
+    float outputs:drive_left = 0.0
+
     def Scope "Electrical" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
-        float inputs:drive_left = 0.0
+        float inputs:drive_left.connect = </Rig.outputs:drive_left>
         float outputs:soc.connect = </Rig/Battery.outputs:soc_out>
         float outputs:solar_power.connect = </Rig/SolarPanel.outputs:power_out>
         uniform token collection:components:expansionRule = "explicitOnly"
