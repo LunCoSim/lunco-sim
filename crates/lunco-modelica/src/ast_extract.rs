@@ -210,6 +210,34 @@ pub fn within_package_of_source(source: &str) -> Option<String> {
     within_package(&parse(source)?)
 }
 
+/// Fully qualified names declared by a source document, including nested
+/// classes. This is document metadata, not a model-specific rule: the
+/// compiler uses it to decide whether a durable source root already owns an
+/// extra document before registering a second URI for the same class.
+pub(crate) fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
+    let ast = parse_recovered(source, file_label);
+    let prefix = ast
+        .within
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let mut names = Vec::new();
+    collect_declared_class_names(&ast.classes, &prefix, &mut names);
+    names
+}
+
+fn collect_declared_class_names(
+    classes: &AstIndexMap<String, ClassDef>,
+    prefix: &str,
+    names: &mut Vec<String>,
+) {
+    for (name, class) in classes {
+        let qualified = qualify(prefix, name);
+        names.push(qualified.clone());
+        collect_declared_class_names(&class.classes, &qualified, names);
+    }
+}
+
 /// Join a parent qualified name with a child segment to form a new
 /// qualified name. When `parent` is empty, returns `child` alone —
 /// **not** `".child"`, which in Modelica (MLS §5.3.2) is a *global*

@@ -285,6 +285,13 @@ pub struct ModelicaCompiler {
     /// library had nowhere to be recorded, and [`Self::compile_str`]'s
     /// package-member path had to special-case the string `"LunCo"` to avoid
     /// clobbering itself.
+    ///
+    /// Source-root installation records the top-level names it actually
+    /// parsed here as well. The source-root command may be keyed by a mount
+    /// identifier such as `twin:school`, while Modelica resolves a member by
+    /// its authored `within` root such as `School`; recording the authored
+    /// namespace is what lets later package-member compiles use the already
+    /// seated root instead of registering a second URI.
     installed_roots: std::collections::HashSet<String>,
     /// URIs of the user documents currently seated as overlays in this
     /// reused session (NOT the MSL/library source roots). Every compile is
@@ -726,6 +733,13 @@ impl ModelicaCompiler {
             }
             return self.compile_loaded(&qualified);
         }
+        if self.class_is_owned_by_installed_root(model_name) {
+            return Err(format!(
+                "`{filename}` declares `{model_name}`, but that class is already owned by a \
+                 loaded Modelica source root; edit the source-root document or use a new \
+                 namespace instead of registering a second definition"
+            ));
+        }
         let mut keep = std::collections::HashSet::new();
         keep.insert(filename.to_string());
         self.evict_user_docs_except(&keep);
@@ -831,23 +845,72 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let primary_owned_class =
+            crate::ast_extract::within_package_of_source(source).and_then(|within| {
+                let root = within.split('.').next().unwrap_or(&within);
+                if !self.installed_roots.contains(root) {
+                    let _ = self.ensure_root_installed(root);
+                }
+                let qualified = crate::ast_extract::qualify(
+                    &within,
+                    crate::ast_extract::short_name(model_name),
+                );
+                self.class_is_owned_by_installed_root(&qualified)
+                    .then_some(qualified)
+            });
         let mut keep = std::collections::HashSet::new();
-        keep.insert(filename.to_string());
-        for (extra_filename, _) in extras {
+        if primary_owned_class.is_none() {
+            keep.insert(filename.to_string());
+        }
+        let mut filtered_extras = Vec::with_capacity(extras.len());
+        for (extra_filename, extra_source) in extras {
             if extra_filename != filename {
+                let declared =
+                    crate::ast_extract::declared_class_names(extra_source, extra_filename);
+                let owned = declared
+                    .iter()
+                    .filter(|qualified| self.class_is_owned_by_installed_root(qualified))
+                    .count();
+                if owned == declared.len() && !declared.is_empty() {
+                    continue;
+                }
+                if owned != 0 {
+                    return Err(format!(
+                        "extra source `{extra_filename}` mixes classes already owned by a \
+                         loaded source root with new definitions; update the source root or \
+                         place the new classes under a distinct namespace"
+                    ));
+                }
                 keep.insert(extra_filename.clone());
+                filtered_extras.push((extra_filename, extra_source));
             }
         }
         self.evict_user_docs_except(&keep);
-        for (extra_filename, extra_source) in extras {
+        for (extra_filename, extra_source) in filtered_extras {
             if extra_filename == filename {
                 continue;
             }
             self.seat_user_source(extra_filename, extra_source);
         }
-        self.seat_user_source(filename, source);
+        if primary_owned_class.is_none() {
+            self.seat_user_source(filename, source);
+        }
         self.seated_user_uris = keep;
-        self.compile_loaded(model_name)
+        match primary_owned_class {
+            Some(qualified) => self.compile_loaded(&qualified),
+            None => self.compile_loaded(model_name),
+        }
+    }
+
+    /// Whether a fully-qualified class name belongs to a durable source root
+    /// already seated in this compiler session. User overlays are deliberately
+    /// not treated as durable ownership; they remain governed by
+    /// `seated_user_uris` and are replaced by the next compile.
+    fn class_is_owned_by_installed_root(&mut self, qualified: &str) -> bool {
+        let Some(root) = qualified.split('.').next() else {
+            return false;
+        };
+        self.installed_roots.contains(root) && self.session.class_lookup_query(qualified).is_some()
     }
 
     /// Compile an MSL class that is already loaded into the session
@@ -1045,6 +1108,7 @@ impl ModelicaCompiler {
                     inserted,
                     total,
                 );
+                self.installed_roots.insert(id.to_string());
                 return rumoca_compile::compile::SourceRootLoadReport {
                     source_set_id: id.to_string(),
                     source_root_path: lunco_assets::msl_dir()
@@ -1063,12 +1127,16 @@ impl ModelicaCompiler {
             // it is instantiated, not compiled as a top-level target, so
             // the bound-`input` strip does not apply, and the pre-parsed
             // bundle path above couldn't strip anyway.
-            return self.session.load_source_root_tolerant(
+            let report = self.session.load_source_root_tolerant(
                 id,
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
                 root_dir,
                 None,
             );
+            if report.diagnostics.is_empty() {
+                self.installed_roots.insert(id.to_string());
+            }
+            return report;
         }
         // Every other disk root (twin `models/` trees, system libraries)
         // holds user classes that can be compile *targets*, so each file
@@ -1208,7 +1276,10 @@ impl ModelicaCompiler {
                 }
             }
             match self.session.add_document(uri, &stripped) {
-                Ok(()) => inserted += 1,
+                Ok(()) => {
+                    self.remember_source_roots_from_document(uri);
+                    inserted += 1;
+                }
                 Err(error) => {
                     let message = format!("source root `{id}`: could not seat {uri}: {error}");
                     log::warn!("[ModelicaCompiler] {message}");
@@ -1226,6 +1297,32 @@ impl ModelicaCompiler {
             cache_file: None,
             diagnostics,
         }
+    }
+
+    /// Record the authored top-level namespace(s) supplied by one source-root
+    /// document. A source-root identifier is transport metadata and may not be
+    /// the Modelica namespace (`twin:demo` can contain `Demo.*`), so the
+    /// compiler must derive this from the parsed document rather than guess
+    /// from the URI or loader id.
+    fn remember_source_roots_from_document(&mut self, uri: &str) {
+        let roots: Vec<String> = self
+            .session
+            .parsed_file_query(uri)
+            .map(|ast| {
+                let within = ast.within.as_ref().map(ToString::to_string);
+                ast.classes
+                    .keys()
+                    .filter_map(|class_name| {
+                        let qualified = within
+                            .as_deref()
+                            .map(|prefix| format!("{prefix}.{class_name}"))
+                            .unwrap_or_else(|| class_name.clone());
+                        qualified.split('.').next().map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.installed_roots.extend(roots);
     }
 
     /// The `input` defaults captured from every seated library member — the
@@ -2050,6 +2147,37 @@ mod observables_smoke {
                 .any(|message| message.contains("could not parse Broken.mo")),
             "a source root must not report Ready when its bound-input strip failed: {:?}",
             report.diagnostics
+        );
+    }
+
+    #[test]
+    fn source_root_namespace_owns_later_package_member_compiles() {
+        let mut compiler = ModelicaCompiler::new();
+        let member = "within Demo;\nmodel Part\n  Real x;\nequation\n  x = 1;\nend Part;\n";
+        let report = compiler.load_source_root_in_memory(
+            "twin:demo",
+            "in-memory:demo",
+            vec![("demo/Part.mo".to_string(), member.to_string())],
+        );
+        assert_eq!(report.inserted_file_count, 1);
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+
+        // The source root is keyed by a transport id (`twin:demo`), but the
+        // package-member route must resolve the authored `within Demo;` root
+        // and compile the already-seated class rather than adding a second
+        // URI for the same qualified name.
+        let result = compiler.compile_str("Part", member, "workspace/Part.mo");
+        assert!(
+            result.is_ok(),
+            "a loaded source root must own its package members: {:?}",
+            result.err()
+        );
+
+        let multi_result = compiler.compile_str_multi("Part", member, "workspace/Part.mo", &[]);
+        assert!(
+            multi_result.is_ok(),
+            "the multi-document path must share source-root ownership: {:?}",
+            multi_result.err()
         );
     }
 
