@@ -226,6 +226,35 @@ fn hist_fingerprint(h: &crate::signal::ScalarHistory) -> HistFingerprint {
     }
 }
 
+/// Return an owned time-series presentation buffer that is rebuilt only when
+/// the source history changes. Plot hosts that combine this visualization's
+/// live curves with another plot surface use this owner instead of copying a
+/// ring buffer during every panel paint.
+pub fn cached_scalar_history_points(
+    ctx: &egui::Context,
+    registry: &SignalRegistry,
+    source: &SignalRef,
+) -> Option<std::sync::Arc<Vec<[f64; 2]>>> {
+    let history = registry.scalar_history(source)?;
+    if history.is_empty() {
+        return None;
+    }
+    let key = hist_fingerprint(history);
+    let cache_id = egui::Id::new(("line_plot_scalar_history", source));
+    type Cached = std::sync::Arc<(HistFingerprint, std::sync::Arc<Vec<[f64; 2]>>)>;
+    if let Some(cached) = ctx.data(|data| data.get_temp::<Cached>(cache_id)) {
+        if cached.0 == key {
+            return Some(cached.1.clone());
+        }
+    }
+    let points: std::sync::Arc<Vec<[f64; 2]>> =
+        std::sync::Arc::new(history.iter().map(|s| [s.time, s.value]).collect());
+    ctx.data_mut(|data| {
+        data.insert_temp(cache_id, std::sync::Arc::new((key, points.clone())));
+    });
+    Some(points)
+}
+
 /// Everything a cached tessellation depends on. Stored next to the
 /// points; a mismatch on any component forces a rebuild.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -867,6 +896,23 @@ mod tests {
         assert!(pair_by_time(&[], vec![].into_iter()).is_empty());
         assert!(pair_by_time(&[s(0.0, 1.0)], vec![].into_iter()).is_empty());
         assert!(pair_by_time(&[], vec![s(0.0, 1.0)]).is_empty());
+    }
+
+    #[test]
+    fn cached_scalar_history_points_reuses_unchanged_history() {
+        let ctx = egui::Context::default();
+        let signal = SignalRef::new(Entity::from_raw_u32(1).unwrap(), "speed");
+        let mut registry = SignalRegistry::with_default_capacity(8);
+        registry.push_scalar(signal.clone(), 0.0, 1.0);
+
+        let first = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
+        let second = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+
+        registry.push_scalar(signal.clone(), 1.0, 2.0);
+        let changed = cached_scalar_history_points(&ctx, &registry, &signal).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.as_slice(), &[[0.0, 1.0], [1.0, 2.0]]);
     }
 
     #[test]

@@ -72,6 +72,75 @@ enum CosimUpdateSet {
 #[derive(Component)]
 struct UsdTelemetryProjected;
 
+/// Runtime index for the one-time USD telemetry projection.
+///
+/// The declaration projector is triggered by scene/projection changes and by
+/// unprojected prims.  Its wrapper-port and domain-member indexes therefore
+/// belong to the projection lifecycle, not to the per-frame query.  Keeping
+/// them here makes the steady state an empty gated system instead of a full
+/// ECS scan and a set of cloned USD-path keys every Update.
+#[derive(Resource, Default)]
+struct UsdTelemetryProjectionIndex {
+    generated_outputs: HashMap<
+        (
+            bevy::asset::AssetId<UsdStageAsset>,
+            Option<u64>,
+            String,
+            String,
+        ),
+        (Entity, String),
+    >,
+    network_members_by_stage:
+        HashMap<bevy::asset::AssetId<UsdStageAsset>, std::collections::HashSet<String>>,
+    dirty: bool,
+}
+
+fn mark_usd_telemetry_projection_index_dirty(
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
+    added_prims: Query<(), Added<UsdPrimPath>>,
+    changed_wrappers: Query<
+        (),
+        Or<(
+            Added<GeneratedModelicaSource>,
+            Changed<GeneratedModelicaSource>,
+            Added<ModelicaSignalLayout>,
+            Changed<ModelicaSignalLayout>,
+        )>,
+    >,
+) {
+    if !added_prims.is_empty() || !changed_wrappers.is_empty() {
+        index.dirty = true;
+    }
+}
+
+fn telemetry_projection_index_changed(
+    added_prims: Query<(), Added<UsdPrimPath>>,
+    changed_wrappers: Query<
+        (),
+        Or<(
+            Added<GeneratedModelicaSource>,
+            Changed<GeneratedModelicaSource>,
+            Added<ModelicaSignalLayout>,
+            Changed<ModelicaSignalLayout>,
+        )>,
+    >,
+) -> bool {
+    !added_prims.is_empty() || !changed_wrappers.is_empty()
+}
+
+fn telemetry_projection_needed(
+    index: Res<UsdTelemetryProjectionIndex>,
+    pending: Query<(), (With<UsdPrimPath>, Without<UsdTelemetryProjected>)>,
+) -> bool {
+    index.dirty || !pending.is_empty()
+}
+
+fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
+    index.generated_outputs.clear();
+    index.network_members_by_stage.clear();
+    index.dirty = true;
+}
+
 /// Telemetry event published when a USD-declared model could not be handed to
 /// the solver at all — the worker channel was closed, so the compile that
 /// `SimStatus::Compiling` is waiting for will never be attempted.
@@ -595,18 +664,28 @@ fn read_authored_telemetry_real(
 /// the signal registry.
 fn project_usd_telemetry(
     mut commands: Commands,
-    query: Query<(
+    generated_query: Query<(
         Entity,
         &UsdPrimPath,
-        Option<&GeneratedModelicaSource>,
+        &GeneratedModelicaSource,
         Option<&ModelicaSignalLayout>,
         Option<&lunco_core::Provenance>,
         Option<&lunco_core::GlobalEntityId>,
         Has<UsdInstanceRoot>,
-        Has<UsdTelemetryProjected>,
     )>,
+    pending_query: Query<
+        (
+            Entity,
+            &UsdPrimPath,
+            Option<&lunco_core::Provenance>,
+            Option<&lunco_core::GlobalEntityId>,
+            Has<UsdInstanceRoot>,
+        ),
+        Without<UsdTelemetryProjected>,
+    >,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
 ) {
     // The generated wrapper is the only runtime Modelica participant.  Build
     // the authored-member -> wrapper port map from its projection metadata
@@ -621,51 +700,40 @@ fn project_usd_telemetry(
             _ => None,
         }
     };
-    let mut generated_outputs: HashMap<
-        (
-            bevy::asset::AssetId<UsdStageAsset>,
-            Option<u64>,
-            String,
-            String,
-        ),
-        (Entity, String),
-    > = HashMap::new();
-    let mut network_members_by_stage: HashMap<
-        bevy::asset::AssetId<UsdStageAsset>,
-        std::collections::HashSet<String>,
-    > = HashMap::new();
-    for (wrapper, prim_path, generated, layout, provenance, gid, is_root, _) in &query {
-        let (Some(generated), Some(layout)) = (generated, layout) else {
-            continue;
-        };
-        let instance = instance_of(provenance, gid, is_root);
-        for (member, output, alias) in &generated.member_output_aliases {
-            // A boundary output is the canonical runtime address when one
-            // exists; otherwise the generated member alias is the public
-            // wrapper port.  The same layout used by Modelica telemetry owns
-            // this choice, so authored telemetry and solver retention cannot
-            // disagree about which value they read.
-            let runtime_port = layout
-                .exact_provenance
-                .get(alias)
-                .and_then(|identity| identity.canonical_name.clone())
-                .unwrap_or_else(|| alias.clone());
-            generated_outputs.insert(
-                (
-                    prim_path.stage_handle.id(),
-                    instance,
-                    member.clone(),
-                    output.clone(),
-                ),
-                (wrapper, runtime_port),
-            );
+    if index.dirty {
+        index.generated_outputs.clear();
+        index.network_members_by_stage.clear();
+        for (wrapper, prim_path, generated, layout, provenance, gid, is_root) in &generated_query {
+            let Some(layout) = layout else {
+                continue;
+            };
+            let instance = instance_of(provenance, gid, is_root);
+            for (member, output, alias) in &generated.member_output_aliases {
+                // A boundary output is the canonical runtime address when one
+                // exists; otherwise the generated member alias is the public
+                // wrapper port.  The same layout used by Modelica telemetry owns
+                // this choice, so authored telemetry and solver retention cannot
+                // disagree about which value they read.
+                let runtime_port = layout
+                    .exact_provenance
+                    .get(alias)
+                    .and_then(|identity| identity.canonical_name.clone())
+                    .unwrap_or_else(|| alias.clone());
+                index.generated_outputs.insert(
+                    (
+                        prim_path.stage_handle.id(),
+                        instance,
+                        member.clone(),
+                        output.clone(),
+                    ),
+                    (wrapper, runtime_port),
+                );
+            }
         }
+        index.dirty = false;
     }
 
-    for (entity, prim_path, _, _, provenance, gid, is_root, already_projected) in &query {
-        if already_projected {
-            continue;
-        }
+    for (entity, prim_path, provenance, gid, is_root) in &pending_query {
         let Some(recipe) = stages
             .get(&prim_path.stage_handle)
             .and_then(|asset| asset.recipe.clone())
@@ -782,7 +850,7 @@ fn project_usd_telemetry(
                             prim_path.path.clone(),
                             port.clone(),
                         );
-                        if let Some((wrapper, runtime_port)) = generated_outputs.get(&key) {
+                        if let Some((wrapper, runtime_port)) = index.generated_outputs.get(&key) {
                             (Some(*wrapper), ChannelSource::Port(runtime_port.clone()))
                         } else {
                             // A domain member has no standalone port surface.
@@ -791,7 +859,8 @@ fn project_usd_telemetry(
                             // marking it now would permanently cache the wrong
                             // member target and produce a false missing-port
                             // warning during the compile window.
-                            let members = network_members_by_stage
+                            let members = index
+                                .network_members_by_stage
                                 .entry(prim_path.stage_handle.id())
                                 .or_insert_with(|| {
                                     lunco_usd_bevy::program::modelica_network_member_paths(&view)
@@ -4489,6 +4558,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<crate::domain_projection::MemberClasses>()
         .init_resource::<crate::domain_projection::ProjectionDirty>()
         .init_resource::<crate::domain_projection::SynthesizerRegistry>()
+        .init_resource::<UsdTelemetryProjectionIndex>()
         .init_resource::<SceneTransitionCoordinator>();
     app.add_observer(request_binding_epoch::<UsdPrimPath>)
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
@@ -4625,20 +4695,44 @@ pub(crate) fn install(app: &mut App) {
         report_python_unavailable.after(CosimUpdateSet::Scene),
     );
     app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
+    app.add_systems(
+        lunco_core::SceneTeardown,
+        reset_usd_telemetry_projection_index,
+    );
 
     app.add_systems(
         Update,
-        (
-            crate::domain_projection::project_domain_islands,
-            // Domain projection must publish the generated wrapper and its
-            // member-output layout before authored telemetry declarations are
-            // attached.  Otherwise a member declaration is mistaken for a
-            // standalone port and produces the duplicate/silent channel pair.
-            project_usd_telemetry,
-            crate::domain_projection::sync_generated_network_documents,
-            crate::domain_projection::publish_generated_sources,
-        )
-            .chain()
+        crate::domain_projection::project_domain_islands.in_set(CosimUpdateSet::Projection),
+    );
+    app.add_systems(
+        Update,
+        mark_usd_telemetry_projection_index_dirty
+            .after(crate::domain_projection::project_domain_islands)
+            .run_if(telemetry_projection_index_changed)
+            .in_set(CosimUpdateSet::Projection),
+    );
+    // Domain projection must publish the generated wrapper and its
+    // member-output layout before authored telemetry declarations are
+    // attached. Otherwise a member declaration is mistaken for a standalone
+    // port and produces the duplicate/silent channel pair. This system is
+    // gated on actual projection work, so the steady state has no full query.
+    app.add_systems(
+        Update,
+        project_usd_telemetry
+            .after(mark_usd_telemetry_projection_index_dirty)
+            .run_if(telemetry_projection_needed)
+            .in_set(CosimUpdateSet::Projection),
+    );
+    app.add_systems(
+        Update,
+        crate::domain_projection::sync_generated_network_documents
+            .after(project_usd_telemetry)
+            .in_set(CosimUpdateSet::Projection),
+    );
+    app.add_systems(
+        Update,
+        crate::domain_projection::publish_generated_sources
+            .after(crate::domain_projection::sync_generated_network_documents)
             .in_set(CosimUpdateSet::Projection),
     );
 
@@ -4776,6 +4870,37 @@ register_commands!(on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct TelemetryProjectionRuns(usize);
+
+    fn count_telemetry_projection_runs(mut runs: ResMut<TelemetryProjectionRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn telemetry_projection_gate_closes_after_scene_projection() {
+        let mut app = App::new();
+        app.init_resource::<UsdTelemetryProjectionIndex>()
+            .init_resource::<TelemetryProjectionRuns>()
+            .add_systems(
+                Update,
+                count_telemetry_projection_runs.run_if(telemetry_projection_needed),
+            );
+
+        app.update();
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 0);
+
+        let entity = app.world_mut().spawn(UsdPrimPath::default()).id();
+        app.update();
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(UsdTelemetryProjected);
+        app.update();
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+    }
 
     #[test]
     fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {

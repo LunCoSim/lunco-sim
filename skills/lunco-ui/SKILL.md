@@ -87,6 +87,9 @@ impl Panel for MyPanel {
 | Mutate resources directly from UI | `ctx.trigger(TypedCommand { .. })` (or `ctx.defer`), let observers handle it |
 | Put UI code in `lib.rs` or outside `ui/` | All UI in `src/ui/` subdirectory |
 | Use `world.query()` every frame for graphs | Use `WidgetSystem` for O(1) cached queries |
+| Copy a SignalRegistry history every graph paint | Use the visualization-owned history fingerprint cache; copy only at the egui plot data boundary |
+| Reproject every canvas edge every paint | Cache screen geometry by scene generation and viewport key; keep selection/tool state live |
+| Walk the dock tree once per anchor group | Publish all slot anchors from one dock traversal |
 | Build custom docking/themes | Use lunco-workbench — it's already there |
 
 ## Discovering Existing Commands

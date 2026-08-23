@@ -1830,7 +1830,7 @@ pub fn populate_experiments_view_model(world: &mut World) {
 pub struct PlotExtraLine {
     pub label: String,
     pub color: (u8, u8, u8),
-    pub points: Vec<[f64; 2]>,
+    pub points: std::sync::Arc<Vec<[f64; 2]>>,
 }
 
 /// Render a bare plot frame plus any live overlays. Used when no
@@ -1843,8 +1843,11 @@ fn render_empty_plot_frame(ui: &mut egui::Ui, extras: &[PlotExtraLine]) {
         .show(ui, |plot_ui| {
             for ex in extras {
                 let (r, g, b) = ex.color;
-                let line = Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
-                    .color(egui::Color32::from_rgb(r, g, b));
+                let line = Line::new(
+                    ex.label.clone(),
+                    PlotPoints::from(ex.points.as_ref().clone()),
+                )
+                .color(egui::Color32::from_rgb(r, g, b));
                 plot_ui.line(line);
             }
         });
@@ -2449,9 +2452,9 @@ fn render_experiments_plot_inner(
                     for ex in extras {
                         let (r, g, b) = ex.color;
                         let pts = if log_y {
-                            lunco_viz::plot_fmt::log_y_points(&ex.points)
+                            lunco_viz::plot_fmt::log_y_points(ex.points.as_slice())
                         } else {
-                            ex.points.clone()
+                            ex.points.as_ref().clone()
                         };
                         let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
                             .color(egui::Color32::from_rgb(r, g, b));

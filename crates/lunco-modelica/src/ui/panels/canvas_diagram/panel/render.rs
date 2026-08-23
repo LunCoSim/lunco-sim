@@ -18,10 +18,10 @@ pub(crate) fn render_diagram_canvas(
     let render_tab_id = ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id);
     let trace_phases = std::env::var_os("RENDER_CANVAS_TRACE").is_some();
     let mut phase_t = web_time::Instant::now();
-    let mut phase_log = Vec::new();
+    state.phase_log.clear();
 
     let (doc_id, editing_class) = ops::resolve_doc_context(ctx);
-    mark("resolve_doc_context", &mut phase_t, &mut phase_log);
+    mark("resolve_doc_context", &mut phase_t, &mut state.phase_log);
 
     let active_doc = doc_id;
     let tab_read_only = active_doc
@@ -33,20 +33,8 @@ pub(crate) fn render_diagram_canvas(
         .filter(|s| s.enabled)
         .map(|s| lunco_canvas::SnapSettings { step: s.step });
 
-    {
-        // Publish the active theme once per frame. Every egui paint
-        // helper (canvas built-in layers, node/edge painters, icon
-        // remap) reads it back via `lunco_theme::active(ctx)` — one
-        // theme, one transport, no per-consumer projection caches.
-        let theme = ctx
-            .resource::<lunco_theme::Theme>()
-            .cloned()
-            .unwrap_or_else(lunco_theme::Theme::dark);
-        lunco_theme::store_active(ui.ctx(), &theme);
-    }
-
     stash_snapshots(ui.ctx(), ctx, doc_id);
-    mark("snapshots+sigreg", &mut phase_t, &mut phase_log);
+    mark("snapshots+sigreg", &mut phase_t, &mut state.phase_log);
 
     let (response, events) = {
         let docstate = state.get_mut_for_render(render_tab_id, active_doc);
@@ -54,7 +42,11 @@ pub(crate) fn render_diagram_canvas(
         docstate.canvas.snap = snap_settings;
         docstate.canvas.ui(ui)
     };
-    mark("canvas.ui (scene render)", &mut phase_t, &mut phase_log);
+    mark(
+        "canvas.ui (scene render)",
+        &mut phase_t,
+        &mut state.phase_log,
+    );
 
     let gesture_down = response.is_pointer_button_down_on();
     let mut gesture = ctx
@@ -78,10 +70,7 @@ pub(crate) fn render_diagram_canvas(
     // never momentarily empty mid-flight, so the overlay needs only
     // the lifecycle projection.
     {
-        let theme = ctx
-            .resource::<lunco_theme::Theme>()
-            .cloned()
-            .unwrap_or_else(lunco_theme::Theme::dark);
+        let theme = ctx.resource_expect::<lunco_theme::Theme>();
         let drilled_class = render_tab_id
             .and_then(|tid| {
                 ctx.resource::<crate::model_tabs::ModelTabs>()
@@ -199,10 +188,7 @@ pub(crate) fn render_diagram_canvas(
                 .resource::<crate::ModelicaRunnerResource>()
                 .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
-            let color = ctx
-                .resource::<lunco_theme::Theme>()
-                .map(|t| t.tokens.warning)
-                .unwrap_or_else(|| lunco_theme::Theme::dark().tokens.warning);
+            let color = ctx.resource_expect::<lunco_theme::Theme>().tokens.warning;
             let painter = ui
                 .painter()
                 .clone()
@@ -248,7 +234,7 @@ pub(crate) fn render_diagram_canvas(
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
-    mark("overlays", &mut phase_t, &mut phase_log);
+    mark("overlays", &mut phase_t, &mut state.phase_log);
 
     handle_drag_and_drop(
         ui,
@@ -335,7 +321,7 @@ pub(crate) fn render_diagram_canvas(
         }
     }
 
-    mark("tail (events/menu/fit)", &mut phase_t, &mut phase_log);
+    mark("tail (events/menu/fit)", &mut phase_t, &mut state.phase_log);
     let frame_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
     log_frame_times(frame_ms, 0.0);
 
@@ -343,8 +329,9 @@ pub(crate) fn render_diagram_canvas(
     // the `RENDER_CANVAS_TRACE` env var, which is always absent on wasm
     // (no process env) — so the browser never got the breakdown that
     // localises a stall to a phase. Now any slow frame self-reports.
-    if (trace_phases || frame_ms > 16.0) && !phase_log.is_empty() {
-        let breakdown = phase_log
+    if (trace_phases || frame_ms > 16.0) && !state.phase_log.is_empty() {
+        let breakdown = state
+            .phase_log
             .iter()
             .map(|(name, ms)| format!("{name}={ms:.1}ms"))
             .collect::<Vec<_>>()

@@ -173,7 +173,7 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
         // CSV) and the log-Y toggle inline on its Variables/Runs row, so
         // the whole toolbar is a single line — no separate header here.
         let extras = if has_live {
-            collect_live_extras(ctx, viz_id)
+            collect_live_extras(ui, ctx, viz_id)
         } else {
             Vec::new()
         };
@@ -251,6 +251,7 @@ pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id:
 /// label, visibility — minus the X/Y picker UI, which only the
 /// LinePlot toolbar exposes).
 fn collect_live_extras(
+    ui: &egui::Ui,
     ctx: &PanelCtx,
     viz_id: VizId,
 ) -> Vec<crate::ui::panels::experiments::PlotExtraLine> {
@@ -270,11 +271,11 @@ fn collect_live_extras(
         .iter()
         .filter(|b| b.role == "y" && b.visible)
         .filter_map(|b| {
-            let hist = sigs.scalar_history(&b.source)?;
-            if hist.is_empty() {
-                return None;
-            }
-            let points: Vec<[f64; 2]> = hist.iter().map(|s| [s.time, s.value]).collect();
+            let points = lunco_viz::kinds::line_plot::cached_scalar_history_points(
+                ui.ctx(),
+                sigs,
+                &b.source,
+            )?;
             // Series colour comes from the THEME (`PlotTokens`), not a hardcoded
             // palette — plots follow the active theme like every other surface.
             let color = b.color.unwrap_or_else(|| {
