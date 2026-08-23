@@ -24,8 +24,9 @@ use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
 use lunco_cosim::SimComponent;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
+use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -51,7 +52,6 @@ pub(crate) struct SeminarExposureTrace {
     last_label: Option<String>,
     tipped: bool,
     max_slope_deg: Option<f32>,
-    last_soc_pct: Option<f32>,
     overlay: Option<lunco_terrain_surface::overlay::TerrainOverlayParams>,
 }
 
@@ -82,36 +82,19 @@ const FALLBACK_CAUTION_TILT_DEG: f32 = 20.0;
 /// Fallback red threshold. See [`FALLBACK_CAUTION_TILT_DEG`].
 const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 
-/// Information about a driven vessel's energy budget/battery.
+/// One authored operator channel retained by the shared telemetry registry.
+///
+/// The producer intentionally carries no electrical, thermal, hydraulic, or
+/// other domain vocabulary. A declaration participates in this compact surface
+/// only when its authored USD prim has the standard `ui:displayName`; that
+/// existing authoring field is the explicit operator-view membership and label.
+/// The full public telemetry catalog remains available to the telemetry browser
+/// and API whether or not a channel is promoted to this surface.
 #[derive(Debug, Clone, PartialEq)]
-struct EnergyInfo {
-    /// State of charge in percent (0.0 ..= 100.0).
-    soc_pct: f32,
-    /// Total remaining energy in Wh, if capacity is known.
-    energy_wh: Option<f32>,
-    /// Pack capacity in Wh, if known.
-    capacity_wh: Option<f32>,
-    /// Signed electrical power into the battery: positive charges, negative
-    /// discharges. This is the canonical flow state shown by the HUD.
-    net_power_w: Option<f64>,
-}
-
-/// Information about a driven vessel's motor temperatures.
-#[derive(Debug, Clone, PartialEq)]
-struct ThermalInfo {
-    temp_left_k: Option<f32>,
-    temp_right_k: Option<f32>,
-}
-
-impl ThermalInfo {
-    fn max_temp_k(&self) -> f32 {
-        match (self.temp_left_k, self.temp_right_k) {
-            (Some(l), Some(r)) => l.max(r),
-            (Some(l), None) => l,
-            (None, Some(r)) => r,
-            (None, None) => 250.0,
-        }
-    }
+struct PublicTelemetryValue {
+    label: String,
+    value: f64,
+    unit: Option<String>,
 }
 
 /// What the HUD needs about the driven vessel, resolved at the bounded exposure
@@ -133,10 +116,6 @@ struct DrivenVessel {
     speed: Option<f32>,
     /// Live comms link, or `None` for a vessel carrying no link node at all.
     link: Option<LinkInfo>,
-    /// Energy/battery status, or `None` if vehicle has no battery telemetry.
-    energy: Option<EnergyInfo>,
-    /// Thermal status, or `None` if vehicle has no thermal telemetry.
-    thermal: Option<ThermalInfo>,
     /// Amber threshold — this vessel's own slip limit when derivable, else the
     /// generic fallback. See [`FALLBACK_CAUTION_TILT_DEG`].
     caution_deg: f32,
@@ -375,90 +354,65 @@ fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf
     false
 }
 
-fn resolve_energy(
+fn resolve_authored_telemetry(
     vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    signals: &SignalRegistry,
     q_parents: &Query<&ChildOf>,
-) -> Option<EnergyInfo> {
-    for (ent, sim) in q_sim.iter() {
-        if !is_owned_by_vessel(ent, vessel, q_parents) {
-            continue;
-        }
-        let raw_soc = sim
-            .outputs
-            .get("soc")
-            .or_else(|| sim.outputs.get("soc_out"))
-            .or_else(|| sim.outputs.get("SOC"))
-            .or_else(|| sim.outputs.get("battery_soc"))
-            .copied();
-
-        if let Some(raw_soc) = raw_soc {
-            let soc_frac = if raw_soc <= 1.0 {
-                raw_soc.max(0.0)
-            } else {
-                (raw_soc / 100.0).clamp(0.0, 1.0)
-            };
-            let soc_pct = (soc_frac * 100.0) as f32;
-
-            let capacity_wh = capacity_wh(sim);
-
-            let energy_wh = capacity_wh.map(|cap| (soc_frac as f32) * cap);
-            let net_power_w = sim
-                .outputs
-                .get("battery_net_power")
-                .or_else(|| sim.outputs.get("net_power_w"))
-                .or_else(|| sim.outputs.get("battery_net_power_w"))
-                .copied()
-                .filter(|value| value.is_finite());
-
-            return Some(EnergyInfo {
-                soc_pct,
-                energy_wh,
-                capacity_wh,
-                net_power_w,
-            });
-        }
-    }
-    None
-}
-
-fn capacity_wh(sim: &SimComponent) -> Option<f32> {
-    sim.parameters
-        .get("capacity_wh")
-        .or_else(|| sim.inputs.get("capacity_wh"))
-        .copied()
-        .map(|value| value as f32)
-}
-
-fn resolve_thermal(
-    vessel: Entity,
-    q_sim: &Query<(Entity, &SimComponent)>,
-    q_parents: &Query<&ChildOf>,
-) -> Option<ThermalInfo> {
-    for (ent, sim) in q_sim.iter() {
-        if !is_owned_by_vessel(ent, vessel, q_parents) {
-            continue;
-        }
-        let tl = sim
-            .outputs
-            .get("temp_left")
-            .or_else(|| sim.outputs.get("tl"))
-            .copied()
-            .map(|v| v as f32);
-        let tr = sim
-            .outputs
-            .get("temp_right")
-            .or_else(|| sim.outputs.get("tr"))
-            .copied()
-            .map(|v| v as f32);
-        if tl.is_some() || tr.is_some() {
-            return Some(ThermalInfo {
-                temp_left_k: tl,
-                temp_right_k: tr,
-            });
-        }
-    }
-    None
+    q_channels: &Query<(
+        Entity,
+        &lunco_core::telemetry::Parameter,
+        Option<&lunco_core::markers::Callsign>,
+    )>,
+) -> Vec<PublicTelemetryValue> {
+    // `Parameter` is the existing authored recording declaration. It is the
+    // complete, domain-neutral boundary for USD telemetry channels and for
+    // channels authored through the generic command/script API. Modelica's
+    // runtime catalog is intentionally not included: it is inspection state
+    // until an author promotes a value through a `Parameter` declaration.
+    //
+    // The registry is still the sole value/history source. This query only
+    // selects which authored declarations belong to the driven vessel; it
+    // never reads a domain output map or interprets a producer name.
+    let mut seen = HashSet::new();
+    let mut values = q_channels
+        .iter()
+        .filter_map(|(channel_entity, parameter, callsign)| {
+            let callsign = callsign?;
+            if !parameter.enabled || parameter.name.is_empty() {
+                return None;
+            }
+            let measured = parameter.target.unwrap_or(channel_entity);
+            if !is_owned_by_vessel(measured, vessel, q_parents)
+                || !seen.insert((measured, parameter.name.clone()))
+            {
+                return None;
+            }
+            let signal = SignalRef::new(measured, parameter.name.clone());
+            if signals.signal_type(&signal) != Some(SignalType::Scalar)
+                || !signals.is_active(&signal)
+            {
+                return None;
+            }
+            let value = signals
+                .scalar_history(&signal)
+                .and_then(|history| history.samples.back())?
+                .value;
+            let unit = (!parameter.unit.is_empty())
+                .then_some(parameter.unit.clone())
+                .or_else(|| signals.meta(&signal).and_then(|meta| meta.unit.clone()));
+            Some(PublicTelemetryValue {
+                // `ui:displayName` is the standard USD human-facing label and
+                // is projected onto the channel as Callsign. It also makes
+                // membership in this deliberately compact operator view
+                // explicit; a channel without it remains in the full catalog.
+                label: callsign.0.clone(),
+                value,
+                unit,
+            })
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.label.cmp(&b.label));
+    values
 }
 
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
@@ -475,7 +429,6 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
-    q_sim: &Query<(Entity, &SimComponent)>,
     surface_pose: &lunco_celestial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
@@ -580,8 +533,6 @@ fn resolve_driven(
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
         link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
-        energy: resolve_energy(vessel, q_sim, q_parents),
-        thermal: resolve_thermal(vessel, q_sim, q_parents),
         caution_deg,
         danger_deg,
         limits_derived,
@@ -654,7 +605,7 @@ mod tilt_band_tests {
 }
 
 #[cfg(test)]
-mod energy_thermal_tests {
+mod exposure_tests {
     use super::*;
 
     #[test]
@@ -684,38 +635,24 @@ mod energy_thermal_tests {
     }
 
     #[test]
-    fn thermal_info_max_temp() {
-        let t = ThermalInfo {
-            temp_left_k: Some(290.0),
-            temp_right_k: Some(310.0),
-        };
-        assert_eq!(t.max_temp_k(), 310.0);
+    fn telemetry_summary_preserves_authored_labels_units_and_values() {
+        let values = [
+            PublicTelemetryValue {
+                label: "power.battery_soc".into(),
+                value: 100.0,
+                unit: Some("%".into()),
+            },
+            PublicTelemetryValue {
+                label: "power.battery_discharge".into(),
+                value: 327.5,
+                unit: Some("W".into()),
+            },
+        ];
 
-        let t_empty = ThermalInfo {
-            temp_left_k: None,
-            temp_right_k: None,
-        };
-        assert_eq!(t_empty.max_temp_k(), 250.0);
-    }
-
-    #[test]
-    fn energy_capacity_uses_only_explicit_watt_hours() {
-        let sim = SimComponent {
-            parameters: [
-                ("capacity".to_string(), 83.33),
-                ("capacity_wh".to_string(), 2_000.0),
-            ]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        assert_eq!(capacity_wh(&sim), Some(2_000.0));
-
-        let amp_hours_only = SimComponent {
-            parameters: [("capacity".to_string(), 83.33)].into_iter().collect(),
-            ..Default::default()
-        };
-        assert_eq!(capacity_wh(&amp_hours_only), None);
+        assert_eq!(
+            format_telemetry_summary(&values),
+            "power.battery_soc 100.0 % | power.battery_discharge 327.5 W"
+        );
     }
 }
 
@@ -782,6 +719,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     timer: Local<'s, ExposureTimer>,
     refresh: ResMut<'w, ExposureRefresh>,
     exposures: ResMut<'w, EngineExposures>,
+    signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
@@ -811,6 +749,15 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    channels: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static lunco_core::telemetry::Parameter,
+            Option<&'static lunco_core::markers::Callsign>,
+        ),
+    >,
     usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
 }
 
@@ -856,18 +803,12 @@ pub(crate) fn publish_exposure(
         &queries.ids,
         &queries.wheels,
         &queries.com,
-        &queries.sim,
         &geo.surface_pose,
     ) else {
-        if let (Some(label), Some(soc_pct)) = (seminar.last_label.as_deref(), seminar.last_soc_pct)
-        {
-            info!("[seminar] battery end: vessel={} soc={soc_pct:.1}%", label);
-        }
         seminar.current_vessel = None;
         seminar.last_label = None;
         seminar.tipped = false;
         seminar.max_slope_deg = None;
-        seminar.last_soc_pct = None;
         {
             let mut ui = runtime.exposures.writer("driven-vessel");
             ui.visible(false);
@@ -902,15 +843,10 @@ pub(crate) fn publish_exposure(
     };
 
     if seminar.current_vessel != Some(vessel.entity) {
-        if let (Some(label), Some(soc_pct)) = (seminar.last_label.as_deref(), seminar.last_soc_pct)
-        {
-            info!("[seminar] battery end: vessel={} soc={soc_pct:.1}%", label);
-        }
         seminar.current_vessel = Some(vessel.entity);
         seminar.last_label = Some(vessel.label.clone());
         seminar.tipped = false;
         seminar.max_slope_deg = None;
-        seminar.last_soc_pct = None;
         let prim = trace_inputs
             .prims
             .get(vessel.entity)
@@ -963,24 +899,6 @@ pub(crate) fn publish_exposure(
         }
     }
 
-    if let Some(energy) = vessel.energy.as_ref() {
-        let changed = seminar
-            .last_soc_pct
-            .is_none_or(|previous| (energy.soc_pct - previous).abs() >= 1.0);
-        if changed {
-            let phase = if seminar.last_soc_pct.is_none() {
-                "start"
-            } else {
-                "sample"
-            };
-            info!(
-                "[seminar] battery {phase}: vessel={} soc={:.1}% energy_wh={:?} capacity_wh={:?}",
-                vessel.label, energy.soc_pct, energy.energy_wh, energy.capacity_wh
-            );
-            seminar.last_soc_pct = Some(energy.soc_pct);
-        }
-    }
-
     let autopilot = geo
         .autopilots
         .iter()
@@ -988,7 +906,13 @@ pub(crate) fn publish_exposure(
     {
         let mut ui = runtime.exposures.writer("driven-vessel");
         ui.visible(true);
-        publish_vessel_values(&mut ui, &vessel, autopilot);
+        let telemetry = resolve_authored_telemetry(
+            vessel.entity,
+            &runtime.signals,
+            &queries.parents,
+            &queries.channels,
+        );
+        publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
     }
     publish_lunica_schema_exposure(
         &mut runtime.exposures,
@@ -1905,7 +1829,12 @@ fn link_snapshot(
 /// This is the only domain-specific part of the first producer. It emits generic
 /// properties and CSS state variables; no HUI, Flair, egui, or Bevy UI component
 /// is touched here.
-fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilot: bool) {
+fn publish_vessel_values(
+    ui: &mut ExposureWriter<'_>,
+    v: &DrivenVessel,
+    autopilot: bool,
+    telemetry: &[PublicTelemetryValue],
+) {
     let tilt_color = if v.tilt_deg >= v.danger_deg {
         "var(--danger-color)"
     } else if v.tilt_deg >= v.caution_deg {
@@ -1928,9 +1857,17 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     ui.property(
         "autopilot_color",
         if autopilot {
-            "var(--danger-color)"
+            "var(--accent-color)"
         } else {
             "var(--muted-color)"
+        },
+    );
+    ui.property(
+        "autopilot_label",
+        if autopilot {
+            "AUTOPILOT ON"
+        } else {
+            "AUTOPILOT"
         },
     );
     ui.property("label", v.label.clone());
@@ -2004,54 +1941,26 @@ fn publish_vessel_values(ui: &mut ExposureWriter<'_>, v: &DrivenVessel, autopilo
     ui.property("comms_los_display", comms_los_display);
     ui.property("comms_color", comms_color);
 
-    if let Some(energy) = &v.energy {
-        const POWER_FLOW_DEADBAND_W: f64 = 1.0;
-        let (detail, power_color) = match energy.net_power_w {
-            Some(power) if power > POWER_FLOW_DEADBAND_W => (
-                format!("CHARGING · {}", format_power(power)),
-                "var(--ok-color)",
-            ),
-            Some(power) if power < -POWER_FLOW_DEADBAND_W => (
-                format!("DISCHARGING · {}", format_power(-power)),
-                "var(--danger-color)",
-            ),
-            Some(_) => ("STANDBY".to_owned(), "var(--muted-color)"),
-            None => ("POWER FLOW UNAVAILABLE".to_owned(), "var(--muted-color)"),
-        };
-        ui.property("power_display", "flex");
-        ui.property("power_color", power_color);
-        ui.property("power_value", format!("{:.0}%", energy.soc_pct));
-        ui.property("power_detail", detail);
+    if telemetry.is_empty() {
+        ui.property("telemetry_display", "none");
+        ui.property("telemetry_summary", "TELEMETRY UNAVAILABLE");
     } else {
-        ui.property("power_display", "none");
-    }
-
-    if let Some(thermal) = &v.thermal {
-        let max_temp_k = thermal.max_temp_k();
-        let thermal_color = if max_temp_k > 350.0 {
-            "var(--danger-color)"
-        } else if max_temp_k > 310.0 {
-            "var(--caution-color)"
-        } else {
-            "var(--ok-color)"
-        };
-        let detail = match (thermal.temp_left_k, thermal.temp_right_k) {
-            (Some(left), Some(right)) => format!("L {:.0} K  ·  R {:.0} K", left, right),
-            _ => "—".to_owned(),
-        };
-        ui.property("thermal_display", "flex");
-        ui.property("thermal_color", thermal_color);
-        ui.property("thermal_value", format!("{:.0}°C", max_temp_k - 273.15));
-        ui.property("thermal_detail", detail);
-    } else {
-        ui.property("thermal_display", "none");
+        ui.property("telemetry_display", "flex");
+        ui.property("telemetry_summary", format_telemetry_summary(telemetry));
     }
 }
 
-fn format_power(power_w: f64) -> String {
-    if power_w >= 1000.0 {
-        format!("{:.1} kW", power_w / 1000.0)
-    } else {
-        format!("{power_w:.0} W")
-    }
+fn format_telemetry_summary(values: &[PublicTelemetryValue]) -> String {
+    values
+        .iter()
+        .map(|value| {
+            let unit = value
+                .unit
+                .as_deref()
+                .filter(|unit| !unit.is_empty())
+                .map_or_else(String::new, |unit| format!(" {unit}"));
+            format!("{} {:.1}{}", value.label, value.value, unit)
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }

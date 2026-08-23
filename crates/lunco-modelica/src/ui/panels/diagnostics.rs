@@ -117,7 +117,7 @@ impl Panel for DiagnosticsPanel {
     }
 
     fn title(&self) -> String {
-        "⚠ Diagnostics".into()
+        "Diagnostics".into()
     }
 
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {

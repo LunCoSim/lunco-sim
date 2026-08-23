@@ -74,6 +74,14 @@ fn reads_a_composed_collection_into_network_facts() {
         facts.get("boundary_links"),
         Some(lunco_hooks::HookValue::Array(links)) if !links.is_empty()
     ));
+    let lunco_hooks::HookValue::Array(boundary_links) = facts.get("boundary_links").unwrap() else {
+        panic!("boundary_links is an array");
+    };
+    assert!(boundary_links.iter().any(|link| {
+        link.get("input").and_then(|value| value.as_str()) == Some("drive_left")
+            && link.get("target_path").and_then(|value| value.as_str()) == Some("/Rig/Motor")
+            && link.get("target_input").and_then(|value| value.as_str()) == Some("demand")
+    }));
 }
 
 #[test]

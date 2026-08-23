@@ -92,6 +92,8 @@ struct UsdTelemetryProjectionIndex {
     >,
     network_members_by_stage:
         HashMap<bevy::asset::AssetId<UsdStageAsset>, std::collections::HashSet<String>>,
+    entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
+    generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     dirty: bool,
 }
 
@@ -138,6 +140,8 @@ fn telemetry_projection_needed(
 fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
     index.generated_outputs.clear();
     index.network_members_by_stage.clear();
+    index.entities_by_path.clear();
+    index.generated_entities_by_path.clear();
     index.dirty = true;
 }
 
@@ -664,6 +668,7 @@ fn read_authored_telemetry_real(
 /// the signal registry.
 fn project_usd_telemetry(
     mut commands: Commands,
+    entity_query: Query<(Entity, &UsdPrimPath, Option<&GeneratedModelicaSource>)>,
     generated_query: Query<(
         Entity,
         &UsdPrimPath,
@@ -703,6 +708,15 @@ fn project_usd_telemetry(
     if index.dirty {
         index.generated_outputs.clear();
         index.network_members_by_stage.clear();
+        index.entities_by_path.clear();
+        index.generated_entities_by_path.clear();
+        for (entity, prim_path, generated) in &entity_query {
+            let key = (prim_path.stage_handle.id(), prim_path.path.clone());
+            index.entities_by_path.entry(key.clone()).or_insert(entity);
+            if generated.is_some() {
+                index.generated_entities_by_path.insert(key, entity);
+            }
+        }
         for (wrapper, prim_path, generated, layout, provenance, gid, is_root) in &generated_query {
             let Some(layout) = layout else {
                 continue;
@@ -764,6 +778,35 @@ fn project_usd_telemetry(
             }
         };
         if authored {
+            let target_paths = view.rel_targets(&path, "lunco:telemetry:target");
+            let target_path = match target_paths.as_slice() {
+                [] => prim_path.path.clone(),
+                [target] => target.as_str().to_owned(),
+                _ => {
+                    warn!(
+                        "[usd-cosim] {} has multiple telemetry targets; exactly one is allowed",
+                        path.as_str()
+                    );
+                    String::new()
+                }
+            };
+            if target_path.is_empty() {
+                commands.entity(entity).try_insert(UsdTelemetryProjected);
+                continue;
+            }
+            let target_key = (id, target_path.clone());
+            let Some(target_entity) = index
+                .generated_entities_by_path
+                .get(&target_key)
+                .copied()
+                .or_else(|| index.entities_by_path.get(&target_key).copied())
+            else {
+                // A target prim may be present in USD before its generated
+                // Modelica participant has published its ECS entity. Keep
+                // the declaration unprojected for the next pass; binding
+                // it to the declaration prim would read the wrong surface.
+                continue;
+            };
             let declaration = (|| {
                 let port = read_authored_telemetry_string(&view, &path, "lunco:telemetry:port")?
                     .filter(|value| !value.is_empty());
@@ -785,6 +828,10 @@ fn project_usd_telemetry(
                 let name = read_authored_telemetry_string(&view, &path, "lunco:telemetry:name")?
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| source_name.to_string());
+                let display_name = view
+                    .text(&path, "ui:displayName")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| value.trim().to_owned());
                 let unit = read_authored_telemetry_string(&view, &path, "lunco:telemetry:unit")?
                     .unwrap_or_default();
                 let description =
@@ -817,19 +864,22 @@ fn project_usd_telemetry(
                     Some(value) if value > 0 => Some(usize::try_from(value).map_err(|_| ())?),
                     _ => return Err(()),
                 };
-                Ok(Parameter {
-                    name,
-                    unit,
-                    description,
-                    source,
-                    target: Some(entity),
-                    rate_hz,
-                    enabled,
-                    deadband,
-                    retention,
-                })
+                Ok((
+                    Parameter {
+                        name,
+                        unit,
+                        description,
+                        source,
+                        target: Some(target_entity),
+                        rate_hz,
+                        enabled,
+                        deadband,
+                        retention,
+                    },
+                    display_name,
+                ))
             })();
-            if let Ok(parameter) = declaration {
+            if let Ok((parameter, display_name)) = declaration {
                 // A generated domain root is projected one Update before its
                 // Modelica wrapper can publish SimComponent. Publish the typed
                 // lifecycle fact before the first FixedUpdate so the sampler
@@ -847,7 +897,7 @@ fn project_usd_telemetry(
                         let key = (
                             prim_path.stage_handle.id(),
                             instance_of(provenance, gid, is_root),
-                            prim_path.path.clone(),
+                            target_path.clone(),
                             port.clone(),
                         );
                         if let Some((wrapper, runtime_port)) = index.generated_outputs.get(&key) {
@@ -865,7 +915,7 @@ fn project_usd_telemetry(
                                 .or_insert_with(|| {
                                     lunco_usd_bevy::program::modelica_network_member_paths(&view)
                                 });
-                            if members.contains(&prim_path.path) {
+                            if members.contains(&key.2) {
                                 continue;
                             }
                             (parameter.target, parameter.source.clone())
@@ -878,11 +928,14 @@ fn project_usd_telemetry(
                     source,
                     ..parameter
                 };
-                commands.spawn((
+                let mut channel = commands.spawn((
                     Name::new(format!("telemetry:{}", parameter.name)),
                     ChildOf(entity),
                     parameter,
                 ));
+                if let Some(display_name) = display_name {
+                    channel.insert(lunco_core::markers::Callsign(display_name));
+                }
             } else {
                 warn!(
                     "[usd-cosim] {} has invalid telemetry attributes; declaration ignored",

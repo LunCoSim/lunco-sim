@@ -150,25 +150,20 @@
         "comms_peer": { "source": "comms_peer" },
         "comms_range": { "source": "comms_range" },
         "comms_elevation": { "source": "comms_elevation" },
-        "power_value": { "source": "power_value" },
-        "power_detail": { "source": "power_detail" },
-        "thermal_value": { "source": "thermal_value" },
-        "thermal_detail": { "source": "thermal_detail" },
+        "telemetry_summary": { "source": "telemetry_summary" },
         "tilt_color": { "source": "tilt_color" },
         "tilt_marker": { "source": "tilt_marker" },
         "caution_width": { "source": "caution_width" },
         "danger_start": { "source": "danger_start" },
         "danger_width": { "source": "danger_width" },
         "autopilot_color": { "source": "autopilot_color" },
+        "autopilot_label": { "source": "autopilot_label" },
         "geo_display": { "source": "geo_display" },
         "local_display": { "source": "local_display" },
         "comms_display": { "source": "comms_display" },
         "comms_los_display": { "source": "comms_los_display" },
         "comms_color": { "source": "comms_color" },
-        "power_display": { "source": "power_display" },
-        "power_color": { "source": "power_color" },
-        "thermal_display": { "source": "thermal_display" },
-        "thermal_color": { "source": "thermal_color" }
+        "telemetry_display": { "source": "telemetry_display" }
       },
       "actions": [
         { "callback": "runtime_toggle_autopilot", "action": "autopilot.toggle" }

@@ -133,14 +133,17 @@ The stable runtime contract uses a deliberately small HUI vocabulary:
     <text id="status-title">{title}</text>
     <text id="status-state">{state}</text>
     <button id="status-pause" on_press="runtime_status_pause">
-      Pause
+      <text>Pause</text>
     </button>
   </node>
 </template>
 ```
 
 Use `<template>`, `<property>`, `<node>`, `<text>`, and `<button>` with stable
-`id` values, property interpolation (`{title}`), and `on_press` callbacks.
+`id` values, property interpolation (`{title}`), and `on_press` callbacks. A
+button's visible caption must be a nested `<text>` node; raw text directly under
+`<button>` is not part of the retained HUI contract and can render as an empty
+control.
 HUI supports more template features, but features outside this contract need a
 real surface test before they become a shared interface convention. A surface
 callback receives only the pressed entity. The manifest turns it into a

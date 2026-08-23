@@ -14,7 +14,7 @@
 def Xform "Battery" (
     doc = "Reusable battery pack with mass, collision, electrical state, capacity, and state-of-charge telemetry."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -35,6 +35,7 @@ def Xform "Battery" (
     float inputs:R_internal = 0.01
     float inputs:soc_init = 1.0
     float outputs:soc_out
+    float outputs:soc_percent
     float outputs:capacity_ah
     float outputs:charge_remaining_ah
     float outputs:terminal_voltage_v
@@ -45,6 +46,60 @@ def Xform "Battery" (
     float outputs:charge_current_a
     float outputs:discharge_current_a
     custom token connectors:p
+
+    # Every battery exposes the complete solved electrical state from the same
+    # reusable component. Declaration prims are used because one prim may carry
+    # only one LunCoTelemetryAPI channel; each declaration targets this battery
+    # explicitly so the runtime parameter contract stays independent of the
+    # enclosing vessel's domain wrapper.
+    def Scope "SocTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "SOC"
+        token lunco:telemetry:port = "soc_percent"
+        token lunco:telemetry:name = "power.battery_soc"
+        token lunco:telemetry:unit = "%"
+        string lunco:telemetry:description = "Live battery state of charge in percent."
+        rel lunco:telemetry:target = </Battery>
+    }
+    def Scope "NetPowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Net"
+        token lunco:telemetry:port = "net_power_w"
+        token lunco:telemetry:name = "power.battery_net"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Solved net power into the battery; positive charges and negative discharges."
+        rel lunco:telemetry:target = </Battery>
+    }
+    def Scope "ChargePowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Charging"
+        token lunco:telemetry:port = "charge_power_w"
+        token lunco:telemetry:name = "power.battery_charge"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Solved power currently stored in the battery."
+        rel lunco:telemetry:target = </Battery>
+    }
+    def Scope "DischargePowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Used"
+        token lunco:telemetry:port = "discharge_power_w"
+        token lunco:telemetry:name = "power.battery_discharge"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Solved power currently supplied by the battery to the vehicle."
+        rel lunco:telemetry:target = </Battery>
+    }
 
     # --- Telemetry ---
     # State of charge as a RETAINED channel. Authored on the component so every

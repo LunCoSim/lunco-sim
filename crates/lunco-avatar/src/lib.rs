@@ -889,7 +889,7 @@ impl Plugin for LunCoAvatarPlugin {
         #[cfg(feature = "ui")]
         app.add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            crate::ui::draw_notifications,
+            crate::ui::draw_notifications.in_set(lunco_workbench::ApplicationOverlayRenderSet),
         );
 
         // Incremental camera modes are stepped at a constant 60 Hz and eased by

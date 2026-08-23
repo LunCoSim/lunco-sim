@@ -34,12 +34,16 @@ tree. The browser defaults to current publishers and exposes archived history on
 an explicit display setting; `ListTelemetryChannels` keeps the `active` field so API clients
 can make the same live-versus-history choice without guessing from names.
 
-All operator-facing channel labels go through `lunco_viz::signal::display_channel_label`, which
-uses the same identifier humanizer and ownership-relative shortening in the telemetry browser,
-plot controls, legends, and exports. The generated-name setting only selects the presentation
+The telemetry browser, plot controls, legends, and exports all label channels through
+`lunco_viz::signal::display_channel_label`, which uses the same identifier humanizer and
+ownership-relative shortening. The generated-name setting only selects the presentation
 projection; it never changes identity, history, bindings, or the USD/Modelica model. A new
 producer therefore supplies ownership metadata once and does not need a second naming table in
-each UI surface.
+those surfaces. A runtime-authored compact surface may additionally opt a declaration into its
+operator summary with the standard USD `ui:displayName`; the USD projector carries that explicit
+label through the existing generic `Callsign` marker. This is membership and authoring data, not a
+second name heuristic: declarations without it remain in the full telemetry catalog, and the
+catalog's labels still use `display_channel_label`.
 
 ---
 
@@ -47,7 +51,7 @@ each UI surface.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})` |
+| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`, and its optional `lunco:telemetry:target` relationship lets a declaration prim observe any composed prim without adding a domain-specific channel component |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |

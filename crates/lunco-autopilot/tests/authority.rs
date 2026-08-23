@@ -11,7 +11,7 @@ use lunco_autopilot::{
 };
 use lunco_core::coords::{GridRot, VehicleFrame};
 use lunco_core::session::{AuthorityRole, SessionRbac};
-use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
+use lunco_core::{GlobalEntityId, NetworkRole, PhysicsStatePending, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
 use lunco_physics::PhysicsPoseSeeded;
 
@@ -237,6 +237,33 @@ fn autopilot_stops_the_moment_it_loses_ownership() {
     assert!(
         app.world().resource::<SessionRegistry>().owns(human, 0x22),
         "the human now owns the vessel"
+    );
+}
+
+#[test]
+fn autopilot_does_not_write_during_physics_admission() {
+    let mut app = build();
+    let rover = app
+        .world_mut()
+        .spawn((GlobalEntityId::from_raw(0x23), PhysicsStatePending))
+        .id();
+    app.world_mut().spawn(Autopilot::forward(rover, 0, 0.8));
+
+    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
+    assert!(
+        app.world().resource::<DriveLog>().0.is_empty(),
+        "autopilot must wait for the authoritative physics admission boundary"
+    );
+
+    app.world_mut()
+        .entity_mut(rover)
+        .remove::<PhysicsStatePending>();
+    app.world_mut().run_schedule(FixedUpdate);
+    assert_eq!(
+        app.world().resource::<DriveLog>().0,
+        vec![rover],
+        "the first control write belongs to the first admitted fixed tick"
     );
 }
 

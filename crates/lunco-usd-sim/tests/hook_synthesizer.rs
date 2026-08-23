@@ -242,6 +242,11 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
     );
     assert!(plan.source.contains("LunCo.Electrical.Battery"));
     assert!(plan.source.contains("LunCo.Electrical.DCMotor"));
+    assert!(
+        plan.source.contains("Rig_x2f_Motor.demand = drive_left;"),
+        "an authored external boundary source must become a Modelica equation:\n{}",
+        plan.source
+    );
     let interface = lunco_modelica::ast_extract::parse_model_interface(
         &plan.source,
         "shipped-synthesis-policy.mo",

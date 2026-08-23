@@ -351,9 +351,6 @@ def Xform "SixWheelRover" (
                 float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
                 float outputs:soc.connect = </SixWheelRover/Battery.outputs:soc_out>
-                float outputs:battery_net_power.connect = </SixWheelRover/Battery.outputs:net_power_w>
-                float outputs:battery_charge_power.connect = </SixWheelRover/Battery.outputs:charge_power_w>
-                float outputs:battery_discharge_power.connect = </SixWheelRover/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_L0.connect = </SixWheelRover/Motor_L0.outputs:heat>

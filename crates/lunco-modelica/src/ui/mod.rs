@@ -545,7 +545,7 @@ impl Perspective for AnalyzePerspective {
         PerspectiveId("modelica_analyze")
     }
     fn title(&self) -> String {
-        "⚙ Lunica".into()
+        "Lunica".into()
     }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -913,7 +913,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_perspective_help(
                 lunco_workbench::PerspectiveId("modelica_analyze"),
                 lunco_workbench::PerspectiveHelp {
-                    title: "⚙ Lunica",
+                    title: "Lunica",
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![

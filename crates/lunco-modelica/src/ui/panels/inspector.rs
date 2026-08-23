@@ -302,7 +302,7 @@ impl Panel for InspectorPanel {
         // jitter as the underlying HashMap iteration order shifts.
         let mut entries: Vec<(&String, &String)> = component_info.modifications.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
-        ui.collapsing("⚙ Modifications", |ui| {
+        ui.collapsing("Modifications", |ui| {
             egui::Grid::new("modelica_inspector_mods")
                 .num_columns(2)
                 .spacing([10.0, 4.0])

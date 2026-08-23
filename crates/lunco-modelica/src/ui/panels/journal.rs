@@ -279,10 +279,18 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
     let neutral = egui::Color32::from_rgb(180, 180, 180);
 
     match kind {
-        "AddComponent" => ("ADD ".into(), format!("{class} ← {name}"), green),
-        "RemoveComponent" => ("DEL ".into(), format!("{class} ✗ {name}"), red),
-        "AddConnection" => ("WIRE".into(), format!("{class}: {from} → {to}"), blue),
-        "RemoveConnection" => ("UNWR".into(), format!("{class}: {from} ⊘ {to}"), orange),
+        "AddComponent" => ("ADD ".into(), format!("{class} added {name}"), green),
+        "RemoveComponent" => ("DEL ".into(), format!("{class} removed {name}"), red),
+        "AddConnection" => (
+            "WIRE".into(),
+            format!("{class}: {from} connected to {to}"),
+            blue,
+        ),
+        "RemoveConnection" => (
+            "UNWR".into(),
+            format!("{class}: {from} disconnected from {to}"),
+            orange,
+        ),
         "SetPlacement" => ("MOVE".into(), format!("{class}.{name}"), neutral),
         "SetParameter" => {
             let param = payload.get("param").and_then(|v| v.as_str()).unwrap_or("");
@@ -306,11 +314,11 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
                     let e = arr[1].as_u64().unwrap_or(0);
                     let removed = e.saturating_sub(s);
                     if removed == 0 {
-                        format!("@{} ← {}b", s, len)
+                        format!("@{} inserted {}b", s, len)
                     } else if len == 0 {
-                        format!("@{}..{} ✗{}b", s, e, removed)
+                        format!("@{}..{} removed {}b", s, e, removed)
                     } else {
-                        format!("@{}..{} ↺ {}b", s, e, len)
+                        format!("@{}..{} replaced with {}b", s, e, len)
                     }
                 }
                 _ => format!("{}b", len),
@@ -323,11 +331,11 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
                 .get("qualified")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            ("CLAS".into(), format!("✗ {qualified}"), red)
+            ("CLAS".into(), format!("removed {qualified}"), red)
         }
         "AddShortClass" => ("CLAS".into(), format!("{class}/{name} (short)"), green),
-        "AddVariable" => ("VAR ".into(), format!("{class} ← {name}"), green),
-        "RemoveVariable" => ("VAR ".into(), format!("{class} ✗ {name}"), red),
+        "AddVariable" => ("VAR ".into(), format!("{class} added {name}"), green),
+        "RemoveVariable" => ("VAR ".into(), format!("{class} removed {name}"), red),
         "AddEquation" => ("EQN ".into(), class.to_string(), blue),
         "AddPlotNode" | "RemovePlotNode" | "SetPlotNodeExtent" | "SetPlotNodeTitle" => {
             ("PLOT".into(), class.to_string(), neutral)

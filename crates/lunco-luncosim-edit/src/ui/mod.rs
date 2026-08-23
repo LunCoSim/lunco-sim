@@ -555,9 +555,11 @@ impl Plugin for SandboxEditUiPlugin {
                         billboard_overlay::draw_billboard_overlay,
                     )
                         .before(lunco_workbench::WorkbenchRenderSet),
-                    checkpoint_click::draw_waypoint_context_menu,
+                    checkpoint_click::draw_waypoint_context_menu
+                        .in_set(lunco_workbench::ApplicationOverlayRenderSet),
                     // Crosshair + Esc-to-cancel while a placement is armed.
-                    checkpoint_click::handle_waypoint_placement_mode,
+                    checkpoint_click::handle_waypoint_placement_mode
+                        .in_set(lunco_workbench::ApplicationOverlayRenderSet),
                 ),
             )
             .add_systems(

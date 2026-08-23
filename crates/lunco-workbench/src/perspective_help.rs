@@ -120,7 +120,7 @@ impl Plugin for PerspectiveHelpPlugin {
         app.init_resource::<LiveHelpSections>();
         app.add_systems(
             EguiPrimaryContextPass,
-            render_help_popup.after(crate::WorkbenchRenderSet),
+            render_help_popup.in_set(crate::ApplicationOverlayRenderSet),
         );
     }
 }
@@ -230,7 +230,8 @@ fn render_help_popup(
                     ui.horizontal(|ui| {
                         ui.heading(egui::RichText::new(help.title).color(text));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("✖").on_hover_text("Close (Esc)").clicked() {
+                            if crate::icon_button(ui, crate::UiIcon::Close, "Close (Esc)").clicked()
+                            {
                                 close = true;
                             }
                         });
@@ -244,7 +245,19 @@ fn render_help_popup(
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if !help.shortcuts.is_empty() {
-                                ui.strong("⌨ Keyboard Shortcuts");
+                                ui.horizontal(|ui| {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(18.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    crate::paint_icon(
+                                        ui.painter(),
+                                        crate::UiIcon::Keyboard,
+                                        rect,
+                                        text,
+                                    );
+                                    ui.strong("Keyboard Shortcuts");
+                                });
                                 ui.add_space(6.0);
                                 for s in &help.shortcuts {
                                     help_row(

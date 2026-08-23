@@ -300,7 +300,7 @@ pub(super) fn render_edge_menu(
         match hit {
             lunco_canvas::EdgeHitKind::Corner(idx) => {
                 if ui
-                    .button("✕ Delete bend")
+                    .button("Delete bend")
                     .on_hover_text("Remove this waypoint from the connection")
                     .clicked()
                 {

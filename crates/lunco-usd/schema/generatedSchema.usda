@@ -1373,6 +1373,9 @@ class "LunCoTelemetryAPI" (
     string lunco:telemetry:description = "" (
         doc = "Human-facing explanation shown with the retained signal."
     )
+    rel lunco:telemetry:target (
+        doc = "Measured prim. Omitted means the declaration's own prim; exactly one target is allowed."
+    )
     double lunco:telemetry:rateHz = 0 (
         doc = "Sampling rate, Hz. 0/unauthored = the engine's default cadence."
     )

@@ -367,7 +367,13 @@ impl Panel for ComponentPalettePanel {
                 .color(muted_text),
             );
             if (!query_lc.is_empty() || selected_category.is_some())
-                && ui.small_button("✕ clear").clicked()
+                && lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Close,
+                    "Clear",
+                    "Clear the palette filter",
+                )
+                .clicked()
             {
                 clear_all = true;
             }

@@ -148,11 +148,10 @@ impl LoadingIndicator {
                 theme.tokens.surface_raised
             };
             painter.rect_filled(btn_rect, 4.0, bg);
-            painter.text(
-                btn_rect.center(),
-                Align2::CENTER_CENTER,
-                "✕",
-                FontId::proportional(13.0),
+            lunco_workbench::paint_icon(
+                &painter,
+                lunco_workbench::UiIcon::Close,
+                btn_rect.shrink(2.0),
                 theme.tokens.text_subdued,
             );
             if resp.clicked() {

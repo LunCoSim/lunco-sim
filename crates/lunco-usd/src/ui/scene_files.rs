@@ -307,10 +307,12 @@ impl BrowserSection for SceneFilesSection {
         let unresolved = view.unresolved;
         let no_roots = view.roots.is_empty();
 
-        if ui
-            .small_button("↻")
-            .on_hover_text("Re-walk the scene's references")
-            .clicked()
+        if lunco_workbench::icon_button(
+            ui,
+            lunco_workbench::UiIcon::Refresh,
+            "Re-walk the scene's references",
+        )
+        .clicked()
         {
             ctx.set_resource(SceneFileRescan(true));
         }
@@ -338,11 +340,6 @@ impl BrowserSection for SceneFilesSection {
                 ))
                 .show(ui, |ui| {
                     for row in group {
-                        let label = if row.missing {
-                            format!("⚠ {}", row.label)
-                        } else {
-                            row.label.clone()
-                        };
                         // Openable rows are routed through the normal typed
                         // `OpenFile` surface. USD and Modelica have richer
                         // editors; WGSL intentionally opens in the shared
@@ -355,16 +352,34 @@ impl BrowserSection for SceneFilesSection {
                                     | SceneFileKind::Modelica
                                     | SceneFileKind::Shader
                             );
-                        let resp = if openable {
-                            ui.selectable_label(false, label)
-                        } else {
-                            // `sense(hover)` so the tooltip below still fires —
-                            // a bare `Label` senses nothing and would swallow it.
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(label).weak())
-                                    .sense(egui::Sense::hover()),
-                            )
-                        };
+                        let resp = ui
+                            .horizontal(|ui| {
+                                if row.missing {
+                                    let (icon_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(18.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    lunco_workbench::paint_icon(
+                                        ui.painter(),
+                                        lunco_workbench::UiIcon::Warning,
+                                        icon_rect,
+                                        ui.visuals().error_fg_color,
+                                    );
+                                }
+                                if openable {
+                                    ui.selectable_label(false, row.label.clone())
+                                } else {
+                                    // `sense(hover)` so the tooltip below still fires —
+                                    // a bare `Label` senses nothing and would swallow it.
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(row.label.clone()).weak(),
+                                        )
+                                        .sense(egui::Sense::hover()),
+                                    )
+                                }
+                            })
+                            .inner;
                         let resp = if row.missing {
                             resp.on_hover_text("Referenced by the scene but not on disk")
                         } else if openable {

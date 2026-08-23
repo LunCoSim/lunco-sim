@@ -28,6 +28,19 @@ pub(crate) fn stamp() {
         .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
     println!("cargo:rustc-env=LUNCO_RELEASE_VERSION={release_version}");
     println!("cargo:rerun-if-env-changed=LUNCO_RELEASE_VERSION");
+    let repository = std::env::var("LUNCO_REPOSITORY_URL").unwrap_or_else(|_| {
+        match (
+            std::env::var("GITHUB_SERVER_URL"),
+            std::env::var("GITHUB_REPOSITORY"),
+        ) {
+            (Ok(server), Ok(repository)) => format!("{server}/{repository}"),
+            _ => "https://github.com/LunCoSim/lunco-sim".to_owned(),
+        }
+    });
+    println!("cargo:rustc-env=LUNCO_REPOSITORY_URL={repository}");
+    println!("cargo:rerun-if-env-changed=LUNCO_REPOSITORY_URL");
+    println!("cargo:rerun-if-env-changed=GITHUB_SERVER_URL");
+    println!("cargo:rerun-if-env-changed=GITHUB_REPOSITORY");
     // Re-stamp when the checked-out revision moves. Without this, the build
     // can report the revision from an earlier checkout.
     println!("cargo:rerun-if-changed=../../.git/HEAD");

@@ -9,8 +9,6 @@
 :root {
   --ui-tilt-color: var(--ok-color);
   --ui-comms-color: var(--muted-color);
-  --ui-power-color: var(--ok-color);
-  --ui-thermal-color: var(--ok-color);
   --ui-tilt-marker: 0%;
   --ui-caution-width: 44%;
   --ui-danger-start: 44%;
@@ -20,8 +18,7 @@
   --ui-local-display: flex;
   --ui-comms-display: none;
   --ui-comms-los-display: none;
-  --ui-power-display: none;
-  --ui-thermal-display: none;
+  --ui-telemetry-display: none;
 }
 
 #rover-hud-root {
@@ -55,7 +52,7 @@
 
 #rover-hud-nav {
   right: 14px;
-  width: 250px;
+  width: 420px;
 }
 
 #rover-hud-attitude-title,
@@ -63,8 +60,7 @@
 #rover-hud-speed-label,
 #rover-hud-altitude-label,
 #rover-hud-comms-label,
-#rover-hud-power-label,
-#rover-hud-thermal-label {
+#rover-hud-telemetry-label {
   color: var(--muted-color);
   font-size: 12px;
 }
@@ -79,9 +75,7 @@
 #rover-hud-attitude-fine,
 #rover-hud-geo,
 #rover-hud-local,
-#rover-hud-comms-heading,
-#rover-hud-power-heading,
-#rover-hud-thermal-heading {
+#rover-hud-comms-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -105,8 +99,7 @@
 #rover-hud-tilt-status,
 #rover-hud-tilt-limits,
 #rover-hud-comms-status,
-#rover-hud-power-value,
-#rover-hud-thermal-value {
+#rover-hud-telemetry-summary {
   color: var(--ui-tilt-color);
   font-size: 12px;
   font-weight: 700;
@@ -114,8 +107,7 @@
 
 #rover-hud-tilt-limits,
 #rover-hud-comms-detail,
-#rover-hud-power-detail,
-#rover-hud-thermal-detail {
+#rover-hud-telemetry-summary {
   color: var(--muted-color);
   font-size: 12px;
 }
@@ -171,13 +163,15 @@
 #rover-hud-local-heading,
 #rover-hud-comms-peer,
 #rover-hud-comms-range,
-#rover-hud-power-detail,
-#rover-hud-thermal-detail {
+#rover-hud-telemetry-summary {
   color: var(--text-color);
   font-size: 12px;
 }
 
 #rover-hud-autopilot {
+  min-width: 104px;
+  min-height: 24px;
+  flex-shrink: 0;
   color: var(--ui-autopilot-color);
   background-color: transparent;
   border-width: 1px;
@@ -197,8 +191,7 @@
 }
 
 #rover-hud-comms,
-#rover-hud-power,
-#rover-hud-thermal {
+#rover-hud-telemetry {
   display: var(--ui-comms-display);
   flex-direction: column;
   row-gap: 4px;
@@ -209,8 +202,7 @@
 
 #rover-hud-comms-heading,
 #rover-hud-comms-detail,
-#rover-hud-power,
-#rover-hud-thermal {
+#rover-hud-telemetry-heading {
   flex-direction: column;
 }
 
@@ -226,18 +218,12 @@
   color: var(--danger-color);
 }
 
-#rover-hud-power {
-  display: var(--ui-power-display);
+#rover-hud-telemetry {
+  display: var(--ui-telemetry-display);
 }
 
-#rover-hud-power-value {
-  color: var(--ui-power-color);
-}
-
-#rover-hud-thermal {
-  display: var(--ui-thermal-display);
-}
-
-#rover-hud-thermal-value {
-  color: var(--ui-thermal-color);
+#rover-hud-telemetry-summary {
+  width: 100%;
+  color: var(--text-color);
+  overflow: hidden;
 }

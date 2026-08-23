@@ -81,7 +81,8 @@ impl Plugin for ModelicaCommandsPlugin {
             )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                lifecycle::render_close_dialogs,
+                lifecycle::render_close_dialogs
+                    .in_set(lunco_workbench::ApplicationOverlayRenderSet),
             );
 
         // All typed commands, collected by the `register_commands!`

@@ -489,9 +489,6 @@ def Xform "SkidRover" (
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
                 float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
-                float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
-                float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
-                float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>

@@ -124,6 +124,7 @@ impl Plugin for SandboxUiPlugin {
         app.insert_resource(lunco_workbench::BuildIdentity::new(
             crate::PRODUCT_VERSION,
             crate::GIT_SHA,
+            crate::REPOSITORY_URL,
         ));
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, crate::apply_luncosim_window_icon);
@@ -325,6 +326,7 @@ impl Plugin for SandboxUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 celestial_time::draw_celestial_time
+                    .in_set(lunco_workbench::ApplicationOverlayRenderSet)
                     .run_if(not(recording_offline))
                     .run_if(in_view_perspective)
                     .run_if(overlays::sky_clock_visible),
@@ -520,12 +522,8 @@ fn register_camera_menu(world: &mut World) {
             } else {
                 ui.label("Operator camera");
                 for name in &state.cameras {
-                    let label = if state.active_name.as_deref() == Some(name.as_str()) {
-                        format!("✓ {name}")
-                    } else {
-                        name.clone()
-                    };
-                    if ui.button(label).clicked() {
+                    let active = state.active_name.as_deref() == Some(name.as_str());
+                    if ui.selectable_label(active, name).clicked() {
                         ctx.trigger(SetUserCamera { name: name.clone() });
                         ui.close();
                     }
@@ -768,37 +766,68 @@ fn register_downloadable_assets_settings(world: &mut World) {
                             ui.label(name);
                             match state {
                                 DatasetState::Installed => {
-                                    ui.label(egui::RichText::new("✔ ready · cached").weak());
+                                    let (icon_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(18.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    lunco_workbench::paint_icon(
+                                        ui.painter(),
+                                        lunco_workbench::UiIcon::Check,
+                                        icon_rect,
+                                        ui.visuals().weak_text_color(),
+                                    );
+                                    ui.label(egui::RichText::new("ready · cached").weak());
                                 }
                                 DatasetState::Downloading {
                                     bytes_done,
                                     bytes_total,
                                 } => {
                                     if *bytes_total == 0 {
-                                        ui.label("⬇ downloading…");
+                                        ui.label("Downloading…");
                                     } else {
                                         ui.label(format!(
-                                            "⬇ {:.1}/{:.1} MB",
+                                            "Downloading {:.1}/{:.1} MB",
                                             *bytes_done as f64 / 1_048_576.0,
                                             *bytes_total as f64 / 1_048_576.0
                                         ));
                                     }
-                                    if ui.button("Cancel").clicked() {
+                                    if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Stop,
+                                        "Cancel",
+                                        "Cancel dataset download",
+                                    )
+                                    .clicked()
+                                    {
                                         requested = Some(DatasetAction::Cancel(key.clone()));
                                     }
                                 }
                                 DatasetState::Processing { kind } => {
-                                    ui.label(format!("⚙ processing {kind}…"));
+                                    ui.label(format!("Processing {kind}…"));
                                 }
                                 DatasetState::Missing => {
                                     ui.label(egui::RichText::new("not installed").weak());
-                                    if ui.button("⬇ Download").clicked() {
+                                    if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Download,
+                                        "Download",
+                                        "Download this dataset",
+                                    )
+                                    .clicked()
+                                    {
                                         requested = Some(DatasetAction::Request(key.clone()));
                                     }
                                 }
                                 DatasetState::Failed(error) => {
                                     ui.colored_label(egui::Color32::LIGHT_RED, error);
-                                    if ui.button("Retry").clicked() {
+                                    if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Refresh,
+                                        "Retry",
+                                        "Retry dataset download",
+                                    )
+                                    .clicked()
+                                    {
                                         requested = Some(DatasetAction::Request(key.clone()));
                                     }
                                 }

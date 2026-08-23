@@ -89,12 +89,17 @@ fn draw_control_blackout(
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("⚠  NO LINK")
-                                .color(alert)
-                                .size(16.0)
-                                .strong(),
-                        );
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            crate::paint_icon(ui.painter(), crate::UiIcon::Warning, rect, alert);
+                            ui.label(
+                                egui::RichText::new("NO LINK")
+                                    .color(alert)
+                                    .size(16.0)
+                                    .strong(),
+                            );
+                        });
                         // Say what it MEANS, not just that it happened: the lesson is
                         // that the rover is on its own, not that it is broken.
                         ui.label(

@@ -231,7 +231,14 @@ pub fn draw_input_overlay(
                                 });
                         };
 
-                        ui.label(egui::RichText::new("⌨").size(15.0).weak());
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                        crate::paint_icon(
+                            ui.painter(),
+                            crate::UiIcon::Keyboard,
+                            rect,
+                            ui.visuals().weak_text_color(),
+                        );
                         let Ok(bindings) = bindings.key_bindings() else {
                             error!("[input-overlay] active keymap is invalid");
                             return;
@@ -313,6 +320,9 @@ pub fn register_input_overlay_commands(app: &mut App) {
 /// Registers the input overlay resources, settings, commands, and systems.
 pub fn build_input_overlay(app: &mut App) {
     register_input_overlay_commands(app);
-    app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        draw_input_overlay.in_set(crate::ApplicationOverlayRenderSet),
+    );
     app.add_systems(PreUpdate, emit_injected_pointer);
 }

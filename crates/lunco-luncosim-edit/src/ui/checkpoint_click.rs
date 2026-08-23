@@ -791,7 +791,14 @@ pub fn draw_waypoint_context_menu(
                     });
                     open = false;
                 }
-                if ui.button("❌  Delete").clicked() {
+                if lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Delete,
+                    "Delete",
+                    "Delete this waypoint",
+                )
+                .clicked()
+                {
                     match remove_waypoint_leaf(&xml.0, &marker_target) {
                         Ok(new_xml) => {
                             edited = Some(new_xml);
@@ -1287,11 +1294,7 @@ pub fn draw_waypoint_overlay(
             let fade = if focused { fade } else { fade * 0.5 };
 
             let alpha = (255.0 * fade) as u8;
-            let text = if wp.visited {
-                format!("✓{}", wp.index + 1)
-            } else {
-                format!("{}", wp.index + 1)
-            };
+            let text = format!("{}", wp.index + 1);
             let font = egui::FontId::proportional(font_size);
             let label = if wp.visited {
                 theme.tokens.success
@@ -1854,11 +1857,13 @@ fn route_ribbon_points(
         .filter(|&index| index < points.len())
         .or_else(|| points.iter().position(|(_, visited)| !visited));
     let blue = next
-        .map(|index| {
-            vec![
-                rover_pos.unwrap_or_else(|| points[index.saturating_sub(1)].0),
-                points[index].0,
-            ]
+        .and_then(|index| {
+            // The first leg has no previous waypoint. Until the live physics
+            // pose is available, there is no honest start point to render;
+            // synthesising W0 → W0 creates an invisible line. Later legs may
+            // use the preceding authored waypoint while the live pose is absent.
+            let start = rover_pos.or_else(|| (index > 0).then_some(points[index - 1].0))?;
+            Some(vec![start, points[index].0])
         })
         .unwrap_or_default();
     (green, blue)
@@ -2607,6 +2612,13 @@ mod tests {
     fn route_ribbon_has_no_blue_leg_when_a_one_way_route_is_done() {
         let points = [(DVec3::ZERO, true), (DVec3::X * 10.0, true)];
         let (_, blue) = route_ribbon_points(&points, Some(DVec3::Y), None);
+        assert!(blue.is_empty());
+    }
+
+    #[test]
+    fn first_blue_leg_waits_for_the_live_rover_pose() {
+        let points = [(DVec3::ZERO, false), (DVec3::X * 10.0, false)];
+        let (_, blue) = route_ribbon_points(&points, None, Some(0));
         assert!(blue.is_empty());
     }
 

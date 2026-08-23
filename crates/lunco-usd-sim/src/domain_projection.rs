@@ -785,8 +785,10 @@ pub fn network_facts(
                         target_instance.clone(),
                         input.clone(),
                     ));
+                    continue;
                 }
-            } else if let Some(boundary) = target.strip_prefix(&boundary_prefix).or_else(|| {
+            }
+            if let Some(boundary) = target.strip_prefix(&boundary_prefix).or_else(|| {
                 network
                     .input_sources
                     .iter()
@@ -2640,11 +2642,27 @@ fn has_authored_telemetry_for_output(view: &impl UsdRead, member: &str, output: 
     let Ok(path) = SdfPath::new(member) else {
         return false;
     };
-    if view.boolean(&path, "lunco:telemetry") != Some(true) {
-        return false;
+    if view.boolean(&path, "lunco:telemetry") == Some(true)
+        && view
+            .text(&path, "lunco:telemetry:port")
+            .is_some_and(|port| port == output)
+    {
+        return true;
     }
-    view.text(&path, "lunco:telemetry:port")
-        .is_some_and(|port| port == output)
+
+    // One prim can carry one LunCoTelemetryAPI declaration. Additional
+    // operator channels are authored as declaration prims that target the
+    // measured member through the same API's relationship, so they still
+    // suppress a duplicate generated public alias.
+    view.prim_paths().into_iter().any(|candidate| {
+        view.boolean(&candidate, "lunco:telemetry") == Some(true)
+            && view
+                .text(&candidate, "lunco:telemetry:port")
+                .is_some_and(|port| port == output)
+            && view
+                .rel_target(&candidate, "lunco:telemetry:target")
+                .is_some_and(|target| target == member)
+    })
 }
 
 /// Build the runtime address map that reconnects one generated solver to the

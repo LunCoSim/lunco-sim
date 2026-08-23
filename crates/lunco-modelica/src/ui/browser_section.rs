@@ -197,7 +197,7 @@ impl BrowserSection for ModelicaSection {
                         if let Some(error) = &entry.error {
                             ui.colored_label(
                                 egui::Color32::from_rgb(220, 140, 70),
-                                format!("⚠ {error}"),
+                                format!("Error: {error}"),
                             );
                         }
                     });
@@ -326,11 +326,20 @@ fn render_workspace_doc_row(
                     start_rename = Some(doc_name.to_string());
                 }
                 resp.context_menu(|ui| {
-                    if ui.button("✏ Rename").clicked() {
+                    if lunco_workbench::icon_text_button(
+                        ui,
+                        lunco_workbench::UiIcon::Edit,
+                        "Rename",
+                        "Rename this document",
+                    )
+                    .clicked()
+                    {
                         start_rename = Some(doc_name.to_string());
                         ui.close();
                     }
-                    if ui.button("✕ Close").clicked() {
+                    if lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Close, "Close")
+                        .clicked()
+                    {
                         close_doc = true;
                         ui.close();
                     }
@@ -530,7 +539,7 @@ pub(crate) fn render_workspace_doc(
         // explicitly.
         let (text, color) = if has_parse_errors {
             (
-                "⚠ parse error".to_string(),
+                "Parse error".to_string(),
                 egui::Color32::from_rgb(220, 160, 60),
             )
         } else {

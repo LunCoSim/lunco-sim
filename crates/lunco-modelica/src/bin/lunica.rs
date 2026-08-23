@@ -178,6 +178,7 @@ fn main() {
         app.insert_resource(lunco_workbench::BuildIdentity::new(
             lunco_modelica::PRODUCT_VERSION,
             lunco_modelica::GIT_SHA,
+            lunco_modelica::REPOSITORY_URL,
         ));
         app.add_plugins(ModelicaWorkbenchPlugin::default());
         // Frame pacing: Continuous focused (vsync paces Update); low-power

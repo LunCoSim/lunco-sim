@@ -408,6 +408,7 @@ def Xform "RockerBogie" (
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int physxVehicleWheelAttachment:index = 0
             float inputs:drive.connect = </RockerBogie.outputs:drive_left>
+            float inputs:steer.connect = </RockerBogie.outputs:steering>
         }
 
         # Motor + reduction for the front-left wheel. A CHILD OF THE ROCKER, not of
@@ -566,6 +567,7 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheelAttachment:index = 1
             float inputs:drive.connect = </RockerBogie.outputs:drive_right>
+            float inputs:steer.connect = </RockerBogie.outputs:steering>
         }
 
         # Wheel index 1 is odd ⇒ `drive_right`. Mirror of the left rocker.
@@ -1083,9 +1085,6 @@ def Xform "RockerBogie" (
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
                 float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
-                float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
-                float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
-                float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a

@@ -7412,6 +7412,7 @@ dependencies = [
  "big_space",
  "console_error_panic_hook",
  "getrandom 0.3.4",
+ "image",
  "js-sys",
  "leafwing-input-manager",
  "lunco-api",
@@ -7442,6 +7443,7 @@ dependencies = [
  "lunco-scene-commands",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-signal",
  "lunco-storage",
  "lunco-telemetry",
  "lunco-terrain-globe",
@@ -7471,6 +7473,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winit",
+ "winresource",
 ]
 
 [[package]]
@@ -11466,7 +11469,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14715,6 +14718,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0986a8b1d586b7d3e4fe3d9ea39fb451ae22869dcea4aa109d287a374d866087"
+dependencies = [
+ "toml 1.1.2+spec-1.1.0",
+ "version_check",
 ]
 
 [[package]]

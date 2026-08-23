@@ -130,8 +130,8 @@ fn domain_icon(domain: &str) -> &'static str {
         // 🧲/🧮/🛠/⏱ tend to miss, ⊗/Σ/⚒/⧖ are in basic math
         // plane and present in every sans font we've loaded.
         "Magnetic" => "⊗",
-        "Blocks" => "⚙",
-        "ComplexBlocks" => "⚙",
+        "Blocks" => "Blocks",
+        "ComplexBlocks" => "Complex Blocks",
         "Math" => "Σ",
         "StateGraph" => "⇄",
         "Clocked" => "⧖",
@@ -686,7 +686,12 @@ impl Panel for WelcomePanel {
                                 .hint_text("search…"),
                         );
                         if !wstate.browse_query.is_empty()
-                            && ui.button("✕").on_hover_text("Clear search").clicked()
+                            && lunco_workbench::icon_button(
+                                ui,
+                                lunco_workbench::UiIcon::Close,
+                                "Clear search",
+                            )
+                            .clicked()
                         {
                             wstate.browse_query.clear();
                         }

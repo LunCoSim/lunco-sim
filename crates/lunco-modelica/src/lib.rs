@@ -43,6 +43,8 @@ use std::thread;
 pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
 /// Short source revision stamped into this build for diagnostics.
 pub const GIT_SHA: &str = env!("LUNCO_GIT_SHA");
+/// Public GitHub repository containing the stamped source revision.
+pub const REPOSITORY_URL: &str = env!("LUNCO_REPOSITORY_URL");
 
 /// Typed identity for a Modelica class across the workbench.
 ///

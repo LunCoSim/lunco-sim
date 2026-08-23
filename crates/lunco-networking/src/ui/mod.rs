@@ -35,7 +35,8 @@ impl Plugin for LunCoNetworkingUiPlugin {
             .add_observer(on_net_disconnect_request)
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                (draw_collaborator_cursors, draw_pending_connect_prompt),
+                (draw_collaborator_cursors, draw_pending_connect_prompt)
+                    .in_set(lunco_workbench::ApplicationOverlayRenderSet),
             );
 
         #[cfg(feature = "workbench")]

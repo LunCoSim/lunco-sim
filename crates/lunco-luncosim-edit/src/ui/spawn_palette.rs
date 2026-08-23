@@ -109,7 +109,7 @@ fn spawn_palette_content(
                         .unwrap_or(false);
 
                     let btn_text = if selected {
-                        format!("✓ {}", entry.display_name)
+                        entry.display_name.clone()
                     } else {
                         entry.display_name.clone()
                     };

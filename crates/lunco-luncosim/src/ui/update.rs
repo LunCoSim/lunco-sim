@@ -173,7 +173,10 @@ impl Plugin for UpdatePlugin {
                     .chain(),
             )
             .add_observer(on_status_bar_action)
-            .add_systems(bevy_egui::EguiPrimaryContextPass, render_update_dialog);
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                render_update_dialog.in_set(lunco_workbench::ApplicationOverlayRenderSet),
+            );
     }
 }
 

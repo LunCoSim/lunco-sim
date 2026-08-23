@@ -476,7 +476,7 @@ fn render_unified_toolbar(
             // (where the full error text lives), right-click dismisses.
             let resp = ui
                 .add(
-                    egui::Label::new(egui::RichText::new("⚠ Error").color(tokens.error))
+                    egui::Label::new(egui::RichText::new("Error").color(tokens.error))
                         .sense(egui::Sense::click()),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -494,33 +494,39 @@ fn render_unified_toolbar(
             });
         } else if runner_busy {
             // Show the live count so several concurrent Fast Runs are
-            // visible at a glance (e.g. "⏩ 3 running · ⏳ 2").
-            let mut pill = format!("⏩ {runner_running} running");
+            // visible at a glance (e.g. "3 running · 2 queued").
+            let mut pill = format!("{runner_running} running");
             if let Some(t) = experiment_run_t { pill.push_str(&format!(" · t={t:.2}s")); }
-            if runner_queued > 0 { pill.push_str(&format!(" · ⏳ {runner_queued}")); }
+            if runner_queued > 0 { pill.push_str(&format!(" · {runner_queued} queued")); }
             ui.colored_label(tokens.warning, pill).on_hover_text(
                 format!("Fast Run in progress — {runner_running} executing, {runner_queued} queued (background simulation)")
             );
         } else if realtime_active {
-            ui.colored_label(tokens.warning, "⏩ Running…").on_hover_text("Realtime simulation stepping");
+            ui.colored_label(tokens.warning, "Running…").on_hover_text("Realtime simulation stepping");
         } else {
             match compile_state {
-                CompileState::Compiling => { ui.colored_label(tokens.warning, "⏳").on_hover_text("Compiling — building the model"); }
-                CompileState::Ready => { ui.colored_label(tokens.success, "✓").on_hover_text("Ready — model compiled successfully"); }
-                CompileState::Error => { ui.colored_label(tokens.error, "⚠").on_hover_text("Error — compilation failed"); }
-                CompileState::Idle => { ui.colored_label(tokens.text_subdued, "◌").on_hover_text("Idle — model not compiled yet"); }
+                CompileState::Compiling => { ui.colored_label(tokens.warning, "Compiling").on_hover_text("Compiling — building the model"); }
+                CompileState::Ready => { ui.colored_label(tokens.success, "Ready").on_hover_text("Ready — model compiled successfully"); }
+                CompileState::Error => { ui.colored_label(tokens.error, "Error").on_hover_text("Error — compilation failed"); }
+                CompileState::Idle => { ui.colored_label(tokens.text_subdued, "Idle").on_hover_text("Idle — model not compiled yet"); }
             }
         }
 
         if let Some((can_undo, can_redo, undo_n, redo_n)) = undo_redo {
             ui.separator();
             undo_clicked = ui
-                .add_enabled(can_undo, egui::Button::new("↶"))
+                .add_enabled_ui(can_undo, |ui| {
+                    lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Back, "Undo")
+                })
+                .inner
                 .on_hover_text(format!("Undo ({undo_n})"))
                 .on_disabled_hover_text("Undo — nothing to undo")
                 .clicked();
             redo_clicked = ui
-                .add_enabled(can_redo, egui::Button::new("↷"))
+                .add_enabled_ui(can_redo, |ui| {
+                    lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Forward, "Redo")
+                })
+                .inner
                 .on_hover_text(format!("Redo ({redo_n})"))
                 .on_disabled_hover_text("Redo — nothing to redo")
                 .clicked();
@@ -538,7 +544,7 @@ fn render_unified_toolbar(
         // the three-way split: build vs live-run vs batch-run.
         let r_compile = ui
             .add_enabled(!matches!(compile_state, CompileState::Compiling) && !runner_busy, egui::Button::new("Compile"))
-            .on_hover_text("Compile — build & check the model only. It does NOT run.\n▶ Run = watch it live    ⏩ Fast Run = plots, no watching")
+            .on_hover_text("Compile — build & check the model only. It does NOT run.\nRun = watch it live    Fast Run = plots, no watching")
             .on_disabled_hover_text(compile_busy_hint);
         compile_clicked = r_compile.clicked();
 
@@ -550,11 +556,29 @@ fn render_unified_toolbar(
         // Run as the default verb.
         let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
         let r_run = ui
-            .add_enabled(!matches!(compile_state, CompileState::Compiling), egui::Button::new(if realtime_running { "⏸" } else { "▶" }))
+            .add_enabled_ui(
+                !matches!(compile_state, CompileState::Compiling),
+                |ui| {
+                    lunco_workbench::icon_button(
+                        ui,
+                        if realtime_running {
+                            lunco_workbench::UiIcon::Pause
+                        } else {
+                            lunco_workbench::UiIcon::Play
+                        },
+                        if realtime_running {
+                            "Pause live run"
+                        } else {
+                            "Run live"
+                        },
+                    )
+                },
+            )
+            .inner
             .on_hover_text(if realtime_running {
-                "Pause — freeze live stepping. State is kept; press ▶ to resume."
+                "Pause — freeze live stepping. State is kept; use Run live to resume."
             } else {
-                "Run live — compile if needed, then step in realtime so you can watch and drive it in the 3D view.\nWant plots without watching? Use ⏩ Fast Run."
+                "Run live — compile if needed, then step in realtime so you can watch and drive it in the 3D view.\nWant plots without watching? Use Fast Run."
             })
             .on_disabled_hover_text("Compiling — wait for the current build to finish");
         run_pause_clicked = r_run.clicked();
@@ -564,8 +588,19 @@ fn render_unified_toolbar(
         // behind the concurrency cap; see the Experiments panel). Only an
         // in-progress *compile* disables it.
         let r_fast = ui
-            .add_enabled(!matches!(compile_state, CompileState::Compiling), egui::Button::new("⏩"))
-            .on_hover_text("Fast Run — simulate to completion in the background and make an Experiment with plots.\nNo live 3D view — for that use ▶ Run.")
+            .add_enabled_ui(
+                !matches!(compile_state, CompileState::Compiling),
+                |ui| {
+                    lunco_workbench::icon_text_button(
+                        ui,
+                        lunco_workbench::UiIcon::Forward,
+                        "Fast Run",
+                        "Run to completion and collect plots",
+                    )
+                },
+            )
+            .inner
+            .on_hover_text("Fast Run — simulate to completion in the background and make an Experiment with plots.\nNo live 3D view — use Run live for the 3D view.")
             .on_disabled_hover_text("Compiling — wait for the current build to finish");
         fast_run_clicked = r_fast.clicked();
         // Publish a combined anchor over the three execution verbs
@@ -584,8 +619,18 @@ fn render_unified_toolbar(
         // (rewind-only vs rewind-and-run) stays explicit.
         if let Some((_paused, t_now)) = sim_state {
             ui.separator();
-            reset_clicked = ui.button("⏮").on_hover_text("Reset — stop and rewind to t=0 (stays paused).\nUse ↻ Restart to rewind AND run again.").clicked();
-            restart_clicked = ui.button("↻").on_hover_text("Restart — rewind to t=0 and run again immediately.\nUse ⏮ Reset to rewind without running.").clicked();
+            reset_clicked = lunco_workbench::icon_button(
+                ui,
+                lunco_workbench::UiIcon::Refresh,
+                "Reset — stop and rewind to t=0 (stays paused).",
+            )
+            .clicked();
+            restart_clicked = lunco_workbench::icon_button(
+                ui,
+                lunco_workbench::UiIcon::Play,
+                "Restart — rewind to t=0 and run again immediately.",
+            )
+            .clicked();
             ui.label(egui::RichText::new(format!("t={:.3}s", t_now)).monospace().weak());
         }
 

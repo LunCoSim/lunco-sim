@@ -171,11 +171,7 @@ fn script_tools_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_th
         for tool in &tools {
             let is_armed = armed.as_deref() == Some(tool.name.as_str());
             let label = title_case(&tool.name);
-            let text = if is_armed {
-                format!("✓ {label}")
-            } else {
-                label
-            };
+            let text = label;
             let btn = egui::Button::new(text);
             let btn = if is_armed {
                 btn.fill(tokens.success_subdued)
@@ -232,11 +228,7 @@ fn tool_button(
     current: TerrainTool,
 ) -> egui::Response {
     let selected = current == which;
-    let text = if selected {
-        format!("✓ {label}")
-    } else {
-        label.to_string()
-    };
+    let text = label.to_string();
     let btn = egui::Button::new(text);
     let btn = if selected {
         btn.fill(tokens.success_subdued)
