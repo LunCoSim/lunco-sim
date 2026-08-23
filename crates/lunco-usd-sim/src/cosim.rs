@@ -634,6 +634,19 @@ fn project_usd_telemetry(
         bevy::asset::AssetId<UsdStageAsset>,
         std::collections::HashSet<String>,
     > = HashMap::new();
+    let mut entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity> =
+        HashMap::new();
+    let mut generated_entities_by_path: HashMap<
+        (bevy::asset::AssetId<UsdStageAsset>, String),
+        Entity,
+    > = HashMap::new();
+    for (entity, prim_path, generated, _, _, _, _, _) in &query {
+        let key = (prim_path.stage_handle.id(), prim_path.path.clone());
+        entities_by_path.entry(key.clone()).or_insert(entity);
+        if generated.is_some() {
+            generated_entities_by_path.insert(key, entity);
+        }
+    }
     for (wrapper, prim_path, generated, layout, provenance, gid, is_root, _) in &query {
         let (Some(generated), Some(layout)) = (generated, layout) else {
             continue;
@@ -696,6 +709,34 @@ fn project_usd_telemetry(
             }
         };
         if authored {
+            let target_paths = view.rel_targets(&path, "lunco:telemetry:target");
+            let target_path = match target_paths.as_slice() {
+                [] => prim_path.path.clone(),
+                [target] => target.as_str().to_owned(),
+                _ => {
+                    warn!(
+                        "[usd-cosim] {} has multiple telemetry targets; exactly one is allowed",
+                        path.as_str()
+                    );
+                    String::new()
+                }
+            };
+            if target_path.is_empty() {
+                commands.entity(entity).try_insert(UsdTelemetryProjected);
+                continue;
+            }
+            let target_key = (id, target_path.clone());
+            let Some(target_entity) = generated_entities_by_path
+                .get(&target_key)
+                .copied()
+                .or_else(|| entities_by_path.get(&target_key).copied())
+            else {
+                // A target prim may be present in USD before its generated
+                // Modelica participant has published its ECS entity. Keep
+                // the declaration unprojected for the next pass; binding
+                // it to the declaration prim would read the wrong surface.
+                continue;
+            };
             let declaration = (|| {
                 let port = read_authored_telemetry_string(&view, &path, "lunco:telemetry:port")?
                     .filter(|value| !value.is_empty());
@@ -754,7 +795,7 @@ fn project_usd_telemetry(
                     unit,
                     description,
                     source,
-                    target: Some(entity),
+                    target: Some(target_entity),
                     rate_hz,
                     enabled,
                     deadband,
@@ -779,7 +820,7 @@ fn project_usd_telemetry(
                         let key = (
                             prim_path.stage_handle.id(),
                             instance_of(provenance, gid, is_root),
-                            prim_path.path.clone(),
+                            target_path,
                             port.clone(),
                         );
                         if let Some((wrapper, runtime_port)) = generated_outputs.get(&key) {
@@ -796,7 +837,7 @@ fn project_usd_telemetry(
                                 .or_insert_with(|| {
                                     lunco_usd_bevy::program::modelica_network_member_paths(&view)
                                 });
-                            if members.contains(&prim_path.path) {
+                            if members.contains(&key.2) {
                                 continue;
                             }
                             (parameter.target, parameter.source.clone())

@@ -13,6 +13,7 @@ model Battery
   Pin p;
   Real soc(unit="1", start = soc_init) "State of charge, 0..1";
   output Real soc_out(unit="1") "State of charge, 0..1";
+  output Real soc_percent(unit="%") "State of charge, percent";
   output Real capacity_ah(unit="Ah") "Authored total battery capacity";
   output Real charge_remaining_ah(unit="Ah") "Charge currently available";
   output Real terminal_voltage_v(unit="V") "Battery terminal voltage on the electrical bus";
@@ -32,6 +33,7 @@ equation
   // is prevented from leaving its physical interval at either boundary.
   der(soc) = max(-soc, min(1.0 - soc, soc_rate));
   soc_out = soc;
+  soc_percent = 100.0 * soc;
   capacity_ah = capacity;
   charge_remaining_ah = capacity * soc;
   terminal_voltage_v = p.v;

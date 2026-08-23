@@ -14,25 +14,20 @@
   <property name="comms_peer">—</property>
   <property name="comms_range">—</property>
   <property name="comms_elevation">—</property>
-  <property name="power_value">—</property>
-  <property name="power_detail">—</property>
-  <property name="thermal_value">—</property>
-  <property name="thermal_detail">—</property>
+  <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
   <property name="tilt_color">var(--ok-color)</property>
   <property name="tilt_marker">0%</property>
   <property name="caution_width">44%</property>
   <property name="danger_start">44%</property>
   <property name="danger_width">22%</property>
   <property name="autopilot_color">var(--muted-color)</property>
+  <property name="autopilot_label">AUTOPILOT</property>
   <property name="geo_display">none</property>
   <property name="local_display">flex</property>
   <property name="comms_display">none</property>
   <property name="comms_los_display">none</property>
   <property name="comms_color">var(--muted-color)</property>
-  <property name="power_display">none</property>
-  <property name="power_color">var(--ok-color)</property>
-  <property name="thermal_display">none</property>
-  <property name="thermal_color">var(--ok-color)</property>
+  <property name="telemetry_display">none</property>
 
   <node id="rover-hud-root">
     <node id="rover-hud-attitude">
@@ -60,7 +55,7 @@
     <node id="rover-hud-nav">
       <node id="rover-hud-nav-heading">
         <text id="rover-hud-label">{label}</text>
-        <button id="rover-hud-autopilot" on_press="runtime_toggle_autopilot">AUTOPILOT</button>
+        <button id="rover-hud-autopilot" on_press="runtime_toggle_autopilot">{autopilot_label}</button>
       </node>
       <text id="rover-hud-frame">site frame · metres</text>
       <node id="rover-hud-altitude-block">
@@ -88,20 +83,11 @@
         </node>
       </node>
 
-      <node id="rover-hud-power">
-        <node id="rover-hud-power-heading">
-          <text id="rover-hud-power-label">BATTERY</text>
-          <text id="rover-hud-power-value">{power_value}</text>
+      <node id="rover-hud-telemetry">
+        <node id="rover-hud-telemetry-heading">
+          <text id="rover-hud-telemetry-label">LIVE TELEMETRY</text>
         </node>
-        <text id="rover-hud-power-detail">{power_detail}</text>
-      </node>
-
-      <node id="rover-hud-thermal">
-        <node id="rover-hud-thermal-heading">
-          <text id="rover-hud-thermal-label">THERMAL</text>
-          <text id="rover-hud-thermal-value">{thermal_value}</text>
-        </node>
-        <text id="rover-hud-thermal-detail">{thermal_detail}</text>
+        <text id="rover-hud-telemetry-summary">{telemetry_summary}</text>
       </node>
     </node>
   </node>

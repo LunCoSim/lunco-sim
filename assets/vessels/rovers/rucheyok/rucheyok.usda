@@ -129,6 +129,7 @@ def Xform "Rucheyok" (
         float inputs:drive_left.connect = </Rucheyok.outputs:drive_left>
         float inputs:drive_right.connect = </Rucheyok.outputs:drive_right>
         float outputs:soc.connect = </Rucheyok/Battery.outputs:soc_out>
+        float outputs:soc_percent.connect = </Rucheyok/Battery.outputs:soc_percent>
         float outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
         float outputs:solar_incidence.connect = </Rucheyok/SolarPanel.outputs:cos_incidence>
         uniform token collection:components:expansionRule = "explicitOnly"

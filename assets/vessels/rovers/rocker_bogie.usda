@@ -1083,9 +1083,43 @@ def Xform "RockerBogie" (
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
                 float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+                float outputs:soc_percent.connect = </RockerBogie/Battery.outputs:soc_percent>
                 float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
                 float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
                 float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
+                def Scope "BatteryNetPower" (
+                    prepend apiSchemas = ["LunCoTelemetryAPI"]
+                )
+                {
+                    bool lunco:telemetry = true
+                    token lunco:telemetry:port = "battery_net_power"
+                    token lunco:telemetry:name = "power.battery_net"
+                    token lunco:telemetry:unit = "W"
+                    string lunco:telemetry:description = "Solved net power into the battery; positive charges and negative discharges."
+                    rel lunco:telemetry:target = </RockerBogie/Electrical>
+                }
+                def Scope "BatteryChargePower" (
+                    prepend apiSchemas = ["LunCoTelemetryAPI"]
+                )
+                {
+                    bool lunco:telemetry = true
+                    token lunco:telemetry:port = "battery_charge_power"
+                    token lunco:telemetry:name = "power.battery_charge"
+                    token lunco:telemetry:unit = "W"
+                    string lunco:telemetry:description = "Solved power currently stored in the battery."
+                    rel lunco:telemetry:target = </RockerBogie/Electrical>
+                }
+                def Scope "BatteryDischargePower" (
+                    prepend apiSchemas = ["LunCoTelemetryAPI"]
+                )
+                {
+                    bool lunco:telemetry = true
+                    token lunco:telemetry:port = "battery_discharge_power"
+                    token lunco:telemetry:name = "power.battery_discharge"
+                    token lunco:telemetry:unit = "W"
+                    string lunco:telemetry:description = "Solved power currently supplied by the battery to the vehicle."
+                    rel lunco:telemetry:target = </RockerBogie/Electrical>
+                }
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a

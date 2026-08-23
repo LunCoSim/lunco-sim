@@ -42,7 +42,7 @@ each UI surface.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})` |
+| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`, and its optional `lunco:telemetry:target` relationship lets a declaration prim observe any composed prim without adding a domain-specific channel component |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |

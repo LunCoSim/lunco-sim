@@ -68,6 +68,7 @@ lunco-hardware = { path = "../lunco-hardware" }
 # wired, so leaving this out meant the API advertised parameter telemetry that could
 # never arrive. Render-free: it is the eyes-and-ears of a `--no-ui` run.
 lunco-telemetry = { path = "../lunco-telemetry" }
+lunco-signal = { path = "../lunco-signal" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-autopilot = { path = "../lunco-autopilot" }
