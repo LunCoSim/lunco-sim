@@ -345,8 +345,10 @@ pub struct ScenarioIntrospection<V> {
 /// the language mechanics — [`ScenarioDriver`] owns all lifecycle policy.
 ///
 /// Each method is keyed by the host `entity`; the impl owns the per-entity
-/// compiled state internally. `self_gid` is the host's `GlobalEntityId` (the
-/// `self` a hook receives), passed in so the impl never resolves it.
+/// compiled state internally. `self_gid` is the host's `GlobalEntityId` when
+/// one exists, or the telemetry bus' explicit global/local source `0` for a
+/// local host (the `self` a hook receives), passed in so the impl never resolves
+/// identity itself.
 ///
 // TODO(hooks): evaluate folding this onto the `lunco-hooks` registry (the
 // language-neutral internal-hook substrate that backs `MergePolicy`,

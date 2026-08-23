@@ -107,8 +107,8 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
-        hint("You've felt why a high centre of mass tips, and how to climb anyway: pick the fall-line, keep steering inputs small on a grade. Next: compare the rover variants.");
-        notify_kind("Lesson complete - on to Rover Variants", "success");
+        hint("You've felt why a high centre of mass tips, and how to climb anyway: pick the fall-line, keep steering inputs small on a grade. Click Continue in the Tutorial complete dialog to compare the rover variants.");
+        notify_kind("Lesson complete — choose Continue for Rover Variants", "success");
     }
 }
 

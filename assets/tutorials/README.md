@@ -6,6 +6,13 @@ mounts that payload through the typed scene lifecycle, waits for completion,
 then starts the script on a host entity. The coach card / spotlight / objectives
 come from the shared HUD + the rhai prelude.
 
+The boundary is intentional: Rust owns the tutorial lifecycle (curriculum
+composition, authored perspective, payload mounting, host lifetime, event
+attribution, and the Continue/Stay here chain dialog). Rhai owns lesson policy
+only (coaching, objectives, action predicates, and semantic event emission).
+Rhai does not open scenes, choose perspectives, or start another lesson; it
+uses the small prelude surface exposed for those lesson-level concerns.
+
 ## Layout
 
 ```

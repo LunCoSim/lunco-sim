@@ -62,8 +62,8 @@ fn mission(me) {
 
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
-        hint("You can drive, climb, stop, and read the result. Next: Slopes & Tip-Over — feel why a top-heavy rover rolls.");
-        notify_kind("Lesson complete - on to Slopes & Tip-Over", "success");
+        hint("You can drive, climb, stop, and read the result. Click Continue in the Tutorial complete dialog to begin Slopes & Tip-Over.");
+        notify_kind("Lesson complete — choose Continue for Slopes & Tip-Over", "success");
     }
 }
 

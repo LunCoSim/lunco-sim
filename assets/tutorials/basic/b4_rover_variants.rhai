@@ -43,7 +43,8 @@ fn on_event(me, evt) {
 
     if this.i >= s.len() {
         end_tour();
-        notify_kind("Variants felt — on to joining a team", "success");
+        hint("You have compared the rover variants. Click Continue in the Tutorial complete dialog to begin Join a Team Session.");
+        notify_kind("Variants felt — choose Continue for Join a Team Session", "success");
         emit("MISSION_COMPLETE", 0);
     } else {
         show(s, this.i);
