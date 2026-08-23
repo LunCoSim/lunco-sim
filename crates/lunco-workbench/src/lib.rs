@@ -92,14 +92,10 @@ fn window_control_button(
     let bottom = rect.bottom() - 6.0;
     match icon {
         WindowControlIcon::Close => {
-            ui.painter().line_segment(
-                [egui::pos2(left, top), egui::pos2(right, bottom)],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [egui::pos2(right, top), egui::pos2(left, bottom)],
-                stroke,
-            );
+            ui.painter()
+                .line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
+            ui.painter()
+                .line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
         }
         WindowControlIcon::Maximize => {
             ui.painter().rect_stroke(
