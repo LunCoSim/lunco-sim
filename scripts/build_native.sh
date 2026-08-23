@@ -164,11 +164,11 @@ velopack_runtime() {
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
 #   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   luncosim:  fonts (UI rendering) + Earth/Moon imagery
+#   luncosim:  fonts (UI rendering); Earth/Moon imagery remains user-cache data
 cache_subdirs_for() {
     case "$1" in
         lunica)   echo "fonts msl thermofluidstream" ;;
-        luncosim) echo "fonts textures" ;;
+        luncosim) echo "fonts" ;;
     esac
 }
 
@@ -266,8 +266,9 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Every binary needs the UI font; lunica also needs MSL, while luncosim
-    # ships its declared Earth/Moon imagery for an offline launch.
+    # Every binary needs the UI font; lunica also needs MSL. LunCoSim's
+    # Earth/Moon imagery is deliberately a user-consented download and is not
+    # bundled into a release package.
     local groups_to_download=""
     local groups_to_process=""
     case "$binary" in
@@ -275,8 +276,7 @@ download_cache_for() {
             groups_to_download="fonts modelica"
             ;;
         luncosim)
-            groups_to_download="fonts celestial"
-            groups_to_process="celestial"
+            groups_to_download="fonts"
             ;;
     esac
 
@@ -307,7 +307,7 @@ download_cache_for() {
 # payload it promises to ship was actually materialised.
 required_cache_files_for() {
     case "$1" in
-        luncosim) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
+        lunica|luncosim) echo "fonts/DejaVuSans.ttf" ;;
     esac
 }
 
@@ -641,8 +641,9 @@ fi
 
 # `download_cache_for` can continue after an individual download failure to
 # preserve useful diagnostics. Packaging cannot: it must contain every
-# runtime-required file, including luncosim's processed Earth/Moon textures.
-if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "luncosim" ]; then
+# runtime-required file. Earth/Moon imagery is intentionally absent from the
+# package and is requested through the first-run resource prompt.
+if [ "$NO_CACHE" -eq 0 ] && [ -n "$(required_cache_files_for "$BINARY")" ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     verify_required_cache_files "$BINARY" "$CACHE_SRC"
 fi
@@ -680,6 +681,18 @@ if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
     sync_dir "$PROJECT_DIR/assets/" "$OUT_DIR/assets/"
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
+fi
+
+# Earth/Moon textures are runtime datasets, never package payload. This also
+# removes a developer's local packed-cache copy before the release staging
+# step, so a GitHub build cannot accidentally re-embed it.
+if [ "$BINARY" = "luncosim" ] && [ -d "$OUT_DIR/assets/.cache/textures" ]; then
+    rm -f "$OUT_DIR/assets/.cache/textures/earth.png" \
+          "$OUT_DIR/assets/.cache/textures/moon.png" \
+          "$OUT_DIR/assets/.cache/textures/earth_source.jpg" \
+          "$OUT_DIR/assets/.cache/textures/moon_source.tif"
+    rmdir "$OUT_DIR/assets/.cache/textures" 2>/dev/null || true
+    info "Excluded assets/.cache/textures from the luncosim package"
 fi
 
 stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
@@ -734,6 +747,24 @@ if [ "$NO_CACHE" -eq 0 ]; then
     fi
 else
     info "Skipping packed cache (--no-cache)"
+fi
+
+if [ "$NO_CACHE" -eq 0 ] && [ -n "$(required_cache_files_for "$BINARY")" ]; then
+    if [ -f "$OUT_DIR/assets/.cache/textures/earth.png" ] || \
+       [ -f "$OUT_DIR/assets/.cache/textures/moon.png" ] || \
+       [ -f "$OUT_DIR/assets/.cache/textures/earth_source.jpg" ] || \
+       [ -f "$OUT_DIR/assets/.cache/textures/moon_source.tif" ]; then
+        rm -f "$OUT_DIR/assets/.cache/textures/earth.png" \
+              "$OUT_DIR/assets/.cache/textures/moon.png" \
+              "$OUT_DIR/assets/.cache/textures/earth_source.jpg" \
+              "$OUT_DIR/assets/.cache/textures/moon_source.tif"
+        rmdir "$OUT_DIR/assets/.cache/textures" 2>/dev/null || true
+        info "Excluded Earth/Moon textures from the luncosim package"
+    fi
+    if [ ! -f "$OUT_DIR/assets/.cache/fonts/DejaVuSans.ttf" ]; then
+        error "The luncosim package is missing assets/.cache/fonts/DejaVuSans.ttf"
+        exit 1
+    fi
 fi
 
 # Write launcher script

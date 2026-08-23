@@ -143,16 +143,12 @@ fn forget_backed_document_on_closed(
 /// asynchronous folder scan later fails or takes a long time.
 fn clear_scene_on_twin_closed(
     trigger: On<TwinClosed>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
     let root = trigger.event().root.clone();
-    if let Some(twin_roots) = twin_roots {
-        twin_roots.unregister_root(&root);
-    }
     pending_twin.release_root(&root);
     for doc in backed.release_root(&root) {
         registry.remove(doc);
@@ -162,6 +158,12 @@ fn clear_scene_on_twin_closed(
 
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
+        // Twin authority registration belongs to the asset boundary and is
+        // shared by lunica and luncosim. Install it here only for minimal USD
+        // hosts/tests that do not compose the normal asset-source root.
+        if !app.is_plugin_added::<lunco_assets::TwinRootsPlugin>() {
+            app.add_plugins(lunco_assets::TwinRootsPlugin);
+        }
         app.register_settings_section::<crate::runtime_persistence::RuntimePersistenceSettings>();
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
@@ -351,32 +353,16 @@ fn open_usd_docs_on_twin_added(
         .as_ref()
         .and_then(|m| m.usd.as_ref())
         .and_then(|u| u.default_scene.as_deref());
-    // Key the `twin://` source by the Twin's name (its `twin.toml` `name`),
-    // falling back to the root folder name. This yields a stable, per-Twin,
-    // machine-independent asset identity: `twin://<name>/<scene>`.
-    let twin_name = twin
-        .manifest
-        .as_ref()
-        .map(|m| m.name.clone())
-        .filter(|n| !n.is_empty())
-        .or_else(|| {
-            twin.root
-                .file_name()
-                .map(|f| f.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "twin".to_string());
-    // Register the OPENED FOLDER as this Twin's resolve root — unconditionally,
-    // before any scene decision. This is what routes `twin://<name>/…` AND what
-    // the spawn-catalog scan (`maintain_catalogs`) walks to find the Twin's
-    // `structures/…` parts. Doing it only in the `Some(default_scene)` branch
-    // meant a folder opened without a declared starting scene never registered,
-    // so its parts never reached the Spawn palette even though the folder was
-    // open. Keyed by the folder we actually opened (`twin.root`).
-    // Use the name the registry ASSIGNED: if another open Twin already holds
-    // this name for a different folder, it hands back a disambiguated one, and
-    // every `twin://…` URI below must be built from that — not from the
-    // requested name, which now resolves to someone else's root.
-    let twin_name = twin_roots.register(&twin_name, &twin.root);
+    // The asset boundary mounted the root before this domain observer ran.
+    // Resolve the authority it actually assigned: duplicate human names are
+    // disambiguated there and every URI must use that exact identity.
+    let Some(twin_name) = twin_roots.name_for_root(&twin.root) else {
+        warn!(
+            "[twin] Twin `{}` has no mounted asset authority; skipping USD scene open",
+            twin.root.display()
+        );
+        return;
+    };
     match default_scene {
         Some(scene) => {
             let scene_uri = lunco_assets::twin_uri(&twin_name, scene);

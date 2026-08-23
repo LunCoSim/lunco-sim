@@ -41,6 +41,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
+use lunco_core::{on_command, register_commands, Command};
 
 use crate::download::{entry_dest_path, AssetEntry, AssetManifest};
 
@@ -57,6 +58,12 @@ pub enum DatasetState {
         /// Bytes expected, or `0` when unknown.
         bytes_total: u64,
     },
+    /// The download completed and the declared local processing step is
+    /// running. The delivered artifact is not ready until this phase ends.
+    Processing {
+        /// Name of the manifest-declared processing pipeline.
+        kind: String,
+    },
     /// The file is on disk at its declared destination.
     Installed,
     /// The last download attempt failed; the message is the reason.
@@ -71,7 +78,7 @@ impl DatasetState {
 }
 
 /// Who declared a dataset, which decides WHERE its bytes land.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DatasetScope {
     /// Declared by the engine (a crate's own `Assets.toml`) → the shared
     /// [`cache_dir`](crate::cache_dir).
@@ -127,6 +134,9 @@ impl DatasetScope {
 /// One declared dataset, plus where it lives and how it's doing.
 #[derive(Debug, Clone)]
 pub struct DatasetEntry {
+    /// Globally unique registry identity. Manifest keys are only unique within
+    /// one scope; callers must use this id for requests and queries.
+    pub id: String,
     /// Manifest key (`[artemis2_vectors]` → `"artemis2_vectors"`), unique
     /// within its scope.
     pub key: String,
@@ -136,6 +146,8 @@ pub struct DatasetEntry {
     pub scope: DatasetScope,
     /// Human-readable name from the manifest.
     pub name: String,
+    /// Whether onboarding should offer this dataset when it is missing.
+    pub recommended: bool,
     /// Where the file lands once downloaded.
     pub path: PathBuf,
     /// The file this dataset actually DELIVERS, relative to its scope root:
@@ -290,13 +302,19 @@ impl Default for DownloadHandle {
 
 /// Every dataset any crate has declared, and its live state.
 ///
-/// Registration order is irrelevant; keys are unique, and a duplicate key is
-/// refused rather than silently overwriting another crate's dataset.
+/// Registration order is irrelevant; the derived dataset id is unique, and a
+/// duplicate declaration is refused rather than silently overwriting another
+/// dataset. The same key may legitimately occur in different manifest groups
+/// because the group is part of the engine-scoped id.
 #[derive(Resource, Default)]
 pub struct DatasetRegistry {
     entries: Vec<DatasetEntry>,
     /// Per-entry download handle, written by the task, drained in `Update`.
     slots: Vec<DownloadHandle>,
+    /// Twin scopes already scanned, including Twins with no `Assets.toml`.
+    /// This is lifecycle state, not inferred from entry count: an empty Twin
+    /// still has to be remembered or it is rescanned every frame.
+    scanned_scopes: Vec<DatasetScope>,
     /// Failures raised from `&mut self` methods, which have no `Commands`.
     /// Drained into [`DATASET_FAILED`] telemetry by [`drain_dataset_status`].
     pending_failures: Vec<String>,
@@ -307,10 +325,54 @@ pub struct DatasetRegistry {
 /// The UI emits this event instead of mutating [`DatasetRegistry`] directly;
 /// the registry remains the only owner of download authorisation and task
 /// lifecycle.
-#[derive(Event, Clone, Debug)]
+#[Command]
 pub struct RequestDataset {
-    /// Manifest key of the dataset to fetch.
-    pub key: String,
+    /// Globally unique dataset id from [`DatasetEntry::id`].
+    pub id: String,
+}
+
+/// Cancel a declared dataset download. The task is retired immediately and
+/// the row becomes requestable again; a stalled worker cannot retain the UI.
+#[Command]
+pub struct CancelDataset {
+    /// Globally unique dataset id from [`DatasetEntry::id`].
+    pub id: String,
+}
+
+/// A dataset scope has been scanned and its declared datasets are now stable
+/// for this lifecycle revision. Consumers can make one decision from this
+/// event; they must not poll the registry to infer whether the scan already
+/// happened.
+#[derive(Event, Clone, Debug)]
+pub struct DatasetScopeReady {
+    /// The engine or Twin whose manifest was scanned.
+    pub scope: DatasetScope,
+}
+
+/// A Twin scope has been removed. In-flight tasks for it have already been
+/// cancelled by the registry before this event is emitted.
+#[derive(Event, Clone, Debug)]
+pub struct DatasetScopeRemoved {
+    /// The removed Twin scope.
+    pub scope: DatasetScope,
+}
+
+/// A dataset's delivered artifact became ready after its download and local
+/// processing completed.
+///
+/// The event carries the consumer-facing URI, not the temporary download path.
+/// Consumers that already asked Bevy for this asset can therefore refresh only
+/// this artifact; consumers that had not asked yet simply load it normally.
+#[derive(Event, Clone, Debug)]
+pub struct DatasetInstalled {
+    /// Globally unique dataset id.
+    pub id: String,
+    /// Scope that owns the installed bytes.
+    pub scope: DatasetScope,
+    /// Delivered artifact on disk, including a processed output when declared.
+    pub artifact_path: PathBuf,
+    /// Asset-server URI for the delivered artifact.
+    pub artifact_uri: String,
 }
 
 impl DatasetRegistry {
@@ -346,13 +408,11 @@ impl DatasetRegistry {
         let dest_root = scope.dest_root();
         let mut added = 0;
         for (key, entry) in manifest.assets {
-            // Keys are unique PER SCOPE: two Twins may both declare `dtm`, and
-            // neither may shadow the other or the engine's.
-            if self
-                .entries
-                .iter()
-                .any(|e| e.key == key && e.scope == scope)
-            {
+            // The complete id includes scope, group, and key. Two Twins may
+            // both declare `dtm`, and engine groups may reuse a key without
+            // shadowing one another.
+            let id = dataset_id(&scope, group, &key);
+            if self.entries.iter().any(|e| e.id == id) {
                 error!(
                     "[datasets] duplicate dataset key '{key}' within scope '{}' — ignored",
                     scope.label()
@@ -370,10 +430,12 @@ impl DatasetRegistry {
                 .iter()
                 .any(|r| present(&r.join(&artifact_rel)));
             self.entries.push(DatasetEntry {
+                id,
                 key: key.clone(),
                 group: group.to_string(),
                 scope: scope.clone(),
                 name: entry.name.clone(),
+                recommended: entry.recommended,
                 // Present on disk ⇒ installed, whoever put it there (a previous
                 // run, the CLI downloader, an archive a colleague sent). The
                 // registry reports the filesystem, it doesn't own a separate
@@ -409,6 +471,7 @@ impl DatasetRegistry {
             root: root.to_path_buf(),
         };
         self.forget_scope(&scope);
+        self.scanned_scopes.push(scope.clone());
         let manifest_path = root.join("Assets.toml");
         let Ok(text) = std::fs::read_to_string(&manifest_path) else {
             return 0; // A Twin without a manifest declares no datasets.
@@ -428,19 +491,26 @@ impl DatasetRegistry {
         let mut i = 0;
         while i < self.entries.len() {
             if &self.entries[i].scope == scope {
+                self.slots[i]
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 self.entries.remove(i);
                 self.slots.remove(i);
             } else {
                 i += 1;
             }
         }
+        self.scanned_scopes.retain(|known| known != scope);
     }
 
     /// Re-read on-disk presence for every entry. Cheap (`Path::exists` per
     /// dataset) and only meaningful for entries not currently downloading.
     pub fn refresh_installed_state(&mut self) {
         for e in &mut self.entries {
-            if matches!(e.state, DatasetState::Downloading { .. }) {
+            if matches!(
+                e.state,
+                DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+            ) {
                 continue;
             }
             e.state = if present(&e.artifact_path()) {
@@ -458,29 +528,34 @@ impl DatasetRegistry {
         &self.entries
     }
 
-    /// State of one dataset, or `None` if nothing declared that key.
-    pub fn state(&self, key: &str) -> Option<&DatasetState> {
-        self.entries.iter().find(|e| e.key == key).map(|e| &e.state)
+    /// Twin scopes whose manifests have been scanned, including empty ones.
+    pub fn scanned_scopes(&self) -> &[DatasetScope] {
+        &self.scanned_scopes
+    }
+
+    /// State of one globally identified dataset.
+    pub fn state(&self, id: &str) -> Option<&DatasetState> {
+        self.entries.iter().find(|e| e.id == id).map(|e| &e.state)
     }
 
     /// On-disk path of the file one dataset DELIVERS (its `[*.process]` output
     /// where it has one), or `None` if nothing declared that key. This is the
     /// path a consumer loads; [`DatasetEntry::path`] is where the download
     /// landed, which for a derived product is not the same file.
-    pub fn path(&self, key: &str) -> Option<PathBuf> {
+    pub fn path(&self, id: &str) -> Option<PathBuf> {
         self.entries
             .iter()
-            .find(|e| e.key == key)
+            .find(|e| e.id == id)
             .map(|e| e.artifact_path())
     }
 
     /// The installed dataset delivering `key`, or `None` when it is not
     /// declared or not on disk. The one call a consumer needs: "are these bytes
     /// available, and where?".
-    pub fn installed(&self, key: &str) -> Option<&DatasetEntry> {
+    pub fn installed(&self, id: &str) -> Option<&DatasetEntry> {
         self.entries
             .iter()
-            .find(|e| e.key == key && e.state.is_installed())
+            .find(|e| e.id == id && e.state.is_installed())
     }
 
     /// Datasets that are declared but not on disk.
@@ -490,7 +565,7 @@ impl DatasetRegistry {
             .filter(|e| matches!(e.state, DatasetState::Missing | DatasetState::Failed(_)))
     }
 
-    /// Start downloading `key`. **The only call in the engine that authorises
+    /// Start downloading `id`. **The only call in the engine that authorises
     /// network traffic for declared assets** — wire it to an explicit user
     /// action, never to startup or scene load.
     ///
@@ -500,14 +575,16 @@ impl DatasetRegistry {
     /// watchdog that turns a wedged transfer into [`DatasetState::Failed`], and
     /// `Failed` is requestable again — so "the host went away mid-download"
     /// costs the user a wait, never the process lifetime.
-    pub fn request(&mut self, key: &str) {
-        let Some(i) = self.entries.iter().position(|e| e.key == key) else {
-            warn!("[datasets] request for unknown dataset '{key}'");
+    pub fn request(&mut self, id: &str) {
+        let Some(i) = self.entries.iter().position(|e| e.id == id) else {
+            warn!("[datasets] request for unknown dataset '{id}'");
             return;
         };
         if matches!(
             self.entries[i].state,
-            DatasetState::Installed | DatasetState::Downloading { .. }
+            DatasetState::Installed
+                | DatasetState::Downloading { .. }
+                | DatasetState::Processing { .. }
         ) {
             return;
         }
@@ -538,12 +615,15 @@ impl DatasetRegistry {
     /// up, and holding the UI hostage to that is exactly the wedge this exists
     /// to prevent — so the entry is released now and the doomed task, whose
     /// handle has been replaced, writes into a slot nobody reads.
-    pub fn cancel(&mut self, key: &str) {
-        let Some(i) = self.entries.iter().position(|e| e.key == key) else {
-            warn!("[datasets] cancel for unknown dataset '{key}'");
+    pub fn cancel(&mut self, id: &str) {
+        let Some(i) = self.entries.iter().position(|e| e.id == id) else {
+            warn!("[datasets] cancel for unknown dataset '{id}'");
             return;
         };
-        if !matches!(self.entries[i].state, DatasetState::Downloading { .. }) {
+        if !matches!(
+            self.entries[i].state,
+            DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+        ) {
             return;
         }
         self.slots[i]
@@ -551,20 +631,33 @@ impl DatasetRegistry {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.slots[i] = DownloadHandle::default();
         self.entries[i].state = DatasetState::Failed("cancelled".into());
-        info!("[datasets] '{key}' download cancelled by user");
+        info!("[datasets] '{id}' download cancelled by user");
     }
 
     /// Start every missing dataset. Same authorisation rule as [`request`](Self::request).
     pub fn request_all_missing(&mut self) {
-        let keys: Vec<String> = self.missing().map(|e| e.key.clone()).collect();
-        for k in keys {
-            self.request(&k);
+        let ids: Vec<String> = self.missing().map(|e| e.id.clone()).collect();
+        for id in ids {
+            self.request(&id);
         }
     }
 }
 
+pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
+    match scope {
+        DatasetScope::Engine => format!("engine/{group}/{key}"),
+        DatasetScope::Twin { name, .. } => format!("twin/{name}/{key}"),
+    }
+}
+
+#[on_command(RequestDataset)]
 fn on_request_dataset(trigger: On<RequestDataset>, mut registry: ResMut<DatasetRegistry>) {
-    registry.request(&trigger.event().key);
+    registry.request(&trigger.event().id);
+}
+
+#[on_command(CancelDataset)]
+fn on_cancel_dataset(trigger: On<CancelDataset>, mut registry: ResMut<DatasetRegistry>) {
+    registry.cancel(&trigger.event().id);
 }
 
 /// How often the stall watchdog samples the liveness counter. Small relative to
@@ -696,10 +789,19 @@ fn spawn_download(
                 // second command to run, so the fetch that a user authorised
                 // has to produce the file they asked for — otherwise the UI
                 // says "installed" and the consumer still finds nothing.
-                Ok(()) => match run_process_step(&spec, &scope, &dest) {
-                    Ok(()) => DatasetState::Installed,
-                    Err(e) => DatasetState::Failed(format!("processing failed: {e}")),
-                },
+                Ok(()) => {
+                    if let Some(process) = &spec.process {
+                        if let Ok(mut s) = slot.lock() {
+                            *s = Some(DatasetState::Processing {
+                                kind: process.kind.clone(),
+                            });
+                        }
+                    }
+                    match run_process_step(&spec, &scope, &dest) {
+                        Ok(()) => DatasetState::Installed,
+                        Err(e) => DatasetState::Failed(format!("processing failed: {e}")),
+                    }
+                }
                 Err(e) => DatasetState::Failed(e.to_string()),
             };
             if let Ok(mut s) = slot.lock() {
@@ -768,11 +870,12 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands:
         }
     }
 
-    if !registry
-        .entries
-        .iter()
-        .any(|e| matches!(e.state, DatasetState::Downloading { .. }))
-    {
+    if !registry.entries.iter().any(|e| {
+        matches!(
+            e.state,
+            DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+        )
+    }) {
         return;
     }
     for i in 0..registry.entries.len() {
@@ -793,10 +896,28 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands:
             }
             if state.is_installed() {
                 info!("[datasets] '{}' installed", registry.entries[i].key);
+                let entry = &registry.entries[i];
+                commands.trigger(DatasetInstalled {
+                    id: entry.id.clone(),
+                    scope: entry.scope.clone(),
+                    artifact_path: entry.artifact_path(),
+                    artifact_uri: entry.artifact_uri(),
+                });
             }
             registry.entries[i].state = state;
         }
     }
+}
+
+/// Refresh a delivered asset only after its complete producer pipeline has
+/// finished. This handles consumers that requested a missing URI before the
+/// download began: the same logical URI is re-read from the newly available
+/// cache artifact, without reloading unrelated assets or rebuilding a scene.
+fn reload_installed_asset(trigger: On<DatasetInstalled>, asset_server: Option<Res<AssetServer>>) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    asset_server.reload(trigger.event().artifact_uri.clone());
 }
 
 /// Keep the registry in step with the set of OPEN Twins.
@@ -811,6 +932,7 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands:
 fn scan_open_twins_for_datasets(
     roots: Option<Res<crate::TwinRoots>>,
     registry: Option<ResMut<DatasetRegistry>>,
+    mut commands: Commands,
 ) {
     let (Some(roots), Some(mut registry)) = (roots, registry) else {
         return;
@@ -819,28 +941,32 @@ fn scan_open_twins_for_datasets(
 
     // Gone: forget every scope whose Twin is no longer open.
     let stale: Vec<DatasetScope> = registry
-        .entries
+        .scanned_scopes
         .iter()
-        .filter_map(|e| match &e.scope {
-            DatasetScope::Twin { name, .. } if !open.contains(name) => Some(e.scope.clone()),
-            _ => None,
+        .filter(|scope| match scope {
+            DatasetScope::Twin { name, .. } => !open.contains(name),
+            DatasetScope::Engine => false,
         })
+        .cloned()
         .collect();
     for scope in stale {
         registry.forget_scope(&scope);
+        commands.trigger(DatasetScopeRemoved { scope });
     }
 
-    // New: scan any open Twin the registry has not seen.
+    // New: scan any open Twin the registry has not seen. The tracked scope,
+    // rather than entry count, handles a valid Twin with no manifest.
     for name in open {
-        let known = registry
-            .entries
-            .iter()
-            .any(|e| matches!(&e.scope, DatasetScope::Twin { name: n, .. } if *n == name));
-        if known {
-            continue;
-        }
         if let Some(root) = roots.root_for(&name) {
+            let scope = DatasetScope::Twin {
+                name: name.clone(),
+                root: root.clone(),
+            };
+            if registry.scanned_scopes.contains(&scope) {
+                continue;
+            }
             registry.scan_twin(&name, &root);
+            commands.trigger(DatasetScopeReady { scope });
         }
     }
 }
@@ -853,7 +979,7 @@ fn scan_open_twins_for_datasets(
 /// it just no longer carries a compiled-in copy of the declaration, so adding a
 /// dataset or fixing a URL is an edit to a `.toml`.
 #[cfg(not(target_arch = "wasm32"))]
-fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>) {
+fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>, mut commands: Commands) {
     let Some(mut registry) = registry else { return };
     let manifests = crate::engine_manifests();
     if manifests.is_empty() {
@@ -881,6 +1007,9 @@ fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>) {
         }
     }
     info!("[datasets] {total} declared dataset(s) from assets/manifests");
+    commands.trigger(DatasetScopeReady {
+        scope: DatasetScope::Engine,
+    });
 }
 
 /// Adds the [`DatasetRegistry`], its status pump, the engine-manifest scan and
@@ -890,7 +1019,9 @@ pub struct DatasetsPlugin;
 impl Plugin for DatasetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DatasetRegistry>();
-        app.add_observer(on_request_dataset);
+        register_commands!(on_request_dataset, on_cancel_dataset);
+        register_all_commands(app);
+        app.add_observer(reload_installed_asset);
         app.add_systems(Update, drain_dataset_status);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, scan_engine_manifests);
@@ -923,10 +1054,10 @@ dest = "ephemeris/demo.csv"
     }
 
     #[test]
-    fn duplicate_keys_are_refused_not_overwritten() {
+    fn duplicate_ids_are_refused_not_overwritten() {
         let mut r = DatasetRegistry::default();
         assert_eq!(r.register(MANIFEST, "first"), 1);
-        assert_eq!(r.register(MANIFEST, "second"), 0);
+        assert_eq!(r.register(MANIFEST, "first"), 0);
         assert_eq!(r.entries().len(), 1);
         assert_eq!(r.entries()[0].group, "first");
     }
@@ -952,7 +1083,7 @@ dest = "ephemeris/demo.csv"
         // And a duplicate key is a failure too, not just a log line.
         let mut r = DatasetRegistry::default();
         r.register(MANIFEST, "first");
-        r.register(MANIFEST, "second");
+        r.register(MANIFEST, "first");
         assert_eq!(r.pending_failures.len(), 1);
         assert!(r.pending_failures[0].contains("demo_vectors"));
 
@@ -968,7 +1099,8 @@ dest = "ephemeris/demo.csv"
     fn cancel_releases_the_entry_for_retry() {
         let mut r = DatasetRegistry::default();
         r.register(MANIFEST, "demo");
-        r.cancel("demo_vectors"); // not downloading → no-op
+        let id = r.entries()[0].id.clone();
+        r.cancel(&id); // not downloading → no-op
         assert_eq!(r.entries()[0].state, DatasetState::Missing);
 
         // Simulate an in-flight download without touching the network.
@@ -976,7 +1108,7 @@ dest = "ephemeris/demo.csv"
             bytes_done: 0,
             bytes_total: 0,
         };
-        r.cancel("demo_vectors");
+        r.cancel(&id);
         assert!(matches!(r.entries()[0].state, DatasetState::Failed(_)));
         // `missing()` — what the UI offers a download button for — includes it.
         assert_eq!(r.missing().count(), 1);

@@ -253,6 +253,21 @@ impl TwinRoots {
         self.roots.read().ok().and_then(|m| m.get(name).cloned())
     }
 
+    /// Return the authority assigned to an open Twin root.
+    ///
+    /// Names can be disambiguated when two open folders share the same
+    /// authored/folder name, so consumers must resolve the assigned authority
+    /// instead of reconstructing it from the manifest again.
+    pub fn name_for_root(&self, root: impl AsRef<Path>) -> Option<String> {
+        let target = canonical_root(root.as_ref());
+        self.roots.read().ok().and_then(|roots| {
+            roots
+                .iter()
+                .find(|(_, existing)| canonical_root(existing) == target)
+                .map(|(name, _)| name.clone())
+        })
+    }
+
     /// Names of all currently-open Twins, sorted (deterministic order — the
     /// map's own iteration order isn't).
     pub fn names(&self) -> Vec<String> {

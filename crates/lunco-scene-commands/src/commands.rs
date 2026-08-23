@@ -3368,6 +3368,9 @@ impl Plugin for SpawnCommandPlugin {
         // Resources this plugin's OWN systems read, so it stands alone without the
         // UI-layer `SandboxEditPlugin` / the render-layer `ShaderMaterialPlugin`
         // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
+        // The host must install `lunco_assets::register_lunco_asset_sources`
+        // before Bevy's asset plugin; that shared asset boundary owns the
+        // `AssetManifest` and `TwinRoots` resources consumed here.
         // `init_resource` is idempotent, so when those plugins also init these it's
         // a harmless no-op:
         //   - `SpawnCatalog`   — read by `maintain_catalogs` + `apply_replicated_spawns`;
@@ -3375,9 +3378,6 @@ impl Plugin for SpawnCommandPlugin {
         //   - `ShaderCatalog`  — read by `maintain_catalogs` (per-frame) + the shader
         //     command observers. Lives in `lunco_materials`; an empty one is fine on
         //     a server (shader discovery populates it but nothing renders it).
-        // Answers "which files ship" — walks `assets/` on native, fetches
-        // `assets/manifest.json` on the web. Everything below is downstream of it.
-        app.add_plugins(lunco_assets::discovery::AssetDiscoveryPlugin);
         app.init_resource::<crate::catalog::SpawnCatalog>();
         // `CatalogScan` — the async read pipeline `maintain_catalogs` dispatches
         // into. `AssetMetaStore` — what the scanned files said about themselves;

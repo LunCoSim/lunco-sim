@@ -6,9 +6,6 @@
 //! - `local_root_override` — absolute path to a user-supplied MSL
 //!   tree (e.g. a system install, a checked-out Modelica repo). Wins
 //!   over the cached download.
-//! - `last_fetched_version` — bookkeeping populated from the Assets
-//!   manifest entry after a successful user-requested download; surfaced
-//!   in the Assets settings panel so the user can tell what's on disk.
 
 use std::path::PathBuf;
 
@@ -25,11 +22,6 @@ pub struct MslSettings {
     /// the explicit download.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_root_override: Option<PathBuf>,
-
-    /// Version string from `Assets.toml` `[msl].version` after the
-    /// most recent successful user-requested download. Read-only display.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_fetched_version: Option<String>,
 }
 
 impl SettingsSection for MslSettings {

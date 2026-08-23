@@ -83,6 +83,12 @@ pub struct AssetEntry {
     pub shared: bool,
     /// Expected SHA-256 hex digest. Empty string means "compute and suggest".
     pub sha256: Option<String>,
+    /// Offer this dataset in the first-run resource prompt when it is not
+    /// already installed. This is an onboarding recommendation, not a
+    /// runtime dependency: the application remains usable when the user
+    /// declines it.
+    #[serde(default)]
+    pub recommended: bool,
     /// Optional post-processing step (resize, convert).
     #[serde(default)]
     pub process: Option<ProcessConfig>,
@@ -1068,6 +1074,7 @@ mod tests {
             extract: None,
             shared: false,
             sha256: None,
+            recommended: false,
             process: None,
             extra: Default::default(),
         };
@@ -1088,6 +1095,7 @@ mod tests {
             extract: None,
             shared: false,
             sha256: None,
+            recommended: false,
             process: None,
             extra: Default::default(),
         };

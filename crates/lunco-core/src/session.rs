@@ -943,6 +943,13 @@ pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
 /// Authored in `assets/scripting/policy/boot.rhai`; hot-rewritable by this id.
 pub const BOOT_HOOK: &str = "boot.entry";
 
+/// Hook id for the user-facing decision made when an opened Twin declares
+/// datasets that are not installed. The engine supplies the facts; the Rhai
+/// policy returns `"prompt"` for an interactive consent window or
+/// `"skip"` when that interaction is not appropriate (for example in a
+/// headless run). The policy never authorises network traffic itself.
+pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
+
 /// Which entities the **control path is currently down** to: commands issued now
 /// would not reach them.
 ///

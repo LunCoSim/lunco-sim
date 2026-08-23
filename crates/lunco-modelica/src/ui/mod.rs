@@ -103,6 +103,8 @@ pub mod wire_router;
 /// Modelica section of the Twin Browser — class-tree contributed by
 /// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
 pub mod browser_section;
+/// Twin-scoped downloadable resources shown in the Twin Browser.
+pub mod twin_datasets;
 
 /// Drains the workbench's `BrowserActions` outbox and routes
 /// section-emitted intents (open file, open Modelica class) into the
@@ -952,6 +954,9 @@ impl Plugin for ModelicaUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection);
+        app.world_mut()
+            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .register(twin_datasets::TwinDatasetsSection);
     }
 }
 
@@ -1095,11 +1100,11 @@ fn register_settings_menu(world: &mut World) {
             });
         }
     });
-    layout.register_settings_submenu("Data & libraries", render_assets_settings);
+    layout.register_settings_submenu("Modelica", render_assets_settings);
 }
 
-/// Settings rows for the "Assets" section — MSL load state, local override,
-/// last-fetched bookkeeping, and explicit install/cache actions.
+/// Settings rows for the Modelica section — MSL readiness and local override.
+/// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
     use lunco_assets::msl::{MslLoadPhase, MslLoadState};
@@ -1167,7 +1172,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/msl/`, or a user-supplied override.
     let root = lunco_assets::msl_source_root_path();
-    match root {
+    match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
                 ui.label("Root:");
@@ -1176,6 +1181,20 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         }
         None => {
             ui.label("Root: (not materialised yet)");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if root.is_some() && matches!(state, Some(MslLoadState::Failed(_))) {
+        if ui
+            .button("Rebuild editor index")
+            .on_hover_text(
+                "Re-scan the installed Modelica source and rebuild its editor index. \
+                 This does not download anything.",
+            )
+            .clicked()
+        {
+            ctx.trigger(crate::msl_remote::NativeMslIndexAction::Rebuild);
         }
     }
 
@@ -1210,237 +1229,72 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             };
         }
     });
-    if let Some(v) = settings.last_fetched_version.clone() {
-        ui.label(
-            egui::RichText::new(format!("Installed version: {v}"))
-                .weak()
-                .small(),
-        );
-    }
     if settings != original_settings {
         ctx.set_resource(settings);
     }
 
-    // Actions.
-    let load_state = ctx.resource::<lunco_assets::msl::MslLoadState>().cloned();
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    let install_running = matches!(
-        load_state,
-        Some(lunco_assets::msl::MslLoadState::Loading { .. })
-    );
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    let install_failed = matches!(load_state, Some(lunco_assets::msl::MslLoadState::Failed(_)));
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    let install_ready = matches!(
-        load_state,
-        Some(lunco_assets::msl::MslLoadState::Ready { .. })
-    );
-    ui.horizontal(|ui| {
-        // While an install is in flight, show Cancel. Before the first
-        // install, show Install. Once finished, show Reinstall/Retry.
-        if install_running {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if ctx
-                    .resource::<crate::msl_remote::MslInstallCancel>()
-                    .is_some()
-                    && ui
-                        .button("Cancel")
-                        .on_hover_text(
-                            "Stop the in-flight MSL download/index. The \
-                         download aborts within one chunk; the indexer \
-                         aborts at the next phase boundary.",
-                        )
-                        .clicked()
-                {
-                    ctx.trigger(crate::msl_remote::MslInstallAction::Cancel);
-                }
-            }
-        } else if matches!(
+    // Native downloads are dispatched by the generic dataset panel so MSL,
+    // terrain and Twin resources share one lifecycle, watchdog and retry UX.
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.label("Download MSL from Settings ▸ Data & libraries.");
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Web MSL is a host-served bundle rather than a native dataset, so its
+        // platform-specific fetch controls remain here.
+        let load_state = ctx.resource::<lunco_assets::msl::MslLoadState>().cloned();
+        let install_running = matches!(
             load_state,
-            Some(lunco_assets::msl::MslLoadState::NotStarted) | None
-        ) {
-            if ui
-                .button("Install MSL")
-                .on_hover_text(
-                    "Download and index the Modelica Standard Library. \
+            Some(lunco_assets::msl::MslLoadState::Loading { .. })
+        );
+        let install_failed = matches!(load_state, Some(lunco_assets::msl::MslLoadState::Failed(_)));
+        let install_ready = matches!(
+            load_state,
+            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+        );
+        ui.horizontal(|ui| {
+            // While an install is in flight, show Cancel. Before the first
+            // install, show Install. Once finished, show Reinstall/Retry.
+            if install_running {
+                ui.label("MSL bundle loading…");
+            } else if matches!(
+                load_state,
+                Some(lunco_assets::msl::MslLoadState::NotStarted) | None
+            ) {
+                if ui
+                    .button("Install MSL")
+                    .on_hover_text(
+                        "Download and index the Modelica Standard Library. \
                      Nothing is downloaded until you click this button.",
-                )
-                .clicked()
-            {
-                ctx.trigger(crate::msl_remote::MslInstallAction::Install);
-            }
-        } else if install_failed {
-            if ui
-                .button("Retry")
-                .on_hover_text(
-                    "Re-run the MSL download + indexer. Clears the \
+                    )
+                    .clicked()
+                {
+                    ctx.trigger(crate::msl_remote::MslInstallAction::Install);
+                }
+            } else if install_failed {
+                if ui
+                    .button("Retry")
+                    .on_hover_text(
+                        "Re-run the MSL download + indexer. Clears the \
                      previous cache so a partial install is wiped.",
-                )
-                .clicked()
+                    )
+                    .clicked()
+                {
+                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
+                }
+            } else if install_ready
+                && ui
+                    .button("Reinstall")
+                    .on_hover_text(
+                        "Force-redownload MSL and rebuild the bincode cache. \
+                 Wipes the current cache directory first.",
+                    )
+                    .clicked()
             {
                 ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
             }
-        } else if install_ready
-            && ui
-                .button("Reinstall")
-                .on_hover_text(
-                    "Force-redownload MSL and rebuild the bincode cache. \
-                 Wipes the current cache directory first.",
-                )
-                .clicked()
-        {
-            ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if ui
-            .button("Open cache folder")
-            .on_hover_text("Reveal the MSL cache directory in the system file manager.")
-            .clicked()
-        {
-            ctx.trigger(crate::msl_remote::MslInstallAction::OpenCacheFolder);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if ui
-            .button("Clear cache")
-            .on_hover_text(
-                "Delete the MSL cache directory. Use when a previous \
-                 install left a partial tree. Use Install to download it again.",
-            )
-            .clicked()
-        {
-            ctx.trigger(crate::msl_remote::MslInstallAction::ClearCache);
-        }
-    });
-
-    // ── Optional libraries ────────────────────────────────────────
-    // Other entries in Assets.toml (e.g. ThermofluidStream). Each row
-    // shows current state (installed / missing) and an Install /
-    // Reinstall button. Click fires `download_asset` on
-    // AsyncComputeTaskPool — no fine-grained progress, just a log
-    // line on completion. The indexer picks these up on its next
-    // run (or on app restart).
-    #[cfg(not(target_arch = "wasm32"))]
-    render_optional_libraries(ui);
-}
-
-/// Parse `assets/manifests/modelica.toml` exactly once. Reading and parsing it
-/// every frame `render_optional_libraries` runs (CQ-216) was pure waste; the
-/// file is data now rather than a compiled-in constant, so the once-only read
-/// also keeps it off the render frame.
-#[cfg(not(target_arch = "wasm32"))]
-fn bundled_asset_manifest() -> &'static Result<lunco_assets::download::AssetManifest, String> {
-    use lunco_assets::download::AssetManifest;
-    static CACHE: std::sync::OnceLock<Result<AssetManifest, String>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| {
-        crate::msl_remote::assets_manifest_text()
-            .ok_or_else(|| "assets/manifests/modelica.toml not found".to_string())?
-            .parse::<AssetManifest>()
-            .map_err(|e| e.to_string())
-    })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn render_optional_libraries(ui: &mut bevy_egui::egui::Ui) {
-    use bevy_egui::egui;
-
-    // NOTE(CQ-216): the per-entry `dest.exists()` + `read_dir` below is
-    // still blocking I/O on the render frame. The install state only
-    // changes when a download completes, so the principled fix is a
-    // reactive refresh gated on a download-completion signal (no such
-    // event is exposed here yet) — not a per-frame stat or a poll/throttle.
-    let manifest = match bundled_asset_manifest() {
-        Ok(m) => m,
-        Err(e) => {
-            ui.colored_label(
-                egui::Color32::LIGHT_RED,
-                format!("Could not parse Assets.toml: {e}"),
-            );
-            return;
-        }
-    };
-    let optional: Vec<_> = manifest
-        .assets
-        .iter()
-        .filter(|(k, _)| k.as_str() != "msl")
-        .collect();
-    if optional.is_empty() {
-        return;
-    }
-    ui.add_space(8.0);
-    ui.label(
-        egui::RichText::new("Assets — Optional libraries")
-            .weak()
-            .small(),
-    );
-    for (key, entry) in optional {
-        let dest = lunco_assets::download::entry_dest_path(entry, None);
-        let installed = dest.exists()
-            && std::fs::read_dir(&dest)
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&entry.name).strong());
-            if let Some(v) = entry.version.as_ref() {
-                ui.label(egui::RichText::new(format!("v{v}")).weak().small());
-            }
-            ui.label(
-                egui::RichText::new(if installed {
-                    "installed"
-                } else {
-                    "not installed"
-                })
-                .weak()
-                .small(),
-            );
-            let label = if installed { "Reinstall" } else { "Install" };
-            if ui
-                .button(label)
-                .on_hover_text(format!(
-                    "Download {} from {}.\nLanding zone: {}",
-                    entry.name,
-                    entry.url,
-                    dest.display()
-                ))
-                .clicked()
-            {
-                spawn_optional_library_install(key.clone(), entry.clone(), installed);
-            }
         });
     }
-}
-
-/// Kick off a one-shot download for a non-MSL library entry. No state
-/// is published to ECS — the next render of the panel re-reads the
-/// disk to determine "installed". Errors are logged via bevy::log.
-#[cfg(not(target_arch = "wasm32"))]
-fn spawn_optional_library_install(
-    key: String,
-    entry: lunco_assets::download::AssetEntry,
-    is_reinstall: bool,
-) {
-    let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    pool.spawn(async move {
-        // For a reinstall, wipe the existing dest first so the
-        // version-file cache-hit check doesn't short-circuit.
-        if is_reinstall {
-            let dest = lunco_assets::download::entry_dest_path(&entry, None);
-            if let Err(e) = std::fs::remove_dir_all(&dest) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    bevy::log::warn!(
-                        "[Assets] could not clear {} before reinstall: {e}",
-                        dest.display()
-                    );
-                }
-            }
-        }
-        bevy::log::info!("[Assets] installing {}…", entry.name);
-        match lunco_assets::download::download_asset(&entry, &key, None) {
-            Ok(()) => bevy::log::info!("[Assets] {} installed", entry.name),
-            Err(e) => bevy::log::warn!("[Assets] {} install failed: {e}", entry.name),
-        }
-    })
-    .detach();
 }
 
 /// Contribute Cut/Copy/Paste/Select-All entries to the workbench's

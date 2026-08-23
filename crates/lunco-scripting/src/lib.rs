@@ -12,6 +12,8 @@ pub mod bridge_core;
 #[cfg(feature = "rhai")]
 pub mod catalog;
 pub mod commands;
+#[cfg(feature = "rhai")]
+pub mod dataset_queries;
 /// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
 #[cfg(feature = "rhai")]
 pub mod diagnostics;
@@ -227,6 +229,13 @@ fn register_builtin_policies() {
             lunco_readiness::READINESS_HOOK,
             "readiness_action",
         ),
+        // Dataset provisioning policy: Rust reports missing Twin datasets;
+        // Rhai decides whether an interactive consent window is appropriate.
+        (
+            "dataset_provisioning",
+            lunco_core::session::DATASET_PROVISION_HOOK,
+            "dataset_provisioning",
+        ),
         // Generated Modelica source, topology and diagram schema. The USD
         // projector supplies the complete composed graph as facts; this policy
         // owns the emitted model and its presentation without a Rust edit.
@@ -430,6 +439,7 @@ impl Plugin for LunCoScriptingPlugin {
             #[cfg(not(target_arch = "wasm32"))]
             app.add_observer(timelines::load_timelines_on_twin_added);
             diagnostics::register_queries(app);
+            dataset_queries::register_queries(app);
             // Authoring catalog: ScriptingCatalog aggregates the full callable
             // surface (verbs + commands + queries + tools + prelude) for editor
             // completion / hover / docs and agent discovery.
