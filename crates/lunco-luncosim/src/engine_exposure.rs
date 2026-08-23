@@ -24,9 +24,9 @@ use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
 use lunco_cosim::SimComponent;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
-use lunco_signal::{SignalExposure, SignalRegistry, SignalType};
+use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -353,40 +353,51 @@ fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf
     false
 }
 
-fn resolve_public_telemetry(
+fn resolve_authored_telemetry(
     vessel: Entity,
     signals: &SignalRegistry,
     q_parents: &Query<&ChildOf>,
+    q_channels: &Query<(Entity, &lunco_core::telemetry::Parameter)>,
 ) -> Vec<PublicTelemetryValue> {
-    let mut values = signals
-        .iter_signals()
-        .filter_map(|(signal, signal_type)| {
-            if signal_type != SignalType::Scalar
-                || !signals.is_active(signal)
-                || !is_owned_by_vessel(signal.entity, vessel, q_parents)
+    // `Parameter` is the existing authored recording declaration. It is the
+    // complete, domain-neutral boundary for USD telemetry channels and for
+    // channels authored through the generic command/script API. Modelica's
+    // runtime catalog is intentionally not included: it is inspection state
+    // until an author promotes a value through a `Parameter` declaration.
+    //
+    // The registry is still the sole value/history source. This query only
+    // selects which authored declarations belong to the driven vessel; it
+    // never reads a domain output map or interprets a producer name.
+    let mut seen = HashSet::new();
+    let mut values = q_channels
+        .iter()
+        .filter_map(|(channel_entity, parameter)| {
+            if !parameter.enabled || parameter.name.is_empty() {
+                return None;
+            }
+            let measured = parameter.target.unwrap_or(channel_entity);
+            if !is_owned_by_vessel(measured, vessel, q_parents)
+                || !seen.insert((measured, parameter.name.clone()))
             {
                 return None;
             }
-            let meta = signals.meta(signal)?;
-            if meta.exposure != SignalExposure::Public
-                || meta.provenance.as_deref() != Some("telemetry")
+            let signal = SignalRef::new(measured, parameter.name.clone());
+            if signals.signal_type(&signal) != Some(SignalType::Scalar)
+                || !signals.is_active(&signal)
             {
                 return None;
             }
             let value = signals
-                .scalar_history(signal)
+                .scalar_history(&signal)
                 .and_then(|history| history.samples.back())?
                 .value;
-            let label = meta
-                .canonical_name
-                .as_deref()
-                .filter(|name| !name.is_empty())
-                .unwrap_or(signal.path.as_str())
-                .to_owned();
+            let unit = (!parameter.unit.is_empty())
+                .then_some(parameter.unit.clone())
+                .or_else(|| signals.meta(&signal).and_then(|meta| meta.unit.clone()));
             Some(PublicTelemetryValue {
-                label,
+                label: parameter.name.clone(),
                 value,
-                unit: meta.unit.clone(),
+                unit,
             })
         })
         .collect::<Vec<_>>();
@@ -728,6 +739,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    channels: Query<'w, 's, (Entity, &'static lunco_core::telemetry::Parameter)>,
     usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
 }
 
@@ -876,7 +888,12 @@ pub(crate) fn publish_exposure(
     {
         let mut ui = runtime.exposures.writer("driven-vessel");
         ui.visible(true);
-        let telemetry = resolve_public_telemetry(vessel.entity, &runtime.signals, &queries.parents);
+        let telemetry = resolve_authored_telemetry(
+            vessel.entity,
+            &runtime.signals,
+            &queries.parents,
+            &queries.channels,
+        );
         publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
     }
     publish_lunica_schema_exposure(

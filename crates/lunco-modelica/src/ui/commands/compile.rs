@@ -2366,7 +2366,8 @@ impl Plugin for CompileCommandsPlugin {
             .init_resource::<FastRunSetupState>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                (render_compile_class_picker, render_fast_run_setup),
+                (render_compile_class_picker, render_fast_run_setup)
+                    .in_set(lunco_workbench::ApplicationOverlayRenderSet),
             );
         register_all_commands(app);
     }

@@ -41,7 +41,7 @@ use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
 use lunco_workbench::tutorial_overlay::{
-    TutorialHud, TutorialRecovery, TutorialRecoveryContinueRequested,
+    TutorialHud, TutorialNext, TutorialRecovery, TutorialRecoveryContinueRequested,
     TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
 };
 #[cfg(feature = "ui")]
@@ -901,13 +901,7 @@ fn on_tutorial_recovery_continue(
         // Guided tours already use this typed event-bus contract for their
         // Next button. Continue therefore advances the authored step instead
         // of silently abandoning the current tour.
-        commands.trigger(TelemetryEvent {
-            name: "cmd:TutorialNext".into(),
-            source: 0,
-            severity: Severity::Info,
-            data: TelemetryValue::Bool(true),
-            timestamp: 0.0,
-        });
+        commands.trigger(TutorialNext {});
     }
 }
 
@@ -1933,6 +1927,7 @@ mod tests {
     fn core_executes_and_stops_a_lesson_without_the_ui_plugin() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(lunco_workbench::tutorial_overlay::TutorialOverlayPlugin)
             .add_plugins(TutorialCorePlugin {
                 app: "sandbox".into(),
             });
@@ -1992,7 +1987,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(TutorialCorePlugin {
                 app: "sandbox".into(),
-            });
+            })
+            .add_plugins(lunco_workbench::tutorial_overlay::TutorialOverlayPlugin);
         app.init_resource::<WorkbenchLayout>();
         {
             let mut layout = app.world_mut().resource_mut::<WorkbenchLayout>();
@@ -2077,7 +2073,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(TutorialCorePlugin {
                 app: "sandbox".into(),
-            });
+            })
+            .add_plugins(lunco_workbench::tutorial_overlay::TutorialOverlayPlugin);
         app.init_resource::<TutorialHud>();
         app.init_resource::<Seen>();
         app.add_observer(|trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>| {
@@ -2126,6 +2123,8 @@ mod tests {
         assert!(app.world().resource::<TutorialHud>().recovery.is_some());
 
         app.world_mut().trigger(TutorialRecoveryContinueRequested);
+        app.update();
+        app.update();
         app.update();
         assert!(app.world().resource::<TutorialHud>().recovery.is_none());
         assert!(app.world().resource::<TutorialHud>().tour.is_none());

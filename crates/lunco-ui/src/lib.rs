@@ -86,7 +86,7 @@ impl Plugin for LuncoUiPlugin {
         // `EguiContexts` to paint on the active egui context.
         app.init_resource::<modal::ModalQueue>().add_systems(
             bevy_egui::EguiPrimaryContextPass,
-            modal::host::render_modal_host,
+            modal::host::render_modal_host.in_set(lunco_workbench::ApplicationOverlayRenderSet),
         );
     }
 }

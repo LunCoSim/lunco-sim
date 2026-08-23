@@ -22,6 +22,7 @@
 //! checklist block from the rhai prelude) — the same trivially-marshalled shape
 //! as `ShowNotification.text`, avoiding any nested-collection reflection.
 
+use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::{on_command, register_commands, Command};
@@ -173,6 +174,38 @@ pub struct TutorialRecoveryContinueRequested;
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct TutorialRecoveryRetryRequested;
 
+/// Advance a guided tutorial step through the shared typed-command bus.
+/// The command projector supplies the established `cmd:TutorialNext` event
+/// consumed by authored Rhai tours.
+#[Command(default)]
+pub struct TutorialNext {}
+
+/// Return to the previous guided tutorial step.
+#[Command(default)]
+pub struct TutorialBack {}
+
+/// Stop the current guided tutorial tour.
+#[Command(default)]
+pub struct TutorialSkip {}
+
+fn on_tutorial_next(_trigger: On<TutorialNext>, mut world: DeferredWorld) {
+    world.trigger(lunco_core::command_telemetry_event(stringify!(
+        TutorialNext
+    )));
+}
+
+fn on_tutorial_back(_trigger: On<TutorialBack>, mut world: DeferredWorld) {
+    world.trigger(lunco_core::command_telemetry_event(stringify!(
+        TutorialBack
+    )));
+}
+
+fn on_tutorial_skip(_trigger: On<TutorialSkip>, mut world: DeferredWorld) {
+    world.trigger(lunco_core::command_telemetry_event(stringify!(
+        TutorialSkip
+    )));
+}
+
 #[on_command(SetHint)]
 fn on_set_hint(trigger: On<SetHint>, mut hud: ResMut<TutorialHud>) {
     hud.hint = cmd.text.clone();
@@ -225,6 +258,15 @@ register_commands!(
     on_set_tour_step,
     on_clear_tour,
 );
+
+fn register_tutorial_navigation(app: &mut App) {
+    app.register_type::<TutorialNext>()
+        .register_type::<TutorialBack>()
+        .register_type::<TutorialSkip>()
+        .add_observer(on_tutorial_next)
+        .add_observer(on_tutorial_back)
+        .add_observer(on_tutorial_skip);
+}
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
@@ -952,25 +994,13 @@ fn draw_tour(
         });
 
     if next {
-        emit_tour(
-            &mut commands,
-            "cmd:TutorialNext",
-            lunco_core::TelemetryValue::Bool(true),
-        );
+        commands.trigger(TutorialNext {});
     }
     if back {
-        emit_tour(
-            &mut commands,
-            "cmd:TutorialBack",
-            lunco_core::TelemetryValue::Bool(true),
-        );
+        commands.trigger(TutorialBack {});
     }
     if skip {
-        emit_tour(
-            &mut commands,
-            "cmd:TutorialSkip",
-            lunco_core::TelemetryValue::Bool(true),
-        );
+        commands.trigger(TutorialSkip {});
     }
     if stop {
         commands.trigger(TutorialStopRequested);
@@ -1055,6 +1085,7 @@ impl Plugin for TutorialOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialHud>();
         register_all_commands(app);
+        register_tutorial_navigation(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
         // client-scoped tutorial scenario may drive them (see `ClientCommandPolicy`).
         use lunco_core::MarkClientLocalExt;
