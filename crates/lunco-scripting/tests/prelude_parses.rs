@@ -209,7 +209,7 @@ fn link_policy_allows_rover_earth_or_relay() {
 /// change to either compiles perfectly well on its own.
 #[test]
 fn readiness_policy_agrees_with_the_engines_builtin() {
-    use lunco_readiness::{Action, Subject, kinds};
+    use lunco_readiness::{kinds, Action, Subject};
 
     let (_, src) = lunco_assets::scripting::policies()
         .into_iter()

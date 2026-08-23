@@ -2033,8 +2033,7 @@ mod tests {
         }
         app.insert_resource(TransitionsSeen::default());
         app.add_observer(
-            |trigger: On<lunco_core::SceneTransitionIntent>,
-             mut seen: ResMut<TransitionsSeen>| {
+            |trigger: On<lunco_core::SceneTransitionIntent>, mut seen: ResMut<TransitionsSeen>| {
                 seen.0.push(trigger.event().request.clone());
             },
         );

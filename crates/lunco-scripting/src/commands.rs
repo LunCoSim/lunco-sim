@@ -25,18 +25,18 @@ use crate::doc::ScriptLanguage;
 use crate::world_bridge::PendingWorldScripts;
 #[cfg(feature = "rhai")]
 use crate::{
-    ScriptRegistry,
     doc::{ScriptDocument, ScriptedModel},
+    ScriptRegistry,
 };
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use lunco_api::executor::PendingApiRequest;
+use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
-use lunco_core::register_commands;
 #[cfg(any(feature = "rhai", feature = "python"))]
-use lunco_core::{Ack, Command, OpId, on_command};
+use lunco_core::{on_command, Ack, Command, OpId};
 #[cfg(feature = "rhai")]
 use lunco_doc::DocumentId;
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
