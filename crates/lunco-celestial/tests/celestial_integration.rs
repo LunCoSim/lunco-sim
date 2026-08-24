@@ -631,7 +631,7 @@ fn test_celestial_startup_and_movement() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
-    // `setup_big_space_hierarchy` loads `cached_textures://earth.png` at Startup.
+    // setup_big_space_hierarchy loads lunco://textures/earth.png at Startup.
     // The source must be registered *before* `AssetPlugin`, else bevy 0.18 panics
     // on the async load task (it resolves the source off-thread). The app entry
     // registers these; the test must too — otherwise it only passed by timing

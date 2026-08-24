@@ -625,7 +625,7 @@ fn build_sim_app_with_profile(
     render_profile: SandboxRenderProfile,
 ) -> App {
     let mut app = App::new();
-    // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
+    // Register every LunCo asset source (lunco:// and twin://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
@@ -4389,8 +4389,9 @@ fn setup_sandbox(world: &mut World) {
 
 /// Native/headless startup-scene load: resolve the enclosing Twin folder for
 /// `scene_path` (walk up to a `twin.toml`), register it as a workspace Twin so it
-/// mounts doc-first, or fall back to a direct [`LoadScene`]. Web skips this — its
-/// autoload hook loads the deployment twin directly (see [`setup_sandbox`]).
+/// mounts doc-first. Invalid or orphaned roots report an error and do not load a
+/// base-only scene. Web skips this — its autoload hook loads the deployment twin
+/// directly (see [`setup_sandbox`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
     // --- Load scene from USD ---

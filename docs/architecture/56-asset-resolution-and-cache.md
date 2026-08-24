@@ -26,8 +26,8 @@ scheme: naming the mistake legibly would make it permanent.
 | Scheme | Resolves to | For |
 |---|---|---|
 | `lunco://` | `assets/`, then `assets/.cache`, then a source tree's sibling `.cache/`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
-| `twin://<name>/…` | the Twin's root, then `<twin>/.cache` | Twin-owned content, and downloaded scenarios |
-| `cached_textures://` | texture cache dir | *derived* pipeline outputs |
+| `twin://<name>/…` | the Twin's authored root, then `<twin>/.cache`, then the global cache | Twin-owned content, downloaded scenarios, and intentional global reuse |
+| (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 
 Both schemes resolve **authored first, then the cache that travels with the
 unit, then (for a source checkout) its staging cache, then the shared pool**. So a downloaded binary is reachable at its logical
@@ -222,11 +222,10 @@ unmount.
 | neither | `<owner cache>/sources/<url-hash>/<file>` |
 
 *Owner cache* is `<cache>` for a crate manifest and **`<twin>/.cache` for a
-Twin's**. Twin-local is the default, so a Twin is self-contained: copy the
-folder and its data travels, delete it and nothing is orphaned in a global cache
-nobody audits. `shared = true` is the opt-out for a multi-GB upstream product
-several Twins legitimately reuse (the LROC DTM mosaics), trading
-self-containment for one copy on disk.
+Twin entry by default**. A Twin always reads authored content, its local cache,
+then the global cache. `shared = true` selects the global cache as the write
+owner for a reusable product; it does not create a second logical URI or a
+second reader path.
 
 One resolver — `entry_dest_path` — answers this for the CLI downloader, the
 runtime registry and the process step alike, so a file fetched from the app and
@@ -337,11 +336,12 @@ manifest default → `lunco:body:albedoMap` → a `UsdShade` Material bound to t
 prim (which says strictly more, so it wins). A Twin can therefore dress its own
 Earth without touching the engine's manifests.
 
-Three arrival routes, one code path: downloaded now, cached from an earlier run,
-or packed into the distribution at `assets/.cache/textures/earth.png`. The
-registry probes read roots, so the packed case reports *installed* and binds on
-the first frame with no network. A body with no imagery renders its own colour
-(ocean blue, regolith grey) — a complete appearance, not a degraded one.
+Three arrival routes, one code path: downloaded now into the global cache,
+found there from an earlier run, or supplied by the Twin in its own authored
+tree/cache. Earth and Moon imagery is intentionally not bundled: it is a
+user-consented resource, and a first-run resource prompt explains what is
+missing and offers download plus processing. A body with no imagery renders its
+own colour (ocean blue, regolith grey) while the status surface remains honest.
 
 A derived dataset is only ready when its **completed process output** exists,
 not its download. The processor's `.bakekey` completion stamp is part of that
@@ -356,39 +356,30 @@ consumer still finds nothing — the CLI's two-command flow (`download` then
 and what HDRI does (`UsdLuxDomeLight`). It buys: the texture becomes a normal
 USD reference inheriting cache fallback and web staging with no
 celestial-specific path; a Twin can ship its own body map; third-party tools see
-a material instead of a Rust constant; and `cached_textures://` collapses back to
-genuinely derived outputs only.
+a material instead of a Rust constant; and the same logical `lunco://textures/...`
+identity reaches genuinely derived outputs.
 
-The stock maps still ship, because scenarios are dynamic: a Twin authoring an
-Earth at runtime must find `lunco://textures/earth.png` already present, or every
-scene wanting a stock body needs its own download. `lunar_color` is the same
-story in advance — declared but unshipped because nothing samples it (the runtime
-*derives* albedo from relief in `derived_layers::albedo_map`); once something
-authors it as an asset reference it flips to `web = true`.
+The stock maps are global-cache datasets, not release payloads. A Twin may read
+`lunco://textures/earth.png` and `lunco://textures/moon.png` from that cache
+without owning duplicate bytes. `lunar_color` follows the same rule: it is
+declared but not downloaded until a consumer needs it.
 
-## Open: manifest-driven web staging
+## Manifest-driven bundle staging
 
-`scripts/build_web.sh` hardcodes which assets a web bundle carries — the DejaVu
-font by name, `for tex in earth.png moon.png`, and a `*.glb` glob gated on the
-binary. That duplicates what per-crate `Assets.toml` files already declare, so a
-newly declared runtime asset silently 404s in the browser until someone edits the
-script too.
+Each `AssetEntry` may declare exact distribution targets in `bundle`. The
+`lunco-assets download --bundle TARGET` and `stage --binary TARGET` commands
+use that same metadata, so download selection and delivered selection cannot
+drift. Native targets stage into `assets/.cache`; web targets stage into the
+web bundle root. Entries with no target remain user-provisioned resources and
+never enter a release by accident.
 
-The fix mirrors `build_asset_manifest` (which re-uses the runtime's own
-`scan_library` rather than reimplementing the walk in shell). It is blocked on
-one question: **how does a manifest state "the runtime fetches this from the
-bundle, and at what path"?**
+Target names distinguish delivery profiles where the same binary has different
+packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
+`luncosim-web`. The web build still creates its dedicated MSL bundle through
+`build_msl_assets`; raw MSL entries therefore target native packaging only.
 
-Not derivable from today's fields. "Has a `[process]` step" is the tempting proxy
-and is wrong in both directions — the DejaVu font has no process step and is
-required at runtime, while the MSL and ThermofluidStream tarballs also have none
-and must never ship (~200MB; they reach the web through `build_msl_assets`). The
-destination varies too: egui fetches the font outside any `AssetSource`, so it
-lives at `/fonts/…` rather than under `.cache/`.
-
-A `web` field (`true` → `.cache/<rel>`, or an explicit bundle path) was
-prototyped and backed out — it worked, but it grows a shared manifest schema and
-that call belongs to whoever owns the format. Alternatives if the schema is
-unwelcome: process runtime artifacts to `output_root = "assets"` (already
-supported and staged wholesale — costs a gitignore entry), or derive the set from
-what the asset closure actually references.
+This keeps the manifest authoritative without bundling runtime datasets that
+must remain user-consented. The packaged `lunco://` reader checks authored
+assets, packed cache, development cache, and the machine-global cache in that
+order; Twin reads additionally check the Twin's authored/cache roots and then
+the same machine-global cache.

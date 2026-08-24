@@ -949,7 +949,7 @@ pub fn mount_scenario_twin(
     // wrong resolves the load against the wrong root and every prim on this peer
     // derives a different `GlobalEntityId` (possession / client prediction then
     // silently never bind).
-    let assigned = match twins.root_of(name) {
+    let assigned = match twins.root_of(name)? {
         Some(_) => name.to_string(),
         None => twins.register(name, scenario_cache_root(scenario_id))?,
     };

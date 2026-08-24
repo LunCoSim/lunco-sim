@@ -50,6 +50,10 @@ pub enum TwinRootsError {
     RegistryPoisoned,
     #[error("invalid Twin overlay path `{0}`")]
     InvalidOverlayPath(String),
+    #[error("Twin asset resolution failed ({0:?}): {1}")]
+    AssetResolution(std::io::ErrorKind, String),
+    #[error("Twin root resolution failed ({0:?}): {1}")]
+    RootResolution(std::io::ErrorKind, String),
 }
 
 /// The `twin://<name>/<rel>` URI naming `rel` inside the Twin `name` — the ONE
@@ -111,73 +115,108 @@ pub struct TwinRoots {
     overlays: Arc<RwLock<HashMap<PathBuf, Arc<Vec<u8>>>>>,
 }
 
-fn canonical_root(root: &Path) -> PathBuf {
-    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+#[cfg(not(target_arch = "wasm32"))]
+fn canonical_root(root: &Path) -> Result<PathBuf, TwinRootsError> {
+    std::fs::canonicalize(root).map_err(|error| {
+        TwinRootsError::RootResolution(error.kind(), format!("{}: {error}", root.display()))
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn canonical_root(root: &Path) -> Result<PathBuf, TwinRootsError> {
+    Ok(root.to_path_buf())
 }
 
 /// Resolve a Twin-relative path with the same authored-first, Twin-cache,
-/// shared-cache policy used by the `twin://` reader. The AssetServer, dataset
+/// global-cache policy used by the `twin://` reader. The global cache is an
+/// intentional final read source for every Twin; write ownership is controlled
+/// separately by the manifest's `shared` field. The AssetServer, dataset
 /// registry, and native runtime consumers must agree on which roots a logical
 /// Twin path names.
-fn resolve_twin_relative_path(root: &Path, relative: &Path) -> Option<PathBuf> {
+fn resolve_twin_relative_path(
+    root: &Path,
+    relative: &Path,
+) -> Result<Option<PathBuf>, TwinRootsError> {
+    resolve_twin_relative_path_with_cache(root, relative, &crate::cache_dir())
+}
+
+fn resolve_twin_relative_path_with_cache(
+    root: &Path,
+    relative: &Path,
+    shared: &Path,
+) -> Result<Option<PathBuf>, TwinRootsError> {
     if !crate::asset_path::is_safe_relative_components(relative) {
-        return None;
+        return Err(TwinRootsError::AssetResolution(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe relative path `{}`", relative.display()),
+        ));
     }
     let authored = root.join(relative);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = crate::existing_path_within_root(root, relative) {
-        return Some(path);
+    match crate::existing_path_within_root(root, relative) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(TwinRootsError::AssetResolution(
+                error.kind(),
+                format!("{}: {error}", authored.display()),
+            ));
+        }
     }
     #[cfg(target_arch = "wasm32")]
     if authored.exists() {
-        return Some(authored.clone());
-    }
-    if authored.exists() {
-        // A present entry that failed canonical containment is either an
-        // escaping symlink or an entry the native filesystem refused to
-        // canonicalize. Do not hand it to the storage backend.
-        return None;
+        return Ok(Some(authored.clone()));
     }
 
     let cache_root = crate::twin_cache_dir(root);
     let cached = cache_root.join(relative);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = crate::existing_path_within_root(&cache_root, relative) {
-        return Some(path);
+    match crate::existing_path_within_root(&cache_root, relative) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(TwinRootsError::AssetResolution(
+                error.kind(),
+                format!("{}: {error}", cached.display()),
+            ));
+        }
     }
     #[cfg(target_arch = "wasm32")]
     if cached.exists() {
-        return Some(cached.clone());
+        return Ok(Some(cached.clone()));
     }
-    if cached.exists() {
-        // The cache entry failed containment; never turn a remote Twin
-        // reference into an arbitrary host filesystem read.
-        return None;
-    }
-    let shared = crate::cache_dir();
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = crate::existing_path_within_root(&shared, relative) {
-        return Some(path);
+    match crate::existing_path_within_root(&shared, relative) {
+        Ok(Some(path)) => return Ok(Some(path)),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(TwinRootsError::AssetResolution(
+                error.kind(),
+                format!("{}: {error}", shared.join(relative).display()),
+            ));
+        }
     }
     #[cfg(target_arch = "wasm32")]
     if shared.join(relative).exists() {
-        return Some(shared.join(relative));
-    }
-    if shared.join(relative).exists() {
-        // A present entry that failed containment is never a valid Twin asset.
-        return None;
+        return Ok(Some(shared.join(relative)));
     }
     // Preserve the reader's useful missing-file diagnostic: authored is the
     // logical location a Twin-relative reference names.
-    Some(authored)
+    Ok(Some(authored))
 }
 
-pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option<PathBuf> {
-    resolve_twin_relative_path(root, relative).filter(|path| path.is_file())
+pub(crate) fn resolve_twin_relative_file(
+    root: &Path,
+    relative: &Path,
+) -> Result<Option<PathBuf>, TwinRootsError> {
+    Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_file()))
 }
 
-pub(crate) fn resolve_twin_relative_directory(root: &Path, relative: &Path) -> Option<PathBuf> {
-    resolve_twin_relative_path(root, relative).filter(|path| path.is_dir())
+pub(crate) fn resolve_twin_relative_directory(
+    root: &Path,
+    relative: &Path,
+) -> Result<Option<PathBuf>, TwinRootsError> {
+    Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_dir()))
 }
 
 impl TwinRoots {
@@ -216,19 +255,18 @@ impl TwinRoots {
     ) -> Result<String, TwinRootsError> {
         let requested = name.into();
         let root = root.into();
-        let canonical = canonical_root(&root);
+        let canonical = canonical_root(&root)?;
         let mut m = self
             .roots
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
-        let same_root = |existing: &PathBuf| canonical_root(existing) == canonical;
         let mut candidate = requested.clone();
         let mut n = 1u32;
         loop {
             match m.get(&candidate) {
                 // Free, or already this exact root (reopen) — take it.
                 None => break,
-                Some(existing) if same_root(existing) => break,
+                Some(existing) if canonical_root(existing)? == canonical => break,
                 // Taken by a different folder — try the next suffix.
                 Some(_) => {
                     n += 1;
@@ -243,7 +281,7 @@ impl TwinRoots {
                 root.display()
             );
         }
-        m.insert(candidate.clone(), root);
+        m.insert(candidate.clone(), canonical);
         Ok(candidate)
     }
 
@@ -288,19 +326,22 @@ impl TwinRoots {
 
     /// Overlay bytes registered for the reader-facing relative `path`
     /// (`<name>/<rel>`), if any.
-    fn overlay_for(&self, path: &Path) -> Option<Arc<Vec<u8>>> {
+    fn overlay_for(&self, path: &Path) -> Result<Option<Arc<Vec<u8>>>, TwinRootsError> {
         let path = PathBuf::from(crate::asset_path::slashed(path));
         self.overlays
             .read()
-            .ok()
-            .and_then(|m| m.get(&path).cloned())
+            .map(|m| m.get(&path).cloned())
+            .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
     /// Absolute root folder of an open Twin, by `twin://` authority. Public
     /// because a Twin's own `Assets.toml` (scanned on open by
     /// [`crate::datasets`]) is addressed by filesystem path, not by URI.
-    pub fn root_for(&self, name: &str) -> Option<PathBuf> {
-        self.roots.read().ok().and_then(|m| m.get(name).cloned())
+    pub fn root_for(&self, name: &str) -> Result<Option<PathBuf>, TwinRootsError> {
+        self.roots
+            .read()
+            .map(|m| m.get(name).cloned())
+            .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
     /// Return the authority assigned to an open Twin root.
@@ -308,32 +349,38 @@ impl TwinRoots {
     /// Names can be disambiguated when two open folders share the same
     /// authored/folder name, so consumers must resolve the assigned authority
     /// instead of reconstructing it from the manifest again.
-    pub fn name_for_root(&self, root: impl AsRef<Path>) -> Option<String> {
-        let target = canonical_root(root.as_ref());
-        self.roots.read().ok().and_then(|roots| {
-            roots
-                .iter()
-                .find(|(_, existing)| canonical_root(existing) == target)
-                .map(|(name, _)| name.clone())
-        })
+    pub fn name_for_root(&self, root: impl AsRef<Path>) -> Result<Option<String>, TwinRootsError> {
+        let target = canonical_root(root.as_ref())?;
+        self.roots
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)
+            .and_then(|roots| {
+                roots
+                    .iter()
+                    .find_map(|(name, existing)| match canonical_root(existing) {
+                        Ok(path) if path == target => Some(Ok(Some(name.clone()))),
+                        Ok(_) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                    .unwrap_or(Ok(None))
+            })
     }
 
     /// Names of all currently-open Twins, sorted (deterministic order — the
     /// map's own iteration order isn't).
-    pub fn names(&self) -> Vec<String> {
+    pub fn names(&self) -> Result<Vec<String>, TwinRootsError> {
         self.roots
             .read()
-            .ok()
             .map(|m| {
                 let mut v: Vec<String> = m.keys().cloned().collect();
                 v.sort();
                 v
             })
-            .unwrap_or_default()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
     /// Absolute root folder for an open Twin by name.
-    pub fn root_of(&self, name: &str) -> Option<PathBuf> {
+    pub fn root_of(&self, name: &str) -> Result<Option<PathBuf>, TwinRootsError> {
         self.root_for(name)
     }
 
@@ -342,8 +389,14 @@ impl TwinRoots {
     /// policy as the `twin://` AssetReader. Native consumers that need a concrete
     /// filesystem path must use this boundary rather than joining a Twin root
     /// themselves, because downloaded Twin assets live in `.cache`.
-    pub fn resolve_file(&self, name: &str, relative: &Path) -> Option<PathBuf> {
-        let root = self.root_for(name)?;
+    pub fn resolve_file(
+        &self,
+        name: &str,
+        relative: &Path,
+    ) -> Result<Option<PathBuf>, TwinRootsError> {
+        let Some(root) = self.root_for(name)? else {
+            return Ok(None);
+        };
         resolve_twin_relative_file(&root, relative)
     }
 
@@ -353,8 +406,14 @@ impl TwinRoots {
     /// Processed datasets such as DEM sites deliver a directory containing
     /// their runtime products. Directory consumers use this boundary instead
     /// of reconstructing the Twin cache path themselves.
-    pub fn resolve_directory(&self, name: &str, relative: &Path) -> Option<PathBuf> {
-        let root = self.root_for(name)?;
+    pub fn resolve_directory(
+        &self,
+        name: &str,
+        relative: &Path,
+    ) -> Result<Option<PathBuf>, TwinRootsError> {
+        let Some(root) = self.root_for(name)? else {
+            return Ok(None);
+        };
         resolve_twin_relative_directory(&root, relative)
     }
 
@@ -362,18 +421,18 @@ impl TwinRoots {
     /// registered Twin, used as the default destination for newly created or
     /// imported assets when the caller doesn't name a Twin. `None` if no Twin
     /// is open.
-    pub fn primary(&self) -> Option<(String, PathBuf)> {
-        self.names()
-            .into_iter()
-            .next()
-            .and_then(|n| self.root_for(&n).map(|r| (n, r)))
+    pub fn primary(&self) -> Result<Option<(String, PathBuf)>, TwinRootsError> {
+        let Some(name) = self.names()?.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(self.root_for(&name)?.map(|root| (name, root)))
     }
 
     /// Retire every registered Twin authority backed by `root`, including its
     /// composed-document overlays. A closed workspace Twin must not remain a
     /// valid source for a late asset request from the outgoing scene.
     pub fn unregister_root(&self, root: impl AsRef<Path>) -> Result<(), TwinRootsError> {
-        let target = canonical_root(root.as_ref());
+        let target = canonical_root(root.as_ref())?;
         // Mutations that own both maps always acquire overlays first. If either
         // lock is poisoned, no half-unmounted root or stale composed bytes are
         // published to a later Twin using the same authority.
@@ -385,16 +444,17 @@ impl TwinRoots {
             .roots
             .write()
             .map_err(|_| TwinRootsError::RegistryPoisoned)
-            .map(|mut roots| {
+            .and_then(|mut roots| {
                 let mut names = Vec::new();
-                roots.retain(|name, existing| {
-                    let same = canonical_root(existing) == target;
-                    if same {
+                for (name, existing) in roots.iter() {
+                    if canonical_root(existing)? == target {
                         names.push(name.clone());
                     }
-                    !same
-                });
-                names
+                }
+                for name in &names {
+                    roots.remove(name);
+                }
+                Ok(names)
             })?;
         if removed.is_empty() {
             return Ok(());
@@ -432,17 +492,27 @@ impl TwinRoots {
 /// read), which is the same tree the networking client writes a downloaded
 /// scenario into. Going through storage is what lets `twin://` serve a downloaded
 /// scenario on the web, where there is no filesystem.
+fn storage_read_error(path: &Path, error: lunco_storage::StorageError) -> AssetReaderError {
+    match error {
+        lunco_storage::StorageError::NotFound => AssetReaderError::NotFound(path.to_path_buf()),
+        error => AssetReaderError::from(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("could not read Twin asset `{}`: {error}", path.display()),
+        )),
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
-    lunco_storage::read_file_sync(full).ok()
+async fn read_bytes(full: &Path) -> Result<Vec<u8>, AssetReaderError> {
+    lunco_storage::read_file_sync(full).map_err(|error| storage_read_error(full, error))
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
+async fn read_bytes(full: &Path) -> Result<Vec<u8>, AssetReaderError> {
     lunco_storage::OpfsStorage::new()
         .read(&lunco_storage::StorageHandle::File(full.to_path_buf()))
         .await
-        .ok()
+        .map_err(|error| storage_read_error(full, error))
 }
 
 /// Build the `twin://` [`AssetSourceBuilder`] over `roots`. Register in each
@@ -481,15 +551,27 @@ impl TwinReader {
     /// the Twin or was fetched from that Twin's `Assets.toml`. Authored files
     /// win: the cache is a materialisation of a declaration, never an override
     /// of something the author checked in.
-    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+    fn resolve(&self, path: &Path) -> Result<Option<PathBuf>, TwinRootsError> {
         let mut comps = path.components();
-        let name = comps.next()?.as_os_str().to_str()?;
+        let Some(name) = comps
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+        else {
+            return Ok(None);
+        };
         let mut rel = PathBuf::new();
         for comp in comps {
             rel.push(comp.as_os_str());
         }
         self.roots.resolve_file(name, &rel)
     }
+}
+
+fn asset_reader_error(error: TwinRootsError) -> AssetReaderError {
+    AssetReaderError::from(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        error.to_string(),
+    ))
 }
 
 impl AssetReader for TwinReader {
@@ -500,16 +582,14 @@ impl AssetReader for TwinReader {
         // In-memory overlay wins over the on-disk file (E1b: a scene document's
         // composed source projected into the live world). Keyed by the exact
         // reader-facing `<name>/<rel>` path.
-        if let Some(bytes) = self.roots.overlay_for(path) {
+        if let Some(bytes) = self.roots.overlay_for(path).map_err(asset_reader_error)? {
             return Ok(VecReader::new((*bytes).clone()));
         }
-        let Some(full) = self.resolve(path) else {
+        let Some(full) = self.resolve(path).map_err(asset_reader_error)? else {
             return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
-        match read_bytes(&full).await {
-            Some(bytes) => Ok(VecReader::new(bytes)),
-            None => Err::<VecReader, _>(AssetReaderError::NotFound(full)),
-        }
+        let bytes = read_bytes(&full).await?;
+        Ok(VecReader::new(bytes))
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
@@ -526,11 +606,17 @@ impl AssetReader for TwinReader {
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
+        let slashed = crate::asset_path::slashed(path);
+        let Some((name, relative)) = split_twin_rel(&slashed) else {
+            return Ok(false);
+        };
+        let relative = crate::asset_path::relative_path(relative)
+            .ok_or_else(|| AssetReaderError::NotFound(path.to_path_buf()))?;
         Ok(self
-            .resolve(path)
-            .and_then(|full| full.metadata().ok())
-            .map(|m| m.is_dir())
-            .unwrap_or(false))
+            .roots
+            .resolve_directory(name, &relative)
+            .map_err(asset_reader_error)?
+            .is_some())
     }
 }
 
@@ -572,6 +658,7 @@ mod tests {
         assert_eq!(
             roots
                 .overlay_for(Path::new("moonbase/scenes/luncosim.usda"))
+                .expect("read overlay registry")
                 .as_deref(),
             Some(&*bytes),
             "overlay hit for the exact reader-facing path"
@@ -579,6 +666,7 @@ mod tests {
         assert_eq!(
             roots
                 .overlay_for(Path::new(r"moonbase\scenes\luncosim.usda"))
+                .expect("read overlay registry")
                 .as_deref(),
             Some(&*bytes),
             "a Windows reader-facing path finds the slash-normalized overlay"
@@ -586,6 +674,7 @@ mod tests {
         assert!(
             roots
                 .overlay_for(Path::new("moonbase/other.usda"))
+                .expect("read overlay registry")
                 .is_none(),
             "no overlay for an unrelated path"
         );
@@ -596,6 +685,7 @@ mod tests {
         assert!(
             roots
                 .overlay_for(Path::new("moonbase/scenes/luncosim.usda"))
+                .expect("read overlay registry")
                 .is_none(),
             "cleared overlay falls back to disk"
         );
@@ -615,9 +705,11 @@ mod tests {
 
         assert!(roots
             .overlay_for(Path::new("moonbase/../outside.usda"))
+            .expect("read overlay registry")
             .is_none());
         assert!(roots
             .overlay_for(Path::new("../outside/scene.usda"))
+            .expect("read overlay registry")
             .is_none());
     }
 
@@ -628,24 +720,26 @@ mod tests {
     #[test]
     fn same_name_different_root_does_not_repoint() {
         let roots = TwinRoots::default();
+        let first_root = tempfile::tempdir().expect("first Twin root");
+        let second_root = tempfile::tempdir().expect("second Twin root");
 
         let a = roots
-            .register("scenes", "/tmp/project-a/scenes")
+            .register("scenes", first_root.path())
             .expect("register first root");
         let b = roots
-            .register("scenes", "/tmp/project-b/scenes")
+            .register("scenes", second_root.path())
             .expect("register second root");
 
         assert_eq!(a, "scenes");
         assert_ne!(b, a, "second root must not take the first root's name");
         assert_eq!(
             roots.root_of(&a),
-            Some(PathBuf::from("/tmp/project-a/scenes")),
+            Ok(Some(first_root.path().to_path_buf())),
             "first Twin still resolves to its own folder"
         );
         assert_eq!(
             roots.root_of(&b),
-            Some(PathBuf::from("/tmp/project-b/scenes")),
+            Ok(Some(second_root.path().to_path_buf())),
             "second Twin resolves to its own folder under the assigned name"
         );
     }
@@ -655,17 +749,22 @@ mod tests {
     #[test]
     fn reregistering_same_root_reuses_the_name() {
         let roots = TwinRoots::default();
+        let root = tempfile::tempdir().expect("Twin root");
 
         let first = roots
-            .register("moonbase", "/tmp/moonbase")
+            .register("moonbase", root.path())
             .expect("register root");
         let again = roots
-            .register("moonbase", "/tmp/moonbase")
+            .register("moonbase", root.path())
             .expect("re-register root");
 
         assert_eq!(first, "moonbase");
         assert_eq!(again, first, "reopen must reuse the existing name");
-        assert_eq!(roots.names().len(), 1, "no duplicate registration");
+        assert_eq!(
+            roots.names().expect("read Twin registry").len(),
+            1,
+            "no duplicate registration"
+        );
     }
 
     #[test]
@@ -679,7 +778,7 @@ mod tests {
 
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Some(cached.clone()),
+            Ok(Some(cached.clone())),
             "logical Twin paths must resolve downloaded assets through the cache"
         );
 
@@ -689,7 +788,7 @@ mod tests {
         std::fs::write(&authored, b"authored terrain").expect("authored asset");
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Some(authored),
+            Ok(Some(authored)),
             "authored Twin files take precedence over materialized cache files"
         );
     }
@@ -710,40 +809,60 @@ mod tests {
 
         assert_eq!(
             roots.resolve_directory(&name, Path::new("terrain/luna2")),
-            Some(cached.clone()),
+            Ok(Some(cached.clone())),
             "processed Twin directories must resolve through the asset boundary"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn twin_resolution_reads_a_shared_cache_without_a_twin_local_copy() {
+        let twin = tempfile::tempdir().expect("temporary Twin root");
+        let shared = tempfile::tempdir().expect("temporary global cache");
+        let relative = Path::new("terrain/shared/heightmap.tif");
+        let shared_file = shared.path().join(relative);
+        std::fs::create_dir_all(shared_file.parent().expect("shared parent"))
+            .expect("shared directory");
+        std::fs::write(&shared_file, b"shared terrain").expect("shared asset");
+
+        assert_eq!(
+            resolve_twin_relative_path_with_cache(twin.path(), relative, shared.path())
+                .expect("resolve shared Twin asset"),
+            Some(shared_file),
+            "a Twin must consume a shared logical asset without materialising a local copy"
         );
     }
 
     #[test]
     fn unregistering_a_root_removes_its_authority_and_overlays() {
         let roots = TwinRoots::default();
+        let root = tempfile::tempdir().expect("Twin root");
         let name = roots
-            .register("moonbase", "/tmp/moonbase")
+            .register("moonbase", root.path())
             .expect("register root");
         roots
             .set_overlay(&name, "scene.usda", Arc::new(b"#usda 1.0\n".to_vec()))
             .expect("set overlay");
 
-        roots
-            .unregister_root("/tmp/moonbase")
-            .expect("unregister root");
+        roots.unregister_root(root.path()).expect("unregister root");
 
-        assert!(roots.names().is_empty());
-        assert!(roots.root_of(&name).is_none());
+        assert!(roots.names().expect("read Twin registry").is_empty());
+        assert!(roots.root_of(&name).expect("read Twin registry").is_none());
         assert!(roots
             .overlay_for(Path::new("moonbase/scene.usda"))
+            .expect("read overlay registry")
             .is_none());
     }
 
     #[test]
     fn unregistering_a_name_preserves_another_authority_on_the_same_root() {
         let roots = TwinRoots::default();
+        let root = tempfile::tempdir().expect("Twin root");
         let twin = roots
-            .register("moonbase", "/tmp/moonbase")
+            .register("moonbase", root.path())
             .expect("register root");
         let session = roots
-            .register("__viewport_1", "/tmp/moonbase")
+            .register("__viewport_1", root.path())
             .expect("register session root");
         roots
             .set_overlay(&twin, "scene.usda", Arc::new(b"twin".to_vec()))
@@ -754,13 +873,18 @@ mod tests {
 
         roots.unregister_name(&session).expect("unregister session");
 
-        assert!(roots.root_of(&twin).is_some());
-        assert!(roots.root_of(&session).is_none());
+        assert!(roots.root_of(&twin).expect("read Twin registry").is_some());
+        assert!(roots
+            .root_of(&session)
+            .expect("read Twin registry")
+            .is_none());
         assert!(roots
             .overlay_for(Path::new("moonbase/scene.usda"))
+            .expect("read overlay registry")
             .is_some());
         assert!(roots
             .overlay_for(Path::new("__viewport_1/scene.usda"))
+            .expect("read overlay registry")
             .is_none());
     }
 
@@ -785,7 +909,7 @@ mod tests {
         );
         assert_eq!(
             roots.root_for(&name),
-            Some(twin.path().to_path_buf()),
+            Ok(Some(twin.path().to_path_buf())),
             "a failed overlay mutation must leave the root registered"
         );
     }
@@ -804,8 +928,12 @@ mod tests {
             .register("example", root.path())
             .expect("register root");
         let reader = TwinReader { roots };
-        assert!(reader
-            .resolve(Path::new(&format!("{name}/linked.usda")))
-            .is_none());
+        assert!(matches!(
+            reader.resolve(Path::new(&format!("{name}/linked.usda"))),
+            Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::PermissionDenied,
+                _
+            ))
+        ));
     }
 }

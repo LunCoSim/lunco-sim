@@ -9,13 +9,9 @@
 //!    distribution, so a packaged build carries its own payload
 //! 3. `<cache>/<rel>` — the shared machine-wide pool, filled by the downloader
 //!
-//! This replaced the old `lunco-lib://` scheme. That scheme addressed the cache
-//! *directly*, so a `.usda` shipped in the repo asserted "this asset lives in my
-//! download cache" — a machine-local fact baked into authored content, which
-//! resolved only inside our pipeline and left third-party USD tools with
-//! nothing. Large binaries still stay out of git; they are *resolved* into the
-//! library rather than *addressed* in the cache, so nothing needs gitignoring
-//! and no authored file mentions where a download landed.
+//! Large binaries stay out of git; they are resolved into the library rather
+//! than addressed by a machine-local cache path, so authored USD remains
+//! portable and third-party USD tools see the same logical identity.
 //!
 //! See `docs/architecture/56-asset-resolution-and-cache.md`.
 //!
@@ -94,27 +90,39 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
 /// filesystem: asset-root selection and diagnostic paths stay owned here.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result<Vec<u8>> {
-    let path = id_to_disk_path(id, assets_root).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("asset `{id}` has no resolvable native root"),
-        )
-    })?;
-    if let Some(rel) = parse_lunco_uri(id) {
-        let root = assets_root.ok_or_else(|| {
+    let Some(rel) = parse_lunco_uri(id) else {
+        let path = id_to_disk_path(id, assets_root).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("asset `{id}` has no resolvable native root"),
             )
         })?;
-        if root.join(rel).exists() && existing_path_within_root(root, Path::new(rel)).is_none() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!("asset `{id}` resolves outside its library root"),
-            ));
+        return std::fs::read(path);
+    };
+    let mut roots = Vec::new();
+    if let Some(root) = assets_root {
+        roots.push(root.to_path_buf());
+    }
+    roots.extend(crate::cache_roots());
+    let relative = Path::new(rel);
+    for root in roots {
+        #[cfg(not(target_arch = "wasm32"))]
+        match existing_path_within_root(&root, relative)? {
+            Some(path) => return std::fs::read(path),
+            None => continue,
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let candidate = root.join(relative);
+            if candidate.exists() {
+                return std::fs::read(candidate);
+            }
         }
     }
-    std::fs::read(path)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("asset `{id}` was not found in the library or cache"),
+    ))
 }
 
 /// Resolve an existing file-system entry under `root` without following a
@@ -123,22 +131,32 @@ pub fn read_asset_bytes(id: &str, assets_root: Option<&Path>) -> std::io::Result
 /// Lexical traversal checks are necessary for URI paths, but they do not stop
 /// an authored or downloaded Twin from placing a symlink inside the root. A
 /// canonicalized result is returned so the subsequent read does not repeat the
-/// symlink lookup. Missing entries return `None`; callers can preserve their
-/// normal not-found handling.
+/// symlink lookup. Missing entries return `Ok(None)`; filesystem and containment
+/// failures return an error so callers cannot silently fall through to another
+/// root.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn existing_path_within_root(root: &Path, relative: &Path) -> Option<PathBuf> {
+pub fn existing_path_within_root(root: &Path, relative: &Path) -> std::io::Result<Option<PathBuf>> {
     if !crate::asset_path::is_safe_relative_components(relative) {
-        return None;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsafe relative path `{}`", relative.display()),
+        ));
     }
     let candidate = root.join(relative);
-    if !candidate.exists() {
-        return None;
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
     }
-    let canonical_root = std::fs::canonicalize(root).ok()?;
-    let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
-    canonical_candidate
-        .starts_with(canonical_root)
-        .then_some(canonical_candidate)
+    let canonical_root = std::fs::canonicalize(root)?;
+    let canonical_candidate = std::fs::canonicalize(candidate)?;
+    if !canonical_candidate.starts_with(canonical_root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "asset path resolves outside its owning root",
+        ));
+    }
+    Ok(Some(canonical_candidate))
 }
 
 /// Read a canonical asset identity when the composing document belongs to an
@@ -165,11 +183,21 @@ pub fn read_asset_bytes_with_twin_root(
                 format!("Twin asset `{id}` escapes its root"),
             )
         })?;
-        let path =
-            crate::twin_source::resolve_twin_relative_file(root, &relative).ok_or_else(|| {
+        let path = crate::twin_source::resolve_twin_relative_file(root, &relative)
+            .map_err(|error| {
+                let kind = match &error {
+                    crate::twin_source::TwinRootsError::AssetResolution(kind, _) => *kind,
+                    _ => std::io::ErrorKind::Other,
+                };
                 std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("Twin asset `{id}` resolves outside its authored tree or cache"),
+                    kind,
+                    format!("could not resolve Twin asset `{id}`: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Twin asset `{id}` was not found in its authored tree or cache"),
                 )
             })?;
         return std::fs::read(path);
@@ -242,7 +270,12 @@ mod tests {
         std::fs::write(&secret, "must not be read").expect("secret");
         std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
 
-        assert!(existing_path_within_root(root.path(), Path::new("linked.txt")).is_none());
+        assert!(
+            existing_path_within_root(root.path(), Path::new("linked.txt"))
+                .expect_err("escaping symlink must be rejected")
+                .kind()
+                == std::io::ErrorKind::PermissionDenied
+        );
         let error =
             read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
                 .expect_err("Twin symlink must not escape its root");
@@ -361,15 +394,18 @@ struct FallbackReader {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn local_root_allows(root: &str, path: &Path) -> bool {
+fn local_root_allows(root: &str, path: &Path) -> std::io::Result<bool> {
     let root = Path::new(root);
     let candidate = root.join(path);
-    !candidate.exists() || crate::existing_path_within_root(root, path).is_some()
+    if !candidate.exists() {
+        return Ok(true);
+    }
+    crate::existing_path_within_root(root, path).map(|resolved| resolved.is_some())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn local_root_allows(_root: &str, _path: &Path) -> bool {
-    true
+fn local_root_allows(_root: &str, _path: &Path) -> std::io::Result<bool> {
+    Ok(true)
 }
 
 /// Try each root in order; the first non-`NotFound` answer wins.
@@ -379,14 +415,18 @@ macro_rules! try_both {
         // so the loop always assigns before the unwrap.
         let mut last = None;
         for (reader, root) in $self.readers.iter().zip($self.roots.iter()) {
-            if !local_root_allows(root, $path) {
-                return Err(AssetReaderError::from(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "asset path `{}` escapes library root `{root}`",
-                        $path.display()
-                    ),
-                )));
+            match local_root_allows(root, $path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(AssetReaderError::from(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "asset path `{}` escapes library root `{root}`",
+                            $path.display()
+                        ),
+                    )));
+                }
+                Err(error) => return Err(AssetReaderError::from(error)),
             }
             match reader.$method($path).await {
                 Err(AssetReaderError::NotFound(p)) => {

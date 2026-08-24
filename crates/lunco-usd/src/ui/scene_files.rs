@@ -159,7 +159,13 @@ fn resolve_scheme(
     }
     if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
         let relative = lunco_assets::asset_path::relative_path(rel)?;
-        return twins?.resolve_file(name, &relative);
+        return match twins?.resolve_file(name, &relative) {
+            Ok(path) => path,
+            Err(error) => {
+                error!("[scene-files] Twin asset lookup failed for `{reference}`: {error}");
+                None
+            }
+        };
     }
     None
 }
@@ -503,8 +509,9 @@ mod tests {
     fn scheme_references_cannot_escape_their_root() {
         let twins = TwinRoots::default();
         let assets = PathBuf::from("/proj/assets");
+        let root = tempfile::tempdir().expect("temporary Twin root");
         let name = twins
-            .register("moonbase", "/twins/moonbase")
+            .register("moonbase", root.path())
             .expect("register root");
         for reference in [
             "lunco://../outside.usda",

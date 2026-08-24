@@ -823,6 +823,22 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                 DatasetState::Processing { kind } => {
                                     ui.label(format!("Processing {kind}…"));
                                 }
+                                DatasetState::Cancelling => {
+                                    ui.label("Stopping…");
+                                }
+                                DatasetState::Cancelled => {
+                                    ui.label(egui::RichText::new("Cancelled").weak());
+                                    if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Refresh,
+                                        "Retry",
+                                        "Retry dataset download",
+                                    )
+                                    .clicked()
+                                    {
+                                        requested = Some(DatasetAction::Request(key.clone()));
+                                    }
+                                }
                                 DatasetState::Missing => {
                                     ui.label(egui::RichText::new("not installed").weak());
                                     if lunco_workbench::icon_text_button(
@@ -921,6 +937,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, ctx| {
+        let Some(theme) = ctx.resource::<lunco_theme::Theme>() else {
+            ui.label("(theme unavailable)");
+            return;
+        };
+        let error_color = theme.tokens.error;
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(
@@ -1069,9 +1090,31 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = lunco_assets::discovery::list_scene_assets(manifest, &roots);
+        let mut assets = match lunco_assets::discovery::list_scene_assets(manifest, &roots) {
+            Ok(assets) => assets,
+            Err(error) => {
+                ui.label(
+                    bevy_egui::egui::RichText::new(format!(
+                        "(Twin registry unavailable: {error})"
+                    ))
+                    .color(error_color),
+                );
+                return;
+            }
+        };
         // Names copied out here so every click can dispatch through `MenuCtx`.
-        let twin_names = roots.names();
+        let twin_names = match roots.names() {
+            Ok(names) => names,
+            Err(error) => {
+                ui.label(
+                    bevy_egui::egui::RichText::new(format!(
+                        "(Twin registry unavailable: {error})"
+                    ))
+                    .color(error_color),
+                );
+                return;
+            }
+        };
 
         // Test scenes are hidden unless the user asks for them: they are rigs
         // `scripts/run_scene_tests.sh` runs for a verdict, and there are more of

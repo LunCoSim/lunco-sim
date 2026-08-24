@@ -244,6 +244,9 @@ impl CurriculumRoot {
                         .as_ref()
                         .ok_or_else(|| format!("twin source has no filesystem root: {asset:?}"))?;
                     let path = lunco_assets::existing_path_within_root(root, Path::new(rel))
+                        .map_err(|error| {
+                            format!("could not resolve twin lesson source {asset:?}: {error}")
+                        })?
                         .ok_or_else(|| format!("twin lesson source does not exist: {asset:?}"))?;
                     lunco_assets::read_asset_file_string(&path).map_err(|error| {
                         format!("could not read twin lesson source {asset:?}: {error}")

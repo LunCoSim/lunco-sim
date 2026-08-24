@@ -235,22 +235,20 @@ fn default_dem_height_scale() -> f64 {
 /// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
 ///   [`ProcessConfig`] kind list.
 ///
-/// `twin_root` is the caller-supplied Twin folder (the CLI's `--twin <DIR>`).
-/// `output_root = "twin"` resolves against it directly; `"cache"` resolves
-/// against that Twin's OWN cache, so a processed product stays inside the
-/// folder that declared it.
+/// `cache_root` is the cache that owns the declaration's derived artifact.
+/// Engine entries use the global cache; a Twin entry uses its own cache unless
+/// its declaration opts into the shared pool. `twin_root` is the caller-supplied
+/// Twin folder for `output_root = "twin"`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
+    cache_root: &Path,
     twin_root: Option<&Path>,
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     control.check()?;
-    let owner_cache = twin_root
-        .map(crate::twin_cache_dir)
-        .unwrap_or_else(crate::cache_dir);
-    let output_path = process_output_path(process, Some(&owner_cache), twin_root)?;
+    let output_path = process_output_path(process, Some(cache_root), twin_root)?;
 
     // Create output directory if needed
     if let Some(parent) = output_path.parent() {
@@ -263,12 +261,11 @@ pub fn process_asset(
 /// step that WRITES the artifact and the registry that reports whether it
 /// EXISTS can never disagree about the path.
 ///
-/// `cache_root` is the cache of whoever DECLARED the asset — a Twin's own
-/// `.cache` for a Twin manifest, the shared pool for a crate's — and is what
-/// the default `output_root = "cache"` resolves against. The processed product
-/// belongs beside the source it was derived from, so a Twin packed into an
-/// archive carries its derived textures with it instead of leaving them behind
-/// in a machine-global cache the recipient does not have.
+/// `cache_root` is the cache selected by the declaration's owner — a Twin's
+/// `.cache` by default, the global pool for a crate or a Twin entry marked
+/// `shared = true` — and is what the default `output_root = "cache"` resolves
+/// against. Twin readers search the Twin-local and global caches through one
+/// logical path, so processed products do not encode their physical location.
 ///
 /// `twin_root` is the Twin FOLDER itself, for `output_root = "twin"` (authored
 /// content the Twin ships, not a cache artifact). The selected root is required
@@ -557,12 +554,39 @@ fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
 /// Whether a processed artifact is complete enough for a consumer to load.
 ///
 /// The output itself may be a file or a directory (`dem` delivers a terrain
-/// site folder). In both cases the stamp is written only after the processor
-/// has completed successfully, so a partial output cannot be advertised as
-/// installed merely because its path exists.
+/// site folder). The pipeline-specific payload and all required sidecars are
+/// checked before the completion stamp is accepted. When the source is also
+/// present, its current content-addressed bake key must match; packaged builds
+/// may omit the raw source, in which case the non-empty completion stamp is the
+/// integrity boundary created by the packaging pipeline.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn processed_output_present(output_path: &Path) -> bool {
-    (output_path.is_file() || output_path.is_dir()) && bake_stamp_path(output_path).is_file()
+pub fn processed_output_present(
+    output_path: &Path,
+    process: &ProcessConfig,
+    source_path: Option<&Path>,
+) -> bool {
+    let payload_present = match process.kind.as_str() {
+        "dem" => {
+            output_path.is_dir()
+                && output_path
+                    .join("materials/textures/heightmap.tif")
+                    .is_file()
+        }
+        "map" => output_path.is_file() && output_path.with_extension("mean").is_file(),
+        "gltf" | "normalmap" | "texture" => output_path.is_file(),
+        _ => false,
+    };
+    if !payload_present {
+        return false;
+    }
+    let Ok(stamp) = std::fs::read_to_string(bake_stamp_path(output_path)) else {
+        return false;
+    };
+    let stamp = stamp.trim();
+    if stamp.is_empty() {
+        return false;
+    }
+    source_path.is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp))
 }
 
 /// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a

@@ -29,7 +29,6 @@
 #     --target <triple>  Cross-compile target (default: host triple)
 #     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
 #     --skip-download    Skip the cache asset download step (use existing .cache/)
-#     --full-cache       Bundle ALL cache subdirs (default: per-binary subset)
 #     --no-assets        Skip bundling the assets/ tree
 #     --out <dir>        Output directory (default: dist/<binary>-<platform>-<arch>/)
 #     --extra <args>     Pass extra args to cargo build
@@ -45,11 +44,8 @@
 #   macOS   (x86_64 / arm64)    — needs nothing extra (Metal is built-in)
 #   Windows (x86_64)            — needs MSVC build tools (Visual Studio)
 #
-# Cache assets are NOT downloaded by this script. Populate them first with:
-#   cargo run -p lunco-assets -- download -g fonts        # UI font
-#   cargo run -p lunco-assets -- download -g modelica     # MSL (for lunica)
-#   cargo run -p lunco-assets -- download -g models && \
-#     cargo run -p lunco-assets -- process -g models      # rover model (for luncosim)
+# The script downloads the manifest-declared package assets before staging:
+#   cargo run -p lunco-assets -- download --bundle lunica-native
 #
 # The package layout:
 #   dist/<binary>-<platform>-<arch>/
@@ -161,17 +157,6 @@ velopack_runtime() {
     esac
 }
 
-# ── Per-binary cache subdirs ──────────────────────────────────────────────
-# Each binary needs a different subset of the .cache/ tree at runtime.
-#   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   luncosim:  fonts (UI rendering); Earth/Moon imagery remains user-cache data
-cache_subdirs_for() {
-    case "$1" in
-        lunica)   echo "fonts msl thermofluidstream" ;;
-        luncosim) echo "fonts" ;;
-    esac
-}
-
 # ── Resolve the cache directory ───────────────────────────────────────────
 # Mirrors lunco_assets::cache_dir(): LUNCOSIM_CACHE env → workspace .cache/ →
 # one level up (shared workspace cache) → OS cache dir. Returns "" if none
@@ -247,15 +232,11 @@ sync_dir() {
 }
 
 # ── Download cache assets for a binary ────────────────────────────────────
-# Runs `cargo run -p lunco-assets -- download -g GROUP` for each manifest group
-# the binary needs, then `process` for groups with a process step (e.g. the
-# `models` group's glTF transform). Groups are the files in assets/manifests/.
-# Idempotent — re-running with a populated cache is a no-op (the tool verifies
-# sha256 and skips present files).
+# Runs the manifest-owned bundle target for the binary. Idempotent — re-running
+# with a populated cache is a no-op because the tool verifies each declaration.
 #
-# Skipped when --no-cache is set, when the lunco-assets bin can't build
-# (e.g. missing system deps on a fresh CI runner), or when SKIP_DOWNLOAD=1
-# is exported. Downloads land in LUNCOSIM_CACHE (or the resolved cache dir).
+# Skipped when --no-cache or --skip-download is set. Downloads land in
+# LUNCOSIM_CACHE (or the resolved cache dir).
 download_cache_for() {
     local binary="$1"
     local cache_dir
@@ -266,61 +247,14 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Every binary needs the UI font; lunica also needs MSL. LunCoSim's
-    # Earth/Moon imagery is deliberately a user-consented download and is not
-    # bundled into a release package.
-    local groups_to_download=""
-    local groups_to_process=""
-    case "$binary" in
-        lunica)
-            groups_to_download="fonts modelica"
-            ;;
-        luncosim)
-            groups_to_download="fonts"
-            ;;
-    esac
-
     # Export so the lunco-assets binary picks it up.
     export LUNCOSIM_CACHE="$cache_dir"
-
-    for group in $groups_to_download; do
-        info "  downloading assets for group '$group' …"
-        if cargo run -p lunco-assets -- download -g "$group"; then
-            success "  downloaded $group assets"
-        else
-            warn "  download for $group failed — continuing (build_native.sh will warn about missing cache subdirs)"
-        fi
-    done
-    for group in $groups_to_process; do
-        info "  processing assets for group '$group' …"
-        if cargo run -p lunco-assets -- process -g "$group"; then
-            success "  processed $group assets"
-        else
-            warn "  process for $group failed — continuing (the raw asset may be missing or npx unavailable)"
-        fi
-    done
-}
-
-# A release package must be self-contained.  These files are intentionally
-# checked by their runtime cache paths: the manifest remains the source of
-# URLs, hashes, and processing settings, while this script verifies that the
-# payload it promises to ship was actually materialised.
-required_cache_files_for() {
-    case "$1" in
-        lunica|luncosim) echo "fonts/DejaVuSans.ttf" ;;
-    esac
-}
-
-verify_required_cache_files() {
-    local binary="$1" cache_dir="$2" missing=0 rel
-    for rel in $(required_cache_files_for "$binary"); do
-        if [ ! -f "$cache_dir/$rel" ]; then
-            error "Required packaged asset is missing: $cache_dir/$rel"
-            missing=1
-        fi
-    done
-    if [ "$missing" -ne 0 ]; then
-        error "Refusing to create an incomplete $binary package. Re-run without --skip-download, or populate the cache with the indicated asset groups."
+    local target="${binary}-native"
+    info "  downloading manifest bundle '$target' …"
+    if cargo run -q -p lunco-assets -- download --bundle "$target"; then
+        success "  downloaded manifest bundle '$target'"
+    else
+        error "  download for manifest bundle '$target' failed"
         return 1
     fi
 }
@@ -529,7 +463,6 @@ RELEASE_VERSION="${LUNCO_RELEASE_VERSION:-}"
 TARGET=""
 NO_CACHE=0
 SKIP_DOWNLOAD=0
-FULL_CACHE=0
 NO_ASSETS=0
 OUT_DIR=""
 VELOPACK_OUT=""
@@ -546,7 +479,6 @@ while [ $# -gt 0 ]; do
         --target=*)      TARGET="${1#--target=}"; shift ;;
         --no-cache)      NO_CACHE=1; shift ;;
         --skip-download) SKIP_DOWNLOAD=1; shift ;;
-        --full-cache)    FULL_CACHE=1; shift ;;
         --no-assets)     NO_ASSETS=1; shift ;;
         --out)           OUT_DIR="$2"; shift 2 ;;
         --out=*)         OUT_DIR="${1#--out=}"; shift ;;
@@ -639,15 +571,6 @@ elif [ "$SKIP_DOWNLOAD" -eq 1 ]; then
     info "Skipping cache download (--skip-download)"
 fi
 
-# `download_cache_for` can continue after an individual download failure to
-# preserve useful diagnostics. Packaging cannot: it must contain every
-# runtime-required file. Earth/Moon imagery is intentionally absent from the
-# package and is requested through the first-run resource prompt.
-if [ "$NO_CACHE" -eq 0 ] && [ -n "$(required_cache_files_for "$BINARY")" ]; then
-    CACHE_SRC="$(resolve_cache_dir)"
-    verify_required_cache_files "$BINARY" "$CACHE_SRC"
-fi
-
 # ── Stage the package ─────────────────────────────────────────────────────
 if [ -z "$OUT_DIR" ]; then
     OUT_DIR="$PROJECT_DIR/dist/${BINARY}-${PLATFORM}-${ARCH}"
@@ -683,18 +606,6 @@ else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
 
-# Earth/Moon textures are runtime datasets, never package payload. This also
-# removes a developer's local packed-cache copy before the release staging
-# step, so a GitHub build cannot accidentally re-embed it.
-if [ "$BINARY" = "luncosim" ] && [ -d "$OUT_DIR/assets/.cache/textures" ]; then
-    rm -f "$OUT_DIR/assets/.cache/textures/earth.png" \
-          "$OUT_DIR/assets/.cache/textures/moon.png" \
-          "$OUT_DIR/assets/.cache/textures/earth_source.jpg" \
-          "$OUT_DIR/assets/.cache/textures/moon_source.tif"
-    rmdir "$OUT_DIR/assets/.cache/textures" 2>/dev/null || true
-    info "Excluded assets/.cache/textures from the luncosim package"
-fi
-
 stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE"
 
 # Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
@@ -719,52 +630,25 @@ if [ "$NO_ASSETS" -eq 0 ]; then
     fi
 fi
 
-# Copy the packed cache into assets/.cache/ — the resolver's second root, so a
-# package finds its own payload without LUNCOSIM_CACHE and without a launcher.
+# Stage manifest-declared package artifacts into assets/.cache/ — the resolver's
+# second root, so a package finds its own payload without LUNCOSIM_CACHE and
+# without a launcher. The manifest decides what belongs to this binary; user
+# datasets such as Earth/Moon imagery have no bundle target and cannot enter.
 PACKED_CACHE="$OUT_DIR/assets/.cache"
 if [ "$NO_CACHE" -eq 0 ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     if [ -n "$CACHE_SRC" ] && [ -d "$CACHE_SRC" ]; then
-        if [ "$FULL_CACHE" -eq 1 ]; then
-            info "Bundling full cache → $PACKED_CACHE/"
-            sync_dir "$CACHE_SRC/" "$PACKED_CACHE/"
-        else
-            SUBDIRS="$(cache_subdirs_for "$BINARY")"
-            for subdir in $SUBDIRS; do
-                if [ -d "$CACHE_SRC/$subdir" ]; then
-                    mkdir -p "$PACKED_CACHE"
-                    info "Bundling $subdir → assets/.cache/$subdir/ ($(du -sh "$CACHE_SRC/$subdir" | cut -f1))"
-                    sync_dir "$CACHE_SRC/$subdir/" "$PACKED_CACHE/$subdir/" no-delete
-                else
-                    warn "cache/$subdir not found at $CACHE_SRC — $BINARY may need it at runtime"
-                    warn "  Populate with: cargo run -p lunco-assets -- download -g <group>"
-                fi
-            done
-        fi
+        info "Staging manifest-declared artifacts → $PACKED_CACHE/"
+        cargo run -q -p lunco-assets -- stage \
+            --binary "${BINARY}-native" \
+            --cache "$CACHE_SRC" \
+            --destination "$PACKED_CACHE"
     else
-        warn "No cache directory found — app will use the OS cache dir at runtime"
-        warn "  Populate with: cargo run -p lunco-assets -- download"
+        error "No cache directory found — required bundle artifacts cannot be staged"
+        exit 1
     fi
 else
     info "Skipping packed cache (--no-cache)"
-fi
-
-if [ "$NO_CACHE" -eq 0 ] && [ -n "$(required_cache_files_for "$BINARY")" ]; then
-    if [ -f "$OUT_DIR/assets/.cache/textures/earth.png" ] || \
-       [ -f "$OUT_DIR/assets/.cache/textures/moon.png" ] || \
-       [ -f "$OUT_DIR/assets/.cache/textures/earth_source.jpg" ] || \
-       [ -f "$OUT_DIR/assets/.cache/textures/moon_source.tif" ]; then
-        rm -f "$OUT_DIR/assets/.cache/textures/earth.png" \
-              "$OUT_DIR/assets/.cache/textures/moon.png" \
-              "$OUT_DIR/assets/.cache/textures/earth_source.jpg" \
-              "$OUT_DIR/assets/.cache/textures/moon_source.tif"
-        rmdir "$OUT_DIR/assets/.cache/textures" 2>/dev/null || true
-        info "Excluded Earth/Moon textures from the luncosim package"
-    fi
-    if [ ! -f "$OUT_DIR/assets/.cache/fonts/DejaVuSans.ttf" ]; then
-        error "The luncosim package is missing assets/.cache/fonts/DejaVuSans.ttf"
-        exit 1
-    fi
 fi
 
 # Write launcher script

@@ -83,12 +83,15 @@ or evaluated ad hoc, not browsed as an authored asset.
 
 ## The `lunco://` scheme
 
-`lunco://<rel>` = `<repo>/assets/<rel>`, with a fallback to the download cache
-(`crates/lunco-assets/src/lunco_source.rs:87`). `twin://<name>/<rel>` is the
-same shape one level down: the Twin root, then that Twin's own `<twin>/.cache`.
+`lunco://<rel>` = `<repo>/assets/<rel>`, with the packed/development/global
+cache roots after authored assets (`crates/lunco-assets/src/lunco_source.rs:87`).
+`twin://<name>/<rel>` is the same shape one level down: the Twin's authored
+root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
+global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets/src/asset_sources.rs:20`: `lunco://`, `twin://`,
-`cached_textures://`.
+`twin://` is stateful; it is not a second texture scheme. Use the existing
+logical `lunco://` or `twin://` identity for every delivered artifact.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, or the
@@ -274,10 +277,11 @@ which rsyncs `assets/` into `dist/` and runs
 `discovery::scan_library` the native runtime uses, so the two cannot drift.
 There is no standalone regenerate command.
 
-> **Known gap** (`# TODO(asset-staging)`, `build_web.sh:646`): fonts, `.png`
-> textures and `.glb` models are still hardcoded lists in the script. A new
-> binary asset does **not** reach the web bundle until someone edits
-> `build_web.sh`, and the failure is a silent 404.
+Binary runtime assets are staged by the manifest-declared bundle target as part
+of the same build. Add or change the `bundle` field on the authoritative
+`Assets.toml` entry, then rebuild; do not add a second shell list. The staging
+command validates the declared raw/processed artifact before copying it, so a
+missing or incomplete asset fails the build instead of becoming a browser 404.
 
 ## Validate before you run
 

@@ -84,7 +84,7 @@ pub use lunco_source::{
 pub use lunco_source::{
     id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
-pub use scheme_registry::SchemeRegistry;
+pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
     parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
 };
@@ -180,10 +180,10 @@ pub fn user_config_subdir(name: &str) -> PathBuf {
 // ============================================================================
 
 /// Resolves the shared cache directory — ONE location for every worktree
-/// and every twin, holding only regenerable artifacts (MSL, textures,
-/// ephemeris, downloaded terrain sources). Twin-specific *outputs* (baked
-/// heightmaps and layer maps a scene references) never live here — they
-/// belong inside their twin.
+/// and every Twin, holding regenerable artifacts (MSL, textures, ephemeris,
+/// engine downloads, and Twin declarations marked `shared = true`). Twin
+/// declarations with the default ownership write beside the Twin; all Twin
+/// readers may still reuse this global pool.
 ///
 /// Resolution:
 ///
@@ -242,8 +242,9 @@ pub fn cache_dir() -> PathBuf {
 ///
 /// So the library gets a cache of its own, right beside it, read BEFORE the
 /// global one. That is the same rule a Twin already follows
-/// ([`twin_cache_dir`]): the unit you ship carries its data inside itself, and
-/// the global pool is a shared convenience underneath — not a prerequisite.
+/// ([`twin_cache_dir`]): the unit you ship may carry its default-owned data
+/// beside itself, while the global pool remains a reusable read source and the
+/// explicit owner for `shared = true` declarations.
 ///
 /// Read-only in practice: downloads still land in [`cache_dir`], because a
 /// packaged `assets/` may sit on a read-only mount and because one machine
@@ -274,12 +275,11 @@ pub fn manifests_dir() -> PathBuf {
 /// `read_dir` order is whatever the filesystem feels like — which would make the
 /// download list reshuffle between machines for no reason.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn engine_manifests() -> Vec<(String, PathBuf)> {
-    let Ok(entries) = std::fs::read_dir(manifests_dir()) else {
-        return Vec::new();
-    };
+pub fn engine_manifests() -> Result<Vec<(String, PathBuf)>, std::io::Error> {
+    let entries = std::fs::read_dir(manifests_dir())?;
     let mut out: Vec<(String, PathBuf)> = entries
-        .flatten()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
         .filter_map(|p| {
@@ -288,7 +288,7 @@ pub fn engine_manifests() -> Vec<(String, PathBuf)> {
         })
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+    Ok(out)
 }
 
 /// The text of one engine manifest by group name, or `None` when there is no
@@ -355,11 +355,11 @@ pub fn cache_roots() -> Vec<PathBuf> {
 
 /// Where a **Twin's** downloaded assets live: `<twin_root>/.cache`.
 ///
-/// Two caches, one rule: an asset declared by the ENGINE lands in the shared
-/// [`cache_dir`]; an asset declared by a TWIN lands beside that Twin, so the
-/// Twin stays self-contained — copy or move the folder and its data travels
-/// with it, and deleting the Twin takes its downloads with it instead of
-/// orphaning gigabytes in a global cache nobody audits.
+/// Two cache locations, one ownership rule: an asset declared by the ENGINE
+/// lands in the shared [`cache_dir`]; a Twin declaration defaults to the
+/// Twin-local cache, while `shared = true` explicitly selects the global cache.
+/// Twin reads search both locations, so a shared product is reusable without
+/// putting a machine-local cache path into authored USD.
 ///
 /// This is the ONE place the layout is decided; the downloader, the
 /// `twin://` reader and the dataset registry all ask here.
@@ -621,7 +621,7 @@ pub fn scenarios_dir() -> PathBuf {
 /// scene author writing `@lunco://vessels/rovers/skid_rover.usda@`.
 ///
 /// Whether a reference already names its own asset source (`lunco://`, `twin://`,
-/// `cached_textures://`, `http(s)://`, …) and so must be passed through untouched
+/// `http(s)://`, or another registered scheme) and so must be passed through untouched
 /// rather than re-anchored against a root.
 ///
 /// The predicate is one line, but it is the same *decision* everywhere it is
@@ -634,7 +634,7 @@ pub fn has_scheme(reference: impl AsRef<str>) -> bool {
 /// The addressable `lunco://` form of an engine-library reference.
 ///
 /// A reference that ALREADY carries a scheme (`lunco://…`, `twin://…`,
-/// `cached_textures://…`, `http(s)://…`) is returned unchanged — a Twin shipping
+/// `http(s)://…`, or another registered scheme) is returned unchanged — a Twin shipping
 /// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
 /// the Twin, and an already-`lunco://` path must not be double-prefixed.
 ///
@@ -693,8 +693,15 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     if authored.exists() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            return existing_path_within_root(&assets_dir_abs(), Path::new(rel))
-                .filter(|path| path.is_file());
+            return match existing_path_within_root(&assets_dir_abs(), Path::new(rel)) {
+                Ok(path) => path.filter(|path| path.is_file()),
+                Err(error) => {
+                    bevy::log::warn!(
+                        "[lunco-assets] cannot resolve authored asset `{rel}`: {error}"
+                    );
+                    None
+                }
+            };
         }
         #[cfg(target_arch = "wasm32")]
         return Some(authored);
@@ -704,8 +711,16 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
         if candidate.exists() {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                return existing_path_within_root(&root, Path::new(rel))
-                    .filter(|path| path.is_file());
+                return match existing_path_within_root(&root, Path::new(rel)) {
+                    Ok(path) => path.filter(|path| path.is_file()),
+                    Err(error) => {
+                        bevy::log::warn!(
+                            "[lunco-assets] cannot resolve cached asset `{rel}` under {}: {error}",
+                            root.display()
+                        );
+                        None
+                    }
+                };
             }
             #[cfg(target_arch = "wasm32")]
             return Some(candidate);

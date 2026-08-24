@@ -10,6 +10,7 @@ name = "Modelica Standard Library"
 version = "4.1.0"
 url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.1.0.tar.gz"
 dest = "msl"
+bundle = ["lunica-native"]
 # sha256 = ""  # fill after first download
 
 [thermofluidstream]
@@ -17,4 +18,5 @@ name = "DLR Thermofluid Stream Library"
 version = "1.3.0"
 url = "https://github.com/DLR-SR/ThermofluidStream/archive/refs/tags/v1.3.0.tar.gz"
 dest = "thermofluidstream"
+bundle = ["lunica-native"]
 # sha256 = ""  # fill after first download

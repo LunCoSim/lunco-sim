@@ -24,4 +24,7 @@ url = "https://downloads.sourceforge.net/project/dejavu/dejavu/2.37/dejavu-fonts
 # docs, lint tooling). See `AssetEntry::extract` docs.
 extract = "ttf/DejaVuSans.ttf"
 dest = "fonts/DejaVuSans.ttf"
+# Required by both desktop and browser bundles. The packager stages the
+# delivered file, never the upstream archive.
+bundle = ["lunica-native", "luncosim-native", "lunica-web", "luncosim-web"]
 sha256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"

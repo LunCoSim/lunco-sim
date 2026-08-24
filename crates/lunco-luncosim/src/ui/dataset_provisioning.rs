@@ -56,7 +56,10 @@ fn visible_entries<'a>(
 }
 
 fn needs_provisioning(state: &DatasetState) -> bool {
-    matches!(state, DatasetState::Missing | DatasetState::Failed(_))
+    matches!(
+        state,
+        DatasetState::Missing | DatasetState::Failed(_) | DatasetState::Cancelled
+    )
 }
 
 fn same_scope(state: &DatasetProvisioningState, scope: &DatasetScope) -> bool {
@@ -138,6 +141,8 @@ fn status_text(dataset: &ProvisionedDataset) -> String {
         }
         DatasetState::Downloading { .. } => "Downloading…".into(),
         DatasetState::Processing { kind } => format!("Preparing ({kind})…"),
+        DatasetState::Cancelling => "Stopping…".into(),
+        DatasetState::Cancelled => "Cancelled".into(),
         DatasetState::Failed(error) => format!("Failed: {error}"),
     }
 }

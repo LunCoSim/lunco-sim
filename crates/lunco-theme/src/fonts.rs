@@ -43,9 +43,10 @@ pub struct FontsInstalled(pub bool);
 /// Idempotent installer. Native reads the font from the cache dir;
 /// wasm callers must hand in pre-fetched bytes via
 /// [`install_fallback_fonts_with_bytes`] (see [`crate::spawn_wasm_font_fetch`]).
-/// If the font file is missing the app still runs, but logs a visible warning
-/// and keeps the default egui fonts. Release packaging rejects that state
-/// before producing a bundle.
+/// If a development tree is missing the font, the app logs a visible startup
+/// error and keeps the engine running so the diagnostic surface can explain the
+/// missing package input. Release packaging rejects that state before producing
+/// a bundle.
 // Native-only (the wasm path hands in pre-fetched bytes via
 // `install_fallback_fonts_with_bytes`), one-shot font load at startup —
 // a direct `std::fs::read` is correct here, so the `disallowed_methods`
@@ -107,11 +108,10 @@ pub fn install_fallback_fonts_with_bytes(ctx: &egui::Context, dejavu: Vec<u8>) {
 }
 
 /// Wasm-only: fetch `url` over HTTP, then install the result as a
-/// fallback font on `ctx`. The page bundle ships DejaVu under
-/// `/fonts/DejaVuSans.ttf`; `build_web.sh` copies it from
-/// `<workspace>/.cache/fonts/DejaVuSans.ttf` into `dist/lunica/fonts/`
-/// during pack. Fire-and-forget — failure logs a warning and leaves
-/// egui with default fonts (math/arrow glyphs will tofu).
+/// fallback font on `ctx`. The page bundle stages the manifest-declared
+/// `fonts/DejaVuSans.ttf` artifact beside the web assets. A fetch failure is
+/// reported as a startup resource error; it is not treated as a successful
+/// font load.
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_wasm_font_fetch(ctx: egui::Context, url: String) {
     use wasm_bindgen::JsCast;

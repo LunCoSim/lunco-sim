@@ -64,8 +64,14 @@ pub enum DatasetState {
         /// Name of the manifest-declared processing pipeline.
         kind: String,
     },
+    /// Cancellation was requested and the owned worker is unwinding. The row
+    /// remains non-requestable until its task returns, so a retry can never
+    /// race the previous attempt's cleanup or final write.
+    Cancelling,
     /// The delivered artifact is complete at its declared destination.
     Installed,
+    /// The owned operation completed after a user cancellation.
+    Cancelled,
     /// The last download attempt failed; the message is the reason.
     Failed(String),
 }
@@ -83,9 +89,9 @@ pub enum DatasetScope {
     /// Declared by the engine (a crate's own `Assets.toml`) → the shared
     /// [`cache_dir`](crate::cache_dir).
     Engine,
-    /// Declared by a Twin → that Twin's own cache
-    /// ([`twin_cache_dir`](crate::twin_cache_dir)), so the data travels and
-    /// dies with the folder.
+    /// Declared by a Twin. The default write owner is that Twin's cache
+    /// ([`twin_cache_dir`](crate::twin_cache_dir)); entries marked `shared`
+    /// write to the global cache and every Twin can read that shared pool.
     Twin {
         /// `twin://` authority the root is registered under.
         name: String,
@@ -95,17 +101,29 @@ pub enum DatasetScope {
 }
 
 impl DatasetScope {
-    /// The directory a scoped entry's `dest` resolves against — where a
-    /// download WRITES.
-    pub fn dest_root(&self) -> PathBuf {
+    /// Select the write owner for a Twin declaration. This is shared by the
+    /// runtime registry and the standalone asset commands so `shared` cannot
+    /// mean one location in the app and another on the CLI.
+    pub fn twin_cache_root(root: &std::path::Path, shared: bool) -> PathBuf {
+        if shared {
+            crate::cache_dir()
+        } else {
+            crate::twin_cache_dir(root)
+        }
+    }
+
+    /// The cache that owns a scoped entry's downloaded and derived artifacts.
+    /// Engine datasets always use the global cache. A Twin opts into that same
+    /// cache with `shared = true`; otherwise its artifacts stay beside it.
+    pub fn cache_root(&self, shared: bool) -> PathBuf {
         match self {
             DatasetScope::Engine => crate::cache_dir(),
-            DatasetScope::Twin { root, .. } => crate::twin_cache_dir(root),
+            DatasetScope::Twin { root, .. } => Self::twin_cache_root(root, shared),
         }
     }
 
     /// Every directory a scoped entry's file may be READ from, in priority
-    /// order. Wider than [`dest_root`](Self::dest_root) on purpose: bytes that
+    /// order. Wider than [`cache_root`](Self::cache_root) on purpose: bytes that
     /// arrived with a distribution were never written by this machine.
     ///
     /// An engine dataset may ship inside the package (`assets/.cache`) rather
@@ -113,14 +131,21 @@ impl DatasetScope {
     /// of an archive someone sent. A Twin may also explicitly opt into the
     /// engine-wide shared cache. Both are installed — asking only where WE
     /// would have written would report them missing and offer to re-download a
-    /// file already on disk.
+    /// file already on disk. A Twin always has the global cache as its final
+    /// read root: `shared = true` controls where that declaration writes,
+    /// while logical Twin reads intentionally reuse an already-installed global
+    /// copy.
     pub fn read_roots(&self) -> Vec<PathBuf> {
         match self {
-            DatasetScope::Engine => crate::cache_roots(),
+            DatasetScope::Engine => {
+                let mut roots = vec![crate::assets_dir_abs()];
+                roots.extend(crate::cache_roots());
+                roots
+            }
             DatasetScope::Twin { root, .. } => {
                 vec![
-                    crate::twin_cache_dir(root),
                     root.clone(),
+                    crate::twin_cache_dir(root),
                     crate::cache_dir(),
                 ]
             }
@@ -185,7 +210,11 @@ pub struct DatasetEntry {
 /// served by the host over HTTP rather than installed. So a web build reports
 /// every dataset missing, which is the honest answer — it cannot install one
 /// either.
-fn artifact_present(spec: &AssetEntry, path: &std::path::Path) -> bool {
+fn artifact_present(
+    spec: &AssetEntry,
+    path: &std::path::Path,
+    source_path: Option<&std::path::Path>,
+) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = spec;
@@ -194,10 +223,10 @@ fn artifact_present(spec: &AssetEntry, path: &std::path::Path) -> bool {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if spec.process.is_some() {
-            crate::process::processed_output_present(path)
+        if let Some(process) = &spec.process {
+            crate::process::processed_output_present(path, process, source_path)
         } else {
-            path.is_file()
+            crate::download::installed_destination_present(spec, path)
         }
     }
 }
@@ -210,11 +239,34 @@ impl DatasetEntry {
         let roots = self.scope.read_roots();
         for root in &roots {
             let candidate = root.join(&self.artifact_rel);
-            if artifact_present(&self.spec, &candidate) {
+            if artifact_present(&self.spec, &candidate, None) {
                 return candidate;
             }
         }
-        self.scope.dest_root().join(&self.artifact_rel)
+        self.scope
+            .cache_root(self.spec.shared)
+            .join(&self.artifact_rel)
+    }
+
+    fn source_path_for_root(&self, artifact_root: &std::path::Path) -> Option<PathBuf> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = artifact_root;
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let source_rel = self.scope.read_roots().iter().find_map(|root| {
+                self.path
+                    .strip_prefix(root)
+                    .ok()
+                    .map(std::path::Path::to_path_buf)
+            });
+            let candidate = source_rel
+                .map(|relative| artifact_root.join(relative))
+                .filter(|path| path.is_file());
+            candidate.or_else(|| self.path.is_file().then(|| self.path.clone()))
+        }
     }
 
     /// The asset URI the delivered artifact loads at — `lunco://<rel>` for an
@@ -248,7 +300,7 @@ fn artifact_rel_of(
             DatasetScope::Twin { root, .. } => Some(root.as_path()),
             DatasetScope::Engine => None,
         };
-        let cache_root = scope.dest_root();
+        let cache_root = scope.cache_root(entry.shared);
         let _ = crate::process::process_output_path(cfg, Some(&cache_root), twin_root)?;
         if cfg.output_root == "assets" {
             if matches!(scope, DatasetScope::Twin { .. }) {
@@ -284,15 +336,13 @@ fn artifact_rel_of(
             });
     }
     let _ = entry;
-    scope
-        .read_roots()
-        .iter()
-        .find_map(|root| dest.strip_prefix(root).ok().map(crate::asset_path::slashed))
-        .ok_or_else(|| {
+    dest.strip_prefix(scope.cache_root(entry.shared))
+        .map(crate::asset_path::slashed)
+        .map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "download output {} is outside every readable root for scope {}",
+                    "download output {} is outside its owning cache for scope {}",
                     dest.display(),
                     scope.label()
                 ),
@@ -326,19 +376,15 @@ fn dataset_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
     }
 }
 
-/// Everything one download ATTEMPT communicates with: the status slot it writes
-/// into, and the flag that tells it to give up.
-///
-/// One handle per attempt, not per entry. A task we stopped waiting for (stall
-/// watchdog, explicit cancel) is detached and may still be inside a blocking
-/// read; if it shared a slot with the next attempt its late verdict would
-/// clobber the live one. Replacing the handle orphans it harmlessly — it writes
-/// into a slot nobody reads, exactly as [`DatasetRegistry::forget_scope`]
-/// already relies on.
+/// Everything one download ATTEMPT communicates with. The registry owns the
+/// task for the full operation lifetime; no worker is detached or allowed to
+/// outlive the slot that represents it.
 struct DownloadHandle {
     status: StatusSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    task: Option<bevy::tasks::Task<DatasetState>>,
 }
 
 impl DownloadHandle {
@@ -347,6 +393,8 @@ impl DownloadHandle {
             status: Arc::new(Mutex::new(None)),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             commit_gate,
+            #[cfg(not(target_arch = "wasm32"))]
+            task: None,
         }
     }
 }
@@ -369,6 +417,10 @@ pub struct DatasetRegistry {
     /// Failures raised from `&mut self` methods, which have no `Commands`.
     /// Drained into [`DATASET_FAILED`] telemetry by [`drain_dataset_status`].
     pending_failures: Vec<String>,
+    /// Operations removed from the visible registry by Twin close. They stay
+    /// owned here until cancellation and staging cleanup have completed.
+    #[cfg(not(target_arch = "wasm32"))]
+    retiring: Vec<DownloadHandle>,
     /// Shared write barrier for all dataset attempts. Twin close acquires this
     /// before retiring an attempt, so no download or processing commit can
     /// happen after the close boundary returns.
@@ -386,8 +438,8 @@ pub struct RequestDataset {
     pub id: String,
 }
 
-/// Cancel a declared dataset download. The task is retired immediately and
-/// the row becomes requestable again; a stalled worker cannot retain the UI.
+/// Cancel a declared dataset download. The operation remains owned until its
+/// worker returns, after which the row becomes requestable again.
 #[Command]
 pub struct CancelDataset {
     /// Globally unique dataset id from [`DatasetEntry::id`].
@@ -460,7 +512,6 @@ impl DatasetRegistry {
                 return 0;
             }
         };
-        let dest_root = scope.dest_root();
         let mut added = 0;
         for (key, entry) in manifest.assets {
             // The complete id includes scope, group, and key. Two Twins may
@@ -478,6 +529,7 @@ impl DatasetRegistry {
                 ));
                 continue;
             }
+            let dest_root = scope.cache_root(entry.shared);
             let path = match entry_dest_path(&entry, Some(&dest_root)) {
                 Ok(path) => path,
                 Err(error) => {
@@ -506,10 +558,10 @@ impl DatasetRegistry {
                     continue;
                 }
             };
-            let installed = scope
-                .read_roots()
-                .iter()
-                .any(|r| artifact_present(&entry, &r.join(&artifact_rel)));
+            let installed = scope.read_roots().iter().any(|r| {
+                let artifact = r.join(&artifact_rel);
+                artifact_present(&entry, &artifact, None)
+            });
             self.entries.push(DatasetEntry {
                 id,
                 key: key.clone(),
@@ -555,8 +607,18 @@ impl DatasetRegistry {
         self.forget_scope(&scope);
         self.scanned_scopes.push(scope.clone());
         let manifest_path = root.join("Assets.toml");
-        let Ok(text) = std::fs::read_to_string(&manifest_path) else {
-            return 0; // A Twin without a manifest declares no datasets.
+        let text = match std::fs::read_to_string(&manifest_path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return 0; // A Twin without a manifest declares no datasets.
+            }
+            Err(error) => {
+                self.pending_failures.push(format!(
+                    "cannot read Twin manifest {}: {error}",
+                    manifest_path.display()
+                ));
+                return 0;
+            }
         };
         let n = self.register_scoped(&text, name, scope);
         if n > 0 {
@@ -565,20 +627,21 @@ impl DatasetRegistry {
         n
     }
 
-    /// Drop every entry of a scope (a Twin closing, or a rescan).
-    /// In-flight downloads for dropped entries are cancelled and finish into a
-    /// slot nobody reads. Their attempt-specific staging is cleaned up by the
-    /// worker, so a later scan sees only a complete prior installation or a
-    /// missing artifact.
+    /// Drop every entry of a scope (a Twin closing, or a rescan). In-flight
+    /// operations are moved to the retiring queue and remain owned until their
+    /// cancellation and staging cleanup complete.
     pub fn forget_scope(&mut self, scope: &DatasetScope) {
         let gate = self.commit_gate.clone();
-        let gate_locked = gate.lock();
-        if gate_locked.is_err() {
-            self.pending_failures.push(format!(
-                "dataset commit gate was poisoned while retiring scope '{}'",
-                scope.label()
-            ));
-        }
+        let _gate_locked = match gate.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                self.pending_failures.push(format!(
+                    "dataset commit gate was poisoned while retiring scope '{}'",
+                    scope.label()
+                ));
+                poisoned.into_inner()
+            }
+        };
         let mut i = 0;
         while i < self.entries.len() {
             if &self.entries[i].scope == scope {
@@ -586,13 +649,15 @@ impl DatasetRegistry {
                     .cancel
                     .store(true, std::sync::atomic::Ordering::Relaxed);
                 self.entries.remove(i);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.retiring.push(self.slots.remove(i));
+                #[cfg(target_arch = "wasm32")]
                 self.slots.remove(i);
             } else {
                 i += 1;
             }
         }
         self.scanned_scopes.retain(|known| known != scope);
-        drop(gate_locked);
     }
 
     /// Drop every Twin-scoped registry state backed by `root` and return the
@@ -623,16 +688,22 @@ impl DatasetRegistry {
     }
 
     /// Re-read on-disk presence for every entry. Cheap (`Path::exists` per
-    /// dataset) and only meaningful for entries not currently downloading.
+    /// dataset) and only meaningful for entries without an owned operation.
     pub fn refresh_installed_state(&mut self) {
         for e in &mut self.entries {
             if matches!(
                 e.state,
-                DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+                DatasetState::Downloading { .. }
+                    | DatasetState::Processing { .. }
+                    | DatasetState::Cancelling
             ) {
                 continue;
             }
-            e.state = if artifact_present(&e.spec, &e.artifact_path()) {
+            let installed = e.scope.read_roots().iter().any(|root| {
+                let artifact = root.join(&e.artifact_rel);
+                artifact_present(&e.spec, &artifact, e.source_path_for_root(root).as_deref())
+            });
+            e.state = if installed {
                 DatasetState::Installed
             } else if let DatasetState::Failed(msg) = &e.state {
                 DatasetState::Failed(msg.clone())
@@ -707,9 +778,12 @@ impl DatasetRegistry {
 
     /// Datasets that are declared but not on disk.
     pub fn missing(&self) -> impl Iterator<Item = &DatasetEntry> {
-        self.entries
-            .iter()
-            .filter(|e| matches!(e.state, DatasetState::Missing | DatasetState::Failed(_)))
+        self.entries.iter().filter(|e| {
+            matches!(
+                e.state,
+                DatasetState::Missing | DatasetState::Failed(_) | DatasetState::Cancelled
+            )
+        })
     }
 
     /// Start downloading `id`. **The only call in the engine that authorises
@@ -718,10 +792,8 @@ impl DatasetRegistry {
     ///
     /// No-op when the dataset is already installed or already downloading.
     ///
-    /// `Downloading` is not a sticky state: every attempt is watched by a stall
-    /// watchdog that turns a wedged transfer into [`DatasetState::Failed`], and
-    /// `Failed` is requestable again — so "the host went away mid-download"
-    /// costs the user a wait, never the process lifetime.
+    /// An attempt remains owned until its task returns. A retry can therefore
+    /// never overlap staging or installation from an earlier attempt.
     pub fn request(&mut self, id: &str) {
         let Some(i) = self.entries.iter().position(|e| e.id == id) else {
             warn!("[datasets] request for unknown dataset '{id}'");
@@ -732,6 +804,7 @@ impl DatasetRegistry {
             DatasetState::Installed
                 | DatasetState::Downloading { .. }
                 | DatasetState::Processing { .. }
+                | DatasetState::Cancelling
         ) {
             return;
         }
@@ -744,6 +817,18 @@ impl DatasetRegistry {
         self.slots[i] = DownloadHandle::new(self.commit_gate.clone());
         let scope = self.entries[i].scope.clone();
         let spec = self.entries[i].spec.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.slots[i].task = Some(spawn_download(
+                &self.entries[i],
+                &spec,
+                scope,
+                self.slots[i].status.clone(),
+                self.slots[i].cancel.clone(),
+                self.slots[i].commit_gate.clone(),
+            ));
+        }
+        #[cfg(target_arch = "wasm32")]
         spawn_download(
             &self.entries[i],
             &spec,
@@ -754,15 +839,8 @@ impl DatasetRegistry {
         );
     }
 
-    /// Give up on an in-flight download: raise the task's cancel flag and put
-    /// the entry straight into [`DatasetState::Failed`] so it is requestable
-    /// again immediately.
-    ///
-    /// The state does not wait for the task to notice. A task parked in a
-    /// blocking socket read cannot answer until bytes arrive or the OS gives
-    /// up, and holding the UI hostage to that is exactly the wedge this exists
-    /// to prevent — so the entry is released now and the doomed task, whose
-    /// handle has been replaced, writes into a slot nobody reads.
+    /// Request cooperative cancellation. The operation remains owned by the
+    /// registry and the row becomes retryable only after its task returns.
     pub fn cancel(&mut self, id: &str) {
         let Some(i) = self.entries.iter().position(|e| e.id == id) else {
             warn!("[datasets] cancel for unknown dataset '{id}'");
@@ -774,19 +852,10 @@ impl DatasetRegistry {
         ) {
             return;
         }
-        let gate = self.commit_gate.clone();
-        let gate_locked = gate.lock();
-        if gate_locked.is_err() {
-            self.pending_failures.push(format!(
-                "dataset commit gate was poisoned while cancelling '{id}'"
-            ));
-        }
         self.slots[i]
             .cancel
             .store(true, std::sync::atomic::Ordering::Release);
-        self.slots[i] = DownloadHandle::new(self.commit_gate.clone());
-        drop(gate_locked);
-        self.entries[i].state = DatasetState::Failed("cancelled".into());
+        self.entries[i].state = DatasetState::Cancelling;
         info!("[datasets] '{id}' download cancelled by user");
     }
 
@@ -830,21 +899,9 @@ fn on_twin_closed(
     }
 }
 
-/// How often the stall watchdog samples the liveness counter. Small relative to
-/// [`BODY_STALL_TIMEOUT`](crate::download::BODY_STALL_TIMEOUT) so the reported
-/// idle time is accurate to a couple of seconds, large enough that watching a
-/// download costs nothing.
-#[cfg(not(target_arch = "wasm32"))]
-const STALL_POLL: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Spawn the actual fetch on the async pool, plus the watchdog that gives it a
-/// deadline.
-///
-/// Two tasks, because the fetch cannot time itself: it spends its life inside a
-/// blocking `read` that returns when the peer feels like it. The watchdog
-/// watches a liveness counter instead — an INACTIVITY test, not a
-/// total-duration cap, so an hour-long GeoTIFF over a slow link is fine and a
-/// host that stops sending is not.
+/// Spawn the complete fetch and processing operation as one registry-owned task.
+/// Transport-level receive deadlines remain in the downloader; operation
+/// lifetime is represented by the owned task rather than a second watchdog.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_download(
     entry: &DatasetEntry,
@@ -853,98 +910,26 @@ fn spawn_download(
     slot: StatusSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
-) {
-    use crate::download::{download_asset_with_control, DownloadControl, BODY_STALL_TIMEOUT};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+) -> bevy::tasks::Task<DatasetState> {
+    use crate::download::{download_asset_with_control, DownloadControl};
+    use std::sync::atomic::Ordering;
 
     let key = entry.key.clone();
     let name = entry.name.clone();
     let spec = spec.clone();
     let dest = entry.path.clone();
-    let dest_root = scope.dest_root();
+    let dest_root = scope.cache_root(spec.shared);
     let progress_slot = slot.clone();
 
-    // Shared with the watchdog: a monotonic LIVENESS counter bumped by every
-    // progress tick (a chunk read) and every extraction tick, plus the flag
-    // that retires the watchdog once the fetch returns.
-    //
-    // A counter rather than the byte total, because unpacking a tarball is
-    // also progress and reports no bytes — watching the byte count alone would
-    // declare a healthy 2-minute extraction stalled.
-    let activity = Arc::new(AtomicU64::new(0));
-    let network_done = Arc::new(AtomicBool::new(false));
-
     info!("[datasets] downloading '{key}' ({name}) — user-requested");
-
-    {
-        // Watchdog. Retired the moment the fetch call returns: the
-        // `[*.process]` step after it is long, silent and local — a CPU-bound
-        // DEM crop produces no ticks and cancelling it would be a bug.
-        let activity = activity.clone();
-        let network_done = network_done.clone();
-        let cancel = cancel.clone();
-        let slot = slot.clone();
-        let key = key.clone();
-        let commit_gate = commit_gate.clone();
-        bevy::tasks::AsyncComputeTaskPool::get()
-            .spawn(async move {
-                let mut last = u64::MAX; // sentinel: the first sample always counts as progress
-                let mut idle = std::time::Duration::ZERO;
-                loop {
-                    std::thread::sleep(STALL_POLL);
-                    if network_done.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let now = activity.load(Ordering::Relaxed);
-                    if now != last {
-                        last = now;
-                        idle = std::time::Duration::ZERO;
-                        continue;
-                    }
-                    idle += STALL_POLL;
-                    if idle < BODY_STALL_TIMEOUT {
-                        continue;
-                    }
-                    // Give up. Raising the flag lets the fetch task unwind at
-                    // its next chunk boundary if bytes ever resume; the state
-                    // is published NOW regardless, because the whole point is
-                    // that the user must not wait on a peer that is gone.
-                    let gate_locked = commit_gate.lock();
-                    if gate_locked.is_err() {
-                        cancel.store(true, Ordering::Release);
-                        if let Ok(mut s) = slot.lock() {
-                            *s = Some(DatasetState::Failed(
-                                "download commit gate is poisoned".into(),
-                            ));
-                        }
-                        return;
-                    }
-                    cancel.store(true, Ordering::Release);
-                    let secs = BODY_STALL_TIMEOUT.as_secs();
-                    warn!("[datasets] '{key}' stalled — no data for {secs}s, giving up");
-                    if let Ok(mut s) = slot.lock() {
-                        *s = Some(DatasetState::Failed(format!(
-                            "download stalled — no data for {secs}s (retry when the \
-                             connection or the host recovers)"
-                        )));
-                    }
-                    drop(gate_locked);
-                    return;
-                }
-            })
-            .detach();
-    }
-
-    let progress_activity = activity.clone();
-    let extract_activity = activity;
-    let fetch_done = network_done;
-    bevy::tasks::AsyncComputeTaskPool::get()
-        .spawn(async move {
+    bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let process_control =
                 crate::process::ProcessControl::new(cancel.clone(), commit_gate.clone());
+            let download_cancel = cancel.clone();
+            let extracting_slot = slot.clone();
             let download_control = DownloadControl {
                 progress: Some(Box::new(move |done, total| {
-                    progress_activity.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut s) = progress_slot.lock() {
                         *s = Some(DatasetState::Downloading {
                             bytes_done: done,
@@ -952,12 +937,14 @@ fn spawn_download(
                         });
                     }
                 })),
-                // Not for display — the tick is what tells the watchdog an
-                // unpacking archive is alive.
-                extracting: Some(Box::new(move |_entries| {
-                    extract_activity.fetch_add(1, Ordering::Relaxed);
+                extracting: Some(Box::new(move |entries| {
+                    if let Ok(mut s) = extracting_slot.lock() {
+                        *s = Some(DatasetState::Processing {
+                            kind: format!("extracting archive ({entries} entries)"),
+                        });
+                    }
                 })),
-                cancel: Some(cancel),
+                cancel: Some(download_cancel),
                 commit_gate: Some(commit_gate.clone()),
             };
             // The scope decided the root: engine → shared cache, twin →
@@ -970,10 +957,7 @@ fn spawn_download(
                 download_control,
                 Some(dest_root.as_path()),
             );
-            // Network phase over: retire the watchdog before the process step,
-            // which is local, silent and legitimately slow.
-            fetch_done.store(true, Ordering::Relaxed);
-            let outcome = match fetched {
+            match fetched {
                 // A download is only half of a derived dataset. The CLI has
                 // always run `process` as a second command; in-app there is no
                 // second command to run, so the fetch that a user authorised
@@ -989,16 +973,24 @@ fn spawn_download(
                     }
                     match run_process_step(&spec, &scope, &dest, &process_control) {
                         Ok(()) => DatasetState::Installed,
+                        Err(e) if cancel.load(Ordering::Acquire) => {
+                            let _ = e;
+                            DatasetState::Cancelled
+                        }
                         Err(e) => DatasetState::Failed(format!("processing failed: {e}")),
                     }
                 }
+                Err(crate::download::DownloadError::Cancelled) => DatasetState::Cancelled,
                 Err(e) => DatasetState::Failed(e.to_string()),
-            };
-            if let Ok(mut s) = slot.lock() {
-                *s = Some(outcome);
             }
-        })
-        .detach();
+        }))
+        .unwrap_or_else(|_| DatasetState::Failed("dataset worker panicked".into()));
+        #[cfg(target_arch = "wasm32")]
+        if let Ok(mut s) = slot.lock() {
+            *s = Some(outcome.clone());
+        }
+        outcome
+    })
 }
 
 /// Run the entry's `[*.process]` step, if it declares one, into the same path
@@ -1018,8 +1010,9 @@ fn run_process_step(
         DatasetScope::Twin { root, .. } => Some(root.clone()),
         DatasetScope::Engine => None,
     };
+    let cache_root = scope.cache_root(spec.shared);
     info!("[datasets] processing '{}' ({})", cfg.kind, dest.display());
-    crate::process::process_asset(dest, cfg, twin_root.as_deref(), control)
+    crate::process::process_asset(dest, cfg, &cache_root, twin_root.as_deref(), control)
 }
 
 /// The web build has no cache directory to fill and no HTTP downloader here;
@@ -1062,20 +1055,54 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands:
         }
     }
 
-    if !registry.entries.iter().any(|e| {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use bevy::tasks::futures_lite::future;
+        let mut retiring = Vec::new();
+        for mut handle in std::mem::take(&mut registry.retiring) {
+            let finished = handle
+                .task
+                .as_mut()
+                .and_then(|task| future::block_on(future::poll_once(task)))
+                .is_some();
+            if !finished {
+                retiring.push(handle);
+            }
+        }
+        registry.retiring = retiring;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let has_live_work = registry
+        .entries
+        .iter()
+        .zip(&registry.slots)
+        .any(|(_, slot)| slot.task.is_some())
+        || !registry.retiring.is_empty();
+    #[cfg(target_arch = "wasm32")]
+    let has_live_work = registry.entries.iter().any(|entry| {
         matches!(
-            e.state,
-            DatasetState::Downloading { .. } | DatasetState::Processing { .. }
+            entry.state,
+            DatasetState::Downloading { .. }
+                | DatasetState::Processing { .. }
+                | DatasetState::Cancelling
         )
-    }) {
+    });
+    if !has_live_work {
         return;
     }
     for i in 0..registry.entries.len() {
-        let next = registry.slots[i]
-            .status
-            .lock()
-            .ok()
-            .and_then(|mut s| s.take());
+        let status_slot = registry.slots[i].status.clone();
+        let next = match status_slot.lock() {
+            Ok(mut status) => status.take(),
+            Err(_) => {
+                let detail = format!(
+                    "dataset '{}' status channel is poisoned",
+                    registry.entries[i].key
+                );
+                registry.pending_failures.push(detail.clone());
+                Some(DatasetState::Failed(detail))
+            }
+        };
         if let Some(state) = next {
             if let DatasetState::Failed(ref e) = state {
                 warn!("[datasets] '{}' failed: {e}", registry.entries[i].key);
@@ -1097,6 +1124,33 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands:
                 });
             }
             registry.entries[i].state = state;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use bevy::tasks::futures_lite::future;
+            let completed = registry.slots[i]
+                .task
+                .as_mut()
+                .and_then(|task| future::block_on(future::poll_once(task)));
+            if let Some(state) = completed {
+                registry.slots[i].task = None;
+                if let DatasetState::Failed(ref error) = state {
+                    commands.trigger(dataset_failed(format!(
+                        "dataset '{}' failed: {error}",
+                        registry.entries[i].key
+                    )));
+                }
+                if state.is_installed() {
+                    let entry = &registry.entries[i];
+                    commands.trigger(DatasetInstalled {
+                        id: entry.id.clone(),
+                        scope: entry.scope.clone(),
+                        artifact_path: entry.artifact_path(),
+                        artifact_uri: entry.artifact_uri(),
+                    });
+                }
+                registry.entries[i].state = state;
+            }
         }
     }
 }
@@ -1130,21 +1184,42 @@ fn scan_open_twins_for_datasets(
     let (Some(roots), Some(mut registry)) = (roots, registry) else {
         return;
     };
-    let open = roots.names();
+    let open = match roots.names() {
+        Ok(open) => open,
+        Err(error) => {
+            lunco_core::trigger_error(
+                &mut commands,
+                "twin-dataset-registry-unavailable",
+                format!("could not enumerate open Twins for dataset discovery: {error}"),
+            );
+            return;
+        }
+    };
 
     // New: scan any open Twin the registry has not seen. The tracked scope,
     // rather than entry count, handles a valid Twin with no manifest.
     for name in open {
-        if let Some(root) = roots.root_for(&name) {
-            let scope = DatasetScope::Twin {
-                name: name.clone(),
-                root: root.clone(),
-            };
-            if registry.scanned_scopes.contains(&scope) {
-                continue;
+        match roots.root_for(&name) {
+            Ok(Some(root)) => {
+                let scope = DatasetScope::Twin {
+                    name: name.clone(),
+                    root: root.clone(),
+                };
+                if registry.scanned_scopes.contains(&scope) {
+                    continue;
+                }
+                registry.scan_twin(&name, &root);
+                commands.trigger(DatasetScopeReady { scope });
             }
-            registry.scan_twin(&name, &root);
-            commands.trigger(DatasetScopeReady { scope });
+            Ok(None) => {}
+            Err(error) => {
+                lunco_core::trigger_error(
+                    &mut commands,
+                    "twin-dataset-registry-unavailable",
+                    format!("could not resolve Twin `{name}` for dataset discovery: {error}"),
+                );
+                return;
+            }
         }
     }
 }
@@ -1159,7 +1234,19 @@ fn scan_open_twins_for_datasets(
 #[cfg(not(target_arch = "wasm32"))]
 fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>, mut commands: Commands) {
     let Some(mut registry) = registry else { return };
-    let manifests = crate::engine_manifests();
+    let manifests = match crate::engine_manifests() {
+        Ok(manifests) => manifests,
+        Err(error) => {
+            registry.pending_failures.push(format!(
+                "cannot enumerate engine manifests in {}: {error}",
+                crate::manifests_dir().display()
+            ));
+            commands.trigger(DatasetScopeReady {
+                scope: DatasetScope::Engine,
+            });
+            return;
+        }
+    };
     if manifests.is_empty() {
         // Not fatal — an app may ship no declarations at all — but it is also
         // exactly what a mis-staged package looks like, so say so once.
@@ -1167,6 +1254,9 @@ fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>, mut commands
             "[datasets] no manifests in {} — nothing is offered for download",
             crate::manifests_dir().display()
         );
+        commands.trigger(DatasetScopeReady {
+            scope: DatasetScope::Engine,
+        });
         return;
     }
     let mut total = 0;
@@ -1289,9 +1379,10 @@ dest = "ephemeris/demo.csv"
             bytes_total: 0,
         };
         r.cancel(&id);
-        assert!(matches!(r.entries()[0].state, DatasetState::Failed(_)));
-        // `missing()` — what the UI offers a download button for — includes it.
-        assert_eq!(r.missing().count(), 1);
+        assert_eq!(r.entries()[0].state, DatasetState::Cancelling);
+        // While cleanup is in progress the row is not requestable; retry is
+        // exposed only after the owned task returns.
+        assert_eq!(r.missing().count(), 0);
     }
 
     #[test]
@@ -1350,6 +1441,12 @@ output = "terrain/luna2"
         assert_eq!(registry.entries()[0].state, DatasetState::Missing);
 
         std::fs::write(output.join(".bakekey"), "complete").expect("completion stamp");
+        std::fs::create_dir_all(output.join("materials/textures")).expect("terrain payload");
+        std::fs::write(
+            output.join("materials/textures/heightmap.tif"),
+            b"heightmap",
+        )
+        .expect("heightmap payload");
         registry.refresh_installed_state();
         assert_eq!(registry.entries()[0].state, DatasetState::Installed);
     }
@@ -1394,19 +1491,19 @@ output = "terrain/luna2"
     #[test]
     fn engine_scope_reads_the_packed_cache_before_the_shared_pool() {
         let roots = DatasetScope::Engine.read_roots();
-        assert_eq!(roots, crate::cache_roots());
-        assert_eq!(roots[0], crate::packed_cache_dir());
+        assert_eq!(roots[0], crate::assets_dir_abs());
+        assert_eq!(roots[1], crate::packed_cache_dir());
         if let Some(development) = crate::development_cache_dir() {
-            assert_eq!(roots[1], development);
+            assert_eq!(roots[2], development);
         }
         let shared = crate::cache_dir();
         assert_eq!(roots.last(), Some(&shared));
         // The write root stays the shared pool: a package may be read-only,
         // and one machine should not hold a copy per installation.
-        assert_eq!(DatasetScope::Engine.dest_root(), crate::cache_dir());
+        assert_eq!(DatasetScope::Engine.cache_root(false), crate::cache_dir());
     }
 
-    /// A Twin folder writes to its own `.cache`; authored files remain second
+    /// A Twin folder writes to its own `.cache`; authored files remain first
     /// priority, and an explicitly shared dataset is read from the engine pool.
     #[test]
     fn twin_scope_reads_its_own_cache_then_its_authored_tree() {
@@ -1415,10 +1512,15 @@ output = "terrain/luna2"
             name: "school".into(),
             root: root.clone(),
         };
-        assert_eq!(scope.dest_root(), crate::twin_cache_dir(&root));
+        assert_eq!(scope.cache_root(false), crate::twin_cache_dir(&root));
+        assert_eq!(scope.cache_root(true), crate::cache_dir());
         assert_eq!(
             scope.read_roots(),
-            vec![crate::twin_cache_dir(&root), root, crate::cache_dir()]
+            vec![
+                root.clone(),
+                crate::twin_cache_dir(&root),
+                crate::cache_dir()
+            ]
         );
     }
 

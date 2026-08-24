@@ -121,11 +121,9 @@ fn unregister_twin_root(
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because
 /// its reader is stateful (it shares [`TwinRoots`] with the resource).
 ///
-/// A cached texture needs no scheme of its own either: the cache is already
-/// `lunco://`'s fallback, so `lunco://textures/earth.png` reaches exactly what a
-/// `cached_textures://earth.png` did — and on the web it resolves to where
-/// `build_web.sh` actually stages the file, which the cache-rooted spelling did
-/// not.
+/// A cached texture needs no scheme of its own: the cache is already
+/// `lunco://`'s fallback, so `lunco://textures/earth.png` reaches the packaged
+/// or downloaded copy through the same logical address.
 ///
 /// A **downloaded scenario is just a Twin root** over its cache directory, so it
 /// needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
@@ -144,8 +142,6 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // Resolves `assets/` FIRST, then the download cache — so a large binary
     // pulled by `cargo run -p lunco-assets -- download` is reachable at its
     // logical `lunco://` address without any authored file naming the cache.
-    // (This replaced `lunco-lib://`, which addressed the cache directly and so
-    // baked a machine-local location into shipped `.usda` files.)
     app.register_asset_source(crate::LUNCO_SCHEME, lunco_asset_source(&assets_dir));
 
     // `twin://` — a named root, keyed by Twin name: an open Twin's directory, or a
@@ -161,26 +157,30 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // that must reach them without the `AssetServer` (scenario sync, shader
     // pre-validation, file dialogs) cannot disagree with the readers.
     let schemes = crate::scheme_registry::SchemeRegistry::default();
-    schemes.register(crate::LUNCO_SCHEME, move |rel| {
-        if !crate::asset_path::is_safe_relative_path(rel) {
-            return None;
-        }
-        let authored = assets_dir.join(rel);
-        #[cfg(not(target_arch = "wasm32"))]
-        if authored.exists() {
-            return crate::existing_path_within_root(&assets_dir, std::path::Path::new(rel))
-                .filter(|path| path.is_file());
-        }
-        Some(authored)
-    });
+    schemes
+        .register(crate::LUNCO_SCHEME, move |rel| {
+            if !crate::asset_path::is_safe_relative_path(rel) {
+                return None;
+            }
+            crate::engine_asset_local_path(&crate::asset_path::uri(crate::LUNCO_SCHEME, rel))
+        })
+        .expect("register the canonical lunco asset scheme");
     let roots = twin_roots.clone();
-    schemes.register(crate::TWIN_SCHEME, move |rest| {
-        // `twin://<name>/<rel>` — the name selects the root, so this handler is
-        // stateful where `lunco://`'s is constant.
-        let (name, rel) = crate::split_twin_rel(rest)?;
-        let rel = crate::asset_path::relative_path(rel)?;
-        roots.resolve_file(name, &rel)
-    });
+    schemes
+        .register(crate::TWIN_SCHEME, move |rest| {
+            // `twin://<name>/<rel>` — the name selects the root, so this handler is
+            // stateful where `lunco://`'s is constant.
+            let (name, rel) = crate::split_twin_rel(rest)?;
+            let rel = crate::asset_path::relative_path(rel)?;
+            match roots.resolve_file(name, &rel) {
+                Ok(path) => path,
+                Err(error) => {
+                    error!("[twin-roots] local path lookup failed for `{rest}`: {error}");
+                    None
+                }
+            }
+        })
+        .expect("register the canonical twin asset scheme");
     app.insert_resource(schemes);
 
     // Declared-dataset registry: owns every download, scans each open Twin's
@@ -239,8 +239,9 @@ mod tests {
         let roots = app.world().resource::<TwinRoots>();
         let assigned = roots
             .name_for_root(&root)
+            .expect("read Twin registry")
             .expect("workspace Twin is mounted in the asset source");
-        assert_eq!(roots.root_for(&assigned), Some(root.clone()));
+        assert_eq!(roots.root_for(&assigned), Ok(Some(root.clone())));
         assert_eq!(
             app.world().resource::<MountedAuthorities>().0,
             vec![(twin_id, assigned.clone())]
@@ -255,6 +256,11 @@ mod tests {
             root,
             was_active,
         });
-        assert!(app.world().resource::<TwinRoots>().names().is_empty());
+        assert!(app
+            .world()
+            .resource::<TwinRoots>()
+            .names()
+            .expect("read Twin registry")
+            .is_empty());
     }
 }

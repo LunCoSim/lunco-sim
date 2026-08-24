@@ -2834,11 +2834,13 @@ pub fn on_set_shader_source(
 pub fn shader_asset_path_for(
     twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
     stem: &str,
-) -> String {
-    match twin_roots.and_then(|t| t.primary()) {
-        Some((name, _)) => lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
-        None => format!("shaders/{stem}.wgsl"),
-    }
+) -> Result<String, lunco_assets::TwinRootsError> {
+    Ok(
+        match twin_roots.map(|t| t.primary()).transpose()?.flatten() {
+            Some((name, _)) => lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
+            None => format!("shaders/{stem}.wgsl"),
+        },
+    )
 }
 
 /// Sanitise a free-text name into a safe lowercase file stem (`[a-z0-9_]`,
@@ -2896,19 +2898,29 @@ fn install_shader(
 
     // Destination: the primary open Twin's `shaders/` dir (portable, persists
     // with the Twin under a `twin://` asset path), else the engine library.
-    let (asset_path, disk_path): (String, std::path::PathBuf) =
-        match twin_roots.and_then(|t| t.primary()) {
-            Some((name, root)) => (
-                lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
-                root.join("shaders").join(format!("{stem}.wgsl")),
-            ),
-            None => (
-                format!("shaders/{stem}.wgsl"),
-                lunco_assets::assets_dir_abs()
-                    .join("shaders")
-                    .join(format!("{stem}.wgsl")),
-            ),
-        };
+    let primary = match twin_roots
+        .map(|t| t.primary())
+        .transpose()
+        .map(|primary| primary.flatten())
+    {
+        Ok(primary) => primary,
+        Err(error) => {
+            error!("INSTALL_SHADER: Twin registry unavailable: {error}");
+            return None;
+        }
+    };
+    let (asset_path, disk_path): (String, std::path::PathBuf) = match primary {
+        Some((name, root)) => (
+            lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
+            root.join("shaders").join(format!("{stem}.wgsl")),
+        ),
+        None => (
+            format!("shaders/{stem}.wgsl"),
+            lunco_assets::assets_dir_abs()
+                .join("shaders")
+                .join(format!("{stem}.wgsl")),
+        ),
+    };
 
     // Persist to disk (native). Non-fatal on failure — the in-memory insert
     // below still makes it usable this session.
@@ -3092,7 +3104,14 @@ pub fn scan_wgsl_into_catalog(
     catalog: &mut lunco_materials::ShaderCatalog,
 ) -> usize {
     let mut n = 0;
-    for a in lunco_assets::discovery::list_assets(manifest, roots, "wgsl") {
+    let assets = match lunco_assets::discovery::list_assets(manifest, roots, "wgsl") {
+        Ok(assets) => assets,
+        Err(error) => {
+            error!("SHADER_CATALOG: Twin registry unavailable: {error}");
+            return 0;
+        }
+    };
+    for a in assets {
         if catalog.add(a.asset_path) {
             n += 1;
         }
@@ -3142,7 +3161,13 @@ pub fn maintain_catalogs(
         return;
     };
 
-    let names = roots.names();
+    let names = match roots.names() {
+        Ok(names) => names,
+        Err(error) => {
+            error!("CATALOG_SCAN: Twin registry unavailable: {error}");
+            return;
+        }
+    };
     let twins_changed = names != *last_twins;
     if !manifest.is_changed() && !twins_changed {
         return;
@@ -3202,10 +3227,14 @@ pub fn on_delete_shader(
     // neither root (a copy here once joined a bare relative `"assets"`, resolving
     // against the CWD instead of the library path the loader uses).
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(disk) = schemes.as_ref().and_then(|s| s.local_path(&path)) {
-        match lunco_storage::delete_file_sync(&disk) {
-            Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
-            Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),
+    if let Some(schemes) = schemes.as_ref() {
+        match schemes.local_path(&path) {
+            Ok(Some(disk)) => match lunco_storage::delete_file_sync(&disk) {
+                Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
+                Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),
+            },
+            Ok(None) => {}
+            Err(error) => error!("DELETE_SHADER: asset scheme registry unavailable: {error}"),
         }
     }
     if !removed {

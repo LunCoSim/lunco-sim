@@ -43,11 +43,10 @@ with `good` (default) for full res.
   `LUNCOSIM_CACHE` to ONE absolute workspace-level `.cache/` in their
   `.cargo/config.toml`, so every worktree and twin shares a single pool of
   regenerable data (MSL, textures, ephemeris, downloaded sources).
-- **Twin cache** — `<TWIN>/.cache`. A twin's downloads land beside the twin
-  by DEFAULT, so the folder is self-contained: copy it and the data travels,
-  delete it and nothing is orphaned. `twin://` reads resolve `<twin>/<rel>`
-  first, then `<twin>/.cache/<rel>`.
-- **`shared = true`** on an entry sends it to the global pool instead
+- **Twin cache** — `<TWIN>/.cache`. A Twin's default-owned downloads land
+  beside the Twin. `twin://` reads resolve `<twin>/<rel>` first, then
+  `<twin>/.cache/<rel>`, then the global cache `<cache>/<rel>`.
+- **`shared = true`** on an entry sends its write to the global pool instead
   (`<cache>/sources/<sha256(url)[..16]>/<basename>`) — one download per URL,
   reused by every twin and worktree. Use it for multi-GB upstream products
   several twins reuse: the LROC DTM entries all set it, so `apollo15_dtm` and

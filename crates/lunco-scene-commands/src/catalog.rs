@@ -368,7 +368,14 @@ pub fn dispatch_usd_scan(
     scan: &mut CatalogScan,
 ) -> usize {
     let mut started = 0;
-    for asset in lunco_assets::discovery::list_usd_assets(manifest, roots) {
+    let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
+        Ok(assets) => assets,
+        Err(error) => {
+            error!("CATALOG: Twin registry unavailable during USD scan: {error}");
+            return 0;
+        }
+    };
+    for asset in assets {
         if !scan.dispatched.insert(asset.asset_path.clone()) {
             continue;
         }
@@ -477,7 +484,14 @@ pub fn scan_usd_into_catalog_blocking(
     catalog: &mut SpawnCatalog,
 ) -> usize {
     let mut added = 0;
-    for asset in lunco_assets::discovery::list_usd_assets(manifest, roots) {
+    let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
+        Ok(assets) => assets,
+        Err(error) => {
+            error!("CATALOG: Twin registry unavailable during blocking USD scan: {error}");
+            return 0;
+        }
+    };
+    for asset in assets {
         let meta = futures_lite::future::block_on(read_asset_meta(&asset));
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;

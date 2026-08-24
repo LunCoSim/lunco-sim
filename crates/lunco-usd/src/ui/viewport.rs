@@ -629,8 +629,13 @@ fn on_twin_closed_for_viewport(_trigger: On<TwinClosed>, mut commands: Commands)
             install_active_doc(world, doc);
             return;
         };
-        if world.resource::<TwinRoots>().root_for(&name).is_some() {
-            return;
+        match world.resource::<TwinRoots>().root_for(&name) {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(error) => {
+                error!("cannot inspect Twin authority `{name}` after close: {error}");
+                return;
+            }
         }
         world
             .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
@@ -797,8 +802,16 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         .resource::<crate::twin_projection::DocBackedTwinScenes>()
         .coords_of(doc)
     {
-        if world.resource::<TwinRoots>().root_for(&coords.0).is_some() {
-            return Some(coords);
+        match world.resource::<TwinRoots>().root_for(&coords.0) {
+            Ok(Some(_)) => return Some(coords),
+            Ok(None) => {}
+            Err(error) => {
+                error!(
+                    "cannot inspect viewport Twin authority `{}`: {error}",
+                    coords.0
+                );
+                return None;
+            }
         }
         world
             .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
