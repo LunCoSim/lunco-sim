@@ -54,6 +54,9 @@ pub const DEM_BUILD_FAILED: &str = "DEM_BUILD_FAILED";
 /// using the coarse product and scene teardown remains the ownership boundary.
 pub const DEM_REFINEMENT_FAILED: &str = "DEM_REFINEMENT_FAILED";
 
+/// Structured runtime-fault kind for a DEM build that did not produce ground.
+pub const TERRAIN_BUILD_FAULT_KIND: &str = "terrain-build-failed";
+
 /// Construct terrain failure telemetry for the selected lifecycle phase.
 /// Keeping the mnemonic and severity decision here prevents native, web, and
 /// watchdog paths from disagreeing about whether a coarse or full-stage error
@@ -247,7 +250,7 @@ pub struct DemTerrainRequest {
 #[derive(Component, Clone)]
 pub struct DemBaseGrid(
     pub std::sync::Arc<HeightGrid>,
-    /// Cached `grid_key` of the base grid (folds the whole raster). Computed once
+    /// Cached content key of the base grid (folds the whole raster). Computed once
     /// at build time so a live re-stamp reusing this Arc never re-hashes the
     /// multi-million-point grid — the all-analytic stack (the norm) reuses it.
     pub u64,
@@ -268,7 +271,9 @@ pub struct DemTerrainSource {
 /// Progress is derived from build-component presence each frame ([`update_terrain_gen_status`]),
 /// so it needs no plumbing through the async bake tasks. The heavy crater stamp
 /// exposes no incremental callback, so `fraction` stays `None` (the UI shows an
-/// animated spinner) — `phase` carries the meaningful signal.
+/// animated spinner) — `phase` carries the meaningful signal. A queued request is
+/// deliberately indeterminate: it is not a measurable percentage and must not be
+/// presented as one.
 /// The current terrain-build phase — a **typed** signal so the UI caption can't
 /// drift from a stringly-matched substring (native "Baking"/"Preparing" silently
 /// fell through the old `phase.contains("…")` match to the wrong caption).
@@ -302,7 +307,7 @@ impl TerrainGenPhase {
     /// One-line caption describing what the phase is doing (overlay subtext).
     pub fn caption(self) -> &'static str {
         match self {
-            Self::Preparing => "Preparing terrain generation…",
+            Self::Preparing => "Waiting for the terrain build task to start…",
             Self::Downloading => "Fetching heightmap file from server…",
             // Native "Baking" and web "Building" both decode + stamp + build colliders.
             Self::Building | Self::Baking => {
@@ -337,7 +342,7 @@ pub struct TerrainGenStatus {
 /// forever, so the app read "generating" (physics still held, `start_dem_builds`
 /// still skipping the entity) while the user read "done". The watchdog now
 /// cancels the actual job and reports it, so the two stories agree.
-const GEN_STATUS_MAX_SECS: f32 = 60.0;
+pub(crate) const TERRAIN_WORK_MAX_SECS: f32 = 60.0;
 
 /// Wall-clock start of the current scene-owned terrain generation window.
 ///
@@ -359,7 +364,12 @@ fn mark_dem_build_failed(
     entity: Entity,
     detail: impl Into<String>,
 ) {
-    faults.raise("terrain-build-failed", Some(entity), "DEM terrain", detail);
+    faults.raise(
+        TERRAIN_BUILD_FAULT_KIND,
+        Some(entity),
+        "DEM terrain",
+        detail,
+    );
     if let Some(holds) = holds {
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, false);
     }
@@ -489,9 +499,9 @@ fn update_terrain_gen_status(
         .saturating_duration_since(started_at)
         .as_secs_f32();
 
-    if elapsed > GEN_STATUS_MAX_SECS {
+    if elapsed > TERRAIN_WORK_MAX_SECS {
         warn!(
-            "[terrain] generation held {GEN_STATUS_MAX_SECS}s — cancelling the wedged build \
+            "[terrain] generation held {TERRAIN_WORK_MAX_SECS}s — cancelling the wedged build \
              (lost worker reply or stuck bake?)"
         );
         // CANCEL THE JOB, not just the spinner. Dropping `DemBuildTask` drops the
@@ -533,12 +543,12 @@ fn update_terrain_gen_status(
         };
         let detail = if missing_ground {
             format!(
-                "Terrain build for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and was \
+                "Terrain build for '{named}' gave no result after {TERRAIN_WORK_MAX_SECS:.0}s and was \
                  cancelled — the ground is missing. Reload the scene to retry."
             )
         } else {
             format!(
-                "Terrain refinement for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and \
+                "Terrain refinement for '{named}' gave no result after {TERRAIN_WORK_MAX_SECS:.0}s and \
                  was cancelled; the already-built coarse terrain remains active."
             )
         };
@@ -586,7 +596,9 @@ fn update_terrain_gen_status(
     } else if baking {
         (TerrainGenPhase::Baking, None)
     } else {
-        (TerrainGenPhase::Preparing, Some(0.1))
+        // A request without an admitted task is a scheduler hand-off, not 10% of
+        // the bake. Keep it indeterminate until the owning task exists.
+        (TerrainGenPhase::Preparing, None)
     };
     status.phase = phase;
     status.fraction = fraction;
@@ -939,7 +951,7 @@ struct DemBuild {
     /// The raster base grid BEFORE any layer folded in — retained so a live
     /// layer edit re-composes off it without re-reading the GeoTIFF.
     base_grid: std::sync::Arc<HeightGrid>,
-    /// `grid_key(&base_grid)`, computed where the grid was produced (off-thread
+    /// `lunco_terrain_bake::grid_content_key(&base_grid)`, computed where the grid was produced (off-thread
     /// on native) — assembly must never re-fold the multi-million-point raster
     /// on the main thread.
     base_key: u64,
@@ -954,7 +966,7 @@ struct DemBuild {
 }
 
 #[derive(Component, Clone, Copy)]
-pub(crate) struct DemVisualTargetRes(usize);
+pub(crate) struct DemVisualTargetRes(pub(crate) usize);
 
 /// Build the optional static visual product from the composed oracle. The
 /// collider and retained base never pass through this function: `targetRes` is
@@ -1083,10 +1095,9 @@ fn dem_build_from_baked(
 ) -> Result<DemBuild, String> {
     let half_extent = baked.grid.half_extent;
     let base_grid = std::sync::Arc::new(baked.base_grid);
-    // The worker's `base_grid` IS the (stamped) working grid, so ONE fold keys
-    // both the retained base and the oracle — this runs on the wasm main
-    // thread, where a second multi-million-point fold is a visible hitch.
-    let base_key = crate::oracle::grid_key(&base_grid);
+    // The worker's `base_grid` IS the (stamped) working grid. Its content key
+    // was computed before the reply crossed into the page thread.
+    let base_key = baked.base_key;
     let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new_with_base_key(
         std::sync::Arc::new(baked.grid),
         contributions,
@@ -1416,6 +1427,7 @@ fn start_dem_builds(
                                     site,
                                     native_res,
                                     res: grid.res,
+                                    grid_key: lunco_terrain_bake::grid_content_key(&grid),
                                     grid: Ok(grid),
                                 },
                             );
@@ -1473,7 +1485,7 @@ fn start_dem_builds(
             // it without re-reading the GeoTIFF. Its content key is folded HERE,
             // off-thread — assembly on the main thread reuses it.
             let base_grid = std::sync::Arc::new(tile.clone());
-            let base_key = crate::oracle::grid_key(&base_grid);
+            let base_key = lunco_terrain_bake::grid_content_key(&base_grid);
             // Fold any genuinely-rasterising layers into the working grid (most
             // height layers contribute analytically below instead).
             for layer in &layers {
@@ -1826,6 +1838,7 @@ fn finish_dem_worker(
                     site: site.clone(),
                     native_res: reply.native_res,
                     res: reply.res,
+                    base_key: reply.grid_key,
                     stage: lunco_terrain_bake::BakeStage::Coarse,
                 };
                 let built = match dem_build_from_baked(
@@ -1890,13 +1903,10 @@ fn finish_dem_worker(
                     // the retained base stays coarse, so the next brush stroke's
                     // `spawn_restamp_task` re-composes from the coarse grid and the
                     // terrain visibly REVERTS to preview heights after sculpting.
-                    // TODO(backlog): the one remaining main-thread `grid_key` fold —
-                    // the worker reply protocol carries no content key, so the Full
-                    // swap must re-hash the multi-million-point grid here. Removing
-                    // it needs a protocol change (worker folds the key off-thread and
-                    // ships it in the reply). See the engineering-backlog doc in
-                    // docs/architecture (worker reply content key).
-                    let base_key = crate::oracle::grid_key(&base);
+                    // The worker calculated this key while producing the grid;
+                    // folding the full reply on the page thread would recreate
+                    // the cold-load hitch this progressive path is meant to avoid.
+                    let base_key = reply.grid_key;
                     commands
                         .entity(entity)
                         .try_insert(DemBaseGrid(base.clone(), base_key));
@@ -1930,6 +1940,7 @@ fn finish_dem_worker(
                         site: reply.site.clone(),
                         native_res: reply.native_res,
                         res: reply.res,
+                        base_key: reply.grid_key,
                         stage: lunco_terrain_bake::BakeStage::Full,
                     };
                     let built = match dem_build_from_baked(
@@ -3006,6 +3017,30 @@ mod visual_product_tests {
     }
 
     #[test]
+    fn queued_generation_status_is_indeterminate() {
+        let mut app = App::new();
+        app.init_resource::<TerrainGenStatus>()
+            .init_resource::<TerrainGenWatchdog>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(Update, update_terrain_gen_status);
+        app.world_mut().spawn(DemTerrainRequest {
+            uri: "terrain/apollo15".into(),
+            half_window: 10.0,
+            target_res: 0,
+            lod_viz: false,
+            collider_ring: false,
+            with_default_material: false,
+        });
+
+        app.update();
+
+        let status = app.world().resource::<TerrainGenStatus>();
+        assert!(status.active);
+        assert_eq!(status.phase, TerrainGenPhase::Preparing);
+        assert_eq!(status.fraction, None);
+    }
+
+    #[test]
     fn bounded_height_refresh_preserves_scatter_sink_offset() {
         assert_eq!(scatter_y_after_height_change(-0.25, 10.0, 12.5), 2.25);
     }
@@ -3075,7 +3110,7 @@ mod visual_product_tests {
         );
 
         let fault = faults.first.as_ref().expect("terrain fault recorded");
-        assert_eq!(fault.kind, "terrain-build-failed");
+        assert_eq!(fault.kind, TERRAIN_BUILD_FAULT_KIND);
         assert_eq!(fault.entity, Some(entity));
         assert!(!holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
         assert!(holds.holds(lunco_physics::PhysicsHolds::CINEMATIC));

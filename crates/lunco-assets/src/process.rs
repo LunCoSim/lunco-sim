@@ -13,15 +13,63 @@
 //! ```
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::cache_dir;
-#[cfg(not(target_arch = "wasm32"))]
 use image::GenericImageView;
 #[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use usvg::{Options, Tree};
+
+/// Cancellation and commit ownership for one processing attempt.
+///
+/// Processing may spend a long time decoding or resampling a large source, so
+/// cancellation is cooperative at pipeline boundaries. The commit gate is
+/// shared with the dataset download attempt: closing a Twin acquires it before
+/// retiring the attempt, which makes the close boundary a real write barrier.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub struct ProcessControl {
+    cancel: Arc<AtomicBool>,
+    commit_gate: Arc<Mutex<()>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProcessControl {
+    pub(crate) fn new(cancel: Arc<AtomicBool>, commit_gate: Arc<Mutex<()>>) -> Self {
+        Self {
+            cancel,
+            commit_gate,
+        }
+    }
+
+    /// Control for an explicit CLI processing invocation, which has no
+    /// lifecycle owner to cancel it.
+    pub fn unrestricted() -> Self {
+        Self::new(Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(())))
+    }
+
+    fn check(&self) -> Result<(), std::io::Error> {
+        if self.cancel.load(Ordering::Acquire) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "processing cancelled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn commit_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, std::io::Error> {
+        self.commit_gate.lock().map_err(|_| {
+            std::io::Error::other("processing commit gate is poisoned; refusing to commit")
+        })
+    }
+}
 
 /// Processing configuration from `Assets.toml`.
 ///
@@ -187,84 +235,83 @@ fn default_dem_height_scale() -> f64 {
 /// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
 ///   [`ProcessConfig`] kind list.
 ///
-/// `twin_root` is the caller-supplied Twin folder (the CLI's `--twin <DIR>`).
-/// `output_root = "twin"` resolves against it directly; `"cache"` resolves
-/// against that Twin's OWN cache, so a processed product stays inside the
-/// folder that declared it. Without a Twin, both fall back to the shared cache.
+/// `cache_root` is the cache that owns the declaration's derived artifact.
+/// Engine entries use the global cache; a Twin entry uses its own cache unless
+/// its declaration opts into the shared pool. `twin_root` is the caller-supplied
+/// Twin folder for `output_root = "twin"`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
+    cache_root: &Path,
     twin_root: Option<&Path>,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
-    let owner_cache = twin_root.map(crate::twin_cache_dir);
-    let output_path = process_output_path(process, owner_cache.as_deref(), twin_root);
+    control.check()?;
+    let output_path = process_output_path(process, Some(cache_root), twin_root)?;
 
     // Create output directory if needed
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    process_asset_to(source_path, process, &output_path)
+    process_asset_to(source_path, process, &output_path, control)
 }
 
 /// Where a `[*.process]` step writes its product — the ONE resolver, so the
 /// step that WRITES the artifact and the registry that reports whether it
 /// EXISTS can never disagree about the path.
 ///
-/// `cache_root` is the cache of whoever DECLARED the asset — a Twin's own
-/// `.cache` for a Twin manifest, the shared pool for a crate's — and is what
-/// the default `output_root = "cache"` resolves against. The processed product
-/// belongs beside the source it was derived from, so a Twin packed into an
-/// archive carries its derived textures with it instead of leaving them behind
-/// in a machine-global cache the recipient does not have.
+/// `cache_root` is the cache selected by the declaration's owner — a Twin's
+/// `.cache` by default, the global pool for a crate or a Twin entry marked
+/// `shared = true` — and is what the default `output_root = "cache"` resolves
+/// against. Twin readers search the Twin-local and global caches through one
+/// logical path, so processed products do not encode their physical location.
 ///
 /// `twin_root` is the Twin FOLDER itself, for `output_root = "twin"` (authored
-/// content the Twin ships, not a cache artifact). Both fall back to the shared
-/// cache when absent.
+/// content the Twin ships, not a cache artifact). The selected root is required
+/// by the corresponding output mode; an invalid declaration is an error.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_output_path(
     process: &ProcessConfig,
     cache_root: Option<&Path>,
     twin_root: Option<&Path>,
-) -> std::path::PathBuf {
+) -> Result<std::path::PathBuf, std::io::Error> {
+    if !crate::asset_path::is_safe_relative_path(&process.output) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "process output {:?} must be a safe relative path",
+                process.output
+            ),
+        ));
+    }
     match process.output_root.as_str() {
-        "assets" => {
-            // Workspace-rooted: writes under <workspace>/assets/<output>.
-            // We resolve the workspace root by walking up from the
-            // crate manifest dir (set at compile time) — same heuristic
-            // as `cache_dir`'s fallback walk. Falls back to a CWD-relative
-            // `assets/` if the manifest dir isn't useful.
-            let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let mut current = Some(manifest);
-            let mut ws_root = None;
-            for _ in 0..10 {
-                if let Some(dir) = &current {
-                    if dir.join("assets").is_dir() && dir.join("Cargo.toml").is_file() {
-                        ws_root = Some(dir.clone());
-                        break;
-                    }
-                    current = dir.parent().map(std::path::PathBuf::from);
-                }
-            }
-            ws_root
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("assets")
-                .join(&process.output)
-        }
+        "assets" => Ok(crate::assets_dir_abs().join(&process.output)),
         "twin" => {
             // Caller-supplied Twin folder root (the CLI's --twin flag).
-            // Without it there's nowhere Twin-relative to write — fall back
-            // to the cache so a manifest authored for a twin doesn't hard-
-            // fail when run outside one.
-            let root = twin_root
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(cache_dir);
-            root.join(&process.output)
+            let root = twin_root.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "process output_root=\"twin\" requires an open Twin root",
+                )
+            })?;
+            Ok(root.join(&process.output))
         }
-        _ => cache_root
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(cache_dir)
-            .join(&process.output),
+        "cache" => {
+            let root = cache_root.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "process output_root=\"cache\" requires an owning cache root",
+                )
+            })?;
+            Ok(root.join(&process.output))
+        }
+        other => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "unknown process output_root `{other}` (expected \"assets\", \"cache\", or \"twin\")"
+            ),
+        )),
     }
 }
 
@@ -274,7 +321,9 @@ fn process_asset_to(
     source_path: &Path,
     process: &ProcessConfig,
     output_path: &Path,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
+    control.check()?;
     let output_path = output_path.to_path_buf();
 
     // ── Bake-key staleness check ──────────────────────────────────────────
@@ -295,11 +344,20 @@ fn process_asset_to(
         return Ok(());
     }
 
+    let stage_root = staging_root(&output_path)?;
+    let _stage_cleanup = StageCleanup(stage_root.clone());
+    let stage_output = stage_root.join(output_path.file_name().ok_or_else(|| {
+        io_err(format!(
+            "processing output has no file name: {}",
+            output_path.display()
+        ))
+    })?);
+
     match process.kind.as_str() {
-        "gltf" => process_gltf(source_path, &output_path)?,
-        "dem" => process_dem(source_path, &output_path, process)?,
-        "map" => process_map(source_path, &output_path, process)?,
-        "normalmap" => process_normalmap(source_path, &output_path, process)?,
+        "gltf" => process_gltf(source_path, &stage_output, control)?,
+        "dem" => process_dem(source_path, &stage_output, process, control)?,
+        "map" => process_map(source_path, &stage_output, process, control)?,
+        "normalmap" => process_normalmap(source_path, &stage_output, process, control)?,
         "texture" => {
             let [tw, th] = process.target_resolution.ok_or_else(|| {
                 std::io::Error::new(
@@ -312,9 +370,9 @@ fn process_asset_to(
                 .and_then(|s| s.to_str())
                 .unwrap_or("");
             match ext {
-                "svg" => process_svg(source_path, &output_path, tw, th)?,
+                "svg" => process_svg(source_path, &stage_output, tw, th)?,
                 "jpg" | "jpeg" | "png" | "tiff" | "tif" | "bmp" | "webp" => {
-                    process_image(source_path, &output_path, tw, th)?
+                    process_image(source_path, &stage_output, tw, th)?
                 }
                 _ => {
                     return Err(std::io::Error::new(
@@ -336,11 +394,115 @@ fn process_asset_to(
         }
     }
 
+    control.check()?;
     // Stamp only after a fully successful bake, so a failed/interrupted run
-    // never masquerades as fresh.
-    std::fs::write(&stamp_path, &key)?;
+    // never masquerades as fresh. The staged artifact and all of its sidecars
+    // become visible together under the commit gate.
+    std::fs::write(bake_stamp_path(&stage_output), &key)?;
+    commit_staged_output(&stage_root, &output_path, process, control)?;
 
     println!("  ✓ processed → {}", output_path.display());
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct StageCleanup(std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for StageCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error> {
+    let parent = output_path.parent().ok_or_else(|| {
+        io_err(format!(
+            "processing output has no parent: {}",
+            output_path.display()
+        ))
+    })?;
+    static STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = STAGE.fetch_add(1, Ordering::Relaxed);
+    let root = parent.join(format!(".lunco-process-{}-{id}", std::process::id()));
+    std::fs::create_dir(&root)?;
+    Ok(root)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn commit_staged_output(
+    stage_root: &Path,
+    output_path: &Path,
+    process: &ProcessConfig,
+    control: &ProcessControl,
+) -> Result<(), std::io::Error> {
+    let _gate = control.commit_guard()?;
+    control.check()?;
+
+    let mut destinations = vec![output_path.to_path_buf(), bake_stamp_path(output_path)];
+    if process.kind == "map" && output_path.extension().is_some() {
+        destinations.push(output_path.with_extension("mean"));
+    }
+    let backup_root = stage_root.with_file_name(format!(
+        ".{}-backup",
+        stage_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("lunco-process")
+    ));
+    std::fs::create_dir(&backup_root)?;
+    let mut backups = Vec::new();
+    let backup_result = (|| {
+        for (index, destination) in destinations.iter().enumerate() {
+            if destination.exists() {
+                let backup = backup_root.join(index.to_string());
+                std::fs::rename(destination, &backup)?;
+                backups.push((destination.clone(), backup));
+            }
+        }
+        Ok::<(), std::io::Error>(())
+    })();
+    if let Err(error) = backup_result {
+        for (destination, backup) in backups.iter().rev() {
+            let _ = std::fs::rename(backup, destination);
+        }
+        drop(_gate);
+        let _ = std::fs::remove_dir_all(&backup_root);
+        return Err(error);
+    }
+
+    let result = (|| {
+        for entry in std::fs::read_dir(stage_root)? {
+            let entry = entry?;
+            let destination = output_path
+                .parent()
+                .ok_or_else(|| io_err("staged output has no parent".into()))?
+                .join(entry.file_name());
+            std::fs::rename(entry.path(), destination)?;
+        }
+        Ok::<(), std::io::Error>(())
+    })();
+
+    if let Err(error) = result {
+        for (index, destination) in destinations.iter().rev().enumerate() {
+            if destination.exists() {
+                // A failed commit must not recursively delete a large
+                // replacement while Twin teardown waits on the barrier. Move
+                // it aside in O(1); the cleanup runs after the guard drops.
+                let _ = std::fs::rename(destination, backup_root.join(format!("failed-{index}")));
+            }
+        }
+        for (destination, backup) in backups.iter().rev() {
+            let _ = std::fs::rename(backup, destination);
+        }
+        drop(_gate);
+        let _ = std::fs::remove_dir_all(&backup_root);
+        return Err(error);
+    }
+
+    drop(_gate);
+    let _ = std::fs::remove_dir_all(&backup_root);
     Ok(())
 }
 
@@ -392,12 +554,39 @@ fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
 /// Whether a processed artifact is complete enough for a consumer to load.
 ///
 /// The output itself may be a file or a directory (`dem` delivers a terrain
-/// site folder). In both cases the stamp is written only after the processor
-/// has completed successfully, so a partial output cannot be advertised as
-/// installed merely because its path exists.
+/// site folder). The pipeline-specific payload and all required sidecars are
+/// checked before the completion stamp is accepted. When the source is also
+/// present, its current content-addressed bake key must match; packaged builds
+/// may omit the raw source, in which case the non-empty completion stamp is the
+/// integrity boundary created by the packaging pipeline.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn processed_output_present(output_path: &Path) -> bool {
-    (output_path.is_file() || output_path.is_dir()) && bake_stamp_path(output_path).is_file()
+pub fn processed_output_present(
+    output_path: &Path,
+    process: &ProcessConfig,
+    source_path: Option<&Path>,
+) -> bool {
+    let payload_present = match process.kind.as_str() {
+        "dem" => {
+            output_path.is_dir()
+                && output_path
+                    .join("materials/textures/heightmap.tif")
+                    .is_file()
+        }
+        "map" => output_path.is_file() && output_path.with_extension("mean").is_file(),
+        "gltf" | "normalmap" | "texture" => output_path.is_file(),
+        _ => false,
+    };
+    if !payload_present {
+        return false;
+    }
+    let Ok(stamp) = std::fs::read_to_string(bake_stamp_path(output_path)) else {
+        return false;
+    };
+    let stamp = stamp.trim();
+    if stamp.is_empty() {
+        return false;
+    }
+    source_path.is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp))
 }
 
 /// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a
@@ -442,7 +631,7 @@ fn bake_key(source: &Path, cfg: &ProcessConfig) -> Result<String, std::io::Error
 /// on `PATH`; the gltf-transform CLI itself is fetched by `npx` on first
 /// run and cached. Native-only — wasm builds skip this whole module.
 #[cfg(not(target_arch = "wasm32"))]
-fn process_gltf(source: &Path, output: &Path) -> std::io::Result<()> {
+fn process_gltf(source: &Path, output: &Path, control: &ProcessControl) -> std::io::Result<()> {
     use std::process::Command;
 
     // Resolve the absolute path once, rather than spawning the bare name
@@ -460,35 +649,66 @@ fn process_gltf(source: &Path, output: &Path) -> std::io::Result<()> {
     // rather than rewriting `source` so a failed second stage doesn't
     // leave the source corrupted, and so re-running `process` is
     // idempotent (the source is the immutable Assets.toml-pinned blob).
-    let tmp = crate::temp_dir().join(format!("gltf_decoded_{}.glb", std::process::id()));
+    static GLTF_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stage_id = GLTF_STAGE.fetch_add(1, Ordering::Relaxed);
+    let tmp = crate::temp_dir().join(format!(
+        "gltf_decoded_{}-{stage_id}.glb",
+        std::process::id()
+    ));
 
-    let s1 = Command::new(&npx)
-        .args(["--yes", "@gltf-transform/cli", "copy"])
-        .arg(source)
-        .arg(&tmp)
-        .status()?;
-    if !s1.success() {
-        return Err(std::io::Error::other(format!(
-            "gltf-transform copy failed: exit {:?}",
-            s1.code()
-        )));
-    }
+    let result = (|| {
+        let s1 = run_process_command(
+            Command::new(&npx)
+                .args(["--yes", "@gltf-transform/cli", "copy"])
+                .arg(source)
+                .arg(&tmp),
+            control,
+        )?;
+        if !s1.success() {
+            return Err(std::io::Error::other(format!(
+                "gltf-transform copy failed: exit {:?}",
+                s1.code()
+            )));
+        }
 
-    let s2 = Command::new(&npx)
-        .args(["--yes", "@gltf-transform/cli", "png"])
-        .arg(&tmp)
-        .arg(output)
-        .args(["--formats", "*"])
-        .status()?;
+        let s2 = run_process_command(
+            Command::new(&npx)
+                .args(["--yes", "@gltf-transform/cli", "png"])
+                .arg(&tmp)
+                .arg(output)
+                .args(["--formats", "*"]),
+            control,
+        )?;
+        if !s2.success() {
+            return Err(std::io::Error::other(format!(
+                "gltf-transform png failed: exit {:?}",
+                s2.code()
+            )));
+        }
+        Ok(())
+    })();
     let _ = std::fs::remove_file(&tmp);
-    if !s2.success() {
-        return Err(std::io::Error::other(format!(
-            "gltf-transform png failed: exit {:?}",
-            s2.code()
-        )));
-    }
+    result
+}
 
-    Ok(())
+#[cfg(not(target_arch = "wasm32"))]
+fn run_process_command(
+    command: &mut std::process::Command,
+    control: &ProcessControl,
+) -> std::io::Result<std::process::ExitStatus> {
+    control.check()?;
+    let mut child = command.spawn()?;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if let Err(error) = control.check() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -569,20 +789,27 @@ fn process_dem(
     source: &Path,
     output_dir: &Path,
     cfg: &ProcessConfig,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
+    control.check()?;
     let mut src = decode_gray_source(source)?;
     apply_dem_height_units(
         &mut src.samples,
         cfg.source_height_scale_m_per_unit,
         cfg.source_height_offset_m,
+        control,
     )?;
     let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, &src, "dem")?;
     let (out_n, win) = (roi.out_n, roi.win);
     // Sanity ceiling only. A DEM's voids are FILLED below, not avoided — this
     // exists to catch a window that has wandered off the product entirely.
-    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "dem", 0.05)?;
-    let mut heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
-    let filled = fill_dem_voids(&mut heights, out_n, "dem")?;
+    reject_if_mostly_nodata(
+        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
+        "dem",
+        0.05,
+    )?;
+    let mut heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let filled = fill_dem_voids(&mut heights, out_n, "dem", control)?;
     if filled > 0 {
         println!(
             "    filled {filled} void sample(s) ({:.2}%) by neighbour interpolation",
@@ -656,6 +883,7 @@ fn apply_dem_height_units(
     samples: &mut [f64],
     scale_m_per_unit: f64,
     offset_m: f64,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     if !scale_m_per_unit.is_finite() || scale_m_per_unit == 0.0 {
         return Err(io_err(
@@ -665,7 +893,10 @@ fn apply_dem_height_units(
     if !offset_m.is_finite() {
         return Err(io_err("dem source height offset must be finite".into()));
     }
-    for value in samples {
+    for (index, value) in samples.iter_mut().enumerate() {
+        if index.is_multiple_of(4096) {
+            control.check()?;
+        }
         if value.is_finite() {
             *value = *value * scale_m_per_unit + offset_m;
             if !value.is_finite() {
@@ -789,25 +1020,32 @@ fn valid_data_bounds(samples: &[f64], w: usize, h: usize) -> Option<(usize, usiz
 
 /// The RAW source samples inside the ROI, un-resampled.
 ///
-/// The nodata guard must see these, not the resampled output:
-/// `resample_roi_bilinear` substitutes `0.0` for every non-finite neighbour, so
-/// by the time a value reaches the bake, "no data" has already been laundered
-/// into a plausible-looking measurement and `is_finite()` can no longer find it.
+/// The nodata guard sees these rather than the resampled output so its coverage
+/// decision is made against source measurements, independently of interpolation.
 #[cfg(not(target_arch = "wasm32"))]
-fn roi_samples(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Vec<f64> {
+fn roi_samples(
+    samples: &[f64],
+    src_w: usize,
+    src_h: usize,
+    roi: &RoiCrop,
+    control: &ProcessControl,
+) -> Result<Vec<f64>, std::io::Error> {
     // RGB sources keep their data in `planes`; nothing to check here (see
     // `valid_data_bounds`). Returning empty makes the guard a no-op rather than
     // an index panic.
     if samples.len() != src_w.saturating_mul(src_h) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut out = Vec::with_capacity(roi.win * roi.win);
-    for y in roi.y0..(roi.y0 + roi.win).min(src_h) {
+    for (row, y) in (roi.y0..(roi.y0 + roi.win).min(src_h)).enumerate() {
+        if row.is_multiple_of(4096) {
+            control.check()?;
+        }
         for x in roi.x0..(roi.x0 + roi.win).min(src_w) {
             out.push(samples[y * src_w + x]);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Interpolate DEM voids from their valid neighbours. Returns how many were filled.
@@ -835,18 +1073,27 @@ fn roi_samples(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Ve
 /// a gap that survives it is too big to fill honestly and is a real authoring
 /// error, not a speckle.
 #[cfg(not(target_arch = "wasm32"))]
-fn fill_dem_voids(v: &mut [f64], n: usize, kind: &str) -> Result<usize, std::io::Error> {
+fn fill_dem_voids(
+    v: &mut [f64],
+    n: usize,
+    kind: &str,
+    control: &ProcessControl,
+) -> Result<usize, std::io::Error> {
     const MAX_PASSES: usize = 64;
     let idx = |x: usize, y: usize| y * n + x;
     let mut filled = 0usize;
     for _ in 0..MAX_PASSES {
+        control.check()?;
         let holes: Vec<usize> = (0..v.len()).filter(|&i| !v[i].is_finite()).collect();
         if holes.is_empty() {
             return Ok(filled);
         }
         let snapshot = v.to_vec();
         let mut progressed = false;
-        for i in holes {
+        for (index, i) in holes.into_iter().enumerate() {
+            if index.is_multiple_of(4096) {
+                control.check()?;
+            }
             let (x, y) = (i % n, i / n);
             let mut sum = 0.0;
             let mut cnt = 0.0;
@@ -1048,12 +1295,19 @@ fn resolve_roi(
 }
 
 /// Resample the crop's source window to `out_n × out_n` (bilinear;
-/// nodata/NaN treated as 0 — same policy the DEM pipeline always had).
+/// finite neighbours are renormalised and an all-nodata sample remains NaN).
 #[cfg(not(target_arch = "wasm32"))]
-fn resample_roi_bilinear(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Vec<f64> {
+fn resample_roi_bilinear(
+    samples: &[f64],
+    src_w: usize,
+    src_h: usize,
+    roi: &RoiCrop,
+    control: &ProcessControl,
+) -> Result<Vec<f64>, std::io::Error> {
     let (x0, y0, win, out_n) = (roi.x0, roi.y0, roi.win, roi.out_n);
     let mut out = vec![0.0f64; out_n * out_n];
     for oy in 0..out_n {
+        control.check()?;
         // Source row (nearest at the window's centre; bilinear inside).
         let sy_f = y0 as f64 + (oy as f64 / (out_n - 1).max(1) as f64) * (win - 1) as f64;
         let sy0 = sy_f.floor() as usize;
@@ -1103,7 +1357,7 @@ fn resample_roi_bilinear(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiC
             out[oy * out_n + ox] = if wsum > 1e-12 { acc / wsum } else { f64::NAN };
         }
     }
-    out
+    Ok(out)
 }
 
 /// `kind = "map"` pipeline — crop a co-registered raster to the same
@@ -1119,7 +1373,9 @@ fn process_map(
     source: &Path,
     output_path: &Path,
     cfg: &ProcessConfig,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
+    control.check()?;
     let ext = source
         .extension()
         .and_then(|s| s.to_str())
@@ -1164,10 +1420,13 @@ fn process_map(
         let out_n = roi.out_n;
         let rgb: Vec<Vec<f64>> = planes
             .iter()
-            .map(|pl| resample_roi_bilinear(pl, w, h, &roi))
-            .collect();
+            .map(|pl| resample_roi_bilinear(pl, w, h, &roi, control))
+            .collect::<Result<_, _>>()?;
         let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
         for (i, px) in png.pixels_mut().enumerate() {
+            if i.is_multiple_of(out_n.max(1) * 64) {
+                control.check()?;
+            }
             for (channel, plane) in px.0.iter_mut().zip(&rgb) {
                 *channel = plane[i].round().clamp(0.0, 255.0) as u8;
             }
@@ -1181,8 +1440,12 @@ fn process_map(
     let src = decode_gray_source(source)?;
     let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &src, "map")?;
     let out_n = roi.out_n;
-    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "map", 0.02)?;
-    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    reject_if_mostly_nodata(
+        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
+        "map",
+        0.02,
+    )?;
+    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
 
     // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
     // is the scene, and mosaic-wide outliers would flatten its contrast).
@@ -1203,20 +1466,10 @@ fn process_map(
     //   nodata hole. If a baked map is ever bimodal white/black again, suspect
     //   the decoder before touching the stretch.
     //
-    // * `!= 0.0` — this is the one that actually fires here, because
-    //   `resample_roi_bilinear` substitutes `0.0` for every non-finite neighbour
-    //   (see its inner `s` closure). So NaN does NOT reach this point: the
-    //   resampler has already turned the nodata margin into exact zeros. Measured
-    //   on `NAC_DTM_APOLLO15_M111571816_2M.IMG`: the source mosaic is 16.1%
-    //   `CORE_NULL` and contains NOT ONE exact `0.0` sample (real radiance there
-    //   ranges down to -174.9), so an exact zero after resampling means "fill",
-    //   never "dark ground".
-    //
-    // That substitution is itself lossy — a boundary pixel blends real neighbours
-    // against a fake 0 and comes out spuriously dark. Fixing it belongs in the
-    // resampler (propagate NaN, or renormalise the bilinear weights over the
-    // finite neighbours); this predicate only stops the result being baked as an
-    // albedo-annihilating black.
+    // * `!= 0.0` — the authored radiance convention reserves exact zero for
+    //   empty/black samples. The resampler preserves NaN and renormalises over
+    //   finite neighbours, so this check remains a source-domain guard rather
+    //   than a correction for interpolation.
     let is_measurement = |v: f64| v.is_finite() && v != 0.0;
 
     let mut sorted: Vec<f64> = gray
@@ -1307,16 +1560,18 @@ fn process_normalmap(
     source: &Path,
     output_path: &Path,
     cfg: &ProcessConfig,
+    control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
+    control.check()?;
     let src = decode_gray_source(source)?;
     let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
     let out_n = roi.out_n;
     reject_if_mostly_nodata(
-        &roi_samples(&src.samples, src.w, src.h, &roi),
+        &roi_samples(&src.samples, src.w, src.h, &roi, control)?,
         "normalmap",
         0.05,
     )?;
-    let mut h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    let mut h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
 
     // Fill voids BEFORE differencing, for the same reason `process_dem` does — and
     // this map is derived from the same heights, so it must reach the same answer
@@ -1330,7 +1585,7 @@ fn process_normalmap(
     // normal (-1,-1,-1)/√3 — a surface facing into the ground, lit as a black
     // speck. Zeroing the heights instead (the old behaviour) merely flattened the
     // void; propagating NaN without filling it is strictly worse.
-    let filled = fill_dem_voids(&mut h, out_n, "normalmap")?;
+    let filled = fill_dem_voids(&mut h, out_n, "normalmap", control)?;
     if filled > 0 {
         println!(
             "    filled {filled} void sample(s) ({:.2}%) before deriving normals",
@@ -1347,6 +1602,7 @@ fn process_normalmap(
     };
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
     for z in 0..out_n as isize {
+        control.check()?;
         for x in 0..out_n as isize {
             let dhdx = (at(x + 1, z) - at(x - 1, z)) / (2.0 * step);
             let dhdz = (at(x, z + 1) - at(x, z - 1)) / (2.0 * step);
@@ -1391,6 +1647,10 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn control() -> ProcessControl {
+        ProcessControl::unrestricted()
+    }
+
     /// The resampler propagates NaN now, so a void reaches the normal-map gradient.
     /// NaN is total there — `f64::clamp` propagates it and `as u8` saturates to 0,
     /// shipping RGB(0,0,0) = a normal facing INTO the ground. Guard both halves:
@@ -1417,7 +1677,7 @@ mod tests {
         let mut v = vec![10.0f64; n * n];
         v[3 * n + 3] = f64::NAN; // single interior void
         v[3 * n + 4] = f64::NAN; // and its neighbour, so the fill must iterate
-        let filled = fill_dem_voids(&mut v, n, "dem").expect("fills");
+        let filled = fill_dem_voids(&mut v, n, "dem", &control()).expect("fills");
         assert_eq!(filled, 2);
         assert!(v.iter().all(|s| s.is_finite()), "no void may survive");
         // Flat input ⇒ flat output: interpolation must not invent relief.
@@ -1432,18 +1692,79 @@ mod tests {
         let mut v = vec![f64::NAN; n * n];
         // One valid rim sample only: the interior is far wider than the pass cap.
         v[0] = 1.0;
-        assert!(fill_dem_voids(&mut v, n, "dem").is_err());
+        assert!(fill_dem_voids(&mut v, n, "dem", &control()).is_err());
     }
 
     #[test]
     fn dem_source_height_units_are_converted_before_sampling() {
         let mut samples = vec![1.25, f64::NAN, -2.0];
-        apply_dem_height_units(&mut samples, 2000.0, 0.0).expect("valid conversion");
+        apply_dem_height_units(&mut samples, 2000.0, 0.0, &control()).expect("valid conversion");
         assert_eq!(samples[0], 2500.0);
         assert!(samples[1].is_nan(), "nodata must remain non-finite");
         assert_eq!(samples[2], -4000.0);
-        assert!(apply_dem_height_units(&mut samples, 0.0, 0.0).is_err());
-        assert!(apply_dem_height_units(&mut samples, 1.0, f64::INFINITY).is_err());
+        assert!(apply_dem_height_units(&mut samples, 0.0, 0.0, &control()).is_err());
+        assert!(apply_dem_height_units(&mut samples, 1.0, f64::INFINITY, &control()).is_err());
+    }
+
+    #[test]
+    fn process_output_root_requires_its_authoritative_root() {
+        let mut cfg: ProcessConfig = toml::from_str(
+            r#"
+            kind = "texture"
+            output = "textures/test.png"
+            "#,
+        )
+        .expect("valid process config");
+
+        cfg.output_root = "cache".into();
+        assert!(process_output_path(&cfg, None, None).is_err());
+
+        cfg.output_root = "twin".into();
+        assert!(process_output_path(&cfg, Some(Path::new("/cache")), None).is_err());
+
+        cfg.output_root = "unknown".into();
+        assert!(process_output_path(&cfg, Some(Path::new("/cache")), None).is_err());
+    }
+
+    #[test]
+    fn cancelled_processing_cannot_commit_a_staged_artifact() {
+        let tmp = tempfile::tempdir().expect("temporary processing directory");
+        let output = tmp.path().join("texture.png");
+        std::fs::write(&output, b"old").expect("old output");
+        std::fs::write(bake_stamp_path(&output), b"old-key").expect("old stamp");
+
+        let stage = tmp.path().join(".lunco-process-stage");
+        std::fs::create_dir(&stage).expect("stage directory");
+        std::fs::write(stage.join("texture.png"), b"new").expect("staged output");
+        std::fs::write(stage.join("texture.png.bakekey"), b"new-key").expect("staged stamp");
+
+        let control = ProcessControl::unrestricted();
+        control.cancel.store(true, Ordering::Release);
+        let process = ProcessConfig {
+            kind: "texture".into(),
+            output: "texture.png".into(),
+            output_root: "cache".into(),
+            target_resolution: Some([1, 1]),
+            center_lat: None,
+            center_lon: None,
+            window_m: None,
+            pixel_scale_m: 2.0,
+            source_height_scale_m_per_unit: 1.0,
+            source_height_offset_m: 0.0,
+            src_min_lat: None,
+            src_max_lat: None,
+            src_min_lon: None,
+            src_max_lon: None,
+            site_id: None,
+            frame: None,
+        };
+
+        assert!(commit_staged_output(&stage, &output, &process, &control).is_err());
+        assert_eq!(std::fs::read(&output).expect("output remains"), b"old");
+        assert_eq!(
+            std::fs::read(bake_stamp_path(&output)).expect("stamp remains"),
+            b"old-key"
+        );
     }
 
     /// PDS orthorectified products are footprints PADDED to a rectangle with
@@ -1561,7 +1882,7 @@ mod tests {
             frame: Some("MOON_ME".into()),
         };
         let out_dir = tmp.join("site");
-        process_dem(&src_path, &out_dir, &cfg).expect("dem process should succeed");
+        process_dem(&src_path, &out_dir, &cfg, &control()).expect("dem process should succeed");
 
         // heightmap is square float32.
         let out_bytes = std::fs::read(out_dir.join("materials/textures/heightmap.tif")).unwrap();
@@ -1649,7 +1970,7 @@ mod tests {
             frame: Some("MOON_ME".into()),
         };
         let out_dir = tmp.join("site");
-        process_dem(&src_path, &out_dir, &cfg).expect("PDS IMG dem ingest succeeds");
+        process_dem(&src_path, &out_dir, &cfg, &control()).expect("PDS IMG dem ingest succeeds");
 
         let out_bytes = std::fs::read(out_dir.join("materials/textures/heightmap.tif")).unwrap();
         let mut dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
@@ -1702,7 +2023,7 @@ mod tests {
             frame: None,
         };
         let out_path = tmp.join("normal.png");
-        process_normalmap(&src_path, &out_path, &cfg).expect("normalmap succeeds");
+        process_normalmap(&src_path, &out_path, &cfg, &control()).expect("normalmap succeeds");
 
         let png = image::open(&out_path).unwrap().to_rgb8();
         assert_eq!((png.width(), png.height()), (8, 8));
@@ -1758,7 +2079,7 @@ mod tests {
             frame: None,
         };
         let out_path = tmp.join("map.png");
-        process_map(&src_path, &out_path, &cfg).expect("map crop succeeds");
+        process_map(&src_path, &out_path, &cfg, &control()).expect("map crop succeeds");
 
         let out = image::open(&out_path).unwrap().to_rgb8();
         assert_eq!((out.width(), out.height()), (8, 8));

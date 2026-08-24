@@ -184,8 +184,8 @@ struct DemBridged;
 ///
 /// The USD projection remains mounted, but it does not create a terrain build
 /// request until the dataset registry reports the processed artifact ready.
-/// This keeps a user-declined download out of the build watchdog and lets the
-/// same authored prim resume through the normal projection path after an
+/// This keeps a user-declined download out of terrain projection work and lets
+/// the same authored prim resume through the normal projection path after an
 /// explicit download completes.
 #[derive(Component)]
 struct DemDatasetPending {
@@ -1633,7 +1633,13 @@ fn bridge_usd_dem_terrain(
             .filter(|p| matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)))
             .and_then(|p| p.path().components().next())
             .and_then(|c| c.as_os_str().to_str())
-            .and_then(|name| twins.root_of(name))
+            .and_then(|name| match twins.root_of(name) {
+                Ok(root) => root,
+                Err(error) => {
+                    error!("[usd-dem] Twin root lookup failed for '{name}': {error}");
+                    None
+                }
+            })
             // A scene with no source root (the web autoload path loads from the
             // staged `assets/` tree) resolves against its own folder. That is the
             // scene's real location, not a guess about which twin is open.
@@ -1720,12 +1726,18 @@ fn bridge_dem_prim_read(
     // delivered artifact. Wait for its scan before deciding whether this
     // source is available; an unscanned scope means "not known yet", not
     // "missing". Once scanned, a declared-but-uninstalled product becomes a
-    // pending projection rather than a fake terrain build that can sit at 10%
-    // until its watchdog fires.
+    // pending projection rather than a fake terrain build with no ready input.
     if let Some(name) = scene_twin_name {
-        let Some(root) = twins.root_of(name) else {
-            warn!("[usd-dem] cannot resolve Twin root for '{name}'");
-            return;
+        let root = match twins.root_of(name) {
+            Ok(Some(root)) => root,
+            Ok(None) => {
+                warn!("[usd-dem] cannot resolve Twin root for '{name}'");
+                return;
+            }
+            Err(error) => {
+                error!("[usd-dem] Twin root lookup failed for '{name}': {error}");
+                return;
+            }
         };
         let scope = lunco_assets::datasets::DatasetScope::Twin {
             name: name.to_owned(),
@@ -1778,9 +1790,16 @@ fn bridge_dem_prim_read(
     // authored tree before the Twin's `.cache`. A direct `root.join(rel)` would
     // miss downloaded Twin assets and force every scene to author `.cache`.
     let uri = if let Some(name) = scene_twin_name {
-        let Some(path) = twins.resolve_directory(name, std::path::Path::new(&rel)) else {
-            warn!("[usd-dem] cannot resolve DEM source '{rel}' for Twin '{name}'");
-            return;
+        let path = match twins.resolve_directory(name, std::path::Path::new(&rel)) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                warn!("[usd-dem] cannot resolve DEM source '{rel}' for Twin '{name}'");
+                return;
+            }
+            Err(error) => {
+                error!("[usd-dem] Twin asset lookup failed for '{name}/{rel}': {error}");
+                return;
+            }
         };
         lunco_assets::asset_path::slashed(path)
     } else {

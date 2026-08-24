@@ -2,7 +2,7 @@
 @import "ui/runtime_theme.css";
 
 :root {
-  --ui-progress-width: 35%;
+  --ui-progress-width: 0%;
 }
 
 #terrain-progress-root {

@@ -1234,7 +1234,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     }
 
     // Native downloads are dispatched by the generic dataset panel so MSL,
-    // terrain and Twin resources share one lifecycle, watchdog and retry UX.
+    // terrain and Twin resources share one lifecycle and retry UX.
     #[cfg(not(target_arch = "wasm32"))]
     ui.label("Download MSL from Settings ▸ Data & libraries.");
 

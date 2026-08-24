@@ -1,8 +1,8 @@
 //! Embedded assets for wasm32 builds.
 //!
 //! Mission data is baked into the binary at compile time. Textures are NOT —
-//! Earth/Moon are tens of MB, so they load from `cached_textures://` over HTTP on
-//! web (see `big_space_setup`), not `include_bytes!`.
+//! Earth/Moon are tens of MB, so they load from declared lunco texture
+//! resources over HTTP on web (see big_space_setup), not from the binary.
 //!
 //! **No shaders are embedded here any more.** The only one ever was
 //! `trajectory.wgsl`, held by a const `Handle<Shader>` for a `MaterialExtension`

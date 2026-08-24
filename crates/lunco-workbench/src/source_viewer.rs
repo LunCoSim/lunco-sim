@@ -320,11 +320,19 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                     };
                     lunco_assets::discovery::resolve_asset(manifest, roots, &asset_path)
                 };
-                if let Some(asset) = asset {
-                    let path = asset.abs_path.clone();
-                    open_path(world, path, None, Some(asset), false);
-                } else {
-                    warn!("[SourceEditor] rejected unregistered asset path: {asset_path}");
+                match asset {
+                    Ok(Some(asset)) => {
+                        let path = asset.abs_path.clone();
+                        open_path(world, path, None, Some(asset), false);
+                    }
+                    Ok(None) => {
+                        warn!("[SourceEditor] rejected unregistered asset path: {asset_path}");
+                    }
+                    Err(error) => {
+                        error!(
+                            "[SourceEditor] asset registry unavailable for `{asset_path}`: {error}"
+                        );
+                    }
                 }
             }
             SourceOpenRequest::Inline { uri, text } => open_inline(world, uri, text),

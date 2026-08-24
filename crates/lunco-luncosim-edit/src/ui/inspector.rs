@@ -1712,16 +1712,32 @@ fn attach_component_at_socket(
     // library. A component authored by an open Twin is `twin://<name>/…`, which
     // has no path under `assets/` at all; joining one produced a path that never
     // existed and the attach was skipped with a "no plug frame" warning.
-    let schemes = world
+    let Some(schemes) = world
         .get_resource::<lunco_assets::SchemeRegistry>()
         .cloned()
-        .unwrap_or_default();
-    let Some(fs_path) = schemes.local_path(&asset) else {
+    else {
         report_inspector_error(
             world,
-            format!("Mount asset `{asset}` resolves to no local file; attach was skipped"),
+            format!("Asset scheme registry is unavailable for mount asset `{asset}`"),
         );
         return;
+    };
+    let fs_path = match schemes.local_path(&asset) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            report_inspector_error(
+                world,
+                format!("Mount asset `{asset}` resolves to no local file; attach was skipped"),
+            );
+            return;
+        }
+        Err(error) => {
+            report_inspector_error(
+                world,
+                format!("Asset scheme registry unavailable for `{asset}`: {error}"),
+            );
+            return;
+        }
     };
     let Some(plug) = lunco_usd_bevy::mount::read_asset_plug(&fs_path) else {
         report_inspector_error(
@@ -2678,9 +2694,18 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
 
 /// If a shader for `stem` is now registered, swap `part` onto it.
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
-    let path = {
+    let path = match {
         let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
         lunco_scene_commands::commands::shader_asset_path_for(tr, stem)
+    } {
+        Ok(path) => path,
+        Err(error) => {
+            report_inspector_error(
+                world,
+                format!("Twin asset registry unavailable for shader `{stem}`: {error}"),
+            );
+            return;
+        }
     };
     let registered = world
         .resource::<lunco_materials::ShaderCatalog>()

@@ -68,7 +68,9 @@ pub use bake::resample;
 pub use band::SurfaceBand;
 pub use collider_ring::{ColliderTileOf, ColliderTiles, TerrainColliderRing};
 pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
-pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
+pub use derived_layers::{
+    DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus,
+};
 pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
@@ -100,7 +102,7 @@ pub use terrain::{
     resolve_dem_request_parameters, BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource,
     DemTerrainSurface, DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock,
     RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase,
-    TerrainGenStatus,
+    TerrainGenStatus, TERRAIN_BUILD_FAULT_KIND,
 };
 pub use terrain_layers::{
     edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer, terrain_layer_params,

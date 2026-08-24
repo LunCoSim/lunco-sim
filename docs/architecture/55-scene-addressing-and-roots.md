@@ -1,21 +1,22 @@
 # 55 — Scene Addressing and Roots
 
-> Status: Design · Audience: contributors on scene loading, twins, and path resolution
+> Status: Active · Audience: contributors on scene loading, twins, and path resolution
 >
 > Supersedes the ad-hoc "promote an out-of-assets path"
 patching in `normalize_scene_asset_path`.
 
-## The symptom
+## The former failure mode
 
-Opening a scene that lives outside the workspace `assets/` directory fails:
+Historically, opening a scene outside the workspace `assets/` directory failed:
 
 ```
 WARN [scene] `/home/rod/Documents/models/summer_space_school/sim/scenes/traverse.usda`
      is outside assets dir — load it via the Twin (`twin://`) source
 ```
 
-This is not a missing feature. It is the visible edge of three overlapping
-addressing systems that never got unified.
+The runtime now resolves the owning root before loading and reports an invalid
+root visibly. The rest of this document is the current contract; the historical
+failure is retained only to explain why the boundary exists.
 
 ## Diagnosis: three identities for one thing
 
@@ -113,19 +114,17 @@ the root. No `twin.toml` is required, and its siblings resolve correctly.
 pub fn root_for_file(file: &Path) -> PathBuf   // nearest twin.toml ancestor, else parent
 ```
 
-Already implemented. `load_startup_scene`'s inline walk-up is now a duplicate
-and must be deleted in favour of it.
+Implemented. `load_startup_scene` and the interactive open path both use this
+resolver; neither performs its own ancestor walk.
 
-### 3. Identity is `(root_id, rel)`, keyed by path — not by name
+### 3. Identity is `(assigned_authority, rel)`
 
-`TwinRoots` currently keys by **name**, taken from the directory basename or
-`twin.toml`. Two unrelated folders named `scenes` collide, and
-`register()` silently repoints the earlier one — breaking the first Twin's
-asset reads with no diagnostic.
-
-Fix the key, not the symptom: identity is the **canonical path**; the name is
-presentation only. A hash suffix to dodge collisions (as the earlier patch did)
-is a workaround for the wrong key.
+`TwinRoots` assigns a runtime authority from the authored Twin name (or folder
+name). If another open root requests the same authority, registration allocates
+the next deterministic suffix (`name-2`, `name-3`, …) and returns it; callers
+must use that returned authority. Reopening the same root is idempotent.
+The registry never repoints an existing authority, so a live `twin://` read
+cannot change roots underneath it.
 
 ### 4. One mount path, always doc-first
 
@@ -133,11 +132,10 @@ is a workaround for the wrong key.
 resolve root  →  register root  →  open document  →  set overlay  →  LoadScene(twin://…)
 ```
 
-The overlay must be registered **before** `LoadScene`, or the load reads
-base-only bytes and silently drops placed waypoints, runtime spawns, and moved
-transforms. `load_startup_scene`'s "fall through to a direct `LoadScene`"
-branch is exactly that bug in code form and should be **deleted**, not kept as a
-fallback — a fallback that silently discards user edits is worse than an error.
+The overlay is registered **before** `LoadScene`, or the load reads base-only
+bytes and silently drops placed waypoints, runtime spawns, and moved transforms.
+If the owning root cannot be opened, the load reports an error and stops; it
+does not fall through to a base-only `LoadScene`.
 
 ## Commands: no new ones
 
@@ -173,21 +171,16 @@ re-rooted.
 Programmatic callers (API / MCP / rhai) that have a filesystem path therefore
 call `OpenFile`, which is already API-accessible. Still no new commands.
 
-## What gets deleted
+## Current implementation invariants
 
-Not preserved as fallbacks:
-
-- the "outside assets dir" concept and its `Err(_)` arm in `normalize_scene_asset_path`
-- **implicit bare-relative → `assets/` resolution** — in-tree assets are
-  addressed `lunco://`; a bare path is ambiguous once any root is open
-- `load_startup_scene`'s inline `twin.toml` walk-up (duplicate of `root_for_file`)
-- `load_startup_scene`'s direct-`LoadScene` fallback (the overlay-wipe path)
-- name-collision hashing (obviated by path-keyed identity)
-- the `promote_external_scene` patch on this branch (a fourth conversion site)
-
-Dropping bare-relative resolution is the widest-blast-radius item: every
-in-tree `.usda` and every caller passing `"scenes/…"` must move to `lunco://`.
-It is worth doing precisely because the failure it prevents is silent.
+- Root discovery is owned by `lunco_twin::root_for_file`.
+- `TwinRoots` returns the assigned authority and never repoints a live name.
+- Open flows register the root, mount the document overlay, and only then load
+  the `twin://` scene.
+- `LoadScene` accepts already-addressable scheme paths; filesystem paths go
+  through `OpenFile`, which owns root discovery and document mounting.
+- Invalid roots and registry failures are reported at their owner. They are not
+  converted into an empty scene or a base-only fallback.
 
 ## UX consequences
 
@@ -210,22 +203,9 @@ It is worth doing precisely because the failure it prevents is silent.
 | a root nested inside another | prefer the nearest `twin.toml`; `root_for_file` already does this |
 | ordering regressions | overlay-before-load is a correctness invariant, not a nicety — worth a test that asserts a runtime edit survives a reload |
 
-## Implementation order
+## Verification
 
-1. `root_for_file` in `lunco-twin` — **done** on this branch.
-2. Re-key the roots registry by canonical path; name becomes display-only.
-3. Extract `mount_scene` (resolve → register → doc → overlay → load) from
-   `load_startup_scene`.
-4. Point `OpenFile` / `OpenFolder` / `OpenTwin` / `LoadScene` at it.
-5. Register `assets/` as the `lunco://` root and drop its default-source
-   privilege; migrate in-tree refs and callers from bare paths to `lunco://`.
-6. Delete the list under "What gets deleted", including this branch's patch.
-
-Step 5 is the migration; do it before 6 so bare paths fail loudly during the
-transition rather than silently re-rooting.
-
-Steps 2–6 are behaviour-changing and want a regression test that a runtime edit
-survives a reload, since the deleted fallback is precisely what used to mask
-that failure. A second test should assert that a bare relative scene path is
-**rejected**, not quietly resolved — that is the invariant the whole design
-rests on.
+The root and overlay contracts are covered by focused registry/lifecycle tests
+and the production `luncosim` API path. Any change to scene mounting must verify
+both a valid Twin load and a rejected invalid root; a rejected load must leave
+the previous scene intact and publish a visible status error.

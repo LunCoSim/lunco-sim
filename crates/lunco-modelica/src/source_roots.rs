@@ -378,12 +378,24 @@ pub fn load_twin_source_roots(
     let (Some(twin_roots), Some(channels)) = (twin_roots, channels) else {
         return;
     };
-    for name in twin_roots.names() {
+    let names = match twin_roots.names() {
+        Ok(names) => names,
+        Err(error) => {
+            log::error!("[source-roots] Twin registry unavailable: {error}");
+            return;
+        }
+    };
+    for name in names {
         if seen.contains(&name) {
             continue;
         }
-        let Some(root) = twin_roots.root_of(&name) else {
-            continue;
+        let root = match twin_roots.root_of(&name) {
+            Ok(Some(root)) => root,
+            Ok(None) => continue,
+            Err(error) => {
+                log::error!("[source-roots] Twin `{name}` lookup failed: {error}");
+                return;
+            }
         };
         let models_dir = root.join("models");
         // Record the twin either way: a `models/`-less twin has nothing to load and

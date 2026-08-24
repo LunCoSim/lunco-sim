@@ -1073,7 +1073,9 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 ///    ready. `"scene"` is `SceneLoadInFlight`: prims are still spawning, the state
 ///    that produced the original half-loaded opening frame. `"terrain"` is
 ///    `TerrainStreamStatus`, the same read the status bar shows and the same one
-///    `start_camera_paths_when_terrain_ready` gates camera paths on.
+///    `start_camera_paths_when_terrain_ready` gates camera paths on. Optional
+///    derived terrain products use a separate source and do not block
+///    presentability.
 ///
 ///    Going through the bus rather than the resources keeps `lunco-workbench` a
 ///    UI-shell crate: it cannot name `TerrainStreamStatus` or `SceneLoadInFlight`

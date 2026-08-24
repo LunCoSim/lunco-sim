@@ -644,7 +644,7 @@ impl Plugin for MslRemotePlugin {
 // ─── Native dataset bridge and background index ────────────────────
 //
 // `lunco-assets` owns the manifest, download, processing, cancellation and
-// stall watchdog. This module observes that one authoritative state and owns
+// operation lifetime. This module observes that one authoritative state and owns
 // only the Modelica-specific post-download index.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -833,6 +833,14 @@ fn drive_native_msl_dataset(
                 bytes_total: 0,
             };
         }
+        DatasetState::Cancelling => {
+            *state = MslLoadState::Loading {
+                phase: MslLoadPhase::FetchingBundle,
+                bytes_done: 0,
+                bytes_total: 0,
+            };
+        }
+        DatasetState::Cancelled => *state = MslLoadState::NotStarted,
         DatasetState::Failed(error) => *state = MslLoadState::Failed(error.clone()),
         DatasetState::Installed => {
             // A slot remains as the lifecycle marker for the one index attempt.

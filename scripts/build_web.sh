@@ -576,35 +576,16 @@ generate_bindings() {
         info "Copied browser Rhai tools → $dist_dir/tools/"
     fi
 
-    # DejaVu Sans — wasm has no filesystem, lunco-theme fetches this
-    # over HTTP at startup (see crates/lunco-theme/src/fonts.rs::
-    # spawn_wasm_font_fetch). Source lives in the workspace cache
-    # (populated by `cargo run -p lunco-assets -- download`); we just
-    # copy it next to the wasm so it's served same-origin.
-    local dejavu_src=""
-    for candidate in \
-        "$PROJECT_DIR/../.cache/fonts/DejaVuSans.ttf" \
-        "$PROJECT_DIR/.cache/fonts/DejaVuSans.ttf"; do
-        if [ -f "$candidate" ]; then dejavu_src="$candidate"; break; fi
-    done
-    if [ -z "$dejavu_src" ]; then
-        info "DejaVu Sans font not found. Attempting to download automatically..."
-        if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -g fonts; then
-            for candidate in \
-                "$PROJECT_DIR/../.cache/fonts/DejaVuSans.ttf" \
-                "$PROJECT_DIR/.cache/fonts/DejaVuSans.ttf"; do
-                if [ -f "$candidate" ]; then dejavu_src="$candidate"; break; fi
-            done
-        fi
-    fi
-    if [ -n "$dejavu_src" ]; then
-        mkdir -p "$dist_dir/fonts"
-        cp "$dejavu_src" "$dist_dir/fonts/DejaVuSans.ttf"
-        info "Copied DejaVu Sans → $dist_dir/fonts/"
-    else
-        error "DejaVu Sans is required in the web bundle; populate the fonts cache and rebuild."
-        exit 1
-    fi
+    # Bundle-declared runtime artifacts are staged by lunco-assets. The
+    # manifest owns the delivered path and target, so a new required asset
+    # cannot be silently omitted by a second hardcoded shell list.
+    local web_cache="${LUNCOSIM_CACHE:-$PROJECT_DIR/.cache}"
+    mkdir -p "$web_cache"
+    LUNCOSIM_CACHE="$web_cache" cargo run -q -p lunco-assets -- download --bundle "${binary}-web"
+    cargo run -q -p lunco-assets -- stage \
+        --binary "${binary}-web" \
+        --cache "$web_cache" \
+        --destination "$dist_dir"
 
     # luncosim loads scene files via the bevy AssetServer over HTTP
     # (`assets/scenes/luncosim/sandbox_scene.usda` and friends). Copy the
@@ -650,102 +631,6 @@ generate_bindings() {
     if [ -f "$PROJECT_DIR/scripts/copy_to_html_folder.sh" ]; then
         info "Copying copy_to_html_folder.sh → $dist_dir/"
         cp "$PROJECT_DIR/scripts/copy_to_html_folder.sh" "$dist_dir/"
-    fi
-
-    # TODO(asset-staging): the three blocks below (DejaVu font above, these
-    # textures, the glTF models further down) each hardcode WHICH assets exist —
-    # `for tex in earth.png moon.png`, a `*.glb` glob, a font by name. That list
-    # is a second copy of what the per-crate `Assets.toml` files already declare,
-    # so declaring a new runtime asset does NOT reach the web bundle until
-    # someone also edits this script, and the failure is a silent 404 in the
-    # browser. Replace with a manifest-driven staging step (the same reasoning as
-    # `build_asset_manifest` above, which re-uses the runtime's own scanner
-    # instead of reimplementing the walk in shell).
-    #
-    # Blocked on: deciding how a manifest states "the runtime fetches this from
-    # the bundle, at this path". It is not derivable from the existing fields —
-    # the DejaVu font has no `[process]` step yet is required, while the MSL and
-    # ThermofluidStream tarballs also have none and must never ship (~200MB, and
-    # they reach the web via `build_msl_assets` instead). An added `web` field
-    # was prototyped and backed out (2026-07-18) to avoid growing the shared
-    # manifest schema; see `docs/architecture/56-asset-resolution-and-cache.md`.
-
-    # luncosim and luncosim render Earth/Moon as celestial bodies whose imagery is
-    # a declared dataset (`crates/lunco-celestial/Assets.toml`), loaded as
-    # `lunco://textures/<tex>`. On wasm every root of that scheme is an HTTP root,
-    # so staging into `assets/.cache/textures/` — the PACKED cache, exactly where
-    # `build_native.sh` puts it — serves them same-origin with no web-only path.
-    if [ "$binary" = "luncosim" ]; then
-        local missing_celestial=0
-        for tex in earth.png moon.png; do
-            local tex_found=0
-            for candidate in \
-                "$PROJECT_DIR/../.cache/textures/$tex" \
-                "$PROJECT_DIR/.cache/textures/$tex"; do
-                if [ -f "$candidate" ]; then tex_found=1; break; fi
-            done
-            if [ "$tex_found" -eq 0 ]; then
-                missing_celestial=1
-                break
-            fi
-        done
-
-        if [ "$missing_celestial" -eq 1 ]; then
-            info "Celestial textures (earth.png / moon.png) not found. Attempting to download and process automatically..."
-            if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -g celestial && \
-               LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- process -g celestial; then
-                success "Celestial textures downloaded and processed"
-            fi
-        fi
-
-        for tex in earth.png moon.png; do
-            local tex_src=""
-            for candidate in \
-                "$PROJECT_DIR/../.cache/textures/$tex" \
-                "$PROJECT_DIR/.cache/textures/$tex"; do
-                if [ -f "$candidate" ]; then tex_src="$candidate"; break; fi
-            done
-            if [ -n "$tex_src" ]; then
-                mkdir -p "$dist_dir/assets/.cache/textures"
-                cp "$tex_src" "$dist_dir/assets/.cache/textures/$tex"
-                info "Copied $tex → $dist_dir/assets/.cache/textures/"
-            else
-                warn "celestial texture $tex not found — that body renders untextured in \
-the browser. Run: cargo run -p lunco-assets -- download -g celestial && cargo run -p lunco-assets -- process -g celestial"
-            fi
-        done
-    fi
-
-    # luncosim references glTF models via `lunco://models/<name>.glb`. The
-    # `lunco://` reader resolves `assets/` first, then the cache root — on wasm
-    # both are HTTP roots — so a model staged here is fetched from
-    # `<origin>/.cache/models/<name>.glb` (cache_dir() = ".cache").
-    # Stage the PROCESSED models (e.g. NASA Perseverance) next to the wasm — same
-    # idea as the luncosim textures above. Populate the cache first with:
-    #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \
-    #     && cargo run -p lunco-assets --bin lunco-assets -- process -g models
-    if [ "$binary" = "luncosim" ]; then
-        local models_src=""
-        for candidate in \
-            "$PROJECT_DIR/../.cache/models" \
-            "$PROJECT_DIR/.cache/models"; do
-            if [ -d "$candidate" ]; then models_src="$candidate"; break; fi
-        done
-        if [ -n "$models_src" ]; then
-            mkdir -p "$dist_dir/.cache/models"
-            # Only the PROCESSED glbs the scene references (skip the raw *_source.glb).
-            for glb in "$models_src"/*.glb; do
-                [ -f "$glb" ] || continue
-                case "$(basename "$glb")" in
-                    *_source.glb) continue ;;
-                esac
-                cp "$glb" "$dist_dir/.cache/models/"
-                info "Copied $(basename "$glb") → $dist_dir/.cache/models/"
-            done
-        else
-            warn "no .cache/models — glTF models (Perseverance rover) will 404 in the browser. \
-Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -g models"
-        fi
     fi
 
     # Pack the Twin(s) the luncosim should offer, and write scenes.json so the
