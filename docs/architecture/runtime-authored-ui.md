@@ -298,7 +298,10 @@ free:
 5. Mount optional surfaces lazily through visibility and gates. A hidden
    surface has no HUI presentation tree; when exposure returns, the runtime
    creates a fresh root from the manifest so template-owned build state cannot
-   survive a hidden transition.
+   survive a hidden transition. The bridge also destroys any retained root
+   whose exposure or presentation gates turn off even if its lifecycle marker
+   says it is currently unmounted; deferred HUI rebuilds must not leave a stale
+   overlay visible after the authoritative exposure is false.
 6. Prefer CSS custom properties and text replacement over rebuilding the
    hierarchy. Use transitions sparingly and measure large animations.
 7. Profile the complete frame: runtime UI, egui, physics, terrain, and the

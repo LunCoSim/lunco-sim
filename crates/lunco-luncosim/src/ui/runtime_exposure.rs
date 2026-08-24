@@ -966,11 +966,17 @@ pub(crate) fn apply_runtime_ui_exposures(
             matches!(*visibility, Visibility::Hidden)
         };
         let visibility_changed = !visibility_matches;
-        if !should_be_visible && surface.mounted {
+        let has_retained_presentation =
+            surface.mounted || properties.is_some() || existing_style.is_some();
+        if !should_be_visible && has_retained_presentation {
             // HUI builds the template root on this entity itself and keeps
             // private build-state components on it. Despawn the complete
-            // presentation root so a later mount starts from the manifest,
-            // rather than attempting to partially reverse HUI's build.
+            // presentation root whenever any retained HUI state exists, not
+            // only when our lifecycle flag says it is mounted. The latter can
+            // be false after a scene teardown or a deferred HUI rebuild while
+            // the root is still present; leaving that tree alive is how a
+            // completed terrain overlay remained visible after its exposure
+            // had become false.
             //
             // Visibility is changed in the main world before the deferred
             // despawn is applied. Render extraction runs after Update, so a
@@ -1617,6 +1623,58 @@ mod tests {
         assert!(app.world().get_entity(root).is_err());
         assert!(app.world().get_entity(child).is_err());
         assert!(app.world().get_entity(grandchild).is_err());
+    }
+
+    #[test]
+    fn retained_unmounted_surface_is_fully_despawned_when_exposure_turns_off() {
+        let mut app = App::new();
+        let mut exposures = EngineExposures::default();
+        {
+            let mut terrain = exposures.writer("terrain-progress");
+            terrain.visible(false);
+        }
+        let revision = exposures.revision;
+        app.insert_resource(exposures)
+            .insert_resource(RuntimeUiManifestState {
+                handle: Handle::default(),
+                applied: Some(AssetId::default()),
+                rebuild_pending: false,
+            });
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                HtmlNode(Handle::default()),
+                Styled::Inherited,
+                InlineStyle::default(),
+                TemplateProperties::default(),
+                RuntimeUiSurface {
+                    namespace: "terrain-progress".to_owned(),
+                    required_for_recording: false,
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    interactive: false,
+                    mounted: false,
+                    presentation_ready: false,
+                    placement: RuntimeUiPlacement::Viewport,
+                    applied_revision: revision,
+                    applied_placement: None,
+                },
+                Visibility::Visible,
+            ))
+            .id();
+
+        app.add_systems(Update, apply_runtime_ui_exposures);
+        app.update();
+
+        assert!(
+            app.world().get_entity(root).is_err(),
+            "retained HUI state must not survive an exposure being withdrawn"
+        );
     }
 
     #[test]

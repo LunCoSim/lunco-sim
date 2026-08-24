@@ -104,18 +104,16 @@ fn canonical_root(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
-/// Resolve a Twin-relative file with the same authored-first, cache-second
+/// Resolve a Twin-relative path with the same authored-first, cache-second
 /// policy used by the `twin://` reader. The AssetServer, dataset registry, and
-/// native runtime consumers must agree on which bytes a logical Twin path names.
-pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option<PathBuf> {
+/// native runtime consumers must agree on which roots a logical Twin path names.
+fn resolve_twin_relative_path(root: &Path, relative: &Path) -> Option<PathBuf> {
     if !crate::asset_path::is_safe_relative_components(relative) {
         return None;
     }
     let authored = root.join(relative);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) =
-        crate::existing_path_within_root(root, relative).filter(|path| path.is_file())
-    {
+    if let Some(path) = crate::existing_path_within_root(root, relative) {
         return Some(path);
     }
     #[cfg(target_arch = "wasm32")]
@@ -132,9 +130,7 @@ pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option
     let cache_root = crate::twin_cache_dir(root);
     let cached = cache_root.join(relative);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) =
-        crate::existing_path_within_root(&cache_root, relative).filter(|path| path.is_file())
-    {
+    if let Some(path) = crate::existing_path_within_root(&cache_root, relative) {
         return Some(path);
     }
     #[cfg(target_arch = "wasm32")]
@@ -149,6 +145,14 @@ pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option
     // Preserve the reader's useful missing-file diagnostic: authored is the
     // logical location a Twin-relative reference names.
     Some(authored)
+}
+
+pub(crate) fn resolve_twin_relative_file(root: &Path, relative: &Path) -> Option<PathBuf> {
+    resolve_twin_relative_path(root, relative).filter(|path| path.is_file())
+}
+
+pub(crate) fn resolve_twin_relative_directory(root: &Path, relative: &Path) -> Option<PathBuf> {
+    resolve_twin_relative_path(root, relative).filter(|path| path.is_dir())
 }
 
 impl TwinRoots {
@@ -294,11 +298,21 @@ impl TwinRoots {
     /// Resolve a Twin-relative file using the same authored-first, cache-second
     /// policy as the `twin://` AssetReader. Native consumers that need a concrete
     /// filesystem path must use this boundary rather than joining a Twin root
-    /// themselves, because downloaded Twin assets live in `.cache`. Existing
-    /// directories are rejected; every current consumer resolves asset bytes.
+    /// themselves, because downloaded Twin assets live in `.cache`.
     pub fn resolve_file(&self, name: &str, relative: &Path) -> Option<PathBuf> {
         let root = self.root_for(name)?;
         resolve_twin_relative_file(&root, relative)
+    }
+
+    /// Resolve a Twin-relative directory using the same authored-first,
+    /// cache-second policy as the `twin://` AssetReader.
+    ///
+    /// Processed datasets such as DEM sites deliver a directory containing
+    /// their runtime products. Directory consumers use this boundary instead
+    /// of reconstructing the Twin cache path themselves.
+    pub fn resolve_directory(&self, name: &str, relative: &Path) -> Option<PathBuf> {
+        let root = self.root_for(name)?;
+        resolve_twin_relative_directory(&root, relative)
     }
 
     /// The "primary" open Twin as `(name, root)` — the alphabetically-first
@@ -604,6 +618,27 @@ mod tests {
             roots.resolve_file(&name, Path::new("terrain/luna2")),
             Some(authored),
             "authored Twin files take precedence over materialized cache files"
+        );
+    }
+
+    #[test]
+    fn resolve_directory_finds_processed_twin_assets_without_reconstructing_cache_paths() {
+        let twin = tempfile::tempdir().expect("temporary Twin root");
+        let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
+        std::fs::create_dir_all(cached.join("materials/textures"))
+            .expect("cached processed directory");
+        std::fs::write(
+            cached.join("materials/textures/heightmap.tif"),
+            b"processed terrain",
+        )
+        .expect("cached processed asset");
+        let roots = TwinRoots::default();
+        let name = roots.register("luna2", twin.path());
+
+        assert_eq!(
+            roots.resolve_directory(&name, Path::new("terrain/luna2")),
+            Some(cached.clone()),
+            "processed Twin directories must resolve through the asset boundary"
         );
     }
 

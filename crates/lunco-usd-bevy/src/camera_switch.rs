@@ -68,6 +68,7 @@ pub enum CameraSelectionOwner {
     None,
     Director,
     User,
+    Fallback,
 }
 
 /// Change-gated view model for the Camera menu and no-camera presentation.
@@ -84,13 +85,20 @@ pub struct CameraSelectionStatus {
     pub last_error: Option<String>,
 }
 
+/// Engine-owned presentation camera used only when a loaded scene has no
+/// authored window camera. It is an explicit camera policy, not an authored
+/// scene fact: the status/menu can identify it and the camera is removed as
+/// soon as an authored presentation camera becomes available.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentationFallbackCamera;
+
 impl ViewportCameraSelection {
     /// Revision observed by the authored camera-track sampler.
     pub(crate) fn director_revision(&self) -> u64 {
         self.director_revision
     }
 
-    pub(crate) fn owner(&self) -> CameraSelectionOwner {
+    pub fn owner(&self) -> CameraSelectionOwner {
         self.owner
     }
 }
@@ -131,6 +139,7 @@ pub struct ResumeCameraDirector {}
 pub enum CameraActivationSource {
     Director,
     User,
+    Fallback,
 }
 
 #[derive(Event)]
@@ -151,6 +160,13 @@ impl ActivateCamera {
         Self {
             target,
             source: CameraActivationSource::User,
+        }
+    }
+
+    pub fn fallback(target: Entity) -> Self {
+        Self {
+            target,
+            source: CameraActivationSource::Fallback,
         }
     }
 }
@@ -370,6 +386,7 @@ pub fn on_activate_camera(
             selection.owner = match event.source {
                 CameraActivationSource::Director => CameraSelectionOwner::Director,
                 CameraActivationSource::User => CameraSelectionOwner::User,
+                CameraActivationSource::Fallback => CameraSelectionOwner::Fallback,
             };
             status.last_error = None;
             info!(
@@ -410,8 +427,9 @@ pub fn on_activate_camera(
 /// There is deliberately no implicit camera selection here. If the selection
 /// is absent, stale, or still waiting for its authored camera to finish
 /// projection, every window camera is inactive and the status view model says
-/// why. The only asynchronous behaviour is fulfilment of a previously explicit
-/// authored request after re-projection; it never chooses a different camera.
+/// why. The windowed host may publish an explicit fallback activation for a
+/// camera-less scene; this reconciler only fulfils that request and never
+/// chooses a different camera itself.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
     selection: Res<ViewportCameraSelection>,
@@ -583,6 +601,44 @@ pub fn reset_camera_selection(
     *selection = ViewportCameraSelection::default();
     viewport.active_camera = None;
     *status = CameraSelectionStatus::default();
+}
+
+/// Hand ownership back to the authored scene when its camera is projected
+/// after the explicit presentation camera. This is the camera-selection
+/// boundary, so fallback retirement cannot leave both cameras active or make a
+/// later authored projection invisible behind stale fallback state.
+pub fn retire_presentation_fallback(
+    authored: Query<
+        (Entity, Option<&Name>, Option<&RenderTarget>),
+        (With<SceneCamera>, Without<PresentationFallbackCamera>),
+    >,
+    fallback: Query<Entity, With<PresentationFallbackCamera>>,
+    selection: Res<ViewportCameraSelection>,
+    mut viewport: ResMut<SceneViewport>,
+    mut status: ResMut<CameraSelectionStatus>,
+    mut commands: Commands,
+) {
+    if fallback.is_empty() {
+        return;
+    }
+
+    let Some((target, _, _)) = authored
+        .iter()
+        .find(|(_, _, render_target)| render_target.is_none_or(is_window_render_target))
+    else {
+        return;
+    };
+
+    for entity in &fallback {
+        commands.entity(entity).try_despawn();
+    }
+    if selection.owner() != CameraSelectionOwner::Fallback {
+        return;
+    }
+
+    viewport.active_camera = None;
+    *status = CameraSelectionStatus::default();
+    commands.trigger(ActivateCamera::director(target));
 }
 
 /// Final guard for the window render target. Scene-camera reconciliation owns
@@ -806,6 +862,37 @@ mod tests {
             "a camera-less presentation must remain visibly camera-less"
         );
         assert_eq!(app.world().resource::<SceneViewport>().active_camera, None);
+    }
+
+    #[test]
+    fn authored_camera_retires_fallback_and_takes_selection_ownership() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_systems(Update, retire_presentation_fallback);
+        let fallback = app
+            .world_mut()
+            .spawn((SceneCamera::default(), PresentationFallbackCamera))
+            .id();
+        let authored = app
+            .world_mut()
+            .spawn((SceneCamera::default(), Name::new("Authored")))
+            .id();
+        {
+            let mut selection = app.world_mut().resource_mut::<ViewportCameraSelection>();
+            selection.requested = Some(RequestedCamera::Entity(fallback));
+            selection.owner = CameraSelectionOwner::Fallback;
+        }
+
+        app.update();
+
+        assert!(app.world().get_entity(fallback).is_err());
+        let selection = app.world().resource::<ViewportCameraSelection>();
+        assert_eq!(selection.owner, CameraSelectionOwner::Director);
+        assert_eq!(selection.requested, Some(RequestedCamera::Entity(authored)));
     }
 
     #[test]

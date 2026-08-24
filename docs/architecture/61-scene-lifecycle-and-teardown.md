@@ -58,6 +58,22 @@ Celestial state follows the same boundary. Its derived tree is retired and
 this is not inferred from a later frame with no body declarations, because a
 restart can replace old declarations with new declarations in one transaction.
 
+Windowed presentation state follows the same ownership rule. A camera-less
+scene may receive the explicit engine-owned `PresentationFallbackCamera` after
+USD projection settles so a successful load is visible rather than an empty
+viewport. It is parented under the admitted scene root, selected only through
+the shared camera-selection event, and retired when an authored window camera
+appears. Scene teardown resets the selection intent and structural scene
+despawn removes the fallback with its root; it is never carried into the next
+Twin.
+
+The retained runtime UI uses the same invariant. When an exposure, perspective,
+gate, or placement makes a surface invisible, the bridge removes the whole
+retained HUI root whenever any HUI state is present. Visibility flags alone are
+not ownership: a deferred rebuild or teardown can leave a root whose local
+mounted bit is stale, and that root must not survive into the next presentation
+state.
+
 ## Transition admission and schedule boundary
 
 Scene commands never mutate the world in the caller's schedule. API, UI, Rhai,

@@ -54,6 +54,11 @@ poke an input, `possess_vessel` to take control, then re-read.
 4. Modelica in the loop? `snapshot_variables` for solver state, or `cosim_status` for the whole chain.
 5. `capture_screenshot` → `/tmp/x.png` → Read it, to confirm the physical picture.
 
+If the scene has no authored window camera, the windowed luncosim host uses its
+explicit presentation-camera policy and reports that owner in the Camera menu
+and status history; do not interpret a transient camera-less projection as a
+terrain or physics failure.
+
 Before interpreting a live read as a finished scene, check
 `GET /api/ready` and require `ready:true`, `world_hold:false`, and
 `pending_count:0`. A port may be absent while its Modelica island is still

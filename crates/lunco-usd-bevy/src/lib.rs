@@ -269,6 +269,7 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(
                 Update,
                 (
+                    camera_switch::retire_presentation_fallback,
                     camera_switch::cycle_active_camera,
                     camera_switch::request_initial_avatar_view,
                     camera_switch::reconcile_scene_viewport

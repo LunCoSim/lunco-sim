@@ -28,6 +28,8 @@ mod dataset_provisioning;
 mod models_palette;
 /// Which floating viewport overlays are shown (persisted, off by default).
 mod overlays;
+/// Explicit presentation policy for camera-less loaded scenes.
+mod presentation_camera;
 /// Rhai behaviour editor — edit + save + hot-reload the script on the selected
 /// prim, with a diagnostics list. The writable counterpart of `code_panel`.
 mod rhai_editor_panel;
@@ -162,6 +164,18 @@ impl Plugin for SandboxUiPlugin {
         }
 
         add_runtime_ui_layer(app);
+        app.init_resource::<presentation_camera::PresentationFallbackCameraSettings>();
+        app.add_systems(
+            Update,
+            (
+                presentation_camera::spawn_presentation_fallback_camera
+                    .after(lunco_usd_bevy::camera_switch::retire_presentation_fallback),
+                presentation_camera::activate_presentation_fallback
+                    .after(presentation_camera::spawn_presentation_fallback_camera),
+                presentation_camera::report_presentation_fallback
+                    .after(presentation_camera::activate_presentation_fallback),
+            ),
+        );
         app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
@@ -500,6 +514,7 @@ fn register_camera_menu(world: &mut World) {
                 CameraSelectionOwner::None => "none",
                 CameraSelectionOwner::Director => "director",
                 CameraSelectionOwner::User => "operator",
+                CameraSelectionOwner::Fallback => "default presentation",
             };
             ui.label(format!("Active: {active}  ·  Owner: {owner}"));
             if let Some(error) = &state.last_error {
@@ -515,8 +530,12 @@ fn register_camera_menu(world: &mut World) {
             }
             ui.separator();
             if state.cameras.is_empty() {
-                ui.label("No authored window camera is available.");
-                ui.label("The viewport stays inactive until one is authored.");
+                if state.owner == CameraSelectionOwner::Fallback {
+                    ui.label("No authored window camera is available.");
+                    ui.label("Using the default presentation view.");
+                } else {
+                    ui.label("No authored window camera is available yet.");
+                }
             } else {
                 ui.label("Operator camera");
                 for name in &state.cameras {

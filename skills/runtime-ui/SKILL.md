@@ -193,6 +193,11 @@ nested component template reload may require reloading the top-level template
 again. Never manually write Bevy styling components under the surface from Rust;
 HUI/Flair owns those components.
 
+Lifecycle invariant: when an exposure or presentation gate turns off, the
+bridge removes the retained root whenever any HUI state remains, even if its
+local mounted marker is stale after a deferred rebuild. A hidden surface must
+not leave an old progress card in the render tree.
+
 ## Verification
 
 For a markup/style-only change:

@@ -253,6 +253,15 @@ impl StatusEvent {
 /// terrain again. One `const`, one compile error if it ever moves.
 pub const TERRAIN_SOURCE: &str = "terrain";
 
+/// The status source for native/web DEM generation. It is separate from
+/// [`TERRAIN_SOURCE`], which reports streamed tile residency, so one terrain
+/// lifecycle cannot clear the other's progress entry.
+pub const TERRAIN_BUILD_SOURCE: &str = "terrain-build";
+
+/// The status source for an explicit presentation camera supplied by the
+/// windowed host when a scene has no authored viewport camera.
+pub const CAMERA_SOURCE: &str = "camera";
+
 /// The bus source name USD scene spawning publishes under.
 ///
 /// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher

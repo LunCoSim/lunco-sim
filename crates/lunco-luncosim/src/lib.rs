@@ -2919,7 +2919,10 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         app.add_systems(
             Update,
-            report_terrain_stream_status
+            (
+                report_terrain_stream_status,
+                report_terrain_generation_status,
+            )
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
@@ -3423,6 +3426,47 @@ fn report_terrain_stream_status(
     } else {
         bus.remove_progress(SOURCE);
     }
+}
+
+/// Mirror the DEM build lifecycle into the workbench status bus. Dataset
+/// provisioning is a separate, user-controlled lifecycle; once the declared
+/// source is available, this entry reports the actual local generation phase
+/// rather than leaving the old indeterminate preparation card as the only
+/// feedback.
+#[cfg(feature = "ui")]
+fn report_terrain_generation_status(
+    status: Res<lunco_terrain_surface::TerrainGenStatus>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+    const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_BUILD_SOURCE;
+    if !status.active {
+        bus.remove_progress(SOURCE);
+        return;
+    }
+
+    let site = if status.site.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", status.site)
+    };
+    let (done, total) = status
+        .fraction
+        .filter(|fraction| fraction.is_finite())
+        .map(|fraction| {
+            let total = 1_000_u64;
+            (
+                ((fraction.clamp(0.0, 1.0) * total as f32).round()) as u64,
+                total,
+            )
+        })
+        .unwrap_or((0, 0));
+    bus.set_progress(
+        SOURCE,
+        format!("{}{}", status.phase.label(), site),
+        done,
+        total,
+    );
 }
 
 /// Mirror USD scene-spawn progress into the workbench

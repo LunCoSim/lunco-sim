@@ -23,8 +23,10 @@ cargo run -p lunco-assets -- process  --twin <TWIN> -a <key> --quality coarse|go
 
 `<TWIN>` = a folder holding `Assets.toml` + `twin.toml`. `-a <key>` = the
 `[section]` name in its Assets.toml. The same entries appear in-app under
-Settings ▸ Downloadable data once the twin is open (scanned on open); nothing
-downloads without a click there or a CLI run. `--quality coarse` quarters
+Settings ▸ Downloadable data and the Twin inspector once the Twin is open
+(scanned on open). If a declared dataset is missing, the interactive app asks
+which entries to download before terrain generation; nothing downloads until
+the user confirms there or uses a CLI run. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
@@ -148,6 +150,9 @@ Roadmap (bake nodes, node-graph editor): the twin's
   output; a matching stamp skips the bake before the expensive decode.
   Changing the source, ROI, `--quality`, or bumping `PIPELINE_VERSION`
   (`src/process.rs`) rebakes exactly what changed. Never time-based.
+- The dataset registry treats that stamp as the completion boundary: a DEM
+  output directory without `.bakekey` is partial and remains downloadable/
+  processable, even if the directory itself exists.
 - Baked artifacts and the twin cache are gitignored by policy
   (`terrain/*/materials/`, `.bakekey` stamps, `.cache/`) — never commit them.
 
