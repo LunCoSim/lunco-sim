@@ -153,6 +153,21 @@ mod compose_tests {
     }
 
     #[test]
+    fn referenced_battery_telemetry_declarations_keep_their_composed_target() {
+        let stage = compose_file_to_stage(&asset("scenes/luncosim/solar_rover_demo.usda"))
+            .expect("compose solar rover stage");
+        let view = StageView::new(&stage);
+        let declaration =
+            SdfPath::new("/SolarRoverTest/SolarRover/Battery/DischargePowerTelemetry").unwrap();
+
+        assert_eq!(
+            view.rel_targets(&declaration, "lunco:telemetry:target"),
+            vec![SdfPath::new("/SolarRoverTest/SolarRover/Battery").unwrap()],
+            "a referenced telemetry declaration must resolve its authored target through USD composition"
+        );
+    }
+
+    #[test]
     fn collection_members_uses_standard_subtree_expansion() {
         let dir = tempfile::tempdir().expect("scratch dir");
         let scene = dir.path().join("collection.usda");
