@@ -17,7 +17,7 @@ As a systems engineer, I want the 3D environmental conditions (e.g., raycasted s
 - This scalar data is piped through the `rumoca` runtime natively within Bevy's `FixedUpdate` as an input to the Modelica thermal and power equations.
 
 ### Story 2: Subsystem Closure (The "Virtual Plant")
-As a subsystem engineer, I want the rover's battery level to be calculated by a Modelica simulation that reads the current `MotorActuator` power draw and outputs the `BatteryLevel` sensor data.
+As a subsystem engineer, I want the rover's battery level to be calculated by a Modelica simulation that reads the current authored motor electrical load and outputs the `BatteryLevel` sensor data.
 
 **Acceptance Criteria:**
 - The `rumoca` runtime executes natively in Bevy.

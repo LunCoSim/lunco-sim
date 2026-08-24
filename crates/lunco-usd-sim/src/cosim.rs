@@ -2278,39 +2278,10 @@ fn settle_binding_epoch(
 /// `torque` is a perfectly ordinary live port on a motor, and only structural on a
 /// gearbox.
 ///
-/// **Why this table exists at all.** A USD connection into a structural binding is real
-/// and correct USD; what it is *not* is a value the runtime propagates. Nothing ever
-/// registers a backend for these ports, so materialising them as `SimConnection`s leaves
-/// targets no backend claims. Propagation then reports each one as a genuine dangling
-/// wire — genuine because these prims *do* expose other ports, so `has_port_surface` is
-/// true, which is precisely the discriminator the diagnostic uses to separate "typo'd"
-/// from "still loading". The result is a permanent, self-confirming false fault on
-/// hardware that works.
-///
-/// That failure mode has now cost two separate investigations: it produced the Apollo-15
-/// report's critical misdiagnosis (`torque` read as "the rover's drive authority is
-/// dropped") and, once the never-landed gate started reading faults as a test verdict, it
-/// failed four scenes — `autopilot_hold`, `six_independent_parity`, `six_wheel` and
-/// `lint_selftest` — whose rovers measurably drive.
-///
-/// **The rule for adding a row:** the port must have a named parse-time reader, and that
-/// reader must be cited here. If no code reads it at parse and no backend claims it at
-/// runtime, the wire is dangling for real and belongs in the diagnostic, not in this table.
+/// A USD connection into a structural vehicle binding is real authoring, but the
+/// FSW port registry owns that edge rather than the generic scalar binder. Every
+/// other authored input is handled by the generic runtime endpoint surface.
 const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
-    // `Motor.inputs:demand` is the authored command annotation on a motor
-    // instance. The live axle command is consumed by `MotorActuator` through
-    // the wheel's resolved drive port; the motor prim itself is folded into
-    // `PowertrainParams` by `powertrain::find_for_wheel`. In the infinite-power
-    // variant there is no Modelica island to own this USD edge, so materialising
-    // it as a runtime SimConnection creates a false dangling-wire fault. The
-    // battery variant is handled by domain projection because those motors are
-    // collection members of the generated electrical network.
-    ("demand", "LunCoMotorAPI"),
-    // `Gearbox.inputs:torque ← Motor.outputs:torque`. Read by
-    // `powertrain::find_for_wheel`, which folds `stallTorque × ratio × efficiency`
-    // into a static `WheelParams`. Live axle torque is written every tick by
-    // `MotorActuator`, never through this port.
-    ("torque", "LunCoGearboxAPI"),
     // `Wheel.inputs:drive` / `inputs:steer` when the authored source is a
     // vehicle control surface. Read by `connected_port` in `crate::lib`, which
     // resolves the authored connection to the FSW port NAME the wheel
@@ -2345,6 +2316,11 @@ pub fn rewire_usd_connections(
             // diagnostics quite correctly report no broken edge.
             Added<SimComponent>,
             Added<lunco_core::GlobalEntityId>,
+            // A generic physical surface can be installed after a broader
+            // endpoint marker (for example a rigid body) already exists. The
+            // surface itself is the authoritative transition for its named
+            // ports; do not rely on the earlier marker to trigger a rebuild.
+            Added<lunco_core::PortSurface>,
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
@@ -2364,9 +2340,13 @@ pub fn rewire_usd_connections(
             Has<ModelicaModel>,
             Option<&GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
-            Option<&crate::WheelPortEndpoints>,
+            Option<&lunco_core::PortSurface>,
         ),
-        Or<(With<lunco_core::PortSurfaceReady>, With<SimComponent>)>,
+        Or<(
+            With<lunco_core::PortSurfaceReady>,
+            With<lunco_core::PortSurface>,
+            With<SimComponent>,
+        )>,
     >,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
@@ -2450,6 +2430,12 @@ pub fn rewire_usd_connections(
     let environment_probe_entities: std::collections::HashSet<Entity> = q_all
         .iter()
         .filter_map(|(entity, _, _, _, is_probe, _)| is_probe.then_some(entity))
+        .collect();
+    let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = q_all
+        .iter()
+        .filter_map(|(entity, _, _, _, _, surface)| {
+            surface.cloned().map(|surface| (entity, surface))
+        })
         .collect();
     for (e, p, _, generated, _, _) in q_all.iter() {
         let instance = instance_of(e);
@@ -2802,12 +2788,16 @@ pub fn rewire_usd_connections(
                 // run. Every motor drew no current, so a driving rover's battery
                 // never discharged and its bus was solved as if parked. Silent:
                 // the island compiled, published, and stepped.
-                if !generated_alias_present {
-                    if let Some(port_entity) = q_actuators
-                        .get(start_element)
-                        .ok()
-                        .filter(|_| !start_is_input)
-                        .and_then(|a| a.get(&src_conn))
+                if !generated_alias_present && !start_is_input {
+                    if let Some(port_entity) = port_surfaces
+                        .get(&start_element)
+                        .and_then(|surface| surface.get(&src_conn))
+                        .or_else(|| {
+                            q_actuators
+                                .get(start_element)
+                                .ok()
+                                .and_then(|a| a.get(&src_conn))
+                        })
                     {
                         start_element = port_entity;
                         src_conn = lunco_cosim::PORT_NAME.to_string();
@@ -2860,17 +2850,10 @@ pub fn rewire_usd_connections(
                     continue;
                 }
 
-                let wheel_sink = view.has_api_schema(&sink_sdf, "LunCoWheelAPI");
-                let end = if wheel_sink {
-                    match sink_conn {
-                        "drive" => wheel_endpoints.map(|endpoints| {
-                            (endpoints.p_drive, lunco_cosim::PORT_NAME.to_string())
-                        }),
-                        "steer" => wheel_endpoints.map(|endpoints| {
-                            (endpoints.p_steer, lunco_cosim::PORT_NAME.to_string())
-                        }),
-                        _ => None,
-                    }
+                let end = if let Some(surface) = wheel_endpoints {
+                    surface
+                        .get(sink_conn)
+                        .map(|port| (port, lunco_cosim::PORT_NAME.to_string()))
                 } else {
                     Some(
                         forward

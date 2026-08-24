@@ -173,7 +173,7 @@ attachment schema permits the direct self-composition. A separate attachment pri
 may instead author the standard `wheel` and `suspension` relationships; neither
 case requires a LunCo-specific index or a Rust-side topology guess.
 
-**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. Motor and gearbox torque/speed live on their own `LunCoMotorAPI`/`LunCoGearboxAPI` parts. `apiSchemas` is a list-op and composes across reference arcs, so all rover wheels get their schemas from the component files. A rover authors values and connections, never a private index or fallback rule.
+**The APIs are owned at the topology boundary.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`, and each vehicle wheel instance applies `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` because it owns the selected wheel, suspension, tire, and attachment index. Motor, gearbox, and shaft equations are authored Modelica components in one containing `CollectionAPI:components` electrical/mechanical network; the wheel consumes only the solved shaft boundary. `apiSchemas` composes across reference arcs, while the vehicle owns the standard attachment contract. A rover authors values and connections, never a private index or fallback rule.
 
 ---
 

@@ -1919,9 +1919,9 @@ pub fn clear_kinematic_pulse_velocity(
 ///   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
 ///   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
 ///   so this gives independent per-wheel control. Motor torque and no-load speed
-///   are owned by the composed `LunCoMotorAPI` prim; edit its
-///   `lunco:motor:stallTorque` / `lunco:motor:noLoadSpeed` attributes instead of
-///   addressing a removed wheel-local drive parameter.
+///   are owned by the composed Modelica motor prim; edit its authored
+///   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
+///   addressing a wheel-local drive parameter.
 #[Command(default)]
 pub struct SetObjectProperty {
     /// API-stable global entity ID (the `api_id` from `ListEntities`), same

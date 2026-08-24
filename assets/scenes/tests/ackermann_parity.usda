@@ -32,11 +32,8 @@
 # pivots on the spot under exactly that command. If allocation ever regresses to
 # a differential mix, that check fires.
 #
-# THE SHARED CEILING. Both realizations read the one authored no-load axle speed
-# (the motor's `lunco:motor:noLoadSpeed` divided by the gearbox
-# `lunco:gearbox:ratio` — 14400 / 1200 = 12 rad/s): the joint motor targets it,
-# the raycast drive force rolls off toward it. With r = 0.4 m both must cap at
-# omega_max * r = 12 * 0.4 = 4.8 m/s. Parity with each other is necessary but
+# THE SHARED NETWORK. Both realizations read the same authored motor/gearbox/shaft
+# solve. Parity with each other is necessary but
 # not sufficient, so the scenario also pins both to that ABSOLUTE ceiling.
 #
 # `scenarios/tests/ackermann_parity.rhai` (attached below) drives both from ONE tick

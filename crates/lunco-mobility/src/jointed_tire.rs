@@ -11,7 +11,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_core::architecture::Port;
 use lunco_core::InputPorts;
-use lunco_hardware::{commanded_motor_torque, MotorActuator};
+use lunco_cosim::JointTorqueActuator;
 
 use crate::{
     contact_plane_basis, longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph,
@@ -30,7 +30,7 @@ pub struct JointedWheelTire {
     pub drive_joint: Entity,
     /// Wheel radius, m.
     pub radius: f64,
-    /// Total axle inertia including reflected rotor inertia, kg m².
+    /// Complete authored tire and drivetrain assembly inertia, kg m².
     pub axle_inertia: f64,
     /// Longitudinal slip stiffness, N/m.
     pub slip_stiffness: f64,
@@ -123,7 +123,7 @@ pub fn apply_jointed_tire_forces(
         )>,
     )>,
     q_tires: Query<(Entity, &JointedWheelTire)>,
-    q_joints: Query<(&MotorActuator, &RevoluteJoint)>,
+    q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     q_ports: Query<&Port>,
     q_inputs: Query<&InputPorts>,
     q_child_of: Query<&ChildOf>,
@@ -164,14 +164,18 @@ pub fn apply_jointed_tire_forces(
             let omega = (wheel_state.angular_velocity - chassis_state.angular_velocity)
                 .dot(axle_world)
                 * motor.drive_sign;
-            let throttle = q_ports
-                .get(motor.port_entity)
-                .map(|port| port.value)
-                .unwrap_or(0.0);
+            let Ok(port) = q_ports.get(motor.port_entity) else {
+                continue;
+            };
             let braking =
                 lunco_core::architecture::owning_input_ports(wheel, &q_child_of, &q_inputs)
                     .is_some_and(|inputs| inputs.brake_active);
-            let axle_torque = commanded_motor_torque(motor, throttle, omega, braking);
+            let brake_torque = if braking {
+                -omega.signum() * motor.brake_torque
+            } else {
+                0.0
+            };
+            let axle_torque = port.value + brake_torque;
 
             let hub = wheel_state.position;
             let other_hub_velocity = |other: Option<Entity>| {

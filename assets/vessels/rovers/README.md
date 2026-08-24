@@ -2,7 +2,7 @@
 
 This directory contains the USD definitions for all surface rovers in LunCoSim. Since LunCoSim follows **Article X of the Project Constitution (The Tunability Mandate)**, all vehicle masses, joints, motor torques, and suspension settings are driven directly by attributes authored in these USD files rather than being hardcoded in Rust.
 
-**One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every wheel composes; a rover authors only its own decisions (pose, standard `physxVehicleWheelAttachment:index`, explicit drive/steer connections, variants). The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
+**One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every vehicle wheel composes; the vehicle wheel instance also applies the standard wheel/attachment APIs and authors its `physxVehicleWheelAttachment:index`, explicit drive/steer connections, and variants. The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
 
 **Live tuning.** All wheel params carry schema-level slider hints: select a rover, Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
 
@@ -38,13 +38,18 @@ Even for joint-based physical rovers, the suspension settings are read from stan
 *   `float physxVehicleSuspension:springDamperRate`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
 *   `float lunco:suspension:restLength`: Uncompressed suspension length (default `0.5` m).
 
-### 4. Drivetrain & Motor Actuation (Authored per Wheel)
+### 4. Drivetrain & Motor Network (Authored in USD)
 Controlling traction and speed:
-*   `float lunco:motor:stallTorque` and `float lunco:motor:noLoadSpeed`: Motor-shaft
-    torque curve. The optional `lunco:gearbox:ratio`, `:efficiency`, and
-    `:maxOutputTorque` reduce it to the axle. These values live on the motor and
-    gearbox parts, not on a wheel, so both physical and raycast realizations consume
-    one drivetrain contract. See `assets/scenarios/tests/drivetrain_parity.rhai`.
+*   `inputs:stall_torque`, `inputs:no_load_speed`, `inputs:rated_power`, and
+    `inputs:v_rated` are authored on the Modelica motor. Its measured
+    `inputs:speed` comes from the solved wheel speed and `outputs:shaft_torque`
+    drives the generic authored `Torque` boundary;
+    `inputs:ratio`, `inputs:eta`, and `inputs:max_output_torque` are authored on
+    the gearbox. `physxVehicleWheel:moi` is the complete authored tire-and-
+    drivetrain assembly inertia. One containing USD network connects motor,
+    torque boundary, reduction, and shaft, so both physical and raycast
+    realizations consume the solved boundary. See
+    `assets/scenarios/tests/drivetrain_parity.rhai`.
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
 *   `float physics:dynamicFriction`: standard `UsdPhysicsMaterialAPI` Coulomb coefficient ($\mu$) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant, and consumed by both wheel realizations.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).

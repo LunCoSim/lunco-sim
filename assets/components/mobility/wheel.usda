@@ -27,14 +27,13 @@
 # Re-shoe a rover by changing one variant; re-spring it by swapping one arc. Neither
 # touches the hub, and neither needs any code.
 #
-# The drive torque comes from the rover's drivetrain, not from a program of the wheel's
-# own — a wheel is a part, not an actor.
-#
-# TORQUE AND SPEED ARE NOT HERE. They belong to the MOTOR
-# (`lunco://components/mobility/motor.usda`, `LunCoMotorAPI`) and the reduction between
-# it and this hub (`lunco://components/mobility/gearbox.usda`). A wheel is a hub:
-# radius, mass, moment of inertia, bearing drag, brake authority and a contact patch.
-# What turns it is a different part.
+# The drive torque is a boundary of the authored mechanical network. The
+# wheel declares the boundary ports; a containing vehicle authors the motor,
+# reduction, and generic Avian shaft components that connect to them.
+# The containing vehicle also applies the standard PhysX wheel and attachment
+# schemas, because the attachment is a relationship between that wheel and its
+# selected suspension/tire arcs. This component is the reusable hub, not a
+# standalone vehicle wheel.
 #
 # The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`), so they
 # mean the same thing here as in any other PhysX vehicle, and
@@ -43,19 +42,16 @@
 def Cylinder "Wheel" (
     doc = "Reusable motorized rover wheel hub with authored radius, traction, braking, and spin parameters."
     kind = "component"
-    # Applied HERE, once: every wheel on every rover composes this prim, so the
-    # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
-    # A rover authors only its own values — attachment index, radius, and any
-    # per-vehicle overrides — never the schemas.
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
+    # The reusable hub owns its rigid-body and LunCo wheel contracts. A vehicle
+    # applies the standard PhysX wheel/attachment APIs at the instance, where
+    # its suspension, tire, and attachment index are all authored together.
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoWheelAPI"]
     prepend variantSets = ["tire"]
     variants = {
         string tire = "regolith"
     }
 )
 {
-    uniform bool lunco:spawnable = true
-
     # --- Geometry ---
     # `axis = "X"` so the cylinder lies along the rover's left/right axle direction
     # (perpendicular to forward). Instances may override `axis` (Rucheyok is Z-forward
@@ -117,18 +113,12 @@ def Cylinder "Wheel" (
     # (`lunco_mobility::update_wheel_spin`), so a second traction multiplier or
     # travel-speed drag would be a duplicate model rather than a wheel property.
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
-    # Joint-wheel (rigid-axle) drive tuning. The axle's free-spin cap is NOT here and
-    # not on this prim at all: it is the motor's `lunco:motor:noLoadSpeed` divided by
-    # the gearbox ratio, the one no-load speed both wheel realizations obey.
-    #
-    double lunco:wheel:driveDamping = 30.0          # axle motor damping
-
-    # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
-    # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency
-    # and waste heat, and its own arc onto the vessel. The composed
-    # `lunco:motor:drivenWheel` relationship binds this wheel's native axle torque and
-    # speed readback to that motor at projection time. This prim keeps only what a hub
-    # is, and stays one rigid body.
+    # Mechanical network boundary. `drive` is solved torque in N.m and
+    # `shaft_speed` is the measured wheel speed in rad/s. Their runtime
+    # endpoints are projected from these authored names without a wheel/motor
+    # special case.
+    float inputs:drive
+    float outputs:shaft_speed
 
     # --- Tires ---
     # Which rubber this wheel runs. Each variant is nothing but a reference to a tire

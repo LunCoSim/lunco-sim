@@ -42,8 +42,8 @@
 //!
 //! Crucially, the motor is touched **only when a wire targets `angle`** — the
 //! write closure runs solely from the propagation master. An un-wired revolute
-//! joint (e.g. a rover wheel driven by `lunco_hardware::MotorActuator`'s velocity
-//! motor) is left entirely alone, so the two never fight over `joint.motor`.
+//! joint (e.g. a rover wheel driven by the solved mechanical torque boundary)
+//! is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::dynamics::solver::joint_damping;
 use avian3d::dynamics::solver::schedule::SubstepSolverSystems;

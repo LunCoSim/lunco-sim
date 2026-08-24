@@ -198,26 +198,25 @@ joint, so this is a Rust **soft holonomic coupling**.
 ### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
 Every tuning knob of a dynamic vehicle is a USD attribute, read by **one strict
 reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realizations
-(the analytical `WheelRaycast` and the joint-motor physical wheel).
+(the analytical `WheelRaycast` and the jointed physical wheel).
 
 - **Required, not defaulted.** Each attribute the reader wants is mandatory; a
   missing one is collected and returned as a missing-attribute error, so an
   under-authored wheel FAILS instead of quietly inheriting a number nobody wrote.
   There are no wheel defaults in Rust — `WheelRaycast::default()` is all zeros and
   exists only as the struct-update base the reader immediately overwrites.
-- **One no-load speed for both realizations.** The motor's
-  `lunco:motor:noLoadSpeed` divided by the gearbox's `lunco:gearbox:ratio`
-  (12 rad/s at the shipped axle) is THE top-speed parameter. The joint wheel's
-  velocity motor targets it; the raycast wheel's drive force rolls off linearly toward it
-  (`drive_force_mag`), so **both cap at `ω_max · r`**. The old
-  wheel-local speed attributes are deleted — there is one motor/gearbox reduction.
+- **One authored network for both realizations.** `DCMotor.mo`, `GearRatio.mo`,
+  and `AvianShaft.mo` solve the electrical and rotational state once. The
+  physical wheel and raycast wheel both consume the resulting shaft torque and
+  measured shaft speed; no Rust motor curve or copied speed clamp exists.
 - **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
   physical property of the hub in its own right; the old derivation from the drive
   torque is deleted.
 - **Also read:** `physxVehicleWheel:radius` / `:width` / `:mass` / `:moi` /
-  `:maxBrakeTorque`, the composed motor/gearbox torque reduction,
+  `:maxBrakeTorque`, and the authored motor/gearbox/shaft network,
   `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
-  `lunco:wheel:driveDamping` / `:steerAxis`.
+  `lunco:wheel:steerAxis`; drive torque and shaft speed are solved by the
+  authored motor/gearbox/shaft network.
 - **The one non-required number is a derivation, not a default:**
   `physxVehicleWheel:moi` unauthored (or 0) means "solid cylinder", i.e. `½·m·r²`
   computed downstream from the authored mass and radius. Nothing is invented.

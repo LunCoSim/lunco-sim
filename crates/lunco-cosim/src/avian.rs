@@ -21,7 +21,7 @@ use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
     ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
-    RigidBody, Rotation, Sensor, WriteRigidBodyForces,
+    RevoluteJoint, RigidBody, Rotation, Sensor, Sleeping, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -175,6 +175,133 @@ pub struct TorqueActuator {
     pub axis_local: Vec3,
     /// Maximum torque magnitude (N·m).
     pub max_torque_nm: f64,
+}
+
+/// A solved scalar torque applied across a revolute joint.
+///
+/// The scalar is a physical torque from an authored runtime port.  The joint
+/// coordinate sign maps it to equal and opposite world torques on the two
+/// bodies; Avian then integrates the bodies and enforces the revolute
+/// constraint.  This is a reusable mechanical boundary, not a motor model:
+/// motors, brakes, hydraulic rotary actuators, and other domains can publish
+/// the scalar through the same port surface. The same boundary publishes the
+/// solved joint-coordinate speed through `speed_port_entity`.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component, Default)]
+pub struct JointTorqueActuator {
+    /// Runtime port carrying solved torque in the joint's positive coordinate.
+    pub port_entity: Entity,
+    /// Runtime port receiving the measured joint-coordinate speed, rad/s.
+    pub speed_port_entity: Entity,
+    /// Passive opposing torque when the owning vessel's brake command is active.
+    pub brake_torque: f64,
+    /// Mapping from the joint coordinate to body-2's world axis.
+    pub drive_sign: f64,
+}
+
+impl Default for JointTorqueActuator {
+    fn default() -> Self {
+        Self {
+            port_entity: Entity::PLACEHOLDER,
+            speed_port_entity: Entity::PLACEHOLDER,
+            brake_torque: 0.0,
+            drive_sign: 1.0,
+        }
+    }
+}
+
+/// Apply solved joint torque as equal and opposite body torques.
+///
+/// The Modelica/network solver determines the scalar.  This system performs
+/// only the mechanical boundary projection; it does not derive torque from a
+/// command, speed, battery state, motor name, or fixed torque-speed curve.
+pub fn apply_joint_torque_actuators(
+    physics_time: Res<Time<Physics>>,
+    virtual_time: Res<Time<Virtual>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    q_actuators: Query<(&JointTorqueActuator, &RevoluteJoint)>,
+    mut q_ports: ParamSet<(
+        Query<&lunco_core::architecture::Port>,
+        Query<&mut lunco_core::architecture::Port>,
+    )>,
+    q_sleeping: Query<(), With<Sleeping>>,
+    q_child_of: Query<&ChildOf>,
+    q_inputs: Query<&lunco_core::InputPorts>,
+    mut bodies: ParamSet<(
+        Query<(&Rotation, &AngularVelocity)>,
+        Query<Forces, lunco_physics::Integrable>,
+    )>,
+    mut commands: Commands,
+) {
+    if !lunco_physics::physics_is_live_state(&physics_time, &virtual_time, faults.as_deref()) {
+        return;
+    }
+
+    for (actuator, joint) in &q_actuators {
+        let torque = {
+            let q_read_ports = q_ports.p0();
+            let Ok(port) = q_read_ports.get(actuator.port_entity) else {
+                continue;
+            };
+            port.value
+        };
+        if !torque.is_finite()
+            || !actuator.brake_torque.is_finite()
+            || !actuator.drive_sign.is_finite()
+        {
+            continue;
+        }
+        let (axis, coordinate_speed) = {
+            let q_bodies = bodies.p0();
+            let Ok([(body1_rotation, body1_omega), (_, body2_omega)]) =
+                q_bodies.get_many([joint.body1, joint.body2])
+            else {
+                continue;
+            };
+            let axis = (body1_rotation.0 * joint.hinge_axis).normalize_or_zero();
+            if axis == DVec3::ZERO {
+                continue;
+            }
+            let coordinate_speed = (body2_omega.0 - body1_omega.0).dot(axis) * actuator.drive_sign;
+            (axis, coordinate_speed)
+        };
+        if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_port_entity) {
+            speed_port.value = coordinate_speed;
+        }
+        let brake =
+            if lunco_core::architecture::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
+                .is_some_and(|inputs| inputs.brake_active)
+            {
+                -coordinate_speed.signum() * actuator.brake_torque
+            } else {
+                0.0
+            };
+        let coordinate_torque = torque + brake;
+        if coordinate_torque == 0.0 {
+            continue;
+        }
+        let world_torque = axis * (coordinate_torque * actuator.drive_sign);
+        let mut q_forces = bodies.p1();
+        if let Ok([mut body1_forces, mut body2_forces]) =
+            q_forces.get_many_mut([joint.body1, joint.body2])
+        {
+            body1_forces.apply_torque(-world_torque);
+            body2_forces.apply_torque(world_torque);
+        } else {
+            if let Ok(mut body1_forces) = q_forces.get_mut(joint.body1) {
+                body1_forces.apply_torque(-world_torque);
+            }
+            if let Ok(mut body2_forces) = q_forces.get_mut(joint.body2) {
+                body2_forces.apply_torque(world_torque);
+            }
+        }
+        if q_sleeping.contains(joint.body1) {
+            commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body1));
+        }
+        if q_sleeping.contains(joint.body2) {
+            commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body2));
+        }
+    }
 }
 
 /// One tick's command for a [`ForceActuator`] or [`TorqueActuator`].

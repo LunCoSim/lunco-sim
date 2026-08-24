@@ -1,20 +1,20 @@
 within LunCo.Electrical;
-// A two-domain DC motor. The electrical Pin and mechanical Flange are one solved
-// component: bus voltage drives the winding, shaft speed produces back-EMF, and
-// the resulting torque is applied to the same flange that carries the load back
-// into the electrical equations.
+// A two-domain DC motor at the Modelica/engine mechanical boundary. The electrical
+// Pin and measured shaft-speed input determine winding current, back-EMF, torque,
+// heat, and power. The generic Torque member places that solved torque on the
+// authored rotational network; the engine-side wheel owns the rotational state and
+// its authored total inertia, so no state is integrated twice across the boundary.
 model DCMotor
   extends LunCo.Icons.Motor;
   parameter Real stall_torque = 1.5 "Motor-shaft stall torque, N.m";
   parameter Real no_load_speed = 4800.0 "Motor-shaft no-load speed, rad/s";
-  parameter Real rotor_inertia = 0.00012 "Motor rotor inertia, kg.m2";
   parameter Real rated_power = 500.0 "Continuous electrical nameplate power, W";
   parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
 
   input Real demand "Normalized motor demand, -1..1";
+  input Real speed(unit="rad/s") "Measured shaft speed from the mechanical engine";
 
   Pin p;
-  LunCo.Mechanics.Flange shaft;
 
   output Real electrical_power(unit="W") "Electrical power drawn by the motor drive";
   output Real heat(unit="W") "Electrical loss delivered to the thermal network";
@@ -37,7 +37,7 @@ equation
   torque_constant = stall_torque / (rated_power / v_rated);
   back_emf_constant = v_rated / no_load_speed;
 
-  shaft_speed = der(shaft.phi);
+  shaft_speed = speed;
   winding_voltage = demand * p.v;
   back_emf = back_emf_constant * shaft_speed;
   winding_current = (winding_voltage - back_emf) / resistance;
@@ -46,9 +46,6 @@ equation
   // current. The product p.v*p.i therefore equals winding_voltage*winding_current.
   p.i = demand * winding_current;
   shaft_torque = torque_constant * winding_current;
-  // Flange.tau is torque INTO the flange. The motor applies the opposite sign
-  // to the connected load, while the flange flow carries the reaction back.
-  shaft.tau = -shaft_torque;
 
   electrical_power = p.i * p.v;
   heat = resistance * winding_current * winding_current;

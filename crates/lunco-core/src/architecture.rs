@@ -575,6 +575,31 @@ impl ActuatorPorts {
     }
 }
 
+/// A runtime surface for a USD-authored component's physical ports.
+///
+/// The names and endpoint entities are published by the component projection
+/// from authored `inputs:*`/`outputs:*` declarations.  Consumers resolve the
+/// authored connection through this surface; they do not discover a wheel,
+/// motor, hydraulic valve, or thermal boundary by Rust type or entity name.
+#[derive(Component, Debug, Clone, Default)]
+pub struct PortSurface {
+    /// Authored port name to the runtime [`Port`] entity that carries it.
+    pub ports: std::collections::HashMap<String, Entity>,
+}
+
+impl PortSurface {
+    /// Build a surface from the endpoints projected for one authored component.
+    pub fn new(ports: std::collections::HashMap<String, Entity>) -> Self {
+        Self { ports }
+    }
+
+    /// Resolve one authored port name to its runtime endpoint.
+    #[inline]
+    pub fn get(&self, name: &str) -> Option<Entity> {
+        self.ports.get(name).copied()
+    }
+}
+
 /// Apply the control lifecycle's safe-stop boundary immediately.
 ///
 /// `InputPorts` are the command request, while the wired Modelica/hardware path

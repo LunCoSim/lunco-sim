@@ -69,7 +69,7 @@ def Xform "RockerBogie" (
     # Both are now ~0 and the losses are authored where the hardware loses them:
     #   · `physxVehicleWheel:dampingRate` = 0.45 N·m·s per wheel — the sealed
     #     dry-lubricated bearing plus regolith rolling resistance (`wheel.usda`).
-    #   · `lunco:gearbox:efficiency` = 0.85 — a cold multi-stage harmonic drive.
+    #   · gearbox `inputs:eta` = 0.85 — a cold multi-stage harmonic drive.
     #   · tyre μ — lateral friction is what actually resists a yaw, and it does:
     #     with angular damping gone the rover still turns flat (2.8° peak roll
     #     under full steer at 0.6 throttle, measured) rather than spinning out.
@@ -381,6 +381,7 @@ def Xform "RockerBogie" (
 
         # Front Left Wheel
         def Cylinder "Wheel_FL" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -407,7 +408,10 @@ def Xform "RockerBogie" (
 
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int physxVehicleWheelAttachment:index = 0
-            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/RockerL/Shaft_FL.outputs:torque>
             float inputs:steer.connect = </RockerBogie.outputs:steering>
         }
 
@@ -444,7 +448,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerL/Wheel_FL>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
 
             # ── SPEED KNOB ────────────────────────────────────────────────────
@@ -457,7 +461,15 @@ def Xform "RockerBogie" (
             # (stallTorque · 200 · 0.85) is set per tier in `variants/rover_*.usda`,
             # and it is the torque ladder (153 › 85 › 68 N·m) that now carries the
             # difficulty, sized against each tier's traction cone.
-            float lunco:motor:noLoadSpeed = 2400.0
+            float inputs:no_load_speed = 2400.0
+        }
+
+        def Xform "TorqueSource_FL" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/RockerL/Motor_FL.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/RockerL/Gearbox_FL.connectors:flange_a>
         }
 
         def Xform "Gearbox_FL" (
@@ -468,7 +480,16 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.055, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/RockerL/Motor_FL.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/RockerL/TorqueSource_FL.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/RockerL/Shaft_FL.connectors:flange>
+        }
+
+        def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FL>
         }
     }
 
@@ -549,6 +570,7 @@ def Xform "RockerBogie" (
 
         # Front Right Wheel
         def Cylinder "Wheel_FR" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -566,7 +588,10 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheelAttachment:index = 1
-            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/RockerR/Shaft_FR.outputs:torque>
             float inputs:steer.connect = </RockerBogie.outputs:steering>
         }
 
@@ -580,11 +605,19 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerR/Wheel_FR>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             # 12.9 km/h measured — see Motor_FL. All six must
             # agree, or the fast wheels drag the slow ones and every wheel scrubs.
-            float lunco:motor:noLoadSpeed = 2400.0
+            float inputs:no_load_speed = 2400.0
+        }
+
+        def Xform "TorqueSource_FR" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/RockerR/Motor_FR.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/RockerR/Gearbox_FR.connectors:flange_a>
         }
 
         def Xform "Gearbox_FR" (
@@ -594,7 +627,16 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.055, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/RockerR/Motor_FR.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/RockerR/TorqueSource_FR.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/RockerR/Shaft_FR.connectors:flange>
+        }
+
+        def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FR>
         }
     }
 
@@ -692,6 +734,7 @@ def Xform "RockerBogie" (
 
         # Middle Left Wheel
         def Cylinder "Wheel_ML" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -709,11 +752,15 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheelAttachment:index = 2
-            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/BogieL/Shaft_ML.outputs:torque>
         }
 
         # Rear Left Wheel
         def Cylinder "Wheel_RL" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -731,7 +778,10 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheelAttachment:index = 4
-            float inputs:drive.connect = </RockerBogie.outputs:drive_left>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/BogieL/Shaft_RL.outputs:torque>
         }
 
         # Two motors on this bogie — indices 2 and 4, both even ⇒ `drive_left`.
@@ -743,9 +793,17 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_ML>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_ML>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle — see Motor_FL
+            float inputs:no_load_speed = 2400.0
+        }
+
+        def Xform "TorqueSource_ML" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/BogieL/Motor_ML.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_ML.connectors:flange_a>
         }
 
         def Xform "Gearbox_ML" (
@@ -755,7 +813,11 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.055, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/BogieL/Motor_ML.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_ML.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_ML.connectors:flange>
         }
 
         def Xform "Motor_RL" (
@@ -766,9 +828,18 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_RL>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle — see Motor_FL
+            float inputs:no_load_speed = 2400.0
+        }
+
+
+        def Xform "TorqueSource_RL" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/BogieL/Motor_RL.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_RL.connectors:flange_a>
         }
 
         def Xform "Gearbox_RL" (
@@ -778,7 +849,20 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.055, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/BogieL/Motor_RL.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_RL.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_RL.connectors:flange>
+        }
+
+        def Xform "Shaft_ML" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_ML>
+        }
+        def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RL>
         }
     }
 
@@ -867,6 +951,7 @@ def Xform "RockerBogie" (
 
         # Middle Right Wheel
         def Cylinder "Wheel_MR" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -884,11 +969,15 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheelAttachment:index = 3
-            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/BogieR/Shaft_MR.outputs:torque>
         }
 
         # Rear Right Wheel
         def Cylinder "Wheel_RR" (
+            prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
             prepend references = [
                 @lunco://components/mobility/wheel.usda@</Wheel>,
                 @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
@@ -906,7 +995,10 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheelAttachment:index = 5
-            float inputs:drive.connect = </RockerBogie.outputs:drive_right>
+            # Complete axle inertia for the authored motor, reduction, and tire assembly.
+            # The 6.8 kg.m2 value is the composed USD mechanical contract.
+            float physxVehicleWheel:moi = 6.8
+            float inputs:drive.connect = </RockerBogie/BogieR/Shaft_RR.outputs:torque>
         }
 
         # Indices 3 and 5, both odd ⇒ `drive_right`. Mirror of the left bogie.
@@ -918,9 +1010,17 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_MR>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_MR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle — see Motor_FL
+            float inputs:no_load_speed = 2400.0
+        }
+
+        def Xform "TorqueSource_MR" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/BogieR/Motor_MR.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_MR.connectors:flange_a>
         }
 
         def Xform "Gearbox_MR" (
@@ -930,7 +1030,11 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.055, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/BogieR/Motor_MR.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_MR.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_MR.connectors:flange>
         }
 
         def Xform "Motor_RR" (
@@ -941,9 +1045,18 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_RR>
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 2400.0   # 12 rad/s axle — see Motor_FL
+            float inputs:no_load_speed = 2400.0
+        }
+
+
+        def Xform "TorqueSource_RR" (
+            prepend references = @lunco://components/mobility/torque.usda@</Torque>
+        )
+        {
+            float inputs:tau_ref.connect = </RockerBogie/BogieR/Motor_RR.outputs:shaft_torque>
+            custom token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_RR.connectors:flange_a>
         }
 
         def Xform "Gearbox_RR" (
@@ -953,7 +1066,20 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.055, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:torque.connect = </RockerBogie/BogieR/Motor_RR.outputs:torque>
+            float inputs:ratio = 200.0
+            float inputs:eta = 0.85
+            float inputs:max_output_torque = 400.0
+            custom token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_RR.connectors:flange>
+            custom token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_RR.connectors:flange>
+        }
+
+        def Xform "Shaft_MR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_MR>
+        }
+        def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        {
+            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RR>
         }
     }
 
@@ -1068,6 +1194,87 @@ def Xform "RockerBogie" (
     # capability by changing suspension.
     variantSet "power" = {
         "infinite" {
+            def Xform "PowerSource" (
+                prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
+            )
+            {
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+                float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+                float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+                float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+                float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+                float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+                float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+                float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
+                float outputs:bus_voltage.connect = </RockerBogie/PowerSource.outputs:terminal_voltage_v>
+                float outputs:bus_current.connect = </RockerBogie/PowerSource.outputs:terminal_current_a>
+                float outputs:bus_power.connect = </RockerBogie/PowerSource.outputs:terminal_power_w>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </RockerBogie/PowerSource>,
+                    </RockerBogie/RockerL/Motor_FL>,
+                        </RockerBogie/RockerL/TorqueSource_FL>,
+                    </RockerBogie/BogieL/Motor_ML>,
+                        </RockerBogie/BogieL/TorqueSource_ML>,
+                    </RockerBogie/BogieL/Motor_RL>,
+                        </RockerBogie/BogieL/TorqueSource_RL>,
+                    </RockerBogie/RockerR/Motor_FR>,
+                        </RockerBogie/RockerR/TorqueSource_FR>,
+                    </RockerBogie/BogieR/Motor_MR>,
+                        </RockerBogie/BogieR/TorqueSource_MR>,
+                    </RockerBogie/BogieR/Motor_RR>,
+                        </RockerBogie/BogieR/TorqueSource_RR>,
+                    </RockerBogie/RockerL/Gearbox_FL>,
+                    </RockerBogie/RockerR/Gearbox_FR>,
+                    </RockerBogie/BogieL/Gearbox_ML>,
+                    </RockerBogie/BogieL/Gearbox_RL>,
+                    </RockerBogie/BogieR/Gearbox_MR>,
+                    </RockerBogie/BogieR/Gearbox_RR>,
+                    </RockerBogie/RockerL/Shaft_FL>,
+                    </RockerBogie/RockerR/Shaft_FR>,
+                    </RockerBogie/BogieL/Shaft_ML>,
+                    </RockerBogie/BogieL/Shaft_RL>,
+                    </RockerBogie/BogieR/Shaft_MR>,
+                    </RockerBogie/BogieR/Shaft_RR>,
+                ]
+            }
+            over "RockerL" {
+                over "Motor_FL" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "BogieL" {
+                over "Motor_ML" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+                over "Motor_RL" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "RockerR" {
+                over "Motor_FR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "BogieR" {
+                over "Motor_MR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+                over "Motor_RR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
         }
 
         "battery" {
@@ -1084,8 +1291,20 @@ def Xform "RockerBogie" (
             {
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
                 float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+                float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+                float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+                float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+                float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+                float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+                float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
                 float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
+                float outputs:bus_voltage.connect = </RockerBogie/Battery.outputs:terminal_voltage_v>
+                float outputs:bus_current.connect = </RockerBogie/Battery.outputs:terminal_current_a>
+                float outputs:bus_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+                float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+                float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
+                float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a
@@ -1100,11 +1319,29 @@ def Xform "RockerBogie" (
                 prepend rel collection:components:includes = [
                     </RockerBogie/Battery>,
                     </RockerBogie/RockerL/Motor_FL>,
+                        </RockerBogie/RockerL/TorqueSource_FL>,
                     </RockerBogie/BogieL/Motor_ML>,
+                        </RockerBogie/BogieL/TorqueSource_ML>,
                     </RockerBogie/BogieL/Motor_RL>,
+                        </RockerBogie/BogieL/TorqueSource_RL>,
                     </RockerBogie/RockerR/Motor_FR>,
+                        </RockerBogie/RockerR/TorqueSource_FR>,
                     </RockerBogie/BogieR/Motor_MR>,
+                        </RockerBogie/BogieR/TorqueSource_MR>,
                     </RockerBogie/BogieR/Motor_RR>,
+                        </RockerBogie/BogieR/TorqueSource_RR>,
+                    </RockerBogie/RockerL/Gearbox_FL>,
+                    </RockerBogie/RockerR/Gearbox_FR>,
+                    </RockerBogie/BogieL/Gearbox_ML>,
+                    </RockerBogie/BogieL/Gearbox_RL>,
+                    </RockerBogie/BogieR/Gearbox_MR>,
+                    </RockerBogie/BogieR/Gearbox_RR>,
+                    </RockerBogie/RockerL/Shaft_FL>,
+                    </RockerBogie/RockerR/Shaft_FR>,
+                    </RockerBogie/BogieL/Shaft_ML>,
+                    </RockerBogie/BogieL/Shaft_RL>,
+                    </RockerBogie/BogieR/Shaft_MR>,
+                    </RockerBogie/BogieR/Shaft_RR>,
                 ]
             }
             over "RockerL" {
@@ -1140,32 +1377,6 @@ def Xform "RockerBogie" (
                 }
             }
 
-            over "RockerL" {
-                over "Wheel_FL" {
-                    float inputs:drive.connect = </RockerBogie/RockerL/Motor_FL.outputs:available_demand>
-                }
-            }
-            over "BogieL" {
-                over "Wheel_ML" {
-                    float inputs:drive.connect = </RockerBogie/BogieL/Motor_ML.outputs:available_demand>
-                }
-                over "Wheel_RL" {
-                    float inputs:drive.connect = </RockerBogie/BogieL/Motor_RL.outputs:available_demand>
-                }
-            }
-            over "RockerR" {
-                over "Wheel_FR" {
-                    float inputs:drive.connect = </RockerBogie/RockerR/Motor_FR.outputs:available_demand>
-                }
-            }
-            over "BogieR" {
-                over "Wheel_MR" {
-                    float inputs:drive.connect = </RockerBogie/BogieR/Motor_MR.outputs:available_demand>
-                }
-                over "Wheel_RR" {
-                    float inputs:drive.connect = </RockerBogie/BogieR/Motor_RR.outputs:available_demand>
-                }
-            }
             def LunCoEvent "BatteryDrained" {
                 float inputs:trigger.connect = </RockerBogie/Electrical.outputs:battery_drained>
                 uniform token lunco:event:name = "battery_drained"

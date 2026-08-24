@@ -16,13 +16,11 @@
 # slope — which is exactly when it is wanted. See `standard.usda` for the rules.
 
 def Xform "MotorClass" (
-    prepend apiSchemas = ["LunCoMotorAPI"]
+    prepend apiSchemas = ["LunCoProgramAPI"]
     kind = "component"
 )
 {
-    float lunco:motor:stallTorque = 3.0
-    float lunco:motor:noLoadSpeed = 1200.0
-    float lunco:motor:continuousTorque = 1.8
-    # FRAME property — same rotor iron as `standard`, so unchanged.
-    float lunco:motor:rotorInertia = 0.00012
+    float inputs:stall_torque = 3.0
+    float inputs:no_load_speed = 1200.0
+    # Assembly inertia is authored on the composed wheel, not duplicated here.
 }

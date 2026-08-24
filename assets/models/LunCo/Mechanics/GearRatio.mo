@@ -6,7 +6,7 @@ within LunCo.Mechanics;
 //   tau_b = -ratio * eta * tau_a   and correspondingly harder, less what friction took
 //
 // `ratio` > 1 is a REDUCTION (motor fast, wheel slow), matching how every gearbox in this
-// repo is authored (`lunco:gearbox:ratio = 1200`).
+// repo is authored as `inputs:ratio` on each gearbox instance.
 //
 // Why this replaces arithmetic in Rust: `axle_peak_torque` and `axle_no_load_speed` are the
 // two halves of the relation above, evaluated once at config time and thereafter carried as

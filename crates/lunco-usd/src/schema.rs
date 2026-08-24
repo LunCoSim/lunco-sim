@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn wheel_schema_declares_ui_hints() {
         let reg = SchemaRegistry::global().read().unwrap();
-        for name in ["lunco:wheel:driveDamping", "lunco:suspension:restLength"] {
+        for name in ["lunco:suspension:restLength"] {
             let hint = reg.ui_hint(name).unwrap_or_else(|| {
                 panic!("{name} declares no schema-level UI hint — regenerate with gen_schema.py")
             });

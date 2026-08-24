@@ -3,7 +3,7 @@
 // The scene authors an empty battery and no generation source. This is a
 // runtime witness for the normal Modelica/ USD path:
 //
-//   battery terminal voltage -> motor available_demand -> wheel drive
+//   battery terminal voltage -> motor winding -> solved shaft torque
 //
 // The test never writes a motor command or asks Rust to stop an actuator.
 
@@ -24,9 +24,8 @@ fn on_start(me) {
     this.elec = find("/BatteryEmptyActuator/Rover/Electrical");
     this.event_seen = false;
     this.drained = ();
-    this.max_power = 0.0;
-    this.max_authority = 0.0;
-    this.max_voltage = 0.0;
+    this.max_consumed_power = 0.0;
+    this.max_drive_power = 0.0;
     print("[battery-empty] ── empty battery actuator boundary ─────────────");
 }
 
@@ -49,11 +48,10 @@ fn on_tick(me) {
 
     this.drained = get(this.elec, "battery_drained");
     let power = get(this.elec, member_port("electrical_power"));
-    let authority = get(this.elec, member_port("available_demand"));
-    let voltage = get(this.elec, member_port("terminal_voltage_v"));
+    let drive_power = get(this.elec, member_port("mechanical_power_w"));
 
     if this.phase == "wait" {
-        if this.drained == () || power == () || authority == () || voltage == () {
+        if this.drained == () || power == () || drive_power == () {
             if this.t >= PORT_WAIT_S {
                 this.done = true;
                 fail_fast("empty-battery electrical outputs did not publish within " +
@@ -67,9 +65,8 @@ fn on_tick(me) {
     }
 
     drive(this.rover, 1.0, 0.0);
-    if power.abs() > this.max_power { this.max_power = power.abs(); }
-    if authority.abs() > this.max_authority { this.max_authority = authority.abs(); }
-    if voltage.abs() > this.max_voltage { this.max_voltage = voltage.abs(); }
+    if power > this.max_consumed_power { this.max_consumed_power = power; }
+    if drive_power > this.max_drive_power { this.max_drive_power = drive_power; }
 
     if this.t - this.phase_started < DRIVE_S { return; }
 
@@ -84,18 +81,15 @@ fn verdict(s) {
         "battery_drained boundary output was " + s.drained + ", expected 1"));
     f.push(t_true(s.event_seen,
         "authored battery_drained event was not published"));
-    f.push(t_true(s.max_authority <= ZERO_TOL,
-        "motor available_demand remained " + s.max_authority +
-        " with no electrical energy"));
-    f.push(t_true(s.max_power <= ZERO_TOL,
-        "motor electrical power remained " + s.max_power +
-        " W with no electrical energy"));
-    f.push(t_true(s.max_voltage <= ZERO_TOL,
-        "motor terminal voltage remained " + s.max_voltage +
-        " V with an empty battery and no source"));
+    f.push(t_true(s.max_consumed_power <= ZERO_TOL,
+        "motor consumed " + s.max_consumed_power +
+        " W with no electrical source"));
+    f.push(t_true(s.max_drive_power <= ZERO_TOL,
+        "motor delivered " + s.max_drive_power +
+        " W to the shaft with no electrical source"));
 
     print("[battery-empty] drained=" + s.drained + " event=" + s.event_seen +
-          " max_authority=" + s.max_authority + " max_power=" + s.max_power +
-          "W max_voltage=" + s.max_voltage + "V");
+          " max_consumed_power=" + s.max_consumed_power +
+          " W max_drive_power=" + s.max_drive_power + " W");
     report_verdict(f, "BATTERY EMPTY ACTUATOR", "BATTERY_EMPTY_ACTUATOR");
 }

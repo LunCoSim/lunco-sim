@@ -415,29 +415,11 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
         };
         let suspension = openusd::sdf::Path::new(&attachment.suspension).ok();
         let tire = openusd::sdf::Path::new(&attachment.tire).ok();
-        let powertrain = match lunco_usd_sim::powertrain::find_binding_for_wheel(&view, &prim) {
-            Ok(binding) => binding,
-            Err(missing) => {
-                let detail = format!("{missing:?}");
-                report.errors.push(format!(
-                    "wheel {} has an invalid or incomplete motor topology: {}",
-                    prim.as_str(),
-                    detail
-                ));
-                wheel_prims.push(json!({
-                    "prim": prim.as_str(),
-                    "ok": false,
-                    "error": detail,
-                }));
-                continue;
-            }
-        };
         match lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
             &prim,
             suspension.as_ref(),
             tire.as_ref(),
-            powertrain.as_ref().map(|binding| &binding.params),
         ) {
             Ok(_) => wheel_prims.push(json!({ "prim": prim.as_str(), "ok": true })),
             Err(missing) => {

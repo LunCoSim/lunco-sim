@@ -3339,14 +3339,12 @@ pub fn wheel_revolute_joint(
     wheel: Entity,
     mount_local: DVec3,
     axle: DVec3,
-    drive_motor: avian3d::prelude::AngularMotor,
 ) -> JointSpec<RevoluteJoint> {
     JointSpec::new(
         RevoluteJoint::new(chassis, wheel)
             .with_local_anchor1(mount_local)
             .with_local_anchor2(DVec3::ZERO)
-            .with_hinge_axis(axle)
-            .with_motor(drive_motor),
+            .with_hinge_axis(axle),
     )
 }
 

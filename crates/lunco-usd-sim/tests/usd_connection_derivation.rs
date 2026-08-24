@@ -478,6 +478,34 @@ fn lander_actuator_projection_uses_all_authored_force_geometry() {
 }
 
 #[test]
+fn battery_rover_composes_authored_wheel_drive_connections() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/battery_empty_actuator.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose battery_empty_actuator.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    for (parent, wheel, shaft) in [
+        ("RockerL", "Wheel_FL", "Shaft_FL"),
+        ("RockerR", "Wheel_FR", "Shaft_FR"),
+        ("BogieL", "Wheel_ML", "Shaft_ML"),
+        ("BogieL", "Wheel_RL", "Shaft_RL"),
+        ("BogieR", "Wheel_MR", "Shaft_MR"),
+        ("BogieR", "Wheel_RR", "Shaft_RR"),
+    ] {
+        let wheel_path =
+            SdfPath::new(&format!("/BatteryEmptyActuator/Rover/{parent}/{wheel}")).unwrap();
+        assert_eq!(
+            view.connections(&wheel_path, "inputs:drive"),
+            [format!(
+                "/BatteryEmptyActuator/Rover/{parent}/{shaft}.outputs:torque"
+            )],
+            "the composed wheel must retain its authored shaft drive connection"
+        );
+    }
+}
+
+#[test]
 fn actuator_collection_keeps_physical_force_wires_outside_modelica_membership() {
     let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/vessels/landers/descent_lander.usda");

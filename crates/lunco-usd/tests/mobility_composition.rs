@@ -94,10 +94,11 @@ fn each_rover_composes_the_suspension_it_asked_for() {
 
 /// The APIs arrive by composition too — and the loader spawns nothing without them.
 ///
-/// `apiSchemas` is applied ONCE per component (`wheel.usda`'s `Wheel`, each
-/// `suspensions/*.usda`'s `Suspension`) and reaches all 30 wheels through the
-/// reference arcs, because `apiSchemas` is a list-op and composes. A rover authors
-/// values, never schemas.
+/// The reusable hub and suspension/tire arcs carry their domain APIs, while each
+/// vehicle wheel instance applies the standard wheel and attachment APIs because
+/// the instance owns the selected arcs and attachment index. `apiSchemas` then
+/// composes through the reference arcs. A rover authors the complete topology,
+/// rather than relying on an ambiguous standalone wheel component.
 ///
 /// This is load-bearing, not decorative: `process_usd_sim_prim_read` detects a wheel
 /// by `has_api_schema("PhysxVehicleWheelAPI")`, so an arc that stopped delivering the
@@ -132,7 +133,7 @@ fn every_rover_wheel_composes_its_applied_schemas() {
         let view = cs.view();
         let p = SdfPath::new(wheel).unwrap();
         for api in [
-            // from wheel.usda</Wheel>
+            // authored on the vehicle wheel instance
             "PhysxVehicleWheelAttachmentAPI",
             "PhysxVehicleWheelAPI",
             "LunCoWheelAPI",
@@ -249,13 +250,6 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
                 continue;
             }
             wheels += 1;
-            // Torque and no-load speed live on the MOTOR that names this wheel
-            // (`lunco:motor:drivenWheel`), not on the wheel prim — so resolve the
-            // powertrain exactly as the loader does before reading. A driven wheel
-            // with no motor would read zero torque, which the `peak_torque > 0`
-            // assertion below then catches.
-            let powertrain = lunco_usd_sim::powertrain::find_for_wheel(&view, &p)
-                .expect("shipped rover powertrain attributes");
             // The shipped component uses the standard direct-composition form:
             // the attachment, wheel, and suspension APIs arrive on this same
             // composed prim. A relationship-form asset is resolved by the
@@ -269,18 +263,12 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
                 &p,
                 attachment_suspension,
                 attachment_tire,
-                powertrain.as_ref(),
             )
             .unwrap_or_else(|missing| {
                 panic!("{rover}: wheel {} is missing {:?}", p.as_str(), missing)
             });
             assert!(params.radius > 0.0, "{rover}: {} radius", p.as_str());
             assert!(params.mass > 0.0, "{rover}: {} mass", p.as_str());
-            assert!(
-                params.peak_torque > 0.0,
-                "{rover}: {} peakTorque",
-                p.as_str()
-            );
             assert!(params.friction_mu > 0.0, "{rover}: {} tire μ", p.as_str());
             // Default-variant rovers are raycast: no wheel functions without
             // composed suspension compliance.
@@ -309,19 +297,9 @@ fn wheel_resync_claims_are_prim_scoped() {
     let wheel = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
     let chassis = SdfPath::new("/SkidRover/Chassis").unwrap();
     let root = SdfPath::new("/SkidRover").unwrap();
-    let motor = SdfPath::new("/SkidRover/Motor_FL").unwrap();
 
     assert!(claims_edit(&view, &wheel, "physxVehicleWheel:mass"));
     assert!(!claims_edit(&view, &chassis, "physics:mass"));
-    assert!(claims_edit(&view, &wheel, "lunco:wheel:driveDamping"));
-    assert!(!claims_edit(
-        &view,
-        &wheel,
-        "physxVehicleEngine:maxRotationSpeed"
-    ));
-    assert!(!claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
-    assert!(claims_edit(&view, &motor, "lunco:motor:noLoadSpeed"));
-    assert!(claims_edit(&view, &motor, "lunco:motor:stallTorque"));
     assert!(claims_edit(
         &view,
         &wheel,

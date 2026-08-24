@@ -88,6 +88,7 @@ def Xform "SixWheelRover" (
 
     # --- Left bank (binds to drive_left) ------------------------------------
     def Cylinder "Wheel_L0" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -98,10 +99,14 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 0
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_L0.outputs:torque>
     }
 
     def Cylinder "Wheel_L1" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -112,10 +117,14 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 2
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_L1.outputs:torque>
     }
 
     def Cylinder "Wheel_L2" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -126,11 +135,15 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 4
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_L2.outputs:torque>
     }
 
     # --- Right bank (binds to drive_right) ----------------------------------
     def Cylinder "Wheel_R0" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -141,10 +154,14 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 1
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_R0.outputs:torque>
     }
 
     def Cylinder "Wheel_R1" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -155,10 +172,14 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 3
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_R1.outputs:torque>
     }
 
     def Cylinder "Wheel_R2" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -169,30 +190,23 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 5
-        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
+                # Complete axle inertia for the authored motor, reduction, and tire assembly.
+                # The 6.8 kg.m2 value is the composed USD mechanical contract.
+                float physxVehicleWheel:moi = 6.8
+                float inputs:drive.connect = </SixWheelRover/Shaft_R2.outputs:torque>
     }
 
     # --- Motors + reductions -------------------------------------------------
     # SIX motors and six reductions, one per wheel — the point of G4 restated on the
     # actuator side: a non-2×2 layout is a USD file, not a Rust struct, and each of
     # these is independently sized, independently commanded and independently able to
-    # be weakened, worn or overheated by a per-instance attribute override.
-    #
-    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
-    # noLoadSpeed/ratio = 2400/200 = 12 rad/s. Torque and top speed belong to the
-    # motor and the reduction behind it.
-    #
-    # Each motor's `inputs:demand` wires to the SAME channel its wheel's
-    # `inputs:drive` connects to, so the bank split above is stated once and the motors
-    # follow it. Every motor names the WHEEL it turns with
-    # `lunco:motor:drivenWheel` — an explicit relationship, not a name convention.
-    # This drivetrain is RAYCAST, so those wheels have no joint and the raycast wheel
-    # consumes the axle torque and no-load speed directly; the binding is identical to
-    # a physical rover's.
+    # be weakened, worn or overheated by per-instance Modelica input opinions.
+    # Each motor's `inputs:demand` follows the same authored channel its wheel's
+    # `inputs:drive` consumes. The motor, gearbox, and shaft are one solved
+    # network; the raycast and physical realizations share its boundary.
     #
     # The three difficulty variants (`variants/rover_*.usda`) tier themselves by
-    # `over`-ing `lunco:motor:stallTorque` on these prims through the reference arc.
+    # `over`-ing the motor's authored `inputs:stall_torque` through the reference arc.
 
     # --- Left bank motors (drive_left) ---------------------------------------
     def Xform "Motor_L0" (
@@ -202,7 +216,15 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L0>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L0>
+    }
+
+    def Xform "TorqueSource_L0" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_L0.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_L0.connectors:flange_a>
     }
 
     def Xform "Gearbox_L0" (
@@ -211,7 +233,11 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (-0.6, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_L0.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_L0.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_L0.connectors:flange>
     }
 
     def Xform "Motor_L1" (
@@ -221,7 +247,16 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L1>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L1>
+    }
+
+
+    def Xform "TorqueSource_L1" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_L1.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_L1.connectors:flange_a>
     }
 
     def Xform "Gearbox_L1" (
@@ -230,7 +265,11 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (-0.6, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_L1.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_L1.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_L1.connectors:flange>
     }
 
     def Xform "Motor_L2" (
@@ -240,7 +279,16 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (-0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L2>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L2>
+    }
+
+
+    def Xform "TorqueSource_L2" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_L2.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_L2.connectors:flange_a>
     }
 
     def Xform "Gearbox_L2" (
@@ -249,7 +297,11 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (-0.6, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_L2.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_L2.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_L2.connectors:flange>
     }
 
     # --- Right bank motors (drive_right) -------------------------------------
@@ -260,7 +312,15 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R0>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R0>
+    }
+
+    def Xform "TorqueSource_R0" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_R0.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_R0.connectors:flange_a>
     }
 
     def Xform "Gearbox_R0" (
@@ -269,7 +329,11 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (0.6, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_R0.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_R0.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_R0.connectors:flange>
     }
 
     def Xform "Motor_R1" (
@@ -279,7 +343,16 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R1>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R1>
+    }
+
+
+    def Xform "TorqueSource_R1" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_R1.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_R1.connectors:flange_a>
     }
 
     def Xform "Gearbox_R1" (
@@ -288,7 +361,11 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (0.6, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_R1.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_R1.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_R1.connectors:flange>
     }
 
     def Xform "Motor_R2" (
@@ -298,7 +375,16 @@ def Xform "SixWheelRover" (
         double3 xformOp:translate = (0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
-        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R2>
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R2>
+    }
+
+
+    def Xform "TorqueSource_R2" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelRover/Motor_R2.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelRover/Gearbox_R2.connectors:flange_a>
     }
 
     def Xform "Gearbox_R2" (
@@ -307,7 +393,36 @@ def Xform "SixWheelRover" (
     {
         double3 xformOp:translate = (0.6, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelRover/Motor_R2.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelRover/TorqueSource_R2.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelRover/Shaft_R2.connectors:flange>
+    }
+
+    def Xform "Shaft_L0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L0>
+    }
+    def Xform "Shaft_L1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L1>
+    }
+    def Xform "Shaft_L2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_L2>
+    }
+    def Xform "Shaft_R0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R0>
+    }
+    def Xform "Shaft_R1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R1>
+    }
+    def Xform "Shaft_R2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelRover/Electrical.inputs:shaft_speed_R2>
     }
 
     # --- Drive law -----------------------------------------------------------
@@ -334,6 +449,79 @@ def Xform "SixWheelRover" (
     # Modelica DAE.
     variantSet "power" = {
         "infinite" {
+            def Xform "PowerSource" (
+                prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
+            )
+            {
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
+                float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
+                float inputs:shaft_speed_L0.connect = </SixWheelRover/Wheel_L0.outputs:shaft_speed>
+                float inputs:shaft_speed_L1.connect = </SixWheelRover/Wheel_L1.outputs:shaft_speed>
+                float inputs:shaft_speed_L2.connect = </SixWheelRover/Wheel_L2.outputs:shaft_speed>
+                float inputs:shaft_speed_R0.connect = </SixWheelRover/Wheel_R0.outputs:shaft_speed>
+                float inputs:shaft_speed_R1.connect = </SixWheelRover/Wheel_R1.outputs:shaft_speed>
+                float inputs:shaft_speed_R2.connect = </SixWheelRover/Wheel_R2.outputs:shaft_speed>
+                float outputs:bus_voltage.connect = </SixWheelRover/PowerSource.outputs:terminal_voltage_v>
+                float outputs:bus_current.connect = </SixWheelRover/PowerSource.outputs:terminal_current_a>
+                float outputs:bus_power.connect = </SixWheelRover/PowerSource.outputs:terminal_power_w>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </SixWheelRover/PowerSource>,
+                    </SixWheelRover/Motor_L0>,
+                        </SixWheelRover/TorqueSource_L0>,
+                    </SixWheelRover/Motor_L1>,
+                        </SixWheelRover/TorqueSource_L1>,
+                    </SixWheelRover/Motor_L2>,
+                        </SixWheelRover/TorqueSource_L2>,
+                    </SixWheelRover/Motor_R0>,
+                        </SixWheelRover/TorqueSource_R0>,
+                    </SixWheelRover/Motor_R1>,
+                        </SixWheelRover/TorqueSource_R1>,
+                    </SixWheelRover/Motor_R2>,
+                        </SixWheelRover/TorqueSource_R2>,
+                    </SixWheelRover/Gearbox_L0>,
+                    </SixWheelRover/Gearbox_L1>,
+                    </SixWheelRover/Gearbox_L2>,
+                    </SixWheelRover/Gearbox_R0>,
+                    </SixWheelRover/Gearbox_R1>,
+                    </SixWheelRover/Gearbox_R2>,
+                    </SixWheelRover/Shaft_L0>,
+                    </SixWheelRover/Shaft_L1>,
+                    </SixWheelRover/Shaft_L2>,
+                    </SixWheelRover/Shaft_R0>,
+                    </SixWheelRover/Shaft_R1>,
+                    </SixWheelRover/Shaft_R2>,
+                ]
+            }
+            over "Motor_L0" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
+            over "Motor_L1" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
+            over "Motor_L2" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
+            over "Motor_R0" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
+            over "Motor_R1" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
+            over "Motor_R2" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/PowerSource.connectors:p>
+            }
         }
 
         "battery" {
@@ -350,8 +538,20 @@ def Xform "SixWheelRover" (
             {
                 float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
+                float inputs:shaft_speed_L0.connect = </SixWheelRover/Wheel_L0.outputs:shaft_speed>
+                float inputs:shaft_speed_L1.connect = </SixWheelRover/Wheel_L1.outputs:shaft_speed>
+                float inputs:shaft_speed_L2.connect = </SixWheelRover/Wheel_L2.outputs:shaft_speed>
+                float inputs:shaft_speed_R0.connect = </SixWheelRover/Wheel_R0.outputs:shaft_speed>
+                float inputs:shaft_speed_R1.connect = </SixWheelRover/Wheel_R1.outputs:shaft_speed>
+                float inputs:shaft_speed_R2.connect = </SixWheelRover/Wheel_R2.outputs:shaft_speed>
                 float outputs:soc.connect = </SixWheelRover/Battery.outputs:soc_out>
                 float outputs:battery_drained.connect = </SixWheelRover/Battery.outputs:drained>
+                float outputs:bus_voltage.connect = </SixWheelRover/Battery.outputs:terminal_voltage_v>
+                float outputs:bus_current.connect = </SixWheelRover/Battery.outputs:terminal_current_a>
+                float outputs:bus_power.connect = </SixWheelRover/Battery.outputs:net_power_w>
+                float outputs:battery_net_power.connect = </SixWheelRover/Battery.outputs:net_power_w>
+                float outputs:battery_charge_power.connect = </SixWheelRover/Battery.outputs:charge_power_w>
+                float outputs:battery_discharge_power.connect = </SixWheelRover/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_L0.connect = </SixWheelRover/Motor_L0.outputs:heat>
@@ -364,11 +564,29 @@ def Xform "SixWheelRover" (
                 prepend rel collection:components:includes = [
                     </SixWheelRover/Battery>,
                     </SixWheelRover/Motor_L0>,
+                        </SixWheelRover/TorqueSource_L0>,
                     </SixWheelRover/Motor_L1>,
+                        </SixWheelRover/TorqueSource_L1>,
                     </SixWheelRover/Motor_L2>,
+                        </SixWheelRover/TorqueSource_L2>,
                     </SixWheelRover/Motor_R0>,
+                        </SixWheelRover/TorqueSource_R0>,
                     </SixWheelRover/Motor_R1>,
+                        </SixWheelRover/TorqueSource_R1>,
                     </SixWheelRover/Motor_R2>,
+                        </SixWheelRover/TorqueSource_R2>,
+                    </SixWheelRover/Gearbox_L0>,
+                    </SixWheelRover/Gearbox_L1>,
+                    </SixWheelRover/Gearbox_L2>,
+                    </SixWheelRover/Gearbox_R0>,
+                    </SixWheelRover/Gearbox_R1>,
+                    </SixWheelRover/Gearbox_R2>,
+                    </SixWheelRover/Shaft_L0>,
+                    </SixWheelRover/Shaft_L1>,
+                    </SixWheelRover/Shaft_L2>,
+                    </SixWheelRover/Shaft_R0>,
+                    </SixWheelRover/Shaft_R1>,
+                    </SixWheelRover/Shaft_R2>,
                 ]
             }
             over "Motor_L0" {
@@ -394,24 +612,6 @@ def Xform "SixWheelRover" (
             over "Motor_R2" {
                 float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
-            }
-            over "Wheel_L0" {
-                float inputs:drive.connect = </SixWheelRover/Motor_L0.outputs:available_demand>
-            }
-            over "Wheel_L1" {
-                float inputs:drive.connect = </SixWheelRover/Motor_L1.outputs:available_demand>
-            }
-            over "Wheel_L2" {
-                float inputs:drive.connect = </SixWheelRover/Motor_L2.outputs:available_demand>
-            }
-            over "Wheel_R0" {
-                float inputs:drive.connect = </SixWheelRover/Motor_R0.outputs:available_demand>
-            }
-            over "Wheel_R1" {
-                float inputs:drive.connect = </SixWheelRover/Motor_R1.outputs:available_demand>
-            }
-            over "Wheel_R2" {
-                float inputs:drive.connect = </SixWheelRover/Motor_R2.outputs:available_demand>
             }
             def LunCoEvent "BatteryDrained" {
                 float inputs:trigger.connect = </SixWheelRover/Electrical.outputs:battery_drained>

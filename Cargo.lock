@@ -7544,6 +7544,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-core",
+ "lunco-cosim",
  "lunco-environment",
  "lunco-hardware",
  "lunco-hooks",

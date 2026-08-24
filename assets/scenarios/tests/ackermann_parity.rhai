@@ -48,12 +48,8 @@
 //
 // ── THE ABSOLUTE CEILING ────────────────────────────────────────────────────
 //
-// Both realizations read ONE authored no-load axle speed: the motor's
-// `lunco:motor:noLoadSpeed` (14400 rad/s, `components/mobility/motor.usda`)
-// divided by the gearbox `lunco:gearbox:ratio` (1200,
-// `components/mobility/gearbox.usda`) = 12 rad/s at the axle. The joint motor
-// targets it; the raycast drive force rolls off toward it. With r = 0.4 m both
-// must cap at
+// Both realizations read ONE authored motor/gearbox/shaft network. The Modelica
+// equations and wheel/tire load determine the operating point for both.
 //
 //     v_max = omega_max * r = 12.0 * 0.4 = 4.8 m/s
 //

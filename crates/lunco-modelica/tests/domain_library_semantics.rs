@@ -74,16 +74,13 @@ fn electrical_observables_follow_the_physical_power_chain() {
         "motor current must include back-EMF from the solved shaft speed"
     );
     assert!(
-        motor.contains("shaft.tau = -shaft_torque;"),
-        "the solved motor torque must enter the authored rotational flange"
+        motor.contains("output Real shaft_torque")
+            && motor.contains("mechanical_power_w = shaft_torque * shaft_speed;"),
+        "the motor must expose solved torque and mechanical power to the authored domain boundary"
     );
     assert!(
-        motor.contains("shaft_speed = der(shaft.phi);"),
-        "the motor must receive shaft speed through the rotational boundary"
-    );
-    assert!(
-        !motor.contains("available_demand") && !motor.contains("efficiency"),
-        "the old voltage-authority proxy and independent efficiency scale must be removed"
+        motor.contains("input Real speed") && motor.contains("shaft_speed = speed;"),
+        "the motor must receive measured shaft speed at the co-simulation boundary"
     );
 }
 

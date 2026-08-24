@@ -41,12 +41,11 @@ fn test_rover_loading_physics() {
     // applied schema, not the presence of a radius. And every `LunCoWheelAPI` knob is
     // required: they have no fallbacks, in the schema or in Rust.
     //
-    // Real wheels get all of this from one reference arc onto
-    // `components/mobility/wheel.usda` (plus a suspension arc and a tire variant), so
-    // a rover authors an index and a radius and nothing else. This fixture is the only
-    // wheel in the project that composes nothing, which is exactly why it has to spell
-    // out what a wheel is — and why it is worth keeping that way: it pins the contract
-    // the arcs are satisfying.
+    // Real wheels get the physical and LunCo wheel values from
+    // `components/mobility/wheel.usda` (plus suspension and tire arcs). The vehicle
+    // wheel instance applies the standard wheel and attachment APIs because it owns
+    // the complete attachment topology. This fixture composes nothing, so it spells
+    // out that same complete contract and pins the reader's requirements.
     let usda_content = r#"#usda 1.0
 def Xform "Rover" {
     def Cube "Chassis" (
@@ -88,7 +87,6 @@ def Xform "Rover" {
         float physics:staticFriction = 0.8
 
         double3 lunco:wheel:steerAxis = (0, 1, 0)
-        double lunco:wheel:driveDamping = 30.0
     }
 }
 "#;

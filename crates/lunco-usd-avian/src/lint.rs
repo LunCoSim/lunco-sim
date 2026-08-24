@@ -516,7 +516,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     // type, its parent, applied schemas, and property names. `bodies`/`joints` above are
     // pre-chewed answers to the questions we already know we ask; this is what
     // lets a NEW rule ask a NEW question — "PhysicsMassAPI on a prim inside no
-    // body", "LunCoMotorAPI with no drivenWheel", "a collider outside every
+    // body", "a motor with no shaft binding", "a collider outside every
     // body" — without a Rust change, which is the whole point of putting rules in
     // rhai. Bounded by schema'd prims (hundreds), not by prim count (thousands).
     let mut prims: Vec<H> = Vec::new();

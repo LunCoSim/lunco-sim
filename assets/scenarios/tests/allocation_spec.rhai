@@ -638,7 +638,7 @@ fn verdict(s) {
     // absolute metre count would be a performance spec wearing a liveness label —
     // and at 15 m against ~14 m of actual travel it was one, failing on a drivetrain
     // that had resolved, driven, and done nothing wrong. It became one AGAIN at 4x
-    // when the shipped powertrain parameters made the rover accelerate more slowly;
+    // when the shipped authored drivetrain parameters made the rover accelerate more slowly;
     // see `FAILSAFE_CLEARS_BY` for why the multiplier is now 2x.
     f.push(t_min(s.d_fwd, FAILSAFE_MAX_M * FAILSAFE_CLEARS_BY,
                  "forward-leg distance (m) - kernel 'skid' resolved but the rover never moved"));
@@ -744,7 +744,7 @@ fn verdict(s) {
     // 25 deg is an ANTI-TRIVIAL floor, not a rate spec: the yaw a pivoting rover
     // sweeps in 6 s is set by its wheel spin-up, which is the driveline's business.
     // This measures 53.87 deg, and the old 60.0 was a rate spec — it went red when
-    // the shipped powertrain parameters slowed the spin-up, on a pivot that was
+    // the shipped authored drivetrain parameters slowed the spin-up, on a pivot that was
     // otherwise perfect (banks counter-rotating at +-1.56 rad/s, 0.00 m travelled).
     f.push(t_min(s.yaw_pivot, 25.0, "zero-throttle full-steer: swept yaw (deg)"));
     f.push(t_max(s.d_pivot, 4.0, "zero-throttle full-steer: travel (m) - a pivot is not a drive"));
@@ -787,8 +787,8 @@ fn verdict(s) {
     //
     // ⚠ THE SEPARATION SHRINKS AS THE DRIVELINE GETS HEALTHIER, which is why the
     // previous 1.25x gate had to move. That number was measured at 1.50x
-    // (14.56 / 9.72) on a driveline carrying 173 kg·m² of reflected rotor inertia —
-    // 36x what the rebalanced 200:1 reduction reflects — where both rovers were
+    // (14.56 / 9.72) on a driveline carrying the old, overestimated authored axle
+    // inertia, where both rovers were
     // still accelerating throughout the leg. Given real axle authority the lazy
     // mix's single driven bank yaws better on its own, so counter-rotation's
     // advantage narrows. The gate tracks the PROPERTY, not the old margin.

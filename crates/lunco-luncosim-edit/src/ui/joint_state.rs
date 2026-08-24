@@ -14,14 +14,12 @@
 //! - **Revolute** (physical wheels, rocker-bogie pins, doors): angle = twist of
 //!   the relative joint-basis rotation about `hinge_axis`; ω = relative angular
 //!   velocity projected on the world hinge axis; target / torque cap read
-//!   straight from the joint's [`AngularMotor`] — the exact values
-//!   `lunco_hardware::MotorActuator` wrote this tick (its live command-scaled
-//!   DC-curve cap), so no second torque law is transcribed here.
+//!   straight from the joint's [`AngularMotor`] for ordinary position drives.
+//!   Wheel joints instead show the solved torque published by their authored
+//!   mechanical network.
 //! - **Raycast wheels** (no avian joint): θ/ω are the canonical
-//!   `WheelRaycast::spin_angle` / `spin_velocity`; target = throttle ·
-//!   `max_rotation_speed` from the wheel's drive [`Port`]; drive torque is
-//!   reconstructed with the SAME authored curve both realizations use,
-//!   [`lunco_hardware::axle_torque`] — one definition, per project rule.
+//!   `WheelRaycast::spin_angle` / `spin_velocity`; torque is read from the
+//!   solved drive [`Port`]. There is no UI-side motor curve.
 //! - **Steering**: steered wheels (either kind) carry a
 //!   [`lunco_hardware::SteeringActuator`]; its `output_angle` is the single
 //!   shared steer output both realizations consume, shown in the steer column.
@@ -31,7 +29,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::architecture::Port;
-use lunco_hardware::{axle_torque, SteeringActuator};
+use lunco_cosim::JointTorqueActuator;
+use lunco_hardware::SteeringActuator;
 use lunco_mobility::WheelRaycast;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -74,10 +73,8 @@ pub struct JointStateRow {
     pub omega: f64,
     /// Commanded motor target velocity (rad/s), when a motor is driving.
     pub target: Option<f64>,
-    /// Torque (N·m). Revolute: the motor's live torque cap (what
-    /// `MotorActuator` computed from the authored DC curve this tick).
-    /// Raycast: the current drive torque from the same authored curve at the
-    /// current ω and throttle. `None` when no motor drives the joint.
+    /// Torque (N·m) published by the authored mechanical network or an
+    /// ordinary Avian position drive. `None` when no drive is present.
     pub torque: Option<f64>,
     /// Steer angle (rad) for steered wheels ([`SteeringActuator::output_angle`]).
     pub steer: Option<f64>,
@@ -161,7 +158,12 @@ pub fn populate_joint_state_view(
     selection: Res<SelectedEntities>,
     q_child_of: Query<&ChildOf>,
     q_name: Query<&Name>,
-    q_joints: Query<(Entity, &RevoluteJoint, Option<&SteeringActuator>)>,
+    q_joints: Query<(
+        Entity,
+        &RevoluteJoint,
+        Option<&SteeringActuator>,
+        Option<&JointTorqueActuator>,
+    )>,
     q_wheels: Query<(Entity, &WheelRaycast, Option<&SteeringActuator>)>,
     q_bodies: Query<(&Rotation, &AngularVelocity)>,
     q_ports: Query<&Port>,
@@ -182,7 +184,7 @@ pub fn populate_joint_state_view(
     view.rows.clear();
 
     // ── Avian revolute joints (physical wheels, suspension pins, doors) ──
-    for (joint_entity, joint, steer) in q_joints.iter() {
+    for (joint_entity, joint, steer, torque_actuator) in q_joints.iter() {
         // Membership: the jointed child body hangs under the selected vessel.
         if root_of(joint.body2, &q_child_of) != root && root_of(joint_entity, &q_child_of) != root {
             continue;
@@ -200,21 +202,26 @@ pub fn populate_joint_state_view(
         let axis_world = b1 * joint.hinge_axis;
         let omega = (av2.0 - av1.0).dot(axis_world);
 
-        // The joint's AngularMotor holds exactly what `MotorActuator` (drive)
-        // or the cosim joint backend wrote this tick: target velocity and the
-        // live torque cap from the authored DC curve.
-        let motor_on = joint.motor.enabled;
+        // Ordinary authored angle drives use Avian's AngularMotor. Wheel
+        // joints are owned by the solved scalar torque boundary instead.
+        let motor_on = joint.motor.enabled && torque_actuator.is_none();
+        let solved_torque = torque_actuator
+            .and_then(|actuator| q_ports.get(actuator.port_entity).ok())
+            .map(|port| port.value)
+            .filter(|value| value.is_finite());
         view.rows.push(JointStateRow {
             name: row_name(joint_entity, Some(joint.body2), &q_name),
             kind: JointRowKind::Revolute,
             angle,
             omega,
             target: motor_on.then_some(joint.motor.target_velocity),
-            torque: if motor_on {
-                readable_torque(joint.motor.max_torque)
-            } else {
-                None
-            },
+            torque: solved_torque.or_else(|| {
+                if motor_on {
+                    readable_torque(joint.motor.max_torque)
+                } else {
+                    None
+                }
+            }),
             steer: steer.map(|s| s.output_angle),
         });
     }
@@ -224,32 +231,17 @@ pub fn populate_joint_state_view(
         if root_of(wheel_entity, &q_child_of) != root {
             continue;
         }
-        // Throttle from the wheel's drive port; no port wired reads as 0
-        // (free-rolling), matching `update_wheel_spin`.
-        let throttle = q_ports
+        let torque = q_ports
             .get(wheel.drive_port)
-            .map(|p| p.value.clamp(-1.0, 1.0))
-            .unwrap_or(0.0);
-        let driven = wheel.drive_torque_max > 0.0;
-        // Same authored torque-speed law both wheel realizations evaluate
-        // (`lunco_hardware::axle_torque`) at the current throttle and ω —
-        // the drive torque the spin integrator applies this tick (traction
-        // saturation aside).
-        let torque = driven.then(|| {
-            axle_torque(
-                wheel.drive_torque_max,
-                wheel.max_rotation_speed,
-                throttle,
-                wheel.spin_velocity,
-            )
-        });
+            .ok()
+            .map(|port| port.value)
+            .filter(|value| value.is_finite());
         view.rows.push(JointStateRow {
             name: row_name(wheel_entity, None, &q_name),
             kind: JointRowKind::RaycastWheel,
             angle: wheel.spin_angle,
             omega: wheel.spin_velocity,
-            target: (driven && throttle.abs() > f64::EPSILON)
-                .then_some(throttle * wheel.max_rotation_speed),
+            target: None,
             torque,
             steer: steer.map(|s| s.output_angle),
         });

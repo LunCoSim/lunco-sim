@@ -308,14 +308,12 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
             &raycast_path,
             Some(&raycast_path),
             Some(&raycast_path),
-            None,
         );
         let pb = lunco_usd_sim::wheel_params::WheelParams::read(
             &view,
             &physical_path,
             Some(&physical_path),
             Some(&physical_path),
-            None,
         );
 
         match (pa, pb) {
@@ -323,10 +321,13 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
                 assert_eq!(pa.radius, pb.radius, "{wheel} radius");
                 assert_eq!(pa.mass, pb.mass, "{wheel} mass");
                 assert_eq!(pa.moment_of_inertia, pb.moment_of_inertia, "{wheel} moi");
-                assert_eq!(pa.peak_torque, pb.peak_torque, "{wheel} peak torque");
                 assert_eq!(
-                    pa.max_rotation_speed, pb.max_rotation_speed,
-                    "{wheel} no-load speed — the ONE top-speed parameter"
+                    pa.bearing_damping, pb.bearing_damping,
+                    "{wheel} bearing damping"
+                );
+                assert_eq!(
+                    pa.brake_torque_max, pb.brake_torque_max,
+                    "{wheel} brake torque"
                 );
                 assert_eq!(
                     pa.bearing_damping, pb.bearing_damping,
@@ -364,7 +365,6 @@ def Xform "Wheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI"]) {
     float physxVehicleWheel:dampingRate = 0.45
     float physxVehicleWheel:maxBrakeTorque = 1500.0
     double3 lunco:wheel:steerAxis = (0, 1, 0)
-    double lunco:wheel:driveDamping = 30.0
 }
 def Xform "Tire" (prepend apiSchemas = ["PhysxVehicleTireAPI"]) {
     float physxVehicleTire:longitudinalStiffness = 9876.0

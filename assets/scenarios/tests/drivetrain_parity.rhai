@@ -11,10 +11,9 @@
 // authored motor/gearbox reduction, and the raycast drive force includes the
 // same torque-speed term as the joint actuator. Both therefore cap at the same
 // axle speed for a rover built from the same file.
-// Both read the single authored motor/gearbox reduction
-// (`lunco:motor:noLoadSpeed` / `lunco:gearbox:ratio`, yielding 12.0 rad/s at the
-// axle): the joint motor targets it,
-// the raycast drive force rolls off toward it. With r = 0.4 m both must cap at
+// Both read the single authored motor/gearbox/shaft network. The Modelica
+// equations and wheel/tire load determine the operating point for both
+// realizations; no separate Rust motor rule exists.
 //
 //     v_max = omega_max * r = 12.0 * 0.4 = 4.8 m/s
 //

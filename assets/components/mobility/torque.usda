@@ -1,0 +1,23 @@
+#usda 1.0
+(
+    defaultPrim = "Torque"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Generic causal-to-acausal mechanical boundary. A solved domain output drives
+# `tau_ref`; the authored flange then carries that torque into any rotational
+# network. It is reusable for motors, pumps, actuators, and other domains that
+# produce a mechanical torque without owning the connected shaft state.
+def Xform "Torque" (
+    doc = "Generic solved torque source for an authored rotational network."
+    kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Mechanics/Torque.mo@
+
+    float inputs:tau_ref
+    custom token connectors:flange
+}

@@ -13,17 +13,17 @@
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
 //! | `DriveMix` child scope | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix — one prim per sink port, `lunco:factor:<source>` per command source |
 //! | `lunco:driveKernel` (hook id) | `DriveMix { kernel: <hook_id> }` | Scripted (rhai) drive kernel — hook computes per-port outputs |
-//! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* `MotorActuator` + `RigidBody` | Wheel — kind decided by joint authoring |
+//! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* a rigid body plus solved joint torque boundary | Wheel — kind decided by joint authoring |
 //!
 //! ## Wheel kind: discriminated by standard authoring
 //!
 //! No custom `lunco:` tokens. Each `PhysxVehicleWheelAPI` wheel becomes:
 //!
 //! - **Joint-based** if any `def PhysicsRevoluteJoint` in the stage targets
-//!   it via `rel physics:body1`. Motor torque comes from the composed
-//!   `LunCoMotorAPI` + optional `LunCoGearboxAPI` powertrain; the constraint is
-//!   built by `lunco-usd-avian`. The wheel becomes a full
-//!   rigid body with collider and `MotorActuator`.
+//!   it via `rel physics:body1`. Motor torque comes from the authored Modelica
+//!   electrical/mechanical network through its solved shaft boundary; the
+//!   constraint is built by `lunco-usd-avian`. The wheel becomes a full
+//!   rigid body with collider and the generic solved joint torque boundary.
 //! - **Raycast** otherwise. The wheel entity is split into a physics
 //!   entity (identity rotation, `RayCaster::new(Dir3::NEG_Y)`) plus a
 //!   visual child carrying the cylinder rotation.
@@ -66,15 +66,14 @@ pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPreviewOnly, UsdPrimPath, UsdStageA
 use leafwing_input_manager::prelude::ActionState;
 use lunco_avatar::{AdaptiveNearPlane, FreeFlightCamera, OrbitCamera, SpringArmCamera};
 use lunco_controller::InputBindingsSettings;
-use lunco_core::architecture::IntentAnalogState;
-use lunco_core::architecture::Port;
+use lunco_core::architecture::{IntentAnalogState, Port, PortSurface};
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{
-    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, PassivePrismaticSuspension,
-    SimConnection, TorqueActuator,
+    avian_queries::RaycastObservation, ports::PORT_NAME, ForceActuator, JointTorqueActuator,
+    PassivePrismaticSuspension, SimConnection, TorqueActuator,
 };
-use lunco_hardware::{MotorReadback, MotorReadbackTarget, SteeringActuator};
+use lunco_hardware::SteeringActuator;
 use lunco_materials::ShaderLook;
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
@@ -108,7 +107,7 @@ use wheel_params::{SuspensionParams, WheelParams};
 ///
 /// - If any `PhysicsRevoluteJoint` in the stage targets the wheel via its
 ///   `physics:body1` rel → joint-based path. Motor torque and speed come from
-///   the composed `LunCoMotorAPI` and optional `LunCoGearboxAPI`; the joint
+///   the authored Modelica network's solved shaft boundary; the joint
 ///   constraint itself is built by `lunco-usd-avian`.
 /// - Otherwise → raycast path.
 ///
@@ -494,10 +493,10 @@ mod wheel_wiring_tests {
                     stage_handle: stage,
                     path: "/World/Rover/Wheel".into(),
                 },
-                WheelPortEndpoints {
-                    p_drive: drive_port,
-                    p_steer: drive_port,
-                },
+                PortSurface::new(HashMap::from([
+                    ("drive".to_owned(), drive_port),
+                    ("steer".to_owned(), drive_port),
+                ])),
                 PendingWheelWiring {
                     drive_port_name: Some("drive_left".to_owned()),
                     steer_port_name: steer_name.map(str::to_owned),
@@ -688,7 +687,6 @@ pub mod domain_projection;
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
 pub mod physics_telemetry;
-pub mod powertrain;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
@@ -702,7 +700,7 @@ pub mod shader_ports;
 
 /// A joint-based wheel: a full rigid body that interacts with terrain through
 /// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
-/// `MotorActuator` (on its joint) instead of `WheelRaycast` + `RayCaster`.
+/// solved `JointTorqueActuator` boundary instead of `WheelRaycast` + `RayCaster`.
 ///
 /// On the host (and the rover this client owns) the visible spin comes from the
 /// avian joint motor rotating the wheel **body**; the visual mesh is a child and
@@ -754,14 +752,6 @@ pub struct PendingWheelWiring {
     pub steer_port_name: Option<String>,
 }
 
-/// Runtime endpoints for scalar USD connections owned by a wheel. The authored
-/// wheel sink maps to these physical ports for both raycast and joint wheels.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct WheelPortEndpoints {
-    pub p_drive: Entity,
-    pub p_steer: Entity,
-}
-
 /// An authored `PhysxPhysicsGearJoint`, held until the bodies it gears together have
 /// spawned + been admitted by Avian. `resolve_differential_coupling` matches the
 /// prim-path strings → entities (same deferred pattern as `try_wire_wheel` / USD
@@ -800,7 +790,7 @@ pub struct PendingDifferential {
 ///    a scripted rhai kernel — the imperative analog of an Omniverse OmniGraph controller.)
 /// 4. **Detects `PhysxVehicleWheelAPI`** → Sets up wheel based on whether an authored
 ///    `PhysicsRevoluteJoint` targets the wheel:
-///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `MotorActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the composed motor/gearbox)
+///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `JointTorqueActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the authored Modelica network)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
 ///
 /// Run condition: true when any `UsdPrimPath` entity still lacks
@@ -2316,42 +2306,11 @@ fn process_usd_sim_prim_read(
         );
         let attachment_tire =
             wheel_params::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
-        let powertrain = match powertrain::find_binding_for_wheel(reader, &sdf_path) {
-            Ok(binding) => binding,
-            Err(missing) => {
-                error!(
-                    "USD wheel {} has an invalid or ambiguous motor topology — refusing to spawn: {:?}",
-                    sdf_path.as_str(),
-                    missing
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
-        let motor_entities: Vec<Entity> = powertrain
-            .as_ref()
-            .map(|binding| {
-                binding
-                    .motors
-                    .iter()
-                    .filter_map(|motor| {
-                        all_prims
-                            .iter()
-                            .find(|(_, candidate, _)| {
-                                candidate.stage_handle == prim_path.stage_handle
-                                    && candidate.path == motor.as_str()
-                            })
-                            .map(|(entity, _, _)| entity)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let params = match WheelParams::read(
             reader,
             &sdf_path,
             attachment_susp.as_ref(),
             attachment_tire.as_ref(),
-            powertrain.as_ref().map(|binding| &binding.params),
         ) {
             Ok(p) => p,
             Err(missing) => {
@@ -2367,20 +2326,6 @@ fn process_usd_sim_prim_read(
                 return;
             }
         };
-        if powertrain.is_some() && motor_entities.len() != powertrain.as_ref().unwrap().motors.len()
-        {
-            // The motor is an authored USD peer. Retry after its visual projection
-            // arrives; silently falling back to the wheel would lose the composed
-            // topology and split one drivetrain across two UI branches.
-            return;
-        }
-        for motor in &motor_entities {
-            // Native drivetrain state is a port on the authored motor. The
-            // wheel/joint only holds this resolved handle, so runtime discovery
-            // exposes torque and axle speed without an authored telemetry relay.
-            commands.entity(*motor).try_insert(MotorReadback::default());
-        }
-
         // Create the actuator-side ports for drive and steering. Owned by the wheel via
         // `ChildOf` so the single recursive scene-clear reclaims them with the
         // wheel — synthesized backing entities are never left detached at the root
@@ -2390,6 +2335,13 @@ fn process_usd_sim_prim_read(
             .id();
         let p_steer = commands
             .spawn((Port::default(), Name::new("Port_Steer"), ChildOf(entity)))
+            .id();
+        let p_speed = commands
+            .spawn((
+                Port::default(),
+                Name::new("Port_ShaftSpeed"),
+                ChildOf(entity),
+            ))
             .id();
 
         // Wheel identity belongs to the standard attachment schema. The index
@@ -2466,7 +2418,11 @@ fn process_usd_sim_prim_read(
             steer_port_name.is_some() && source_is_vehicle_surface("inputs:steer");
 
         commands.entity(entity).try_insert((
-            WheelPortEndpoints { p_drive, p_steer },
+            PortSurface::new(HashMap::from([
+                ("drive".to_owned(), p_drive),
+                ("steer".to_owned(), p_steer),
+                ("shaft_speed".to_owned(), p_speed),
+            ])),
             lunco_core::PortSurfaceReady,
         ));
 
@@ -2538,8 +2494,8 @@ fn process_usd_sim_prim_read(
                     q_child_of,
                 ),
                 &params,
-                &motor_entities,
                 p_drive,
+                p_speed,
                 steer_for_wheel,
                 max_steer_angle,
                 ackermann_strength,
@@ -2574,9 +2530,9 @@ fn process_usd_sim_prim_read(
                 maybe_shader_mat,
                 maybe_child_of,
                 &params,
-                &motor_entities,
                 &suspension,
                 p_drive,
+                p_speed,
                 p_steer,
                 steer_for_wheel,
                 max_steer_angle,
@@ -3012,9 +2968,9 @@ fn setup_raycast_wheel(
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     params: &WheelParams,
-    motor_entities: &[Entity],
     susp: &SuspensionParams,
     p_drive: Entity,
+    p_speed: Entity,
     p_steer: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
@@ -3022,7 +2978,7 @@ fn setup_raycast_wheel(
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
 
-    let mut wheel = params.to_wheel_raycast(p_drive, p_steer, Some(entity));
+    let mut wheel = params.to_wheel_raycast(p_drive, p_speed, p_steer, Some(entity));
 
     // --- Wheel Entity Splitting (always) ---
     // The physics entity needs identity rotation so `RayCaster::NEG_Y`
@@ -3144,12 +3100,6 @@ fn setup_raycast_wheel(
         avian3d::prelude::Position::default(),
         avian3d::prelude::Rotation::default(),
     ));
-    if !motor_entities.is_empty() {
-        commands
-            .entity(entity)
-            .try_insert(MotorReadbackTarget(motor_entities.to_vec()));
-    }
-
     // Front Ackermann wheel: attach the SHARED steering servo. The same
     // `SteeringActuator` + system the physical joint uses computes this wheel's
     // rate-limited Ackermann angle into `output_angle`; `apply_wheel_steering`
@@ -3243,8 +3193,8 @@ fn setup_physical_wheel(
     maybe_child_of: Option<&ChildOf>,
     suspension_visuals: Vec<(Entity, Transform)>,
     params: &WheelParams,
-    motor_entities: &[Entity],
     p_drive: Entity,
+    p_speed: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
     ackermann_strength: f64,
@@ -3363,9 +3313,9 @@ fn setup_physical_wheel(
         // `physxVehicleWheel:dampingRate · ω` (N·m·s, 0.45) from the axle torque.
         // avian's `AngularDamping` is not a torque coefficient but a per-second
         // decay applied to ω, i.e. τ ≈ d·I·ω, so the authored N·m·s converts as
-        // `d = dampingRate / I_axle`; the live authored inertia includes any
-        // reflected rotor term. One authored number, two realizations, each in
-        // its own units.
+        // `d = dampingRate / I_axle`; the live authored inertia is the complete
+        // wheel assembly. One authored number, two realizations, each in its
+        // own units.
         //
         // `LinearDamping(0.1)` is GONE with no replacement. A wheel hinged to the
         // chassis travels at the chassis's speed, so a linear damper on it was a
@@ -3391,11 +3341,10 @@ fn setup_physical_wheel(
         wheel_tf,
     ));
 
-    // The authored wheel MOI and the motor's reflected rotor inertia are the
-    // rotational contract for BOTH realizations.  Collider density derives the
-    // physical mass, but it cannot express either an authored non-solid-cylinder
-    // MOI or a spin-only reflected rotor term.  Stamp the complete tensor even
-    // when the reflected term is zero; otherwise undriven wheels silently use a
+    // The authored complete wheel-assembly MOI is the rotational contract for
+    // BOTH realizations. Collider density derives the physical mass, but it
+    // cannot express an authored non-solid-cylinder MOI. Stamp the complete
+    // tensor even on undriven wheels; otherwise they silently use a
     // collider-derived inertia and diverge from the same wheel on the raycast
     // path.  The transverse terms remain the geometric cylinder tensor.
     commands.entity(entity).try_insert((
@@ -3458,8 +3407,8 @@ fn setup_physical_wheel(
     // mode with the headless `rover_turn` probe.
     //
     // Instead every wheel hangs off the chassis by a SINGLE revolute (stable,
-    // like the rigid rear axle). The drive is a velocity-controlled motor on that
-    // joint (see MotorActuator). Front wheels are STEERED by rotating the joint's
+    // like the rigid rear axle). The drive is a solved torque boundary on that
+    // joint (see JointTorqueActuator). Front wheels are STEERED by rotating the joint's
     // chassis-side frame about Y (`SteeringActuator`): the alignment constraint
     // yaws the wheel into the steered heading, so it physically turns and its grip
     // carries the rover into an arc — geometric Ackermann through one constraint.
@@ -3467,13 +3416,6 @@ fn setup_physical_wheel(
     // (A spring suspension was also rejected — avian's joint SpringDamper is
     // fragile bearing the chassis weight; the fix for vertical travel is the rigid
     // axle + `SubstepCount(32)`. See `project_physical_rover_suspension`.)
-
-    // The joint starts with the authored motor model disabled. MotorActuator is
-    // the sole owner of its velocity-motor drive and evaluates the same
-    // authored axle torque-speed curve as the raycast path. The shared mobility
-    // tire system owns wheel-ground tangent force; Avian supplies normal
-    // contact and joint constraints.
-    let drive_motor = params.drive_motor();
 
     // Joint construction lives in `lunco-usd-avian` (the single home for all
     // Avian joint-building); we add the mobility/hardware actuators on top.
@@ -3495,13 +3437,13 @@ fn setup_physical_wheel(
         // makes that structurally impossible: no orphans, no reaper, no mask.
         ChildOf(chassis),
         lunco_usd_avian::ScenePhysicsOwned,
-        // The shared torque-speed parameters still come from the composed
-        // motor/gearbox. Avian applies the resulting axle drive through this
-        // revolute motor; no wheel-local torque or speed values are read.
-        lunco_hardware::MotorActuator {
+        // The solved mechanical network publishes physical shaft torque on the
+        // wheel drive port. The generic co-simulation boundary applies that
+        // scalar across this revolute joint; it never derives torque from a
+        // command or from wheel speed.
+        JointTorqueActuator {
             port_entity: p_drive,
-            max_omega: params.max_rotation_speed,
-            peak_torque: params.peak_torque,
+            speed_port_entity: p_speed,
             brake_torque: params.brake_torque_max,
             // The wheel hinge is authored about +X. Negative +X rotation is the
             // demand-positive rolling sense for a chassis-forward -Z wheel;
@@ -3511,9 +3453,6 @@ fn setup_physical_wheel(
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
-    if !motor_entities.is_empty() {
-        joint_cmd.try_insert(MotorReadbackTarget(motor_entities.to_vec()));
-    }
     let joint_entity = joint_cmd.id();
     // Front wheels of an Ackermann rover also steer (frame rotation about Y).
     if let Some(steer_port) = steer {
@@ -3560,7 +3499,7 @@ fn setup_physical_wheel(
         joint_entity,
         chassis,
         entity,
-        lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle, drive_motor),
+        lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle),
     );
 
     // The wheel↔chassis link is the wheel's `ChildOf(chassis)` — set by USD projection
@@ -3572,7 +3511,7 @@ fn setup_physical_wheel(
 /// Build the physical wheel's authored inertia tensor in the entity's local
 /// frame.  `WheelParams::axle_inertia` is the corresponding scalar used by the
 /// raycast integrator; keeping this conversion here makes the two realizations
-/// consume the same authored MOI and reflected motor inertia.
+/// consume the same authored complete assembly MOI.
 pub(crate) fn physical_wheel_angular_inertia(
     params: &WheelParams,
     wheel_axis_rot: Quat,
@@ -3742,8 +3681,8 @@ fn animate_proxy_physical_wheels(
 ) {
     use std::f64::consts::TAU;
     // Sign mapping rolling speed → roll about the axle so the contact patch
-    // tracks the ground (matches the host's motor-driven body spin). Mirrors the
-    // `drive_sign = -1` axle convention used by `MotorActuator`.
+    // tracks the ground (matches the host's solved torque-driven body spin). Mirrors
+    // the `drive_sign = -1` axle convention used by `JointTorqueActuator`.
     const ROLL_SIGN: f64 = -1.0;
 
     let dt = time.delta_secs_f64();
@@ -3961,7 +3900,7 @@ fn on_add_usd_sim_prim(
 /// exists.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
-    q_endpoints: Query<&WheelPortEndpoints>,
+    q_endpoints: Query<&PortSurface>,
     // `ActuatorPorts` does double duty here: it LOCATES the vehicle root (only a rover
     // root carries one) and it is the actuator index the wiring below looks ports up in.
     q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::ActuatorPorts)>,
@@ -4028,20 +3967,22 @@ fn try_wire_wheel(
                 },
             };
 
-            let endpoints = q_endpoints
-                .get(ent)
-                .expect("wheel endpoints are installed with PendingWheelWiring");
+            let Ok(endpoints) = q_endpoints.get(ent) else {
+                continue;
+            };
             // Drive is an authored USD connection. No inferred mapping.
             // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
             // on scene swap — the same general lifecycle contract the ports/joint use.
-            if let (Some(d_port), Some(drive_port_name)) =
-                (d_port, pending.drive_port_name.as_deref())
-            {
+            if let (Some(d_port), Some(drive_port_name), Some(end_port)) = (
+                d_port,
+                pending.drive_port_name.as_deref(),
+                endpoints.get("drive"),
+            ) {
                 commands.spawn((
                     SimConnection {
                         start_element: d_port,
                         start_connector: PORT_NAME.to_string(),
-                        end_element: endpoints.p_drive,
+                        end_element: end_port,
                         end_connector: PORT_NAME.to_string(),
                         ..Default::default()
                     },
@@ -4056,12 +3997,16 @@ fn try_wire_wheel(
 
             // Steering is optional, but if present it is also an authored USD
             // connection. An unsteered wheel has no steering endpoint.
-            if let (Some(name), Some(s_port)) = (pending.steer_port_name.as_deref(), steer_port) {
+            if let (Some(name), Some(s_port), Some(end_port)) = (
+                pending.steer_port_name.as_deref(),
+                steer_port,
+                endpoints.get("steer"),
+            ) {
                 commands.spawn((
                     SimConnection {
                         start_element: s_port,
                         start_connector: PORT_NAME.to_string(),
-                        end_element: endpoints.p_steer,
+                        end_element: end_port,
                         end_connector: PORT_NAME.to_string(),
                         ..Default::default()
                     },

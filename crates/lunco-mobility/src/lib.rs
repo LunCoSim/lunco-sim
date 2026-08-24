@@ -843,6 +843,8 @@ pub struct WheelRaycast {
     pub suspension_port: Entity,
     /// Port mapping for drive torque actuation.
     pub drive_port: Entity,
+    /// Port mapping for the measured shaft speed fed back to the solved network.
+    pub speed_port: Entity,
     /// Port mapping for steering angle actuation.
     pub steer_port: Entity,
     /// Radius of the tire (effectively the minimum offset from ground).
@@ -859,19 +861,8 @@ pub struct WheelRaycast {
     pub mass: f64,
     /// When `> 0` it overrides the mass-derived `½·m·r²`.
     pub moment_of_inertia: f64,
-    /// Rotor inertia reflected through the gearbox to the axle, kg·m²
-    /// (`J·ratio²`). Added on top of the tire's own inertia in
-    /// [`Self::axle_inertia`] — at high reductions it dominates ½·m·r², which
-    /// is why a geared rover spins up slowly instead of snapping to speed.
-    /// `0` = undriven wheel (castor) or no drivetrain authored.
-    pub reflected_inertia: f64,
-    /// (derived from the composed motor's `lunco:motor:stallTorque` and optional
-    /// gearbox, required for a driven wheel).
-    pub drive_torque_max: f64,
     /// the hub in its own right — never inferred from the drive torque.
     pub bearing_damping: f64,
-    /// (joint-motor) realization of the same wheel obeys.
-    pub max_rotation_speed: f64,
     /// Caps the traction torque at `μ·N`, above which the tire breaks loose.
     pub friction_mu: f64,
     /// hard the tire grips toward `v/r` before saturating at the friction limit.
@@ -914,6 +905,7 @@ impl Default for WheelRaycast {
         Self {
             suspension_port: Entity::PLACEHOLDER,
             drive_port: Entity::PLACEHOLDER,
+            speed_port: Entity::PLACEHOLDER,
             steer_port: Entity::PLACEHOLDER,
             wheel_radius: 0.0,
             visual_entity: None,
@@ -922,10 +914,7 @@ impl Default for WheelRaycast {
             spin_velocity: 0.0,
             mass: 0.0,
             moment_of_inertia: 0.0,
-            reflected_inertia: 0.0,
-            drive_torque_max: 0.0,
             bearing_damping: 0.0,
-            max_rotation_speed: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
             lateral_stiffness_graph: TireLateralStiffnessGraph::default(),
@@ -966,10 +955,12 @@ impl WheelRaycast {
         self.spin_velocity * self.wheel_radius
     }
 
-    /// Rotational inertia about the axle in kg·m²: the tire's own inertia
-    /// (USD-authored `physxVehicleWheel:moi` when set, else the solid-disk
-    /// estimate `½·m·r²` from mass and radius) plus the drivetrain's
-    /// [`reflected rotor inertia`](Self::reflected_inertia). Returns `None`
+    /// Complete rotational inertia about the axle in kg·m²: the authored tire
+    /// and attached drivetrain assembly inertia (`physxVehicleWheel:moi`), or
+    /// the solid-disk estimate `½·m·r²` when the field is omitted. Avian owns
+    /// this state at the Modelica co-simulation boundary, so composed USD
+    /// wheels author the total rather than integrating a second shaft state.
+    /// Returns `None`
     /// when the runtime projection does not contain a finite, positive
     /// physical input or when the combined inertia is not usable.
     #[inline]
@@ -986,8 +977,7 @@ impl WheelRaycast {
             }
             0.5 * self.mass * self.wheel_radius * self.wheel_radius
         };
-        let inertia = tire + self.reflected_inertia;
-        (inertia.is_finite() && inertia > 0.0).then_some(inertia)
+        (tire.is_finite() && tire > 0.0).then_some(tire)
     }
 }
 

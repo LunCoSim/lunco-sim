@@ -33,10 +33,12 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 
 | Part | File | Owns |
 |---|---|---|
-| Wheel hub | `mobility/wheel.usda` | dimensions, mass, drive/brake/spin dynamics — THE default set every wheel composes |
+| Wheel hub | `mobility/wheel.usda` | dimensions, mass, brake, contact, and solved shaft boundary — THE default set every wheel composes |
 | Tire | `mobility/tires/*.usda` | grip (`physics:dynamicFriction`, `physxVehicleTire:longitudinalStiffness`, `physxVehicleTire:lateralStiffnessGraph`, `physxVehicleTire:restLoad`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
 | Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
+| Ideal rail | `power/ideal_voltage_source.usda` | authored unlimited-power source for the `infinite` power variant; it is still compiled into the same electrical network |
+| Motor / reduction / shaft | `mobility/motor.usda`, `mobility/gearbox.usda`, `mobility/avian_shaft.usda` | Modelica electrical and rotational equations plus the generic Avian mechanical boundary |
 | Motor thermal | `thermal/motor_thermal.usda` | rover-agnostic thermal PARTS (`MotorHeatLoad`/`MotorThermalMass`/`MotorRadiator`); each rover authors its own `Scope "Thermal"` with one heat load per driven motor, compiled to its own DAE separate from `Electrical` — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
@@ -63,6 +65,7 @@ def Xform "MyRover" (
     def Cube "Chassis" ( prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis> ) {}
 
     def Cylinder "Wheel_FL" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -72,7 +75,7 @@ def Xform "MyRover" (
     {
         double3 xformOp:translate = (-1.0, -0.15, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        int lunco:wheel:index = 0
+        int physxVehicleWheelAttachment:index = 0
     }
     # …Wheel_FR/RL/RR: index 1/2/3, mirrored translates…
 }
@@ -82,7 +85,7 @@ def Xform "MyRover" (
   (`throttle`/`steer`/`brake` intake; `drive_left`/`drive_right`/`steering`).
 - `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
   `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels
-  = `lunco:wheel:index < 2`.
+  = `physxVehicleWheelAttachment:index < 2`.
 - Wheel→port wiring is a USD connection: each wheel connects
   `float inputs:drive.connect` to a `float outputs:<port>` declared on the root,
   and the mix onto those ports is authored as a `DriveMix` child scope — one
@@ -97,44 +100,39 @@ Both wheel kinds read the SAME attributes through ONE strict reader
 - **raycast** (default): analytical spring + traction force at the hub.
   Requires a composed suspension.
 - **physical**: authored `PhysicsRevoluteJoint` targeting the wheel via
-  `physics:body1` ⇒ rigid body + velocity motor. That joint IS the switch —
+  `physics:body1` ⇒ rigid body + solved shaft torque boundary. That joint IS the switch —
   the `drivetrain` variantSet on the 4-wheel rovers just references the
   component that authors (or omits) the joints.
 
-**One no-load speed, so both realizations top out together.**
-The motor's `lunco:motor:noLoadSpeed` reduced by the composed gearbox's
-`lunco:gearbox:ratio` is the axle free-spin speed and both kinds obey it: the
-physical wheel's velocity motor targets it (`MotorActuator.max_omega`), and the
-raycast wheel's drive force carries a **torque–speed rolloff**
-(`drive_force_mag`, `crates/lunco-mobility/src/lib.rs:261`):
+**One authored mechanical network, so both realizations consume the same solve.**
+`DCMotor.mo` solves winding current, back-EMF, electromagnetic torque, terminal
+voltage/current, and heat from its authored electrical pin and measured speed.
+Its solved torque crosses the authored generic `Torque` boundary into
+`GearRatio.mo` and `AvianShaft.mo`. The physical wheel applies that torque
+across its revolute joint; the raycast wheel uses the same solved torque in its
+contact-plane spin equation:
 
 ```
 F_long = clamp(k_slip · (ω · radius − v_forward), −μN, +μN)
 ω̇ = (τ_motor + τ_brake − F_long · radius − c_bearing · ω) / I
 ```
 
-so its force falls to zero at the same `ω_max · r`. Top speed is therefore
-`ω_max · radius` for either drivetrain: at the authored 12 rad/s and r = 0.4 m,
-≈ 4.8 m/s.
+Speed is therefore determined by the authored motor, gearbox, complete wheel
+assembly inertia, and tire load, not by a second Rust motor curve or a copied
+no-load-speed clamp.
 
-Two details that matter if you re-derive it: `ω` is the **hub's ground speed
-converted to an equivalent axle rate and signed by the throttle**, not the
-wheel's measured spin; and the factor is `clamp(…, 0, 1)`, not `max(0, …)` — the
-upper clamp is what stops a reversing wheel receiving *more* than stall force.
-
-The wheel has no speed or torque alias: change the motor/gearbox reduction in ONE
-place and both realizations consume it.
-
-The rolloff is signed: it only bites when the throttle pushes the way the wheel
-is already rolling, so braking and reversing keep full force authority.
+The motor speed input is connected to the engine's solved wheel speed, and its
+torque output is connected through the generic authored boundary. Both
+realizations consume that same solved network; no Rust motor or second shaft
+state mirrors it.
 
 **Strictness:** every drivetrain/tire attr is required; a wheel missing any
 refuses to spawn and the error names ALL missing attrs. That now includes
 `physxVehicleWheel:dampingRate` (bearing + rolling drag): it is a physical
 property of the hub, so it is authored, never inferred from the drive torque —
-  the old derived drive fallback is gone. The ONE number still not authored per
-wheel is `physxVehicleWheel:moi`, and only because 0 means
-"solid cylinder" and it is DERIVED as ½·m·r² from the authored mass and radius.
+  the old derived drive fallback is gone. `physxVehicleWheel:moi` is the
+  complete authored tire-and-drivetrain assembly inertia; when omitted, the
+  documented solid-cylinder derivation ½·m·r² applies.
 You never author them
 per vehicle — composing `wheel.usda` + a tire + (for raycast) a suspension is
 the complete set. If your wheel refuses to spawn, you dropped one of those
@@ -154,7 +152,7 @@ The drill also requires the rover to already be the primary selection.
 Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
 respawn**: `wheel_params::claims_edit` recognises the attribute (any
 `lunco:wheel:` / `lunco:suspension:` / `lunco:tire:` / `physxVehicle*:` prefix,
-plus `lunco:motor:*` / `lunco:gearbox:*` on their applied API prims,
+and authored Modelica `inputs:*` are re-read by the domain projection,
 `lunco:driveKernel`, and `lunco:factor:*` on a `DriveMix` term prim)
 and `resync_wheels_for_stage` updates the live components — same entities, joints
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
@@ -358,7 +356,7 @@ not a pass. **It emits no exit code** — the verdict is the last stdout line
 `DRIVETRAIN PARITY: PASS|FAIL`, so grep for it; a green-looking run that never
 printed the line means the scenario never reached its verdict.
 
-Run this after ANY change to wheel params, the rolloff, the motor actuator, or
+Run this after ANY change to wheel params, the authored motor network, or
 `wheel.usda` defaults — it is the only thing that catches the two realizations
 drifting apart.
 

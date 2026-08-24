@@ -149,7 +149,7 @@ fn verdict(s) {
     // LEG_M. What this assertion owes the test is "the drive path is live, so
     // `held` means held"; whether the rover ARRIVES in the drive window is a
     // question about its speed, and at `LEG_M * 0.6` it was asking one. It went red
-    // at 6.68 m of 7.2 m when the shipped powertrain parameters slowed the rover's
+    // at 6.68 m of 7.2 m when the shipped authored drivetrain parameters slowed the rover's
     // spin-up, on a run where the routed rover drove 6.7x the hold tolerance and
     // the idle one did not move — i.e. the test's actual claim held perfectly.
     f.push(t_moved(routed_end, HOLD_TOL_M * 4.0,
