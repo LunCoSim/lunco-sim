@@ -191,6 +191,32 @@ first, so it is complete and blurry rather than absent).
 2. **Tile resolution.** 157 KB/tile at 49² is heavy. Larger tiles = fewer, fatter tiles and
    less per-tile overhead; worth a sweep before fixing the format.
 
+## Runtime readiness and derived visual work
+
+The DEM build is the ground-readiness boundary. Once its composed heightfield, visual mesh,
+and collider are published, the Twin has usable ground; optional derived surface/normal maps
+are visual refinement and must not hold scene presentation or replacement hostage.
+
+The derived baker uses the existing `RenderingQualitySettings` profile, but a static terrain's
+effective map resolution is also bounded by its authored visual target and source grid. A
+32×32 static product therefore does not launch a 1024² derived bake that cannot add visible
+detail. Streamed terrain keeps the quality-profile resolution because its geometry refines
+independently of the static product. The cache key includes this effective profile, so changing
+the target or quality creates the correct artifact rather than reusing an incompatible one.
+
+Every derived task is scene-owned. `SceneTeardown` drops task handles, published maps, stale
+markers, failure markers, and the derived status before the replacement Twin mounts. Each task
+owns its liveness start time, so the shared terrain work bound applies independently to every
+terrain rather than making a late-queued terrain inherit an older task's age. A bake that stops
+making progress is cancelled and emits a warning; the ground remains usable and the failure is
+terminal for that product until the terrain or quality changes. The status bus mirrors terrain
+streaming and derived preparation through separate sources and appends phase transitions, while
+queued work remains indeterminate instead of displaying a fabricated percentage.
+
+The native and Web Worker DEM paths also share one `HeightGrid` content-key owner. The worker
+returns the key alongside its transferred full grid, so the Web path does not fold a
+multi-million-sample DEM again on the main thread when it publishes the refined surface.
+
 ## Sequencing
 
 1. **Measure the sparse set** (read-only; cannot regress anything). Answers all three open

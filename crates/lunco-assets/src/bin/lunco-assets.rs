@@ -198,7 +198,8 @@ fn process_filtered(
             continue;
         }
         if let Some(ref proc_cfg) = entry.process {
-            let source_path = download::entry_dest_path(entry, twin_cache.as_deref());
+            let source_path = download::entry_dest_path(entry, twin_cache.as_deref())
+                .map_err(|error| format!("invalid destination for {key}: {error}"))?;
             if !source_path.exists() {
                 println!(
                     "  ⚠ {} source not found at {}, skipping",
@@ -217,8 +218,13 @@ fn process_filtered(
                     cfg.target_resolution = Some([(w / 4).max(64), (h / 4).max(64)]);
                 }
             }
-            process::process_asset(&source_path, &cfg, twin_root)
-                .map_err(|e| format!("Failed to process {}: {}", key, e))?;
+            process::process_asset(
+                &source_path,
+                &cfg,
+                twin_root,
+                &process::ProcessControl::unrestricted(),
+            )
+            .map_err(|e| format!("Failed to process {}: {}", key, e))?;
             processed += 1;
         }
     }

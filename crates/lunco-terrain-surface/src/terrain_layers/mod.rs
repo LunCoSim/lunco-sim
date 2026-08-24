@@ -704,7 +704,7 @@ mod tests {
             half_extent: 32.0,
             heights: vec![0.0; 81],
         });
-        let base_key = crate::oracle::grid_key(&base);
+        let base_key = lunco_terrain_bake::grid_content_key(&base);
         let mut stack = TerrainLayerStack::default();
         stack.push_layer(
             "craters",

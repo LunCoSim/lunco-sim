@@ -24,9 +24,15 @@ cargo run -p lunco-assets -- process  --twin <TWIN> -a <key> --quality coarse|go
 `<TWIN>` = a folder holding `Assets.toml` + `twin.toml`. `-a <key>` = the
 `[section]` name in its Assets.toml. The same entries appear in-app under
 Settings ▸ Downloadable data and the Twin inspector once the Twin is open
-(scanned on open). If a declared dataset is missing, the interactive app asks
+(scanned on open). Asset-consuming domains begin only after the asset owner
+publishes `TwinAssetMounted`; they must not depend on observer registration
+order. If a declared dataset is missing, the interactive app asks
 which entries to download before terrain generation; nothing downloads until
-the user confirms there or uses a CLI run. `--quality coarse` quarters
+the user confirms there or uses a CLI run. Closing a Twin retires its dataset
+rows under the shared download/process commit barrier and cancels their
+cooperative tasks before another Twin can reuse the authority. A failed mount
+or poisoned lifecycle lock is surfaced as an error, never reported as a
+successful asset postcondition. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
@@ -135,6 +141,14 @@ travel with the twin. Read by `read_material_network_layer_maps`
 - Layers bind on the static-mesh path (`terrain_layered.wgsl`); streamed LOD
   tiles derive normal/AO from the DEM at runtime, and the derived bake only
   fills slots an authored map left empty.
+- The runtime derived bake is optional visual refinement after the DEM ground
+  is ready. Its effective resolution is bounded by a static terrain's authored
+  visual target, so a low-resolution static product does not pay for an
+  invisible high-resolution map. The task is cancelled at scene teardown or
+  when its liveness bound expires; the terrain remains usable and the status
+  bus reports the terminal warning. This refinement status is separate from
+  terrain tile streaming, so it cannot hide tile progress or make a presentable
+  ground scene wait for an optional map.
 - For multi-site scenes, author these inputs **inside a terrain variant** —
   see `14_SCENARIO_DESIGN.md` §4a in the twin, and verify with
   `cargo run -p lunco-usd --example variant_probe -- <scene.usda>`.
@@ -153,6 +167,14 @@ Roadmap (bake nodes, node-graph editor): the twin's
 - The dataset registry treats that stamp as the completion boundary: a DEM
   output directory without `.bakekey` is partial and remains downloadable/
   processable, even if the directory itself exists.
+- Processing roots are strict (`cache`, `twin`, or `assets`); an unknown root or
+  missing required owner fails visibly. Processing uses a unique staging output
+  and an atomic commit barrier, so cancellation cannot publish stale terrain.
+- The terrain derived bake keys through the oracle's canonical surface identity
+  and does not re-hash the full DEM for every request.
+- A queued DEM build is an indeterminate state until its owner admits a task;
+  do not show a numeric percentage for that scheduler hand-off. Phase changes
+  are discrete status events and active work uses the existing progress entry.
 - Baked artifacts and the twin cache are gitignored by policy
   (`terrain/*/materials/`, `.bakekey` stamps, `.cache/`) — never commit them.
 

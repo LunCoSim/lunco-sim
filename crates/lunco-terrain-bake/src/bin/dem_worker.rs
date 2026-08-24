@@ -49,6 +49,7 @@ mod wasm {
             res: baked.res,
             half_extent: baked.grid.half_extent,
             native_res: baked.native_res,
+            grid_key: lunco_terrain_bake::grid_content_key(&baked.grid),
         };
         let Ok(header_bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard())
         else {
@@ -81,6 +82,7 @@ mod wasm {
             res: 0,
             half_extent: 0.0,
             native_res: 0,
+            grid_key: 0,
         };
         let Ok(bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else {
             return;

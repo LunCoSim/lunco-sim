@@ -73,7 +73,7 @@ pub mod twin_source;
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
-pub use asset_sources::{register_lunco_asset_sources, TwinRootsPlugin};
+pub use asset_sources::{register_lunco_asset_sources, TwinAssetMounted, TwinRootsPlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,7 +85,9 @@ pub use lunco_source::{
     id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
 pub use scheme_registry::SchemeRegistry;
-pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_SCHEME};
+pub use twin_source::{
+    parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
+};
 
 // ============================================================================
 // User Config Directory Resolution

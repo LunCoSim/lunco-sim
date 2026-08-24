@@ -84,7 +84,24 @@ pub struct BakedGrid {
     /// Tile resolution actually produced for this bake stage. The full stage is
     /// native; visual target resolution is applied later by the surface renderer.
     pub res: usize,
+    /// Content key of the retained base grid. Native callers use the pristine
+    /// raster base; the web reply uses the stamped grid it retains after the
+    /// worker transfer.
+    pub base_key: u64,
     pub stage: BakeStage,
+}
+
+/// Content identity of a height grid, shared by native assembly and the web
+/// worker protocol. The fold is linear in the grid and must run where the grid
+/// is produced, never as a second main-thread pass over a full DEM reply.
+pub fn grid_content_key(grid: &HeightGrid) -> u64 {
+    let mut hash = lunco_hash::Fnv1a::new();
+    hash.write_u64(grid.res as u64);
+    hash.write_u64(grid.half_extent.to_bits() as u64);
+    for &height in &grid.heights {
+        hash.write_u64(height.to_bits());
+    }
+    hash.finish()
 }
 
 /// Decode the DEM once into its full native grid — the expensive GeoTIFF decode.
@@ -129,6 +146,10 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
             heights: Vec::new(),
         },
     };
+    let base_key = match stage {
+        BakeStage::Full => grid_content_key(&base_grid),
+        BakeStage::Coarse => 0,
+    };
     // Apply the geometry STAMP layers (craters, …) into the working grid so both
     // the streamed tiles and the heightfield collider carry the same features.
     for stamp in &job.stamps {
@@ -145,6 +166,7 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
         site: site.to_string(),
         native_res,
         res,
+        base_key,
         stage,
     }
 }
@@ -172,6 +194,9 @@ pub struct BakeReplyHeader {
     pub res: usize,
     pub half_extent: f32,
     pub native_res: usize,
+    /// Content key of the grid carried by this reply. The receiver uses this
+    /// for its retained base, so it must not fold the transferred DEM again.
+    pub grid_key: u64,
 }
 
 // ── OPFS grid-cache blob (web) ────────────────────────────────────────────────
@@ -326,6 +351,21 @@ mod tests {
             back.heights, baked.grid.heights,
             "cache round trip must be exact"
         );
+    }
+
+    #[test]
+    fn baked_base_key_is_the_key_of_the_retained_full_grid() {
+        let raw = HeightGrid {
+            res: 3,
+            half_extent: 10.0,
+            heights: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        };
+        let job = DemBakeJob {
+            half_window: 10.0,
+            stamps: Vec::new(),
+        };
+        let baked = finish_bake(&raw, "site", &job, BakeStage::Full);
+        assert_eq!(baked.base_key, grid_content_key(&baked.base_grid));
     }
 
     #[test]

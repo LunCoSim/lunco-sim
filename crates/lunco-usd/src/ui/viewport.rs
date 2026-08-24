@@ -667,7 +667,15 @@ fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Command
             )
         };
         if let Some(name) = session_projection {
-            world.resource::<TwinRoots>().unregister_name(&name);
+            if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
+                world.trigger(lunco_core::TelemetryEvent {
+                    name: "twin-asset-unmount-failed".into(),
+                    source: 0,
+                    severity: lunco_core::Severity::Error,
+                    data: lunco_core::TelemetryValue::String(error.to_string()),
+                    timestamp: 0.0,
+                });
+            }
         }
         if let Some(root) = scene_root {
             if let Ok(mut entity) = world.get_entity_mut(root) {
@@ -703,7 +711,16 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         }
     };
     if let Some(name) = previous_session {
-        world.resource::<TwinRoots>().unregister_name(&name);
+        if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
+            world.trigger(lunco_core::TelemetryEvent {
+                name: "twin-asset-unmount-failed".into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error.to_string()),
+                timestamp: 0.0,
+            });
+            return;
+        }
     }
     let doc_generation = world
         .resource::<DocumentRegistry<UsdDocument>>()
@@ -807,13 +824,46 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     // A stable, URI-safe synthetic twin name for this document.
     let name =
         format!("__viewport_{doc}").replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
-    let roots = world.resource::<TwinRoots>();
     // Use the ASSIGNED name: if this synthetic name is already bound to a
     // different base (same doc re-registered from a new location), the registry
     // hands back a disambiguated one — and the overlay must be keyed to that,
     // or the viewport serves its composed source under a name nobody reads.
-    let name = roots.register(&name, base);
-    roots.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes()));
+    let name = match world.resource::<TwinRoots>().register(&name, base) {
+        Ok(name) => name,
+        Err(error) => {
+            world.trigger(lunco_core::TelemetryEvent {
+                name: "twin-asset-mount-failed".into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error.to_string()),
+                timestamp: 0.0,
+            });
+            return None;
+        }
+    };
+    if let Err(error) = world.resource::<TwinRoots>().set_overlay(
+        &name,
+        &rel,
+        std::sync::Arc::new(composed.into_bytes()),
+    ) {
+        world.trigger(lunco_core::TelemetryEvent {
+            name: "twin-asset-mount-failed".into(),
+            source: 0,
+            severity: lunco_core::Severity::Error,
+            data: lunco_core::TelemetryValue::String(error.to_string()),
+            timestamp: 0.0,
+        });
+        if let Err(cleanup_error) = world.resource::<TwinRoots>().unregister_name(&name) {
+            world.trigger(lunco_core::TelemetryEvent {
+                name: "twin-asset-unmount-failed".into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(cleanup_error.to_string()),
+                timestamp: 0.0,
+            });
+        }
+        return None;
+    }
     Some((name, rel))
 }
 

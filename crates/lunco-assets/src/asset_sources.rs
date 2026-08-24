@@ -12,12 +12,30 @@ use bevy::prelude::*;
 use crate::lunco_source::lunco_asset_source;
 use crate::twin_source::{twin_asset_source, TwinRoots};
 
+const TWIN_ASSET_MOUNT_FAILED: &str = "twin-asset-mount-failed";
+const TWIN_ASSET_UNMOUNT_FAILED: &str = "twin-asset-unmount-failed";
+
 /// Mounts workspace Twins into the shared `twin://` asset source.
 ///
 /// This is asset lifecycle, not USD lifecycle: Modelica-only lunica still
 /// needs Twin-relative reads and Twin-scoped datasets, while a simulation host
 /// must not depend on a particular scene domain to keep the source mounted.
 pub struct TwinRootsPlugin;
+
+/// A workspace Twin has an addressable `twin://` authority and its exact
+/// assigned name is ready for consumers that must load through that source.
+///
+/// [`lunco_workspace::TwinAdded`] announces workspace ownership, while this
+/// event announces the asset boundary's stronger postcondition. Consumers must
+/// use this event when their work requires a mounted Twin source; relying on
+/// observer registration order would race the mount.
+#[derive(Event, Clone, Debug)]
+pub struct TwinAssetMounted {
+    /// Workspace identity of the mounted Twin.
+    pub twin: lunco_workspace::TwinId,
+    /// Exact source authority assigned by [`TwinRoots`].
+    pub name: String,
+}
 
 impl Plugin for TwinRootsPlugin {
     fn build(&self, app: &mut App) {
@@ -44,6 +62,7 @@ fn register_twin_root(
     trigger: On<lunco_workspace::TwinAdded>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     roots: Res<TwinRoots>,
+    mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
         return;
@@ -52,15 +71,42 @@ fn register_twin_root(
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
-    let assigned = roots.register(twin_authority(twin), &twin.root);
+    let assigned = match roots.register(twin_authority(twin), &twin.root) {
+        Ok(assigned) => assigned,
+        Err(error) => {
+            lunco_core::trigger_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                format!(
+                    "could not mount Twin asset root {}: {error}",
+                    twin.root.display()
+                ),
+            );
+            return;
+        }
+    };
     info!(
         "[twin-roots] mounted `{assigned}` at {}",
         twin.root.display()
     );
+    commands.trigger(TwinAssetMounted {
+        twin: twin_id,
+        name: assigned,
+    });
 }
 
-fn unregister_twin_root(trigger: On<lunco_workspace::TwinClosed>, roots: Res<TwinRoots>) {
-    roots.unregister_root(&trigger.event().root);
+fn unregister_twin_root(
+    trigger: On<lunco_workspace::TwinClosed>,
+    roots: Res<TwinRoots>,
+    mut commands: Commands,
+) {
+    if let Err(error) = roots.unregister_root(&trigger.event().root) {
+        lunco_core::trigger_error(
+            &mut commands,
+            TWIN_ASSET_UNMOUNT_FAILED,
+            format!("could not unmount Twin asset root: {error}"),
+        );
+    }
 }
 
 /// Register every LunCo asset source on `app` and insert the shared
@@ -157,6 +203,9 @@ mod tests {
     use super::*;
     use lunco_workspace::{TwinAdded, TwinClosed, WorkspaceResource};
 
+    #[derive(Resource, Default)]
+    struct MountedAuthorities(Vec<(lunco_workspace::TwinId, String)>);
+
     #[test]
     fn twin_root_follows_workspace_lifecycle_without_usd() {
         let dir = tempfile::tempdir().expect("temporary Twin root");
@@ -170,6 +219,14 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<WorkspaceResource>();
         app.add_plugins(TwinRootsPlugin);
+        app.init_resource::<MountedAuthorities>();
+        app.add_observer(
+            |trigger: On<TwinAssetMounted>, mut mounted: ResMut<MountedAuthorities>| {
+                mounted
+                    .0
+                    .push((trigger.event().twin, trigger.event().name.clone()));
+            },
+        );
         app.update();
 
         let twin_id = app
@@ -177,12 +234,17 @@ mod tests {
             .resource_mut::<WorkspaceResource>()
             .add_twin(twin);
         app.world_mut().trigger(TwinAdded { twin: twin_id });
+        app.update();
 
         let roots = app.world().resource::<TwinRoots>();
         let assigned = roots
             .name_for_root(&root)
             .expect("workspace Twin is mounted in the asset source");
         assert_eq!(roots.root_for(&assigned), Some(root.clone()));
+        assert_eq!(
+            app.world().resource::<MountedAuthorities>().0,
+            vec![(twin_id, assigned.clone())]
+        );
 
         let was_active = app.world().resource::<WorkspaceResource>().active_twin == Some(twin_id);
         app.world_mut()

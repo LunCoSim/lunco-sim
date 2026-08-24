@@ -180,7 +180,6 @@ impl Plugin for SandboxUiPlugin {
         app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
-            .add_observer(dataset_provisioning::on_twin_closed)
             .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
         app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
@@ -1004,12 +1003,28 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     else {
                                         continue;
                                     };
-                                    let path = lunco_networking::scenario_sync::mount_scenario_twin(
+                                    let path = match lunco_networking::scenario_sync::mount_scenario_twin(
                                         &twins,
                                         &entry.scenario_id,
                                         &entry.name,
                                         &scene,
-                                    );
+                                    ) {
+                                        Ok(path) => path,
+                                        Err(error) => {
+                                            ctx.trigger(lunco_core::TelemetryEvent {
+                                                name: "scenario-twin-mount-failed".into(),
+                                                source: 0,
+                                                severity: lunco_core::Severity::Error,
+                                                data: lunco_core::TelemetryValue::String(
+                                                    format!(
+                                                        "could not mount downloaded scenario Twin: {error}"
+                                                    ),
+                                                ),
+                                                timestamp: 0.0,
+                                            });
+                                            continue;
+                                        }
+                                    };
                                     ctx.trigger(lunco_usd::LoadScene {
                                         path,
                                         root_prim: String::new(),

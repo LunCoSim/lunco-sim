@@ -1714,7 +1714,7 @@ fn publish_runtime_overlay_exposures(
             terrain.property(
                 "progress_width",
                 status.fraction.map_or_else(
-                    || "35%".to_owned(),
+                    || "0%".to_owned(),
                     |fraction| format!("{:.1}%", fraction * 100.0),
                 ),
             );

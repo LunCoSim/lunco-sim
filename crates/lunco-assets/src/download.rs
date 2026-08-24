@@ -127,18 +127,31 @@ impl AssetEntry {
 /// - Authored `dest` → `<owner cache>/<dest>` (the shared cache for a crate
 ///   manifest, `<twin>/.cache` for a Twin's).
 /// - No `dest` → the owner's source pool, keyed by URL hash.
-pub fn entry_dest_path(entry: &AssetEntry, dest_root: Option<&Path>) -> PathBuf {
+pub fn entry_dest_path(
+    entry: &AssetEntry,
+    dest_root: Option<&Path>,
+) -> Result<PathBuf, std::io::Error> {
+    if !entry.shared {
+        if let Some(dest) = entry.dest.as_deref() {
+            if !crate::asset_path::is_safe_relative_path(dest) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("asset destination {dest:?} must be a safe relative path"),
+                ));
+            }
+        }
+    }
     // Opt-in: this product is big and reused, put it in the one global pool.
     if entry.shared {
-        return shared_source_path(&entry.url);
+        return Ok(shared_source_path(&entry.url));
     }
     // Otherwise everything resolves against the OWNER's cache — the shared
     // cache for an engine manifest, `<twin>/.cache` for a Twin's.
     let root = dest_root.map(Path::to_path_buf).unwrap_or_else(cache_dir);
-    match entry.dest.as_deref() {
+    Ok(match entry.dest.as_deref() {
         Some(d) => root.join(d),
         None => source_pool_path(&root, &entry.url),
-    }
+    })
 }
 
 /// The shared source pool path for a URL:
@@ -359,7 +372,8 @@ pub fn download_asset_with_control(
             )));
         }
     }
-    let dest = entry_dest_path(entry, dest_root);
+    let dest = entry_dest_path(entry, dest_root)
+        .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
 
     // Cache-hit check #1 — versioned install (used by libraries like
     // the MSL tarball where `version = "4.1.0"` pins an upstream
@@ -387,7 +401,7 @@ pub fn download_asset_with_control(
     // is what prevents the NASA textures (no `version`, just a
     // `sha256`) from re-downloading tens of megabytes on every run
     // after they've been pinned. Only runs for single-file entries:
-    // computing the hash of a `copy_dir_all`-style directory tree
+    // computing the hash of an extracted directory tree
     // would be surprisingly subtle (order sensitivity, hidden files)
     // and isn't worth the complexity here — tarball entries still
     // need the `version` path for cache-hit.
@@ -444,21 +458,14 @@ pub fn download_asset_with_control(
     // Download in chunks so progress can tick and cancellation is
     // responsive (within one chunk's read latency).
     //
-    // Timeouts bound the HANDSHAKE phases only — connect, request send, and
-    // response headers. Deliberately NO `timeout_recv_body`: ureq's body
-    // timeout is a total-duration cap measured from the first body byte, and a
-    // legitimate multi-hundred-megabyte LROC/NAC GeoTIFF over a slow link can
-    // run for an hour without anything being wrong. A total cap would kill the
-    // honest download and leave the pathological one (a host that accepts the
-    // connection, answers the headers, then dribbles nothing) alive just as
-    // long. The right shape for the body is an INACTIVITY watchdog — "no bytes
-    // for N seconds" — which is enforced by the caller against the progress
-    // callback and the `cancel` flag (see `datasets::spawn_download`), because
-    // ureq exposes no per-read deadline.
+    // Bound every blocking network phase. `timeout_recv_body` is a per-read
+    // receive deadline in ureq, so a large healthy file may run indefinitely
+    // while a peer that stops producing bytes releases the worker promptly.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_send_request(Some(SEND_REQUEST_TIMEOUT))
         .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
+        .timeout_recv_body(Some(BODY_STALL_TIMEOUT))
         .build()
         .into();
     let mut retries = 0;
@@ -508,9 +515,19 @@ pub fn download_asset_with_control(
         ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     };
     let scratch = format!("lunco_{key}_{}_{attempt}", std::process::id());
-    let download_path = std::env::temp_dir().join(format!("{scratch}.download"));
-    let mut out = std::fs::File::create(&download_path)
+    let install_parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(install_parent)
+        .map_err(|e| DownloadError::WriteFailed(install_parent.to_path_buf(), e.to_string()))?;
+    // Keep the staging file on the destination filesystem. The final install
+    // is therefore one atomic rename, with no copy path that could expose a
+    // partial artifact or hide a cross-device deployment error.
+    let download_path = install_parent.join(format!(".{scratch}.download"));
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&download_path)
         .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
+    let mut download_stage = StagingPath::file(download_path.clone());
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
@@ -518,7 +535,6 @@ pub fn download_asset_with_control(
     loop {
         if cancelled() {
             drop(out);
-            let _ = std::fs::remove_file(&download_path);
             return Err(DownloadError::Cancelled);
         }
         let n = reader
@@ -528,7 +544,7 @@ pub fn download_asset_with_control(
             break;
         }
         out.write_all(&chunk[..n])
-            .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
+            .map_err(|e| DownloadError::WriteFailed(download_stage.path.clone(), e.to_string()))?;
         hasher.update(&chunk[..n]);
         downloaded += n as u64;
         if let Some(cb) = control.progress.as_mut() {
@@ -546,7 +562,6 @@ pub fn download_asset_with_control(
     // Check against expected if provided and non-empty
     if let Some(ref expected) = entry.sha256 {
         if !expected.is_empty() && hash != *expected {
-            let _ = std::fs::remove_file(&download_path);
             return Err(DownloadError::HashMismatch(expected.clone(), hash));
         }
     }
@@ -561,17 +576,18 @@ pub fn download_asset_with_control(
     let is_tar = is_tar_gz || is_tar_bz2;
 
     if is_tar {
-        let temp_dir = std::env::temp_dir().join(&scratch);
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir)
+        let temp_dir = install_parent.join(format!(".{scratch}.extract"));
+        std::fs::create_dir(&temp_dir)
             .map_err(|e| DownloadError::WriteFailed(temp_dir.clone(), e.to_string()))?;
+        let _extract_stage = StagingPath::directory(temp_dir.clone());
 
         let ext = if is_tar_gz { "tar.gz" } else { "tar.bz2" };
         let tar_path = temp_dir.join(format!("asset.{ext}"));
-        // Same filesystem (both under the system temp dir), so a rename moves
+        // Same filesystem (both under the destination parent), so a rename moves
         // the streamed download into place without touching the payload again.
         std::fs::rename(&download_path, &tar_path)
             .map_err(|e| DownloadError::WriteFailed(tar_path.clone(), e.to_string()))?;
+        download_stage.disarm();
 
         let file =
             std::fs::File::open(&tar_path).map_err(|e| DownloadError::ReadFailed(e.to_string()))?;
@@ -595,9 +611,6 @@ pub fn download_asset_with_control(
         let mut extracted: u64 = 0;
         for entry in entries_iter {
             if cancelled() {
-                // Scratch names are now attempt-unique, so an abandoned
-                // extraction would accumulate on disk unless it cleans up.
-                let _ = std::fs::remove_dir_all(&temp_dir);
                 return Err(DownloadError::Cancelled);
             }
             let mut entry = entry.map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;
@@ -646,40 +659,17 @@ pub fn download_asset_with_control(
                 std::fs::create_dir_all(parent)
                     .map_err(|e| DownloadError::WriteFailed(parent.to_path_buf(), e.to_string()))?;
             }
-            std::fs::copy(&src_file, &dest)
-                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+            install_staged_path(&src_file, &dest, entry.version.as_deref(), &control)?;
         } else {
-            // Whole-archive mode: copy the extracted tree to `dest`.
-            if dest.exists() {
-                std::fs::remove_dir_all(&dest)
-                    .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
-            }
-            std::fs::create_dir_all(dest.parent().unwrap_or(&dest))
-                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
-
-            copy_dir_all(source_dir, &dest)
-                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+            // Whole-archive mode: move the extracted tree into place. The
+            // extraction directory and destination share a filesystem, so the
+            // lifecycle barrier covers only the directory renames, never a
+            // recursive copy or deletion of a multi-gigabyte tree.
+            install_staged_path(source_dir, &dest, entry.version.as_deref(), &control)?;
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     } else {
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| DownloadError::WriteFailed(parent.to_path_buf(), e.to_string()))?;
-        }
-        // Rename first (free when temp and cache share a filesystem); fall
-        // back to copy + remove across mounts.
-        if std::fs::rename(&download_path, &dest).is_err() {
-            std::fs::copy(&download_path, &dest)
-                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
-            let _ = std::fs::remove_file(&download_path);
-        }
-    }
-
-    // Write version file for future checks
-    if let Some(ref ver) = entry.version {
-        let version_file = dest.parent().unwrap_or(&dest).join(".version");
-        let _ = std::fs::write(version_file, ver);
+        install_staged_path(&download_path, &dest, entry.version.as_deref(), &control)?;
+        download_stage.disarm();
     }
 
     println!("  ✓ installed at {}", dest.display());
@@ -888,7 +878,7 @@ pub fn list_manifest(
 
     println!("Assets for {label}:");
     for (key, entry) in &manifest.assets {
-        let dest = entry_dest_path(entry, dest_root);
+        let dest = entry_dest_path(entry, dest_root)?;
         let status = if dest.exists() {
             if let Some(ref ver) = entry.version {
                 let version_file = dest.parent().unwrap_or(&dest).join(".version");
@@ -966,10 +956,9 @@ pub enum DownloadError {
     Cancelled,
 }
 
-/// Caller-supplied control surface for a download. Three optional
-/// signals: HTTP read progress, tar-extraction progress, and a cancel
-/// flag. All default to "do nothing" so callers opt in to each
-/// independently.
+/// Caller-supplied control surface for a download. It carries optional HTTP
+/// progress, tar-extraction progress, cancellation, and installation ownership
+/// signals. All default to inactive so callers opt in independently.
 ///
 /// - `progress` runs from the read loop on every chunk (~64 KiB) with
 ///   `(bytes_done, bytes_total)`. `bytes_total = 0` means the server
@@ -993,21 +982,184 @@ pub struct DownloadControl<'a> {
     pub extracting: Option<Box<dyn FnMut(u64) + Send + 'a>>,
     /// Cancellation flag shared with the caller.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Shared installation barrier. Dataset-scope teardown acquires the same
+    /// barrier before retirement, so no worker can install after close returns.
+    pub commit_gate: Option<std::sync::Arc<std::sync::Mutex<()>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dest_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dest_path)?;
-        } else {
-            std::fs::copy(entry.path(), dest_path)?;
+fn commit_guard<'a>(
+    control: &'a DownloadControl<'_>,
+    destination: &Path,
+) -> Result<Option<std::sync::MutexGuard<'a, ()>>, DownloadError> {
+    control
+        .commit_gate
+        .as_ref()
+        .map(|gate| {
+            gate.lock().map_err(|_| {
+                DownloadError::WriteFailed(
+                    destination.to_path_buf(),
+                    "download commit gate is poisoned; refusing to install".into(),
+                )
+            })
+        })
+        .transpose()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct StagingPath {
+    path: PathBuf,
+    directory: bool,
+    armed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StagingPath {
+    fn file(path: PathBuf) -> Self {
+        Self {
+            path,
+            directory: false,
+            armed: true,
         }
     }
+
+    fn directory(path: PathBuf) -> Self {
+        Self {
+            path,
+            directory: true,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for StagingPath {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self.directory {
+            let _ = std::fs::remove_dir_all(&self.path);
+        } else {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_staged_path(
+    staged: &Path,
+    destination: &Path,
+    version: Option<&str>,
+    control: &DownloadControl<'_>,
+) -> Result<(), DownloadError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .map_err(|error| DownloadError::WriteFailed(parent.to_path_buf(), error.to_string()))?;
+
+    let version_path = version.map(|_| parent.join(".version"));
+    let version_stage_path = version_path.as_ref().map(|_| {
+        staged.with_file_name(format!(
+            ".{}-version",
+            staged
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("lunco-staged")
+        ))
+    });
+    let mut version_stage = None;
+    if let (Some(path), Some(value)) = (&version_stage_path, version) {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| DownloadError::WriteFailed(path.clone(), error.to_string()))?;
+        let stage = StagingPath::file(path.clone());
+        file.write_all(value.as_bytes())
+            .map_err(|error| DownloadError::WriteFailed(path.clone(), error.to_string()))?;
+        version_stage = Some(stage);
+    }
+
+    let _gate = commit_guard(control, destination)?;
+    if control
+        .cancel
+        .as_ref()
+        .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire))
+    {
+        return Err(DownloadError::Cancelled);
+    }
+
+    static INSTALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = INSTALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let backup_root = parent.join(format!(".lunco-install-backup-{}-{id}", std::process::id()));
+    std::fs::create_dir(&backup_root)
+        .map_err(|error| DownloadError::WriteFailed(backup_root.clone(), error.to_string()))?;
+    let backup = StagingPath::directory(backup_root.clone());
+
+    let backup_destination = backup_root.join("destination");
+    let backup_version = backup_root.join("version");
+    let mut destination_backed_up = false;
+    let mut version_backed_up = false;
+    let mut destination_installed = false;
+    let result = (|| {
+        if destination.exists() {
+            std::fs::rename(destination, &backup_destination).map_err(|error| {
+                DownloadError::WriteFailed(destination.to_path_buf(), error.to_string())
+            })?;
+            destination_backed_up = true;
+        }
+        if let Some(version_path) = &version_path {
+            if version_path.exists() {
+                std::fs::rename(version_path, &backup_version).map_err(|error| {
+                    DownloadError::WriteFailed(version_path.clone(), error.to_string())
+                })?;
+                version_backed_up = true;
+            }
+        }
+        std::fs::rename(staged, destination).map_err(|error| {
+            DownloadError::WriteFailed(destination.to_path_buf(), error.to_string())
+        })?;
+        destination_installed = true;
+        if let (Some(version_stage), Some(version_path)) = (&version_stage_path, &version_path) {
+            std::fs::rename(version_stage, version_path).map_err(|error| {
+                DownloadError::WriteFailed(version_path.clone(), error.to_string())
+            })?;
+        }
+        Ok::<(), DownloadError>(())
+    })();
+
+    if let Err(error) = result {
+        if destination_installed && destination.exists() {
+            // Keep rollback O(1) while the gate is held. The guard removes the
+            // failed tree after the lifecycle barrier is released.
+            let _ = std::fs::rename(&destination, backup_root.join("failed"));
+        }
+        if version_path.as_ref().is_some_and(|path| path.exists()) {
+            if let Some(path) = &version_path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        if version_backed_up {
+            if let Some(path) = &version_path {
+                let _ = std::fs::rename(&backup_version, path);
+            }
+        }
+        if destination_backed_up {
+            let _ = std::fs::rename(&backup_destination, destination);
+        }
+        drop(_gate);
+        drop(backup);
+        drop(version_stage.take());
+        return Err(error);
+    }
+
+    drop(_gate);
+    drop(backup);
+    drop(version_stage.take());
     Ok(())
 }
 
@@ -1083,6 +1235,24 @@ mod tests {
         assert!(matches!(err, DownloadError::ManifestFailed(_)));
     }
 
+    #[test]
+    fn every_download_scope_rejects_unsafe_dest_before_resolution() {
+        let entry = AssetEntry {
+            name: "evil".into(),
+            version: None,
+            url: "https://example.invalid/never-fetched".into(),
+            dest: Some("../escape.tif".into()),
+            extract: None,
+            shared: false,
+            sha256: None,
+            recommended: false,
+            process: None,
+            extra: Default::default(),
+        };
+        let error = entry_dest_path(&entry, None).expect_err("engine path must be contained");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
     /// The default is the OWNER's cache; `shared = true` is the opt-out.
     #[test]
     fn a_twins_download_lands_in_that_twins_cache_unless_it_opts_into_the_shared_pool() {
@@ -1101,7 +1271,7 @@ mod tests {
         };
 
         // Default: twin-local pool — the Twin stays self-contained.
-        let local = entry_dest_path(&entry, Some(&twin_cache));
+        let local = entry_dest_path(&entry, Some(&twin_cache)).expect("safe local destination");
         assert!(
             local.starts_with(&twin_cache),
             "expected the twin cache, got {}",
@@ -1111,7 +1281,7 @@ mod tests {
 
         // Opt-in: the one global pool, whatever root was offered.
         entry.shared = true;
-        let shared = entry_dest_path(&entry, Some(&twin_cache));
+        let shared = entry_dest_path(&entry, Some(&twin_cache)).expect("shared destination");
         assert!(
             !shared.starts_with(&twin_cache) && shared.starts_with(cache_dir()),
             "shared = true must reach the global pool, got {}",
@@ -1122,7 +1292,7 @@ mod tests {
         entry.shared = false;
         entry.dest = Some("terrain/apollo15/dtm.tif".into());
         assert_eq!(
-            entry_dest_path(&entry, Some(&twin_cache)),
+            entry_dest_path(&entry, Some(&twin_cache)).expect("safe authored destination"),
             twin_cache.join("terrain/apollo15/dtm.tif")
         );
     }
@@ -1147,5 +1317,70 @@ mod tests {
         let res = list_manifest(&tmp.join("Assets.toml"), "twin", Some(&tmp));
         assert!(res.is_ok());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn staged_install_replaces_a_directory_and_version_as_one_commit() {
+        let root = tempfile::tempdir().expect("temporary install root");
+        let staged = root.path().join(".download-stage");
+        let destination = root.path().join("msl");
+        std::fs::create_dir(&staged).expect("create staging directory");
+        std::fs::write(staged.join("package.mo"), "new").expect("write staged payload");
+        std::fs::create_dir(&destination).expect("create old destination");
+        std::fs::write(destination.join("package.mo"), "old").expect("write old payload");
+
+        install_staged_path(
+            &staged,
+            &destination,
+            Some("4.1.0"),
+            &DownloadControl::default(),
+        )
+        .expect("install staged directory");
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("package.mo")).expect("read installed"),
+            "new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join(".version")).expect("read version"),
+            "4.1.0"
+        );
+        assert!(!staged.exists(), "staging tree must be moved, not copied");
+        assert!(root
+            .path()
+            .read_dir()
+            .expect("list install root")
+            .all(|entry| !entry
+                .expect("read install entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".lunco-install-backup-")));
+    }
+
+    #[test]
+    fn cancelled_staged_install_leaves_the_previous_payload_intact() {
+        let root = tempfile::tempdir().expect("temporary install root");
+        let staged = root.path().join(".download-stage");
+        let destination = root.path().join("asset.bin");
+        std::fs::write(&staged, "new").expect("write staged payload");
+        std::fs::write(&destination, "old").expect("write old payload");
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let control = DownloadControl {
+            cancel: Some(cancel),
+            ..DownloadControl::default()
+        };
+
+        assert!(matches!(
+            install_staged_path(&staged, &destination, None, &control),
+            Err(DownloadError::Cancelled)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&destination).expect("read old payload"),
+            "old"
+        );
+        assert!(
+            staged.exists(),
+            "the caller-owned staging guard must retain the cancelled payload until it drops"
+        );
     }
 }

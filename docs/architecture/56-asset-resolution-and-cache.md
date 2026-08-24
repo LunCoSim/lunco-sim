@@ -199,8 +199,19 @@ dies one crate at a time.
 | listing and requesting | the UI (knows no dataset by name) |
 
 Registration follows what is OPEN, not what exists: a crate registers its
-embedded manifest once, and a Twin's `Assets.toml` is scanned when that Twin
-opens and forgotten when it closes.
+embedded manifest once, and a Twin's `Assets.toml` is discovered after that
+Twin mounts. Workspace `TwinAdded` announces ownership; `TwinRoots` then emits
+the typed `TwinAssetMounted` postcondition only after the exact `twin://`
+authority is registered. Asset-consuming domains use that postcondition rather
+than depending on observer registration order. `TwinClosed` is the
+authoritative retirement edge: it acquires the dataset attempt commit barrier,
+cancels and removes that root's dataset scopes, and only then allows a
+same-name replacement to be scanned. Download installation and processed
+output commits use the same barrier, so an outgoing worker may finish CPU work
+but cannot publish a stale artifact after close returns. The update scan
+discovers new roots only; it is not the teardown mechanism. A registry lock
+failure is reported as an error; it is never treated as a successful mount or
+unmount.
 
 ### Where a download lands
 
@@ -220,6 +231,23 @@ self-containment for one copy on disk.
 One resolver — `entry_dest_path` — answers this for the CLI downloader, the
 runtime registry and the process step alike, so a file fetched from the app and
 one fetched from a terminal cannot land in different places.
+
+A Twin declaration may set `shared = true` for a product deliberately reused by
+multiple Twins. That entry writes to the engine-wide cache and the Twin reader
+checks that same cache after the Twin-local cache and authored root. The shared
+choice therefore changes ownership explicitly; it does not create a second URI
+or a second resolver.
+
+Processing output roots are strict: `cache` requires its owning cache, `twin`
+requires the Twin root, `assets` uses the canonical packaged/development assets
+resolver, and an unknown root is an error. The processor writes into a unique
+sibling staging directory and atomically commits the artifact, bake stamp, and
+map sidecar under the attempt barrier. A cancelled or failed bake therefore
+cannot leave a new final output with an old completion stamp.
+
+Native HTTP reads have connect, response, and per-read body deadlines. The body
+deadline is an inactivity bound, not a total transfer-duration limit, so a
+large healthy DEM can continue while a silent peer releases its worker.
 
 ### Domain metadata rides with the declaration
 

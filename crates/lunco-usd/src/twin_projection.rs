@@ -12,7 +12,7 @@
 //!
 //! Flow (doc-first: the document exists and its composed source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
-//! 1. On `TwinAdded` with a `[usd] default_scene`, kick an async
+//! 1. On `TwinAssetMounted` with a `[usd] default_scene`, kick an async
 //!    [`UsdSourceText`] load of `twin://<name>/<scene>` (raw base layer, read
 //!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
 //!    No mount yet — mounting first built the stage from the raw base, and the
@@ -374,8 +374,8 @@ const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
 /// publish the composed (`base ⊕ runtime`) source as the twin overlay — and only
 /// THEN mount the scene ([`LoadScene`]). Ordering is the whole point: the async
 /// stage load reads the overlay bytes, so the one and only projection already
-/// composes the runtime state. Mounting eagerly on `TwinAdded` and doc-backing
-/// afterwards built the stage from the raw base, then the open-time
+/// composes the runtime state. Mounting eagerly at the asset boundary before
+/// doc-backing built the stage from the raw base, then the open-time
 /// `restore_runtime` (a coarse `ReplaceSource` marker) forced a whole-scene
 /// rebuild ~70 ms in — every prim spawned, despawned, and respawned once.
 /// Idempotent: reuses an existing document for the same on-disk path (twin
@@ -476,7 +476,17 @@ pub(crate) fn drain_pending_twin_docs(
             Some(h) => (h.document().generation(), h.document().composed_source()),
             None => continue,
         };
-        twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()));
+        if let Err(error) =
+            twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()))
+        {
+            report_twin_doc_load_failed(
+                &mut empty_reason,
+                &mut commands,
+                &twin_path,
+                format!("could not publish the composed Twin source: {error}"),
+            );
+            continue;
+        }
         backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
         if let Some(scene) = backed.map.get_mut(&doc) {
             scene.synced_generation = Some(cur_gen);
@@ -500,15 +510,20 @@ pub(crate) fn drain_pending_twin_docs(
 /// persistence / next-load source) and mark it overlay-synced at `gen`. O(stage) — a
 /// whole-stage recompose + serialize — so call it only once the document has SETTLED
 /// (see the debounce in [`sync_twin_overlays`]), never on every edit.
-fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) {
+fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) -> bool {
     let composed_source = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
         .map(|h| h.document().composed_source());
     if let Some(src) = composed_source {
-        world
-            .resource::<TwinRoots>()
-            .set_overlay(name, rel, Arc::new(src.into_bytes()));
+        if let Err(error) =
+            world
+                .resource::<TwinRoots>()
+                .set_overlay(name, rel, Arc::new(src.into_bytes()))
+        {
+            warn!("[usd-e1b] could not publish composed source for document {doc}: {error}");
+            return false;
+        }
         if let Some(s) = world
             .resource_mut::<DocBackedTwinScenes>()
             .map
@@ -516,6 +531,9 @@ fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str,
         {
             s.overlay_synced_generation = Some(gen);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -587,7 +605,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let cur_gen = match world.resource::<DocumentRegistry<UsdDocument>>().host(doc) {
             Some(h) => h.document().generation(),
             None => {
-                world.resource::<TwinRoots>().clear_overlay(&name, &rel);
+                if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
+                    warn!("[usd-e1b] could not clear closed document overlay: {error}");
+                }
                 world
                     .resource_mut::<DocBackedTwinScenes>()
                     .forget_document(doc);
@@ -643,7 +663,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // (`drain_pending_twin_docs` publishes before mounting); still needed
             // here for editor-viewport docs tracked via `track()`.
             if overlay_synced != Some(cur_gen) {
-                write_twin_overlay(world, doc, &name, &rel, cur_gen);
+                if !write_twin_overlay(world, doc, &name, &rel, cur_gen) {
+                    continue;
+                }
             }
             // The async load already built the stage from the overlay, so every
             // recorded op is already reflected — just reconcile restored runtime
@@ -655,7 +677,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 .map(|host| host.document().composed_arc())
             else {
                 warn!("[usd-e1b] document {doc} disappeared before initial projection");
-                world.resource::<TwinRoots>().clear_overlay(&name, &rel);
+                if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
+                    warn!("[usd-e1b] could not clear missing document overlay: {error}");
+                }
                 world
                     .resource_mut::<DocBackedTwinScenes>()
                     .forget_document(doc);

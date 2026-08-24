@@ -55,8 +55,8 @@ fn visible_entries<'a>(
         .collect()
 }
 
-fn needs_provisioning(entry: &DatasetEntry) -> bool {
-    matches!(entry.state, DatasetState::Missing | DatasetState::Failed(_))
+fn needs_provisioning(state: &DatasetState) -> bool {
+    matches!(state, DatasetState::Missing | DatasetState::Failed(_))
 }
 
 fn same_scope(state: &DatasetProvisioningState, scope: &DatasetScope) -> bool {
@@ -83,7 +83,7 @@ fn open_modal(request: ProvisioningRequest, modals: &mut ModalQueue) -> ActivePr
             if ui.button("Select all missing").clicked() {
                 if let Ok(mut selected) = selection.lock() {
                     for (value, dataset) in selected.iter_mut().zip(&body_choices) {
-                        *value = needs_provisioning_state(&dataset.state);
+                        *value = needs_provisioning(&dataset.state);
                     }
                 }
             }
@@ -98,7 +98,7 @@ fn open_modal(request: ProvisioningRequest, modals: &mut ModalQueue) -> ActivePr
             let Ok(mut selected) = selection.lock() else {
                 return;
             };
-            let enabled = needs_provisioning_state(&dataset.state);
+            let enabled = needs_provisioning(&dataset.state);
             let mut checked = selected[index];
             ui.horizontal(|ui| {
                 ui.add_enabled(enabled, egui::Checkbox::new(&mut checked, &dataset.name));
@@ -124,10 +124,6 @@ fn open_modal(request: ProvisioningRequest, modals: &mut ModalQueue) -> ActivePr
         dismiss_on_esc: true,
     });
     ActiveProvisioning { request, modal }
-}
-
-fn needs_provisioning_state(state: &DatasetState) -> bool {
-    matches!(state, DatasetState::Missing | DatasetState::Failed(_))
 }
 
 fn status_text(dataset: &ProvisionedDataset) -> String {
@@ -208,7 +204,7 @@ pub(crate) fn on_dataset_scope_ready(
     let missing: Vec<&DatasetEntry> = visible
         .iter()
         .copied()
-        .filter(|entry| needs_provisioning(entry))
+        .filter(|entry| needs_provisioning(&entry.state))
         .collect();
     if missing.is_empty() {
         return;
@@ -229,7 +225,7 @@ pub(crate) fn on_dataset_scope_ready(
     let selection = Arc::new(std::sync::Mutex::new(
         choices
             .iter()
-            .map(|dataset| needs_provisioning_state(&dataset.state))
+            .map(|dataset| needs_provisioning(&dataset.state))
             .collect(),
     ));
     state.pending.push(ProvisioningRequest {
@@ -251,35 +247,6 @@ pub(crate) fn on_dataset_scope_removed(
         .active
         .as_ref()
         .is_some_and(|active| &active.request.scope == scope)
-    {
-        if let Some(active) = state.active.take() {
-            modals.cancel(active.modal);
-        }
-    }
-    show_next(&mut state, &mut modals);
-}
-
-pub(crate) fn on_twin_closed(
-    trigger: On<lunco_workspace::TwinClosed>,
-    mut state: ResMut<DatasetProvisioningState>,
-    mut modals: ResMut<ModalQueue>,
-) {
-    let root = &trigger.event().root;
-    state.pending.retain(|request| match &request.scope {
-        DatasetScope::Twin {
-            root: request_root, ..
-        } => request_root != root,
-        DatasetScope::Engine => true,
-    });
-    if state
-        .active
-        .as_ref()
-        .is_some_and(|active| match &active.request.scope {
-            DatasetScope::Twin {
-                root: request_root, ..
-            } => request_root == root,
-            DatasetScope::Engine => false,
-        })
     {
         if let Some(active) = state.active.take() {
             modals.cancel(active.modal);
