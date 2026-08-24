@@ -191,6 +191,68 @@ fn branch_placement(path, side, index) {
     }
 }
 
+fn layout_groups(net, units) {
+    let groups = [];
+    if units.len == 0 {
+        let all = [];
+        for component in net.components { all.push(component.path); }
+        groups.push(all);
+    } else {
+        for unit in units { groups.push(unit.components); }
+    }
+    groups
+}
+
+fn classify_members(net, members, hub) {
+    let result = #{ sources: [], loads: [], neutral: [] };
+    for path in members {
+        if path == hub { continue; }
+        let role = topology_role(net, path);
+        if role == "source" {
+            result.sources.push(path);
+        } else if role == "load" {
+            result.loads.push(path);
+        } else {
+            result.neutral.push(path);
+        }
+    }
+    result
+}
+
+fn group_member_layout(net, members) {
+    let placements = [];
+    let hub = topology_hub(net, members);
+    placements.push(#{ path: hub, x: HUB_X, y: BUS_Y });
+    let classified = classify_members(net, members, hub);
+    // Explicit source/load roles form opposite banks of the bus. This is a
+    // semantic layout policy, not an electrical direction assumption: the
+    // generated equations remain the authored acausal connect graph.
+    let left_count = 0;
+    for path in classified.sources {
+        placements.push(branch_placement(path, "left", left_count));
+        left_count += 1;
+    }
+    let right_count = 0;
+    for path in classified.loads {
+        placements.push(branch_placement(path, "right", right_count));
+        right_count += 1;
+    }
+    // Components without a side preference remain fully supported. Pack them
+    // onto the shorter bank, with a deterministic left tie, so a new Modelica
+    // domain does not need a Rust layout branch merely because it has neutral
+    // components.
+    for path in classified.neutral {
+        if left_count <= right_count {
+            placements.push(branch_placement(path, "left", left_count));
+            left_count += 1;
+        } else {
+            placements.push(branch_placement(path, "right", right_count));
+            right_count += 1;
+        }
+    }
+    placements
+}
+
 fn visual_layout(net, units) {
     let layout = #{ units: [], members: [] };
     for unit in units {
@@ -206,60 +268,9 @@ fn visual_layout(net, units) {
     // Unit positions belong to the generated root diagram. Member positions
     // belong to each unit's own diagram, so every group gets the same local
     // coordinate system; root-level spacing never leaks into a child class.
-    let groups = [];
-    if units.len == 0 {
-        let all = [];
-        for component in net.components { all.push(component.path); }
-        groups.push(all);
-    } else {
-        for unit in units { groups.push(unit.components); }
-    }
-    for members in groups {
-        let hub = topology_hub(net, members);
-        layout.members.push(#{
-            path: hub,
-            x: HUB_X,
-            y: BUS_Y
-        });
-        let sources = [];
-        let loads = [];
-        let neutral = [];
-        for path in members {
-            if path == hub { continue; }
-            let role = topology_role(net, path);
-            if role == "source" {
-                sources.push(path);
-            } else if role == "load" {
-                loads.push(path);
-            } else {
-                neutral.push(path);
-            }
-        }
-        // Explicit source/load roles form opposite banks of the bus. This is
-        // a semantic layout policy, not an electrical direction assumption:
-        // the generated equations remain the authored acausal connect graph.
-        let left_count = 0;
-        for path in sources {
-            layout.members.push(branch_placement(path, "left", left_count));
-            left_count += 1;
-        }
-        let right_count = 0;
-        for path in loads {
-            layout.members.push(branch_placement(path, "right", right_count));
-            right_count += 1;
-        }
-        // Components without a side preference remain fully supported. Pack
-        // them onto the shorter bank, with a deterministic left tie, so a new
-        // Modelica domain does not need a Rust layout branch merely because it
-        // has neutral components.
-        for path in neutral {
-            if left_count <= right_count {
-                layout.members.push(branch_placement(path, "left", left_count));
-                left_count += 1;
-            } else {
-                layout.members.push(branch_placement(path, "right", right_count));
-                right_count += 1;
-            }
+    for members in layout_groups(net, units) {
+        for placement in group_member_layout(net, members) {
+            layout.members.push(placement);
         }
     }
     layout
