@@ -67,7 +67,10 @@ The Modelica runtime is **rumoca**, our fork:
 ### 2a. Generated network schemas
 
 An authored USD `CollectionAPI:components` network is projected through one
-generic reader. Rust supplies the composed facts — component identities and
+generic reader. Runtime domain ownership is derived first from the composed
+member role schemas: `LunCoForceActuatorAPI` selects the actuator-wrench
+projection, while `LunCoProgramAPI` selects the generated Modelica path. Rust
+supplies the composed facts — component identities and
 classes, constants, causal links, acausal connections, boundary ports, member
 outputs, and deterministic default placements — and validates the result. It
 does not classify components as battery, motor, solar, thermal, fluid, or any

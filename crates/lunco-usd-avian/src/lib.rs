@@ -86,7 +86,7 @@ pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 pub struct ScenePhysicsOwned;
 
 pub mod lint;
-pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
+pub use lint::{physics_facts, USD_LINT_DOMAIN};
 
 pub mod filtered_pairs;
 pub use filtered_pairs::{

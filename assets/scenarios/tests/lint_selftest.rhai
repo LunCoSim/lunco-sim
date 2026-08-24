@@ -26,7 +26,8 @@
 //     cmd("RunLint", #{})            // or the tagged ExecuteCommand envelope over HTTP/MCP
 //     query("LintReport")
 //
-// and a scenario wanting a LIVE linter just calls the same pair on a cadence.
+// An editor or preflight command repeats the same pair after an authored change;
+// this test deliberately invokes it once and has no per-tick lint monitor.
 //
 // HOW FAILURE IS SIGNALLED: `emit("LINT_SELFTEST", "PASS"|"FAIL")`.
 
@@ -142,6 +143,53 @@ fn on_tick(me) {
     f.push(t_true(mentions(ghost, "/LintSelftest/Ghost"),
         "dynamic-body-no-collider never named /LintSelftest/Ghost — the one prim in " +
         "this scene that exists only to trip it"));
+
+    // A force-based drive with stiffness but no driven mass is not the
+    // production implicit motor path. The finding must name the drive itself,
+    // include the authoritative eight-substep contract, and remain separate
+    // from the geometric sprung-foot finding.
+    let unstable_drive = by_rule(findings, "conditionally-stable-joint-drive");
+    f.push(t_true(unstable_drive.len() == 1,
+        "conditionally-stable-joint-drive fired " + unstable_drive.len() +
+        " time(s), expected exactly 1 (/LintSelftest/Leg/Strut_Spring)"));
+    if unstable_drive.len() == 1 {
+        f.push(t_true(unstable_drive[0].subject == "/LintSelftest/Leg/Strut_Spring",
+            "conditionally-stable-joint-drive named " + unstable_drive[0].subject +
+            ", expected the un-massed force drive"));
+        f.push(t_true(unstable_drive[0].severity == "error",
+            "conditionally-stable-joint-drive is severity " + unstable_drive[0].severity +
+            ", expected error"));
+        f.push(t_true(unstable_drive[0].message.contains("8 substeps"),
+            "conditionally-stable-joint-drive did not report the authoritative 8-substep contract"));
+    }
+
+    let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");
+    f.push(t_true(negative_stiffness.len() == 1,
+        "joint-drive-negative-stiffness fired " + negative_stiffness.len() +
+        " time(s), expected exactly 1 (/LintSelftest/Leg/Strut_NegativeStiffness)"));
+    if negative_stiffness.len() == 1 {
+        f.push(t_true(negative_stiffness[0].subject == "/LintSelftest/Leg/Strut_NegativeStiffness",
+            "joint-drive-negative-stiffness named " + negative_stiffness[0].subject +
+            ", expected the negative-stiffness drive"));
+        f.push(t_true(negative_stiffness[0].severity == "error",
+            "joint-drive-negative-stiffness is severity " + negative_stiffness[0].severity +
+            ", expected error"));
+        f.push(t_true(negative_stiffness[0].message.contains("cannot be converted"),
+            "joint-drive-negative-stiffness did not explain why adding mass cannot fix it"));
+    }
+
+    let invalid_gear = by_rule(findings, "invalid-gear-drive");
+    f.push(t_true(invalid_gear.len() == 1,
+        "invalid-gear-drive fired " + invalid_gear.len() +
+        " time(s), expected exactly 1 (/LintSelftest/BadGear)"));
+    if invalid_gear.len() == 1 {
+        f.push(t_true(invalid_gear[0].subject == "/LintSelftest/BadGear",
+            "invalid-gear-drive named " + invalid_gear[0].subject +
+            ", expected the malformed gear drive"));
+        f.push(t_true(invalid_gear[0].severity == "error",
+            "invalid-gear-drive is severity " + invalid_gear[0].severity +
+            ", expected error"));
+    }
 
     // THE FALSE-POSITIVE GUARD. A jointed nested body is the normal wheel mount.
     f.push(t_true(!mentions(findings, "/LintSelftest/Vehicle/Wheel"),

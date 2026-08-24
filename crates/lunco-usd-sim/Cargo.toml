@@ -38,8 +38,9 @@ lunco-controller = { path = "../lunco-controller" }
 # lunco-autopilot stays USD-free and just compiles what it is handed.
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-cosim = { path = "../lunco-cosim" }
-# The hook substrate: synthesizer emit policies are runtime-agnostic and may
-# be authored by any registered hook implementation.
+# Hook substrate for authored policies and typed USD lint facts for the custom
+# PhysxPhysicsGearJoint projection. Rules remain authored in
+# assets/scripting/policy/lint_usd.rhai.
 lunco-hooks = { path = "../lunco-hooks" }
 # The workspace hashing substrate — the generated-model fingerprint that decides
 # whether a live edit recompiles (`domain_projection`).

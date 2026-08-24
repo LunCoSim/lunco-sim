@@ -1554,6 +1554,14 @@ fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
 }
 
 /// Generalized impulse for one authored USD drive update.
+///
+/// The update is implicit in both position and velocity. Solving the authored
+/// law at `(e_next, v_next)` instead of the current state removes the explicit
+/// penalty's `k < I/dt²` restriction while preserving the continuous
+/// force/acceleration law and the authored max-force limit. This is the same
+/// numerical ownership rule as the standard joint-drive bridge: stability
+/// belongs to the solver realization, not to a guessed asset-specific stiffness
+/// cap.
 fn gear_drive_impulse(
     position_error: f64,
     relation_velocity: f64,
@@ -1568,7 +1576,26 @@ fn gear_drive_impulse(
     if inverse_mass <= f64::EPSILON || !dt.is_finite() || dt <= 0.0 {
         return 0.0;
     }
-    let raw = -stiffness * position_error + damping * (target_velocity - relation_velocity);
+    let denominator = match drive_type {
+        DifferentialDriveType::Force => 1.0 + inverse_mass * (damping * dt + stiffness * dt * dt),
+        DifferentialDriveType::Acceleration => 1.0 + damping * dt + stiffness * dt * dt,
+    };
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return 0.0;
+    }
+    let next_velocity = match drive_type {
+        DifferentialDriveType::Force => {
+            (relation_velocity
+                + inverse_mass * dt * (-stiffness * position_error + damping * target_velocity))
+                / denominator
+        }
+        DifferentialDriveType::Acceleration => {
+            (relation_velocity + dt * (-stiffness * position_error + damping * target_velocity))
+                / denominator
+        }
+    };
+    let next_error = position_error + next_velocity * dt;
+    let raw = -stiffness * next_error + damping * (target_velocity - next_velocity);
     if !raw.is_finite() {
         return 0.0;
     }
@@ -2499,6 +2526,9 @@ mod oracle {
 mod differential_tests {
     use super::*;
 
+    const PRODUCTION_SUBSTEP_DT: f64 =
+        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64);
+
     #[test]
     fn force_drive_impulse_is_finite_and_limited() {
         for error in [0.4, -0.15, 0.6, 0.2] {
@@ -2510,11 +2540,11 @@ mod differential_tests {
                 1_200.0,
                 100.0,
                 0.11,
-                1.0 / 64.0,
+                PRODUCTION_SUBSTEP_DT,
                 DifferentialDriveType::Force,
             );
             assert!(impulse.is_finite());
-            assert!(impulse.abs() <= 100.0 / 64.0);
+            assert!(impulse.abs() <= 100.0 * PRODUCTION_SUBSTEP_DT);
         }
     }
 
@@ -2529,11 +2559,67 @@ mod differential_tests {
                 1_200.0,
                 f64::INFINITY,
                 0.11,
-                1.0 / 64.0,
+                PRODUCTION_SUBSTEP_DT,
                 DifferentialDriveType::Force,
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn implicit_force_drive_remains_finite_beyond_the_old_explicit_limit() {
+        let mut error = 1.0;
+        let mut velocity = 0.0;
+        let inverse_mass = 1.0 / 60.0;
+        let dt = 1.0 / 64.0;
+
+        for _ in 0..2_000 {
+            let impulse = gear_drive_impulse(
+                error,
+                velocity,
+                0.0,
+                400_000.0,
+                0.0,
+                f64::INFINITY,
+                inverse_mass,
+                dt,
+                DifferentialDriveType::Force,
+            );
+            velocity += inverse_mass * impulse;
+            error += velocity * dt;
+            assert!(error.is_finite() && velocity.is_finite());
+        }
+        assert!(error.abs() < 1.0);
+    }
+
+    #[test]
+    fn implicit_acceleration_drive_is_damped_without_mass_scaling() {
+        let dt = PRODUCTION_SUBSTEP_DT;
+        let inverse_mass = 1.0 / 60.0;
+        let force_mode = gear_drive_impulse(
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            10.0,
+            f64::INFINITY,
+            inverse_mass,
+            dt,
+            DifferentialDriveType::Force,
+        );
+        let acceleration_mode = gear_drive_impulse(
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            10.0,
+            f64::INFINITY,
+            inverse_mass,
+            dt,
+            DifferentialDriveType::Acceleration,
+        );
+        assert!(acceleration_mode > force_mode);
+        assert!((acceleration_mode * inverse_mass / dt - 10.0 / (1.0 + 10.0 * dt)).abs() < 1e-12);
     }
 
     #[test]
@@ -2562,7 +2648,7 @@ mod differential_tests {
                 1_200.0,
                 f64::INFINITY,
                 0.0,
-                1.0 / 64.0,
+                PRODUCTION_SUBSTEP_DT,
                 DifferentialDriveType::Force,
             ),
             0.0

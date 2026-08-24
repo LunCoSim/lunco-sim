@@ -186,9 +186,12 @@ joint, so this is a Rust **soft holonomic coupling**.
   Textbook differential behaviour.
 
 **Gotchas (both real, both cost a debugging loop):**
-- **Stability:** the explicit penalty needs `stiffness < I/dt²` *and* damped rockers,
-  else it rings/diverges (a first try at `k=4e5` on `I≈60`, `dt≈1/64` tripped avian's
-  collider-AABB assert). Author rocker `physics:diagonalInertia` (G2) so `I` is sane.
+- **Stability:** the gear drive is solved implicitly at each authoritative physics
+  substep, so it does not impose an asset-specific `stiffness < I/dt²` limit. Keep
+  stiffness and damping finite and non-negative, author rocker
+  `physics:diagonalInertia` (G2) so the physical response is well-defined, and
+  run the USD linter before play; malformed gear authoring is an error rather
+  than a runtime fallback.
 - **Redundant rigs hide the effect:** a passive two-rocker rover where each rocker is
   pinned by its own two ground feet already self-levels — the coupling has nothing to
   do, so an A/B shows no difference. Demonstrating the differential needs a rig where
@@ -251,10 +254,17 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   on the joint's port overrides the target per tick. The port pair is the runtime
   face of `PhysxJointStateAPI:{linear,angular} physics:position` (out) +
   `PhysicsDriveAPI` `targetPosition` (in).
-- **`physics:stiffness`/`physics:damping` are mapped** to `MotorModel::ForceBased`
-  (or `AccelerationBased`, per `physics:type`) with the same SI coefficients — a
-  rename, not a conversion, so an authored spring IS the spring the solver
-  integrates. A drive with neither coefficient is a positioner, not a spring, and
+- **`physics:stiffness`/`physics:damping` retain their authored SI law**
+  (`force = k * positionError + c * velocityError`), while the runtime chooses a
+  stable realization. A force-type linear drive with positive authored mass is
+  converted to Avian's implicit `MotorModel::SpringDamper` using the equivalent
+  frequency and damping ratio; this is a numerical realization change, not a
+  second spring or a changed physical coefficient. Acceleration drives map to
+  `AccelerationBased` because their response is intentionally mass-normalized.
+  Standard `Physics*Joint` angular drives and force drives without a usable
+  linear mass remain explicit and are rejected by the USD linter when their
+  coefficients are conditionally unstable. A drive with neither coefficient is
+  a positioner, not a spring, and
   keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
   throughout. Wheels are unaffected: their revolute joints
   are built in `lunco-mobility`, not the authored-joint path, so the G6

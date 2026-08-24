@@ -6,7 +6,7 @@
 //! `AssetServer`, no GPU, no ECS state read or written. Every check here is a
 //! pure function over file bytes (plus, for `.usda`, the referenced layers the
 //! composer opens), so it is safe to call from anywhere — the HTTP API of a
-//! running instance, or `sandbox --validate <path>` before any app exists.
+//! running instance, or `luncosim --validate <path>` before any app exists.
 //! Asset authors get "will this load?" in milliseconds instead of finding out
 //! by spawning it into a live sim.
 //!
@@ -382,10 +382,10 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
     let stage = CanonicalStage::from_stage(stage, path.to_string_lossy().to_string());
     let view = stage.view();
 
-    // The physics projection the `lint.usd` rules read — the SAME facts the live
-    // loader hands them (`lunco_usd_avian::physics_facts`), so a rule cannot pass
-    // here and fire at load, or the reverse.
-    report.lint_facts = Some(lunco_usd_avian::physics_facts(&view));
+    // The physics projection the `lint.usd` rules read — the SAME complete facts
+    // the live lint command hands them, including USD-sim gear drives, so a rule
+    // cannot pass here and fire at load, or the reverse.
+    report.lint_facts = Some(crate::lint_command::usd_physics_facts(&view));
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn
     // through — `Err(missing)` here is exactly the refusal the spawner logs.
@@ -653,7 +653,7 @@ fn validate_behavior_tree(reference: &str, text: &str) -> ValidationReport {
 
 // ─── CLI ────────────────────────────────────────────────────────────────────
 
-/// One-shot CLI leg (`sandbox --validate <path>…`): print each report
+/// One-shot CLI leg (`luncosim --validate <path>…`): print each report
 /// human-readably, return the process exit code (0 = all ok, 1 = any failed).
 /// No Bevy `App` is ever constructed on this path.
 pub fn run_cli(paths: &[String]) -> i32 {

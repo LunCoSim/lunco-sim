@@ -682,6 +682,7 @@ pub mod celestial;
 pub mod cosim;
 pub mod cosim_diagnostics;
 pub mod domain_projection;
+pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;

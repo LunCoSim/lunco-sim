@@ -36,6 +36,11 @@ fn main() -> lunco_luncosim::AppExit {
                 eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai/.btxml/.xml)");
                 std::process::exit(2);
             }
+            // The app is intentionally not constructed for pre-flight, so its
+            // scripting plugin cannot register the authored lint policies.
+            // Use the same registration owner as the live runtime before the
+            // shared ValidateAsset entry point is called.
+            lunco_scripting::register_builtin_policies();
             std::process::exit(lunco_scene_commands::validate::run_cli(&paths));
         }
     }

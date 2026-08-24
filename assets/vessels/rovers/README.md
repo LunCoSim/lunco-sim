@@ -28,7 +28,7 @@ These live on the root vehicle or link `Xform` prims:
 The differential is a standard `PhysxPhysicsGearJoint` (`Differential`) over the two chassis↔rocker hinges (`physxGearJoint:hinge0 = HingeL`, `hinge1 = HingeR`), coupling `RockerL`/`RockerR` to keep the chassis level. It is softened by the joint's own angular `PhysicsDriveAPI:angular` — a spring-damper, not a rigid gear (which would chatter on terrain). Zero the drive stiffness/damping (via an `over "Differential"`) to disable it.
 *   `float drive:angular:physics:stiffness`: Coupling stiffness ($k$, default `15000.0`). Controls how strongly the rockers are forced to mirror each other's pitch.
     > [!WARNING]
-    > To maintain simulation stability, the stiffness must satisfy the explicit-penalty stability limit: $k < \frac{I}{dt^2}$ (where $I$ is the rocker inertia and $dt \approx 1/64$ s). Keeping it under `250000` is recommended.
+    > The gear drive is integrated implicitly at the authoritative physics substep, so there is no asset-specific explicit-penalty limit. Keep stiffness and damping finite and non-negative, author the rocker inertia, and run the USD linter before play.
 *   `float drive:angular:physics:damping`: Coupling damping ($c$, default `1500.0`). Prevents the differential from ringing or oscillating.
 *   `float drive:angular:physics:targetPosition`: Target for $\theta_{\text{left}} + \theta_{\text{right}}$ (rad, default `0.0`).
 

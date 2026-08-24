@@ -210,9 +210,9 @@ pub struct LunCoScriptingPlugin;
 /// Register the built-in `policy→rhai` hooks from `assets/scripting/policy/*.rhai`.
 /// Each is a small authored decision function consulted by a Rust seam by hook id;
 /// authoring the rule in rhai keeps policy out of compiled code (tunable, no
-/// rebuild). Currently: the spec-034 control-authority takeover rule.
+/// rebuild).
 #[cfg(feature = "rhai")]
-fn register_builtin_policies() {
+pub fn register_builtin_policies() {
     // (policy file stem, hook id, entry fn)
     const BUILTINS: &[(&str, &str, &str)] = &[
         (
