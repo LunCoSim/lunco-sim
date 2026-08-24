@@ -67,7 +67,7 @@
 ///
 /// The physical rover keeps its wheels as four SEPARATE bodies, so its chassis
 /// body alone is not the vehicle: mass and centre of mass are aggregated over
-/// chassis + wheels. That aggregate is exactly what `fold_proxy_wheel_mass`
+/// chassis + wheels. That aggregate is exactly what `fold_raycast_wheel_mass`
 /// folds onto the raycast chassis, whose wheels are kinematic proxies avian
 /// never weighs. Comparing chassis to chassis would compare 1100 kg against
 /// 1000 kg and prove nothing.
@@ -207,7 +207,7 @@ fn on_tick(me) {
     let t = this.t;
 
     // Sample the mass properties once, mid-settle: late enough that avian has
-    // published `Computed*` and `fold_proxy_wheel_mass` has run, early enough
+    // published `Computed*` and `fold_raycast_wheel_mass` has run, early enough
     // that the run is still standing still and nothing has been driven.
     if this.mp == () && t > 1.0 {
         this.mp = mass_props(this.rc, this.ph, this.mount_y);

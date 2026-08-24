@@ -2538,7 +2538,6 @@ fn process_usd_sim_prim_read(
                 maybe_mesh,
                 maybe_mat,
                 maybe_shader_mat,
-                maybe_child_of,
                 &params,
                 &suspension,
                 p_drive,
@@ -2976,7 +2975,6 @@ fn setup_raycast_wheel(
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
-    maybe_child_of: Option<&ChildOf>,
     params: &WheelParams,
     susp: &SuspensionParams,
     p_drive: Entity,
@@ -3043,9 +3041,10 @@ fn setup_raycast_wheel(
         scale: existing_tf.scale,
     };
 
-    // Build RayCaster with exclusion filter to prevent wheels from raycasting
-    // against their own rover chassis (causes jiggling/jumping bug).
-    let rover_entity = maybe_child_of.map(|c| c.parent());
+    // Build the RayCaster with the non-physical layer mask. The mobility owner
+    // projects the complete joint-connected assembly into the exclusion set
+    // after Avian's runtime joint graph is available; setup cannot infer that
+    // topology from one ChildOf edge.
     // THE RAY STARTS AT THE STRUT TOP, NOT AT THE PRIM. The wheel prim is the AXLE —
     // the same point the `physical` realization puts its wheel body at — so casting
     // from the prim itself would hang the hub a whole `rest_length` below the mount
@@ -3071,14 +3070,10 @@ fn setup_raycast_wheel(
     // Mask out the non-physical layers so suspension rays ignore trigger-zone
     // sensors (else the wheels ride up on an invisible waypoint sphere) and
     // celestial body spheres (a planet-sized collider that CONTAINS the scene
-    // returns distance 0 — see `NON_PHYSICAL_QUERY_LAYERS`). Excludes the
-    // rover's own chassis by entity as before.
-    let mut filter = avian3d::prelude::SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
+    // returns distance 0 — see `NON_PHYSICAL_QUERY_LAYERS`).
+    let filter = avian3d::prelude::SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
         !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
     ));
-    if let Some(rover_ent) = rover_entity {
-        filter.excluded_entities.insert(rover_ent);
-    }
     ray_caster = ray_caster.with_query_filter(filter);
 
     // avian's `update_ray_caster_positions` derives the ray's global origin from

@@ -213,6 +213,22 @@ The loader then resolves a wheel's suspension via `resolve_suspension_params`, a
 
 **Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd/schema/core/physxSchema.usda` and pinned by the `physx_vehicle_schemas_register_canonical_properties` drift test.
 
+### 3.2.1. Generic support and activation transaction
+
+A raycast wheel has support geometry but no Avian collider. The mobility producer
+publishes the authored probe footprint as `lunco_physics::PhysicsSupportFootprint`;
+terrain consumes that shared contract and does not inspect wheel or drivetrain
+components. The contract is ordered by the shared `PhysicsSupportSet`: `Publish`
+creates the footprint, `Apply` flushes its deferred ECS insertion, and `Consume`
+performs support-cache projection and one-time initial placement. This is a runtime
+transaction, not a per-frame reseat or an overturn recovery mechanism.
+
+Ordinary rigid bodies use their Avian collider bounds directly. Both paths use the
+live spatial support surface for placement: a DEM uses the resident collider ring,
+while a flat authored scene uses its static/kinematic colliders and the local
+gravity axis. Missing support is consumed as an unsupported physical state; it is
+never converted into a permanent activation hold or a guessed world-up placement.
+
 ### 3.3. Physics & Visual Updates (`lunco-mobility`)
 * **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values.
 * **`update_suspension_visuals`:** Queries `(&WheelRaycast, &Suspension, ...)` to scale the spring mesh and translate the piston along the suspension travel axis.

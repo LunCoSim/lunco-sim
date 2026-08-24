@@ -12,8 +12,9 @@
 //! `physxVehicleWheel:mass` is still part of the shared wheel contract but was
 //! never weighed. Terminal speed goes as `F/(c·m)` under `physxRigidBody:linearDamping`,
 //! so a 10% mass error is a 10% speed error that looks exactly like a tire defect.
-//! `lunco_mobility::fold_proxy_wheel_mass` now folds the proxy wheels onto the
-//! chassis; these tests pin the AUTHORED side of the same contract.
+//! `lunco_mobility::fold_raycast_wheel_mass` now folds each proxy wheel onto its
+//! force-carrying rigid body; these tests pin the AUTHORED side of the same
+//! contract.
 //!
 //! The headline test does not hand-list shared vehicle properties. It composes the
 //! rover twice and diffs every shared attribute except the explicitly declared

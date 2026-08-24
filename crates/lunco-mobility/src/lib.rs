@@ -113,19 +113,31 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<SteerBaseRotation>()
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
-            .register_type::<ProxyWheelMassFolded>()
+            .register_type::<RaycastWheelMassFolded>()
             .add_observer(mark_wheel_ports_causal)
             // A vehicle's mass must not depend on which `drivetrain` variant
             // realizes its wheels. Ungated: this is a one-shot mass-property
             // correction per chassis, not a force, so it must land even while
             // physics is held — a rover that spawns during a cinematic hold is
             // still the same rover.
-            .add_systems(FixedUpdate, fold_proxy_wheel_mass)
+            .add_systems(FixedUpdate, fold_raycast_wheel_mass)
             // A raycast suspension is a physics model without Avian colliders.
             // Publish its support geometry through the physics contract once the
             // USD-to-mobility projection has created the wheel entities. Terrain
             // consumes only that contract and never inspects mobility types.
-            .add_systems(Update, publish_raycast_support_footprints)
+            .add_systems(
+                Update,
+                publish_raycast_support_footprints
+                    .in_set(lunco_physics::PhysicsSupportSet::Publish),
+            )
+            // Raycast ownership is topology-driven. Refresh each caster's
+            // exclusion set when its caster is admitted or Avian's joint graph
+            // changes, so articulated suspensions ignore every collider in
+            // their connected assembly rather than only the immediate parent.
+            .add_systems(
+                Update,
+                sync_raycast_assembly_filters.after(publish_raycast_support_footprints),
+            )
             // G5 rocker-bogie differential — separate set: it doesn't read the
             // control ports, only couples two rocker hinges. Idle unless a
             // `DifferentialCoupling` exists, so it's free for every other vehicle.
@@ -256,11 +268,57 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
-/// Marks a chassis whose proxy wheels' mass has already been folded in, so the
-/// fold happens exactly once per vehicle.
+/// Keep a raycast suspension out of the complete joint-connected assembly.
+///
+/// `RayCaster`'s filter is expressed in collider entities, while the Avian
+/// joint graph is expressed in rigid-body entities. The projection below is
+/// the one generic bridge between those two existing runtime products: first
+/// resolve the carrier's connected bodies from Avian's graph, then add every
+/// collider owned by one of those bodies to the caster's filter. No vehicle
+/// path, name, or drivetrain variant participates in the result.
+fn sync_raycast_assembly_filters(
+    joints: Option<Res<avian3d::dynamics::solver::joint_graph::JointGraph>>,
+    mut raycasters: Query<(&ChildOf, &mut RayCaster), With<WheelRaycast>>,
+    colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
+) {
+    let graph_changed = joints.as_ref().is_some_and(Res::is_changed);
+    for (parent, mut raycaster) in &mut raycasters {
+        if !graph_changed && !raycaster.is_added() {
+            continue;
+        }
+
+        let carrier = parent.parent();
+        let mut members = HashSet::from([carrier]);
+        let mut pending = vec![carrier];
+        if let Some(joints) = joints.as_deref() {
+            while let Some(body) = pending.pop() {
+                for connected in joints.bodies_attached_to(body) {
+                    if members.insert(connected) {
+                        pending.push(connected);
+                    }
+                }
+            }
+        }
+
+        raycaster.query_filter.excluded_entities.clear();
+        raycaster
+            .query_filter
+            .excluded_entities
+            .extend(members.iter().copied());
+        for (collider, owner) in &colliders {
+            let body = owner.map_or(collider, |owner| owner.body);
+            if members.contains(&body) {
+                raycaster.query_filter.excluded_entities.insert(collider);
+            }
+        }
+    }
+}
+
+/// Marks a rigid-body carrier whose raycast-wheel mass has already been folded
+/// in, so the fold happens exactly once per carrier.
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
-pub struct ProxyWheelMassFolded;
+pub struct RaycastWheelMassFolded;
 
 /// Resolve a wheel's authored carrier chain to the vehicle's actuator owner.
 ///
@@ -355,14 +413,14 @@ fn publish_raycast_support_footprints(
     }
 }
 
-/// Fold the proxy wheels' authored mass onto the chassis rigid body.
+/// Fold each raycast wheel's authored mass onto its immediate rigid-body carrier.
 ///
 /// A ROVER'S MASS IS A PROPERTY OF THE ROVER, NOT OF HOW ITS WHEELS ARE REALIZED.
-/// The same `skid_rover.usda` composed with `drivetrain = physical` masses 1100 kg
-/// (chassis 1000 + four 25 kg wheel bodies avian integrates in their own right),
-/// and with `drivetrain = raycast` massed 1000 kg — the proxy wheels are kinematic,
-/// so avian never saw their authored `physxVehicleWheel:mass` at all. One variant switch
-/// silently changed the vehicle by 10%, which no variant is allowed to do.
+/// A raycast wheel is not an Avian rigid body, but its authored mass still belongs
+/// to the body that carries its suspension and tire force. For a direct wheel that
+/// body is the vehicle root; for an articulated wheel it is the rocker or bogie.
+/// Folding all descendant wheels into the actuator root made the force owner and
+/// mass owner disagree, destabilising the articulated linkage under drive.
 ///
 /// That 10% is directly a speed error: `physxRigidBody:linearDamping` drags `c·m·v`,
 /// so terminal speed goes as `F/(c·m)`.
@@ -374,16 +432,13 @@ fn publish_raycast_support_footprints(
 /// twin at 51° — a 9% gap turned into 29%. Each wheel therefore contributes its
 /// parallel-axis term `m·d²` at its authored mount as well as its mass.
 ///
-/// SO DOES THE CENTRE OF MASS. Four 25 kg wheels hanging at `y = −0.65` genuinely
-/// pull the vehicle's combined centre of mass down — on the physical rover avian
-/// does that arithmetic for free, because those wheels are bodies. Folding only the
-/// mass and the tensor left the raycast rover's mass acting at the chassis centre,
-/// ~5.9 cm too high, and CoM HEIGHT IS LOAD TRANSFER: it is exactly the quantity a
-/// turning comparison is sensitive to. The fold therefore also writes the combined
-/// centre of mass — chassis plus the proxy wheels as point masses at their mounts.
+/// SO DOES THE CENTRE OF MASS. A wheel's mass is combined with its carrier's
+/// existing mass at the wheel's carrier-local mount. This preserves load transfer
+/// and articulated reaction torques instead of moving every wheel's mass to the
+/// vehicle root.
 ///
 /// The tensor is taken about that COMBINED centre, not about the body origin: the
-/// authored `physics:diagonalInertia` is about the chassis centre, so once the
+/// authored `physics:diagonalInertia` is about the carrier centre, so once the
 /// combined centre moves, both the chassis and each wheel contribute a parallel-axis
 /// term measured from the NEW centre. (The correction is small but not nothing —
 /// ~3.8 kg·m² on a ~1220 kg·m² skid-rover `I_x`, 0.3% — and getting it right costs
@@ -403,79 +458,67 @@ fn publish_raycast_support_footprints(
 /// so the marker is what makes the write survive the next recompute — and the
 /// recompute is what publishes it to `ComputedCenterOfMass`, which is the component
 /// the solver integrates against.
-pub fn fold_proxy_wheel_mass(
+pub fn fold_raycast_wheel_mass(
     mut commands: Commands,
-    q_chassis: Query<Entity, (With<ActuatorPorts>, Without<ProxyWheelMassFolded>)>,
-    q_roots: Query<Entity, With<ActuatorPorts>>,
-    q_wheels: Query<(Entity, &WheelRaycast)>,
-    q_parents: Query<&ChildOf>,
-    q_transforms: Query<&Transform>,
-    mut q_body: Query<(
-        &mut Mass,
-        Option<&mut AngularInertia>,
-        Has<NoAutoAngularInertia>,
-        Option<&CenterOfMass>,
-        Option<&ComputedCenterOfMass>,
-    )>,
+    q_wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
+    mut q_body: Query<
+        (
+            &mut Mass,
+            Option<&mut AngularInertia>,
+            Has<NoAutoAngularInertia>,
+            Option<&CenterOfMass>,
+            Option<&ComputedCenterOfMass>,
+        ),
+        Without<RaycastWheelMassFolded>,
+    >,
 ) {
-    let mut wheels_by_chassis = std::collections::HashMap::<Entity, Vec<(f64, DVec3)>>::new();
-    for (wheel_entity, wheel) in q_wheels.iter() {
-        let Some((chassis, local)) =
-            actuator_root_and_local_transform(wheel_entity, &q_roots, &q_parents, &q_transforms)
-        else {
-            continue;
-        };
-        wheels_by_chassis
-            .entry(chassis)
+    let mut wheels_by_carrier = std::collections::HashMap::<Entity, Vec<(f64, DVec3)>>::new();
+    for (wheel, transform, parent) in q_wheels.iter() {
+        wheels_by_carrier
+            .entry(parent.parent())
             .or_default()
-            .push((wheel.mass, local.translation.as_dvec3()));
+            .push((wheel.mass, transform.translation.as_dvec3()));
     }
 
-    for chassis in q_chassis.iter() {
+    for (carrier, wheels) in wheels_by_carrier {
         // The wheel's `mass` arrives from `WheelParams::apply_to_raycast`, which may
         // land a frame after the component itself. A wheel still reading zero means
         // the vehicle is not ready to fold and must be left for a later tick — never
-        // folded at half its mass. Descendant wheels are grouped by their actuator
-        // owner, so articulated rocker/bogie wheels receive the same mass treatment
-        // as direct-child wheels.
-        let Some(wheels) = wheels_by_chassis.get(&chassis) else {
-            continue;
-        };
+        // folded at half its real mass.
         let pending = wheels.iter().any(|(mass, _)| *mass <= 0.0);
         if pending || wheels.is_empty() {
             continue;
         }
 
         let Ok((mut mass, inertia, inertia_authored, com_override, com_computed)) =
-            q_body.get_mut(chassis)
+            q_body.get_mut(carrier)
         else {
             continue;
         };
 
-        // The chassis's own centre, BEFORE the wheels are folded in. An authored
+        // The carrier's own centre, BEFORE the wheels are folded in. An authored
         // `physics:centerOfMass` arrives as the override and wins (six_wheel_rover
         // authors one); otherwise avian's collider-derived value is the truth.
-        let com_chassis = com_override
+        let com_carrier = com_override
             .map(|c| c.0.as_dvec3())
             .or_else(|| com_computed.map(|c| c.0))
             .unwrap_or(DVec3::ZERO);
-        let chassis_mass = mass.0 as f64;
+        let carrier_mass = mass.0 as f64;
 
         let added: f64 = wheels.iter().map(|(m, _)| *m).sum();
-        let total = chassis_mass + added;
+        let total = carrier_mass + added;
         mass.0 += added as f32;
 
-        // Combined centre of mass: chassis at its own centre, each proxy wheel a
-        // point mass at its mount. On a symmetric rover the x/z terms cancel and
-        // only the drop survives — which is the whole point.
+        // Combined centre of mass: carrier at its own centre, each proxy wheel a
+        // point mass at its carrier-local mount.
         let com_new = if total > 0.0 {
-            let mut moment = com_chassis * chassis_mass;
-            for (m, d) in wheels {
+            let mut moment = com_carrier * carrier_mass;
+            for (m, d) in &wheels {
                 moment += *d * *m;
             }
             moment / total
         } else {
-            com_chassis
+            com_carrier
         };
 
         if let (Some(mut inertia), true) = (inertia, inertia_authored) {
@@ -490,17 +533,17 @@ pub fn fold_proxy_wheel_mass(
                     m * (d.x * d.x + d.y * d.y),
                 )
             };
-            let mut principal = perp(chassis_mass, com_chassis - com_new);
-            for (m, d) in wheels {
+            let mut principal = perp(carrier_mass, com_carrier - com_new);
+            for (m, d) in &wheels {
                 principal += perp(*m, *d - com_new);
             }
             inertia.principal += principal.as_vec3();
         }
 
         commands
-            .entity(chassis)
+            .entity(carrier)
             .try_insert((CenterOfMass(com_new.as_vec3()), NoAutoCenterOfMass));
-        commands.entity(chassis).try_insert(ProxyWheelMassFolded);
+        commands.entity(carrier).try_insert(RaycastWheelMassFolded);
     }
 }
 
@@ -1950,18 +1993,18 @@ fn scripted_drive_mix(
 }
 
 #[cfg(test)]
-mod proxy_wheel_mass_tests {
+mod raycast_wheel_mass_tests {
     //! The vehicle must mass the same whichever `drivetrain` variant realizes its
-    //! wheels. See [`fold_proxy_wheel_mass`].
+    //! wheels. See [`fold_raycast_wheel_mass`].
     use super::*;
 
-    /// Build a skid-rover-shaped chassis with four proxy wheels at the mounts
+    /// Build a skid-rover-shaped chassis with four raycast wheels at the mounts
     /// `skid_rover.usda` authors — (±1.0, −0.65, ±1.225), the SAME mounts the
     /// `physical` variant's wheel bodies get, because the wheel prim is the axle
     /// in both realizations. Runs the fold; returns (mass, inertia, centre of mass).
     fn fold_a_four_wheel_rover(wheel_mass: f64) -> (f32, Vec3, Vec3) {
         let mut app = App::new();
-        app.add_systems(Update, fold_proxy_wheel_mass);
+        app.add_systems(Update, fold_raycast_wheel_mass);
 
         let chassis = app
             .world_mut()
@@ -2095,7 +2138,7 @@ mod proxy_wheel_mass_tests {
     #[test]
     fn folding_twice_does_not_double_the_rover() {
         let mut app = App::new();
-        app.add_systems(Update, fold_proxy_wheel_mass);
+        app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
             .spawn((ActuatorPorts::default(), Mass(1000.0)))
@@ -2119,7 +2162,7 @@ mod proxy_wheel_mass_tests {
     #[test]
     fn articulated_wheel_mass_is_found_through_its_carrier() {
         let mut app = App::new();
-        app.add_systems(Update, fold_proxy_wheel_mass);
+        app.add_systems(Update, fold_raycast_wheel_mass);
         let chassis = app
             .world_mut()
             .spawn((ActuatorPorts::default(), Mass(1000.0)))
@@ -2127,6 +2170,7 @@ mod proxy_wheel_mass_tests {
         let rocker = app
             .world_mut()
             .spawn((
+                Mass(50.0),
                 Transform::from_translation(Vec3::new(0.0, -0.2, 0.5)),
                 ChildOf(chassis),
             ))
@@ -2142,15 +2186,17 @@ mod proxy_wheel_mass_tests {
 
         app.update();
 
-        let mass = app.world().get::<Mass>(chassis).unwrap().0;
+        let chassis_mass = app.world().get::<Mass>(chassis).unwrap().0;
+        let rocker_mass = app.world().get::<Mass>(rocker).unwrap().0;
         let com = app
             .world()
-            .get::<CenterOfMass>(chassis)
+            .get::<CenterOfMass>(rocker)
             .map(|c| c.0)
             .unwrap_or(Vec3::ZERO);
-        assert!((mass - 1025.0).abs() < 1e-3);
-        assert!((com.y + 0.85 * 25.0 / 1025.0).abs() < 1e-6);
-        assert!((com.z + 0.7 * 25.0 / 1025.0).abs() < 1e-6);
+        assert!((chassis_mass - 1000.0).abs() < 1e-3);
+        assert!((rocker_mass - 75.0).abs() < 1e-3);
+        assert!((com.y + 0.65 * 25.0 / 75.0).abs() < 1e-6);
+        assert!((com.z + 1.2 * 25.0 / 75.0).abs() < 1e-6);
     }
 }
 

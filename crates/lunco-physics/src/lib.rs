@@ -36,6 +36,7 @@ use avian3d::prelude::{
     AngularVelocity, CustomPositionIntegration, LinearVelocity, Physics, PhysicsTime, Position,
     RigidBody, Rotation,
 };
+use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::time::Duration;
@@ -49,7 +50,7 @@ pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
-pub use support::{PhysicsSupportContact, PhysicsSupportFootprint};
+pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet};
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
 ///
@@ -423,6 +424,20 @@ impl Plugin for PhysicsGatePlugin {
         pose::register_spatial_query_providers(app);
         app.register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()
+            .configure_sets(
+                Update,
+                (
+                    PhysicsSupportSet::Publish,
+                    PhysicsSupportSet::Apply,
+                    PhysicsSupportSet::Consume,
+                )
+                    .chain(),
+            )
+            // Publishing uses Commands because support footprints are attached to
+            // entities created by other runtime projections. Make that deferred
+            // boundary explicit in the shared contract so consumers always read
+            // the published component in the same Update schedule.
+            .add_systems(Update, ApplyDeferred.in_set(PhysicsSupportSet::Apply))
             // Physics owns both readiness and the solver-resolution contract.
             // Avian's resource is the single runtime reader; no app-level
             // duplicate or target-specific selection is permitted.

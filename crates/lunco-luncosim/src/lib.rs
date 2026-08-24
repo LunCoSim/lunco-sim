@@ -3161,6 +3161,13 @@ fn release_ground_activation_hold(
     mut holds: ResMut<lunco_physics::PhysicsHolds>,
     terrain_providers: Query<(), With<lunco_terrain_surface::TerrainColliderRing>>,
     needs_ground_settle: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    support_footprints: Query<
+        (),
+        (
+            With<lunco_core::NeedsGroundSettle>,
+            With<lunco_physics::PhysicsSupportFootprint>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     match activation.0 {
@@ -3168,12 +3175,12 @@ fn release_ground_activation_hold(
             activation.0 = 1;
             holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
         }
-        // `NeedsGroundSettle` is a request to the DEM terrain service. A scene
-        // with only authored/static collision has no such service and therefore
-        // no placement transaction to wait for; its authored pose is the
-        // physical initial condition. Retire the unclaimed requests at this
-        // assembly boundary instead of leaking an impossible world hold.
-        1 if terrain_providers.is_empty() => {
+        // A flat authored/static scene has no DEM provider, but a published
+        // support footprint still owns a one-shot placement transaction. Keep
+        // the activation hold until that generic physics contract consumes its
+        // marker. Only requests with no support contract are unclaimed and may
+        // be retired here.
+        1 if terrain_providers.is_empty() && support_footprints.is_empty() => {
             for entity in &needs_ground_settle {
                 commands
                     .entity(entity)

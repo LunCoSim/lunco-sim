@@ -495,6 +495,10 @@ mod tests {
             .world_mut()
             .spawn(lunco_core::architecture::Port { value: 1.0 })
             .id();
+        let speed_port = app
+            .world_mut()
+            .spawn(lunco_core::architecture::Port { value: 0.0 })
+            .id();
         let chassis = app
             .world_mut()
             .spawn((
@@ -513,7 +517,7 @@ mod tests {
                 WheelRaycast {
                     suspension_port: port,
                     drive_port: port,
-                    speed_port: port,
+                    speed_port,
                     steer_port: port,
                     steer_axis: DVec3::Y,
                     wheel_radius: 0.4,
@@ -551,19 +555,27 @@ mod tests {
             .id();
 
         app.add_systems(FixedUpdate, update_wheel_spin);
-        // Ten seconds of full throttle with nothing to grip.
+        // Ten seconds of full throttle with nothing to grip. Drive the fixed
+        // schedule explicitly so this test owns the exact number of integration
+        // steps rather than depending on the app's outer time accumulator.
         for _ in 0..600 {
-            app.update();
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(Duration::from_secs_f64(1.0 / 60.0));
+            app.world_mut().run_schedule(FixedUpdate);
         }
         let w = app
             .world()
             .get::<WheelRaycast>(wheel)
             .unwrap()
             .spin_velocity;
-        let expected = 1.0 / 0.45;
+        let dt: f64 = 1.0 / 60.0;
+        let inertia: f64 = 0.5 * 25.0 * 0.4 * 0.4;
+        let equilibrium: f64 = 1.0 / 0.45;
+        let expected = equilibrium * (1.0 - (1.0 - 0.45 * dt / inertia).powi(600));
         assert!(
             (w - expected).abs() < 0.05,
-            "free wheel must reach the torque/bearing equilibrium: {w} vs {expected}"
+            "free wheel must follow the torque/bearing integration law: {w} vs {expected}"
         );
     }
 
