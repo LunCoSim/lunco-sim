@@ -2860,23 +2860,31 @@ pub fn rewire_usd_connections(
                     continue;
                 }
 
-                let (end_element, end_connector) =
-                    if view.has_api_schema(&sink_sdf, "LunCoWheelAPI") {
-                        match sink_conn {
-                            "drive" => wheel_endpoints.map(|endpoints| {
-                                (endpoints.p_drive, lunco_cosim::PORT_NAME.to_string())
-                            }),
-                            "steer" => wheel_endpoints.map(|endpoints| {
-                                (endpoints.p_steer, lunco_cosim::PORT_NAME.to_string())
-                            }),
-                            _ => None,
-                        }
-                        .unwrap_or_else(|| (entity, sink_conn.to_string()))
-                    } else {
+                let wheel_sink = view.has_api_schema(&sink_sdf, "LunCoWheelAPI");
+                let end = if wheel_sink {
+                    match sink_conn {
+                        "drive" => wheel_endpoints.map(|endpoints| {
+                            (endpoints.p_drive, lunco_cosim::PORT_NAME.to_string())
+                        }),
+                        "steer" => wheel_endpoints.map(|endpoints| {
+                            (endpoints.p_steer, lunco_cosim::PORT_NAME.to_string())
+                        }),
+                        _ => None,
+                    }
+                } else {
+                    Some(
                         forward
                             .clone()
-                            .unwrap_or_else(|| (entity, sink_conn.to_string()))
-                    };
+                            .unwrap_or_else(|| (entity, sink_conn.to_string())),
+                    )
+                };
+                let Some((end_element, end_connector)) = end else {
+                    debug!(
+                        "[usd-cosim] deferring wheel {}.{} until its authored physical endpoint exists",
+                        prim_path.path, sink_conn
+                    );
+                    continue;
+                };
                 commands.spawn((
                     SimConnection {
                         start_element,
