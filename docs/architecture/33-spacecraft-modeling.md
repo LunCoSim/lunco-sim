@@ -209,9 +209,10 @@ reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realiz
   There are no wheel defaults in Rust — `WheelRaycast::default()` is all zeros and
   exists only as the struct-update base the reader immediately overwrites.
 - **One authored network for both realizations.** `DCMotor.mo`, `GearRatio.mo`,
-  and `AvianShaft.mo` solve the electrical and rotational state once. The
-  physical wheel and raycast wheel both consume the resulting shaft torque and
-  measured shaft speed; no Rust motor curve or copied speed clamp exists.
+  and `AvianShaft.mo` solve the electrical and rotational state once. `AvianShaft` receives the
+  measured wheel speed, `GearRatio` derives the motor-side speed through its authored reduction,
+  and both the physical wheel and raycast wheel consume the resulting shaft torque; no Rust motor
+  curve or copied speed clamp exists.
 - **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
   physical property of the hub in its own right; the old derivation from the drive
   torque is deleted.

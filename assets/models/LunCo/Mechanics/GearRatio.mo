@@ -27,7 +27,9 @@ model GearRatio
 
   Flange flange_a "Fast side — the motor";
   Flange flange_b "Slow side — the wheel";
+  output Real speed_a(unit="rad/s") "Fast-side shaft speed";
 equation
   flange_a.phi = ratio * flange_b.phi;
   flange_b.tau = -max(-max_output_torque, min(max_output_torque, ratio * eta * flange_a.tau));
+  speed_a = der(flange_a.phi);
 end GearRatio;

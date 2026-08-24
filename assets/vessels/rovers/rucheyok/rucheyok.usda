@@ -295,7 +295,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FL>
+        float inputs:speed.connect = </Rucheyok/Gearbox_FL.outputs:speed_a>
     }
 
     def Xform "TorqueSource_FL" (
@@ -327,7 +327,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FR>
+        float inputs:speed.connect = </Rucheyok/Gearbox_FR.outputs:speed_a>
     }
 
 
@@ -360,7 +360,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RL>
+        float inputs:speed.connect = </Rucheyok/Gearbox_RL.outputs:speed_a>
     }
 
 
@@ -393,7 +393,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RR>
+        float inputs:speed.connect = </Rucheyok/Gearbox_RR.outputs:speed_a>
     }
 
 

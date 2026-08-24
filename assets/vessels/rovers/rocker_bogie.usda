@@ -448,7 +448,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FL>
+            float inputs:speed.connect = </RockerBogie/RockerL/Gearbox_FL.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
 
             # ── SPEED KNOB ────────────────────────────────────────────────────
@@ -605,7 +605,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_FR>
+            float inputs:speed.connect = </RockerBogie/RockerR/Gearbox_FR.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             # 12.9 km/h measured — see Motor_FL. All six must
             # agree, or the fast wheels drag the slow ones and every wheel scrubs.
@@ -793,7 +793,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_ML>
+            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_ML.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
             float inputs:no_load_speed = 2400.0
         }
@@ -828,7 +828,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RL>
+            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_RL.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
             float inputs:no_load_speed = 2400.0
         }
@@ -1010,7 +1010,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_MR>
+            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_MR.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             float inputs:no_load_speed = 2400.0
         }
@@ -1045,7 +1045,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (-0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/Electrical.inputs:shaft_speed_RR>
+            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_RR.outputs:speed_a>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             float inputs:no_load_speed = 2400.0
         }

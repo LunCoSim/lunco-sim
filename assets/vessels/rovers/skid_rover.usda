@@ -282,7 +282,7 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (-0.3, -0.35, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SkidRover.outputs:drive_left>
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_FL>
+        float inputs:speed.connect = </SkidRover/Gearbox_FL.outputs:speed_a>
     }
 
     def Xform "TorqueSource_FL" (
@@ -313,7 +313,7 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (0.3, -0.35, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SkidRover.outputs:drive_right>
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_FR>
+        float inputs:speed.connect = </SkidRover/Gearbox_FR.outputs:speed_a>
     }
 
 
@@ -345,7 +345,7 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (-0.3, -0.35, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SkidRover.outputs:drive_left>
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_RL>
+        float inputs:speed.connect = </SkidRover/Gearbox_RL.outputs:speed_a>
     }
 
 
@@ -377,7 +377,7 @@ def Xform "SkidRover" (
         double3 xformOp:translate = (0.3, -0.35, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SkidRover.outputs:drive_right>
-        float inputs:speed.connect = </SkidRover/Electrical.inputs:shaft_speed_RR>
+        float inputs:speed.connect = </SkidRover/Gearbox_RR.outputs:speed_a>
     }
 
 

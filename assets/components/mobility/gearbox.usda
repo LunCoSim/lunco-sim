@@ -29,6 +29,7 @@ def Xform "Gearbox" (
     float inputs:ratio = 200.0
     float inputs:eta = 0.85
     float inputs:max_output_torque = 400.0
+    float outputs:speed_a
 
     custom token connectors:flange_a
     custom token connectors:flange_b

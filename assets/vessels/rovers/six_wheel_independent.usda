@@ -311,7 +311,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w0>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L0>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L0.outputs:speed_a>
     }
 
     def Xform "TorqueSource_L0" (
@@ -342,7 +342,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w1>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L1>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L1.outputs:speed_a>
     }
 
 
@@ -374,7 +374,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w2>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L2>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L2.outputs:speed_a>
     }
 
 
@@ -406,7 +406,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w3>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R0>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R0.outputs:speed_a>
     }
 
 
@@ -438,7 +438,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w4>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R1>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R1.outputs:speed_a>
     }
 
 
@@ -470,7 +470,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w5>
-        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R2>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R2.outputs:speed_a>
     }
 
 
