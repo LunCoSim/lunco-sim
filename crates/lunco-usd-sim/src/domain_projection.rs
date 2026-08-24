@@ -1912,9 +1912,16 @@ pub fn project_domain_islands(
             // what turns a promise the DAE does not keep into one durable,
             // actionable error instead of an island that steps and publishes
             // nothing.
+            // The generated wrapper is the sole runtime participant. Its
+            // complete parsed Modelica interface is therefore the port
+            // contract, including promoted member outputs that authored USD
+            // telemetry and causal connections address through the wrapper.
+            // Using only the network boundary here leaves valid member ports
+            // absent from `DeclaredOutputPorts` until the first solver result,
+            // turning loading order into a permanent missing-port diagnostic.
             UsdModelicaPortContract::new(
                 synthesized.inputs.iter().cloned(),
-                synthesized.outputs.iter().cloned(),
+                interface.outputs.iter().cloned(),
             ),
             crate::cosim::UsdModelicaSchedule {
                 communication_period_secs: synthesized.communication_period_secs,

@@ -880,18 +880,6 @@ fn project_usd_telemetry(
                 ))
             })();
             if let Ok((parameter, display_name)) = declaration {
-                // A generated domain root is projected one Update before its
-                // Modelica wrapper can publish SimComponent. Publish the typed
-                // lifecycle fact before the first FixedUpdate so the sampler
-                // waits for the authoritative port surface instead of
-                // converting loading order into a missing-port fault. Direct
-                // Modelica programs publish their SimComponent in the same
-                // prim-processing pass and do not need this hold.
-                if view.has_api_schema(&path, "LunCoDomainSynthesisAPI") {
-                    commands
-                        .entity(entity)
-                        .try_insert(lunco_core::PortSurfacePending);
-                }
                 let (target, source) = match &parameter.source {
                     ChannelSource::Port(port) => {
                         let key = (
@@ -918,6 +906,12 @@ fn project_usd_telemetry(
                             if members.contains(&key.2) {
                                 continue;
                             }
+                            // The authored target is not a member of a
+                            // generated domain, so this is a standalone
+                            // Modelica port. Keep the direct USD target and
+                            // port identity; generated members take the
+                            // wrapper mapping above and unresolved members
+                            // remain pending until that mapping is published.
                             (parameter.target, parameter.source.clone())
                         }
                     }
@@ -5215,6 +5209,35 @@ mod tests {
             SimStatus::Compiling,
             "declared but unsolved is `Compiling` — outputs are not trustworthy yet"
         );
+    }
+
+    #[test]
+    fn generated_wrapper_declares_member_outputs_before_first_snapshot() {
+        let model = dispatched_but_unsolved();
+        let contract = UsdModelicaPortContract::new(
+            ["drive_left".to_string(), "drive_right".to_string()],
+            [
+                "soc".to_string(),
+                "__member_Rig_x2f_Battery_terminal_voltage_v".to_string(),
+            ],
+        );
+        let mut app = App::new();
+        let entity = app
+            .world_mut()
+            .spawn((UsdSourcedCosim, model, contract))
+            .id();
+        app.add_systems(Update, wrap_modelica_into_simcomponent);
+
+        app.update();
+
+        let declared = app
+            .world()
+            .get::<DeclaredOutputPorts>(entity)
+            .expect("the generated wrapper must publish its complete output contract");
+        assert!(declared.names.contains("soc"));
+        assert!(declared
+            .names
+            .contains("__member_Rig_x2f_Battery_terminal_voltage_v"));
     }
 
     #[test]

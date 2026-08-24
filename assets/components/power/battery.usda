@@ -62,7 +62,7 @@ def Xform "Battery" (
         token lunco:telemetry:name = "power.battery_soc"
         token lunco:telemetry:unit = "%"
         string lunco:telemetry:description = "Live battery state of charge in percent."
-        rel lunco:telemetry:target = </Battery>
+        rel lunco:telemetry:target = <..>
     }
     def Scope "NetPowerTelemetry" (
         prepend apiSchemas = ["LunCoTelemetryAPI"]
@@ -74,7 +74,7 @@ def Xform "Battery" (
         token lunco:telemetry:name = "power.battery_net"
         token lunco:telemetry:unit = "W"
         string lunco:telemetry:description = "Solved net power into the battery; positive charges and negative discharges."
-        rel lunco:telemetry:target = </Battery>
+        rel lunco:telemetry:target = <..>
     }
     def Scope "ChargePowerTelemetry" (
         prepend apiSchemas = ["LunCoTelemetryAPI"]
@@ -86,7 +86,7 @@ def Xform "Battery" (
         token lunco:telemetry:name = "power.battery_charge"
         token lunco:telemetry:unit = "W"
         string lunco:telemetry:description = "Solved power currently stored in the battery."
-        rel lunco:telemetry:target = </Battery>
+        rel lunco:telemetry:target = <..>
     }
     def Scope "DischargePowerTelemetry" (
         prepend apiSchemas = ["LunCoTelemetryAPI"]
@@ -98,7 +98,7 @@ def Xform "Battery" (
         token lunco:telemetry:name = "power.battery_discharge"
         token lunco:telemetry:unit = "W"
         string lunco:telemetry:description = "Solved power currently supplied by the battery to the vehicle."
-        rel lunco:telemetry:target = </Battery>
+        rel lunco:telemetry:target = <..>
     }
 
     # --- Telemetry ---

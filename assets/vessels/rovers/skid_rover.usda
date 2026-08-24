@@ -108,6 +108,18 @@ def Xform "SkidRover" (
     {
     }
 
+    # The reusable battery is an assembly child, not a variant-local arc. The
+    # power variant selects whether its reference contributes to the composed
+    # vehicle, while keeping the component's internal authored relationships in
+    # one stable namespace for every realization.
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    )
+    {
+        double3 xformOp:translate = (0, 0.55, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
     def Cube "Chassis" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
@@ -426,6 +438,9 @@ def Xform "SkidRover" (
     # battery and motor loads together.
     variantSet "power" = {
         "infinite" {
+            over "Battery" (
+                delete references = @lunco://components/power/battery.usda@</Battery>
+            ) {}
             def Xform "PowerSource" (
                 prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
             )
@@ -472,16 +487,6 @@ def Xform "SkidRover" (
         }
 
         "battery" {
-            def Xform "Battery" (
-                prepend references = @lunco://components/power/battery.usda@</Battery>
-            )
-            {
-                # Chassis top is y=0.30; the battery case is 0.5 m tall after
-                # its authored scale, so its centre must be y=0.55 to sit on
-                # the chassis without visual or collider interpenetration.
-                double3 xformOp:translate = (0, 0.55, 0)
-                uniform token[] xformOpOrder = ["xformOp:translate"]
-            }
             def Scope "Electrical" (
                 prepend apiSchemas = ["CollectionAPI:components"]
             )
@@ -489,6 +494,9 @@ def Xform "SkidRover" (
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
                 float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
+                float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
+                float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
+                float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>
