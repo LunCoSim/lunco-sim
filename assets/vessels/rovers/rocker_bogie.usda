@@ -1184,11 +1184,16 @@ def Xform "RockerBogie" (
     # Each wheel authors its `inputs:drive` connection to one of the two drive-bank
     # ports. The channel assignment is USD topology, not an index heuristic.
 
-    # The battery is an assembly child, not a variant-local arc. Keeping the
-    # component reference in the stable chassis namespace preserves the
-    # referenced component's authored relative telemetry relationships through
-    # every power realization. The infinite variant removes this reference;
-    # the battery realization retains it.
+    # --- Power: does driving cost anything ----------------------------------
+    # ORTHOGONAL to the drive law: `infinite` deactivates the finite-storage
+    # component, while `battery` keeps it active and composes the reusable
+    # six-motor electrical network into one Modelica DAE. The reference stays
+    # in the stable chassis namespace so USD remaps its authored relationships
+    # through every power realization.
+    #
+    # Same two sets `six_wheel_rover.usda` carries, because the difficulty tiers
+    # (`variants/rover_*.usda`) sit on THIS chassis now and a tier must not lose a
+    # capability by changing suspension.
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
@@ -1196,21 +1201,11 @@ def Xform "RockerBogie" (
         double3 xformOp:translate = (0, 0.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # --- Power: does driving cost anything ----------------------------------
-    # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
-    # is today's drive-forever behavior. `battery` composes the reusable
-    # six-motor electrical network; its connected island is projected to one
-    # Modelica DAE.
-    #
-    # Same two sets `six_wheel_rover.usda` carries, because the difficulty tiers
-    # (`variants/rover_*.usda`) sit on THIS chassis now and a tier must not lose a
-    # capability by changing suspension.
     variantSet "power" = {
         "infinite" {
-            over "Battery" (
-                delete references = @lunco://components/power/battery.usda@</Battery>
-            ) {}
+            over "Battery" {
+                bool active = false
+            }
             def Xform "PowerSource" (
                 prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
             )

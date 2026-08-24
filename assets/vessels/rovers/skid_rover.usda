@@ -109,9 +109,9 @@ def Xform "SkidRover" (
     }
 
     # The reusable battery is an assembly child, not a variant-local arc. The
-    # power variant selects whether its reference contributes to the composed
-    # vehicle, while keeping the component's internal authored relationships in
-    # one stable namespace for every realization.
+    # infinite power realization deactivates this authored component, while the
+    # finite realization keeps it active. Its stable namespace preserves the
+    # component's authored relationships through both selections.
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
@@ -520,9 +520,9 @@ def Xform "SkidRover" (
     # battery and motor loads together.
     variantSet "power" = {
         "infinite" {
-            over "Battery" (
-                delete references = @lunco://components/power/battery.usda@</Battery>
-            ) {}
+            over "Battery" {
+                bool active = false
+            }
             def Xform "PowerSource" (
                 prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
             )

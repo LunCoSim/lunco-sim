@@ -75,7 +75,7 @@ struct UsdTelemetryProjected;
 /// Runtime index for the one-time USD telemetry projection.
 ///
 /// The declaration projector is triggered by scene/projection changes and by
-/// unprojected prims.  Its wrapper-port and domain-member indexes therefore
+/// unprojected prims.  Its wrapper-port index therefore
 /// belong to the projection lifecycle, not to the per-frame query.  Keeping
 /// them here makes the steady state an empty gated system instead of a full
 /// ECS scan and a set of cloned USD-path keys every Update.
@@ -90,8 +90,6 @@ struct UsdTelemetryProjectionIndex {
         ),
         (Entity, String),
     >,
-    network_members_by_stage:
-        HashMap<bevy::asset::AssetId<UsdStageAsset>, std::collections::HashSet<String>>,
     entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     dirty: bool,
@@ -139,7 +137,6 @@ fn telemetry_projection_needed(
 
 fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
     index.generated_outputs.clear();
-    index.network_members_by_stage.clear();
     index.entities_by_path.clear();
     index.generated_entities_by_path.clear();
     index.dirty = true;
@@ -678,6 +675,7 @@ fn project_usd_telemetry(
         Option<&lunco_core::GlobalEntityId>,
         Has<UsdInstanceRoot>,
     )>,
+    pending_interface_query: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
     pending_query: Query<
         (
             Entity,
@@ -707,7 +705,6 @@ fn project_usd_telemetry(
     };
     if index.dirty {
         index.generated_outputs.clear();
-        index.network_members_by_stage.clear();
         index.entities_by_path.clear();
         index.generated_entities_by_path.clear();
         for (entity, prim_path, generated) in &entity_query {
@@ -891,27 +888,20 @@ fn project_usd_telemetry(
                         if let Some((wrapper, runtime_port)) = index.generated_outputs.get(&key) {
                             (Some(*wrapper), ChannelSource::Port(runtime_port.clone()))
                         } else {
-                            // A domain member has no standalone port surface.
-                            // Leave its declaration unprojected until the
-                            // generated wrapper publishes the topology map;
-                            // marking it now would permanently cache the wrong
-                            // member target and produce a false missing-port
-                            // warning during the compile window.
-                            let members = index
-                                .network_members_by_stage
-                                .entry(prim_path.stage_handle.id())
-                                .or_insert_with(|| {
-                                    lunco_usd_bevy::program::modelica_network_member_paths(&view)
-                                });
-                            if members.contains(&key.2) {
+                            // A USD Modelica member has no standalone port
+                            // surface. Leave its declaration unprojected
+                            // until the generated wrapper publishes the
+                            // topology map; otherwise it would bind to the
+                            // transform/member entity and emit a false
+                            // missing-port warning during the compile window.
+                            // This is a lifecycle contract, not a domain-name
+                            // classifier: standalone programs become direct
+                            // targets once their own SimComponent surface is
+                            // published, while generated members become
+                            // wrapper targets through `generated_outputs`.
+                            if pending_interface_query.contains(target_entity) {
                                 continue;
                             }
-                            // The authored target is not a member of a
-                            // generated domain, so this is a standalone
-                            // Modelica port. Keep the direct USD target and
-                            // port identity; generated members take the
-                            // wrapper mapping above and unresolved members
-                            // remain pending until that mapping is published.
                             (parameter.target, parameter.source.clone())
                         }
                     }
