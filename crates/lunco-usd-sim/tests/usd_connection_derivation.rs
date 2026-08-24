@@ -506,6 +506,29 @@ fn battery_rover_composes_authored_wheel_drive_connections() {
 }
 
 #[test]
+fn battery_telemetry_target_is_a_modelica_network_member() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/battery_empty_actuator.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose battery_empty_actuator.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
+    assert!(
+        members.contains("/BatteryEmptyActuator/Rover/Battery"),
+        "the composed battery must remain owned by the generated electrical network"
+    );
+
+    let declaration = SdfPath::new("/BatteryEmptyActuator/Rover/Battery/DischargePowerTelemetry")
+        .expect("telemetry declaration path");
+    assert_eq!(
+        view.rel_targets(&declaration, "lunco:telemetry:target"),
+        vec![SdfPath::new("/BatteryEmptyActuator/Rover/Battery").unwrap()],
+        "the authored telemetry declaration must target the composed battery prim"
+    );
+}
+
+#[test]
 fn actuator_collection_keeps_physical_force_wires_outside_modelica_membership() {
     let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/vessels/landers/descent_lander.usda");

@@ -51,7 +51,7 @@ catalog's labels still use `display_channel_label`.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`, and its optional `lunco:telemetry:target` relationship lets a declaration prim observe any composed prim without adding a domain-specific channel component |
+| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`, and its optional `lunco:telemetry:target` relationship lets a declaration prim observe any composed prim without adding a domain-specific channel component. A referenced component with internal telemetry relationships keeps its reference on the stable assembly prim; a variant removes that reference with `delete references` rather than relocating it into the variant. |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |

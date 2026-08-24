@@ -1183,6 +1183,19 @@ def Xform "RockerBogie" (
     # Each wheel authors its `inputs:drive` connection to one of the two drive-bank
     # ports. The channel assignment is USD topology, not an index heuristic.
 
+    # The battery is an assembly child, not a variant-local arc. Keeping the
+    # component reference in the stable chassis namespace preserves the
+    # referenced component's authored relative telemetry relationships through
+    # every power realization. The infinite variant removes this reference;
+    # the battery realization retains it.
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    )
+    {
+        double3 xformOp:translate = (0, 0.35, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
     # is today's drive-forever behavior. `battery` composes the reusable
@@ -1194,6 +1207,9 @@ def Xform "RockerBogie" (
     # capability by changing suspension.
     variantSet "power" = {
         "infinite" {
+            over "Battery" (
+                delete references = @lunco://components/power/battery.usda@</Battery>
+            ) {}
             def Xform "PowerSource" (
                 prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
             )
@@ -1278,13 +1294,6 @@ def Xform "RockerBogie" (
         }
 
         "battery" {
-            def Xform "Battery" (
-                prepend references = @lunco://components/power/battery.usda@</Battery>
-            )
-            {
-                double3 xformOp:translate = (0, 0.35, 0)
-                uniform token[] xformOpOrder = ["xformOp:translate"]
-            }
             def Scope "Electrical" (
                 prepend apiSchemas = ["CollectionAPI:components"]
             )

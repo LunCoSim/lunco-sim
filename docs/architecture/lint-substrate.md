@@ -144,12 +144,13 @@ and booms as broken mechanisms; the fact is now "resolves to no body", and
 is the USD spelling of Modelica's `Pin p`, and a catalogue part cannot know
 whether the vehicle composing it will wire that pin —
 `components/mobility/motor.usda` declares its pin unconditionally, and
-`rocker_bogie.usda` wires it only in the `power = "battery"` variant, while every
-rover ships defaulting to `power = "infinite"`, which authors no `Electrical`
-collection at all. Reading the declaration as the fault reported 314 errors, one
-per motor per rover, none of them fixable without either wiring a battery the
-scene deliberately omits or stripping the pin from the part that owns it. The
-facts now carry `connectors` **and** `connected`, and the rule reads the second.
+`rocker_bogie.usda` binds it to the selected power source in each `power` variant;
+the default `power = "infinite"` realization uses an authored ideal source, while
+the finite realization uses the stable battery assembly child. Reading the
+declaration as the fault reported 314 errors, one per motor per rover, none of
+them fixable without either wiring a source the scene deliberately omits or
+stripping the pin from the part that owns it. The facts now carry `connectors`
+**and** `connected`, and the rule reads the second.
 
 The authoring rule underneath all of it: **hierarchy is namespace, a joint is
 attachment.** An internal part is mass + geometry with no body; a part that must
