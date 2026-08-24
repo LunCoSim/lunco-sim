@@ -1041,6 +1041,7 @@ const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// [`MODELICA_SOURCE`](crate::status_bus::MODELICA_SOURCE).
 const VISUAL_BUSY_SOURCES: &[&str] = &[
     crate::status_bus::TERRAIN_SOURCE,
+    crate::status_bus::TERRAIN_BUILD_SOURCE,
     crate::status_bus::SCENE_SOURCE,
     crate::status_bus::DOME_SOURCE,
     crate::status_bus::MODELICA_SOURCE,

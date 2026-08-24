@@ -126,6 +126,7 @@ impl Plugin for UsdTerrainPlugin {
         app.add_systems(
             Update,
             (
+                release_pending_dem_datasets.before(UsdTerrainSet::Bridge),
                 bridge_usd_dem_terrain
                     .in_set(UsdTerrainSet::Bridge)
                     .run_if(terrain_schema_is_valid),
@@ -178,6 +179,18 @@ fn terrain_schema_is_valid(status: Res<TerrainSchemaStatus>) -> bool {
 /// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
 #[derive(Component)]
 struct DemBridged;
+
+/// A DEM prim whose declared delivered artifact is not installed yet.
+///
+/// The USD projection remains mounted, but it does not create a terrain build
+/// request until the dataset registry reports the processed artifact ready.
+/// This keeps a user-declined download out of the build watchdog and lets the
+/// same authored prim resume through the normal projection path after an
+/// explicit download completes.
+#[derive(Component)]
+struct DemDatasetPending {
+    dataset_id: String,
+}
 
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
 /// child layer prim's attributes through the stage reader, so terrain-surface's layer
@@ -1531,7 +1544,7 @@ fn on_obstacle_spec_authored(
 }
 
 fn bridge_usd_dem_terrain(
-    q: Query<(Entity, &lunco_usd::UsdPrimPath), Without<DemBridged>>,
+    q: Query<(Entity, &lunco_usd::UsdPrimPath), (Without<DemBridged>, Without<DemDatasetPending>)>,
     // Live terrains already realized from a PRIOR instantiation pass. A stage
     // recompose (runtime-overlay restore, doc-backing) hands every prim a fresh
     // ECS entity; the previous pass's terrain survives long enough to double
@@ -1549,6 +1562,7 @@ fn bridge_usd_dem_terrain(
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
+    datasets: Res<lunco_assets::datasets::DatasetRegistry>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
@@ -1633,6 +1647,7 @@ fn bridge_usd_dem_terrain(
             scene_root.as_deref(),
             scene_twin_name.as_deref(),
             &twins,
+            &datasets,
             &registry,
             obstacle_spec.bypass_change_detection(),
             &mut commands,
@@ -1654,6 +1669,7 @@ fn bridge_dem_prim_read(
     scene_root: Option<&std::path::Path>,
     scene_twin_name: Option<&str>,
     twins: &lunco_assets::twin_source::TwinRoots,
+    datasets: &lunco_assets::datasets::DatasetRegistry,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -1699,7 +1715,48 @@ fn bridge_dem_prim_read(
         );
         return;
     };
-    // Resolve the DEM source to a byte-readable URI.
+
+    // A Twin manifest is the authoritative declaration for a downloadable
+    // delivered artifact. Wait for its scan before deciding whether this
+    // source is available; an unscanned scope means "not known yet", not
+    // "missing". Once scanned, a declared-but-uninstalled product becomes a
+    // pending projection rather than a fake terrain build that can sit at 10%
+    // until its watchdog fires.
+    if let Some(name) = scene_twin_name {
+        let Some(root) = twins.root_of(name) else {
+            warn!("[usd-dem] cannot resolve Twin root for '{name}'");
+            return;
+        };
+        let scope = lunco_assets::datasets::DatasetScope::Twin {
+            name: name.to_owned(),
+            root,
+        };
+        if !datasets.is_scope_scanned(&scope) {
+            commands.entity(entity).try_remove::<DemBridged>();
+            return;
+        }
+        if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(&rel)) {
+            if !entry.state.is_installed() {
+                let detail = format!(
+                    "Terrain data '{}' is not installed. Choose Download in Twin resources to continue.",
+                    entry.name
+                );
+                commands.entity(entity).try_insert(DemDatasetPending {
+                    dataset_id: entry.id.clone(),
+                });
+                commands.trigger(lunco_core::TelemetryEvent {
+                    name: "DEM_DATASET_REQUIRED".to_owned(),
+                    source: 0,
+                    severity: lunco_core::Severity::Warning,
+                    data: lunco_core::TelemetryValue::String(detail),
+                    timestamp: 0.0,
+                });
+                return;
+            }
+        }
+    }
+
+    // Resolve the processed DEM site directory through the asset boundary.
     //
     // `demSource` is relative to the root the SCENE came from. Named Twin scenes
     // resolve through `TwinRoots`, whose canonical resolver checks the authored
@@ -1711,7 +1768,7 @@ fn bridge_dem_prim_read(
     // an unrelated local twin open, which would capture the lookup and resolve a
     // downloaded twin's DEM under the wrong root.
     //
-    // Native yields an absolute path; the web autoload path stays
+    // Native yields an absolute directory path; the web autoload path stays
     // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
     let Some(root) = scene_root else {
         warn!("[usd-dem] cannot resolve DEM source '{rel}': the scene has no root directory");
@@ -1721,7 +1778,7 @@ fn bridge_dem_prim_read(
     // authored tree before the Twin's `.cache`. A direct `root.join(rel)` would
     // miss downloaded Twin assets and force every scene to author `.cache`.
     let uri = if let Some(name) = scene_twin_name {
-        let Some(path) = twins.resolve_file(name, std::path::Path::new(&rel)) else {
+        let Some(path) = twins.resolve_directory(name, std::path::Path::new(&rel)) else {
             warn!("[usd-dem] cannot resolve DEM source '{rel}' for Twin '{name}'");
             return;
         };
@@ -1881,6 +1938,24 @@ fn bridge_dem_prim_read(
          lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path
     );
+}
+
+/// Re-open a DEM projection after its declared delivered artifact becomes
+/// installed. The bridge owns the projection marker; the dataset registry owns
+/// the download, so this small lifecycle boundary is the only coupling needed
+/// between them.
+fn release_pending_dem_datasets(
+    datasets: Res<lunco_assets::datasets::DatasetRegistry>,
+    pending: Query<(Entity, &DemDatasetPending)>,
+    mut commands: Commands,
+) {
+    for (entity, pending) in &pending {
+        if datasets.installed(&pending.dataset_id).is_some() {
+            commands
+                .entity(entity)
+                .try_remove::<(DemDatasetPending, DemBridged)>();
+        }
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -2094,6 +2169,7 @@ def Xform \"Traverse\"\n{\n}\n"
                 Some(std::path::Path::new("/twin/moonbase")),
                 None,
                 &lunco_assets::twin_source::TwinRoots::default(),
+                &lunco_assets::datasets::DatasetRegistry::default(),
                 &registry,
                 &mut spec,
                 &mut commands,

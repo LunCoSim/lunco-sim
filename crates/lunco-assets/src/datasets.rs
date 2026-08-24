@@ -64,7 +64,7 @@ pub enum DatasetState {
         /// Name of the manifest-declared processing pipeline.
         kind: String,
     },
-    /// The file is on disk at its declared destination.
+    /// The delivered artifact is complete at its declared destination.
     Installed,
     /// The last download attempt failed; the message is the reason.
     Failed(String),
@@ -150,7 +150,7 @@ pub struct DatasetEntry {
     pub recommended: bool,
     /// Where the file lands once downloaded.
     pub path: PathBuf,
-    /// The file this dataset actually DELIVERS, relative to its scope root:
+    /// The artifact this dataset actually DELIVERS, relative to its scope root:
     /// the `[*.process]` output when the declaration has one, else the download
     /// itself.
     ///
@@ -180,34 +180,39 @@ pub struct DatasetEntry {
 /// served by the host over HTTP rather than installed. So a web build reports
 /// every dataset missing, which is the honest answer — it cannot install one
 /// either.
-fn present(path: &std::path::Path) -> bool {
+fn artifact_present(spec: &AssetEntry, path: &std::path::Path) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = spec;
         let _ = path;
         false
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        path.exists()
+        if spec.process.is_some() {
+            crate::process::processed_output_present(path)
+        } else {
+            path.is_file()
+        }
     }
 }
 
 impl DatasetEntry {
-    /// Absolute path of the delivered file: the first
+    /// Absolute path of the delivered artifact: the first
     /// [`read root`](DatasetScope::read_roots) that actually holds it, else the
     /// root a download would write it to.
     pub fn artifact_path(&self) -> PathBuf {
         let roots = self.scope.read_roots();
         for root in &roots {
             let candidate = root.join(&self.artifact_rel);
-            if present(&candidate) {
+            if artifact_present(&self.spec, &candidate) {
                 return candidate;
             }
         }
         self.scope.dest_root().join(&self.artifact_rel)
     }
 
-    /// The asset URI the delivered file loads at — `lunco://<rel>` for an
+    /// The asset URI the delivered artifact loads at — `lunco://<rel>` for an
     /// engine dataset, `twin://<name>/<rel>` for a Twin's.
     ///
     /// Both schemes already search their own cache before falling through, so
@@ -428,7 +433,7 @@ impl DatasetRegistry {
             let installed = scope
                 .read_roots()
                 .iter()
-                .any(|r| present(&r.join(&artifact_rel)));
+                .any(|r| artifact_present(&entry, &r.join(&artifact_rel)));
             self.entries.push(DatasetEntry {
                 id,
                 key: key.clone(),
@@ -513,7 +518,7 @@ impl DatasetRegistry {
             ) {
                 continue;
             }
-            e.state = if present(&e.artifact_path()) {
+            e.state = if artifact_present(&e.spec, &e.artifact_path()) {
                 DatasetState::Installed
             } else if let DatasetState::Failed(msg) = &e.state {
                 DatasetState::Failed(msg.clone())
@@ -533,12 +538,40 @@ impl DatasetRegistry {
         &self.scanned_scopes
     }
 
+    /// Whether a scope has completed its manifest scan for this lifecycle.
+    ///
+    /// Consumers that project a declared resource must wait for this boundary:
+    /// an empty manifest is still a valid answer, while consulting the registry
+    /// before the scan would confuse "not discovered yet" with "not declared".
+    pub fn is_scope_scanned(&self, scope: &DatasetScope) -> bool {
+        self.scanned_scopes.iter().any(|scanned| scanned == scope)
+    }
+
+    /// Find the declaration that delivers one scope-relative artifact.
+    ///
+    /// The artifact path, rather than a domain-specific dataset key, is the
+    /// contract shared with consumers. This lets a USD source wait for a
+    /// processed product without learning the manifest's group or inventing a
+    /// second terrain-resource identity.
+    pub fn declared_artifact(
+        &self,
+        scope: &DatasetScope,
+        relative: &std::path::Path,
+    ) -> Option<&DatasetEntry> {
+        let relative = crate::asset_path::slashed(relative)
+            .trim_start_matches('/')
+            .to_owned();
+        self.entries
+            .iter()
+            .find(|entry| &entry.scope == scope && entry.artifact_rel == relative)
+    }
+
     /// State of one globally identified dataset.
     pub fn state(&self, id: &str) -> Option<&DatasetState> {
         self.entries.iter().find(|e| e.id == id).map(|e| &e.state)
     }
 
-    /// On-disk path of the file one dataset DELIVERS (its `[*.process]` output
+    /// On-disk path of the artifact one dataset DELIVERS (its `[*.process]` output
     /// where it has one), or `None` if nothing declared that key. This is the
     /// path a consumer loads; [`DatasetEntry::path`] is where the download
     /// landed, which for a derived product is not the same file.
@@ -1033,6 +1066,7 @@ impl Plugin for DatasetsPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const MANIFEST: &str = r#"
 [demo_vectors]
@@ -1145,6 +1179,35 @@ output = "textures/earthlike.png"
         assert_eq!(e.artifact_uri(), "lunco://textures/earthlike.png");
     }
 
+    #[test]
+    fn a_processed_directory_requires_its_completion_stamp() {
+        const DERIVED: &str = r#"
+[luna2]
+name = "Luna 2 terrain"
+url = "https://example.invalid/luna2.tif"
+dest = "terrain/luna2/source.tif"
+
+[luna2.process]
+kind = "dem"
+output = "terrain/luna2"
+"#;
+        let twin = tempfile::tempdir().expect("temporary Twin root");
+        let scope = DatasetScope::Twin {
+            name: "luna2".into(),
+            root: twin.path().to_path_buf(),
+        };
+        let output = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
+        std::fs::create_dir_all(&output).expect("partial processed directory");
+
+        let mut registry = DatasetRegistry::default();
+        assert_eq!(registry.register_scoped(DERIVED, "luna2", scope), 1);
+        assert_eq!(registry.entries()[0].state, DatasetState::Missing);
+
+        std::fs::write(output.join(".bakekey"), "complete").expect("completion stamp");
+        registry.refresh_installed_state();
+        assert_eq!(registry.entries()[0].state, DatasetState::Installed);
+    }
+
     /// A Twin's dataset addresses through `twin://`, so bytes that arrived
     /// inside the folder — an archive someone sent, `.cache` included — load
     /// through the same URI a freshly downloaded copy would.
@@ -1160,6 +1223,24 @@ output = "textures/earthlike.png"
             r.entries()[0].artifact_uri(),
             "twin://school/ephemeris/demo.csv"
         );
+    }
+
+    #[test]
+    fn declared_artifact_matches_the_scope_relative_delivery_path() {
+        let mut r = DatasetRegistry::default();
+        let scope = DatasetScope::Twin {
+            name: "school".into(),
+            root: PathBuf::from("/twins/school"),
+        };
+        assert_eq!(r.register_scoped(MANIFEST, "school", scope.clone()), 1);
+        assert_eq!(
+            r.declared_artifact(&scope, Path::new("ephemeris/demo.csv"))
+                .map(|entry| entry.key.as_str()),
+            Some("demo_vectors")
+        );
+        assert!(r
+            .declared_artifact(&scope, Path::new("terrain/missing"))
+            .is_none());
     }
 
     /// Read roots are wider than the write root, and ordered: a copy packed

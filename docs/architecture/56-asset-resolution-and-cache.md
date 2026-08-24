@@ -34,6 +34,12 @@ unit, then (for a source checkout) its staging cache, then the shared pool**. So
 address without any authored file naming a cache, and a file the author
 committed always wins over a materialised copy of it.
 
+The same boundary resolves delivered directories. A processed dataset such as
+a DEM site may produce a directory containing several runtime products; its
+consumer asks `TwinRoots::resolve_directory` (or the corresponding dataset
+artifact URI) and never reconstructs a `.cache` path or treats the directory as
+a single file.
+
 ### The unit you ship carries its own data
 
 `assets/.cache` and `<twin>/.cache` are the same idea applied to the two things
@@ -175,10 +181,11 @@ what is declared, what is on disk, and what a user has asked for.
 
 **The app never reaches the network on its own.** Launch, scene load and twin
 open must not open a connection. `DatasetRegistry::request(key)` is the only
-call in the engine that authorises traffic, and it is wired to a click
-(Settings ▸ Downloadable data). This is a rule about trust, not bandwidth: a
-simulator that phones home when you open a file has to be *explained* rather
-than *read*.
+call in the engine that authorises traffic. For an interactive Twin, a missing
+declared dataset is presented at Twin open in a consent window with an explicit
+selection; the same request remains available in Settings ▸ Downloadable data
+and the Twin inspector. This is a rule about trust, not bandwidth: a simulator
+that phones home when you open a file has to be *explained* rather than *read*.
 
 That rule is also why fetching lives in this crate and nowhere else. A domain
 crate owning its own downloader inevitably grows a "just fetch it at startup"
@@ -308,11 +315,13 @@ registry probes read roots, so the packed case reports *installed* and binds on
 the first frame with no network. A body with no imagery renders its own colour
 (ocean blue, regolith grey) — a complete appearance, not a degraded one.
 
-A derived dataset is only ready when its **process output** exists, not its
-download, so an in-app fetch runs the `[*.process]` step before reporting
-installed. Otherwise the UI says "installed" while every consumer still finds
-nothing — the CLI's two-command flow (`download` then `process`) has no
-equivalent second command in the app.
+A derived dataset is only ready when its **completed process output** exists,
+not its download. The processor's `.bakekey` completion stamp is part of that
+contract, including for directory products such as DEM sites; a partial output
+directory is still missing. An in-app fetch therefore runs the `[*.process]`
+step before reporting installed. Otherwise the UI says "installed" while every
+consumer still finds nothing — the CLI's two-command flow (`download` then
+`process`) has no equivalent second command in the app.
 
 `lunco:body:albedoMap` is not a new mechanism — it is what terrain already does
 (`demSource = @terrain/apollo15@`), what materials do (`lunco:material:shader`),

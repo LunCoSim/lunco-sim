@@ -128,8 +128,8 @@ scene changes the selection intent, while exactly **one** system writes
 (`is_active = bound-camera && visible`) and relocates the big_space
 `FloatingOrigin` onto the active camera. A missing, stale, or projectionless
 explicit request produces no active camera and a visible status diagnostic; it
-never selects the first camera as a repair or silently substitutes a different
-authored camera.
+never selects the first authored camera as a repair or silently substitutes a
+different authored camera.
 
 ### 6.3 Switching
 
@@ -145,8 +145,14 @@ The viewport has explicit presentation ownership:
   `ResumeCameraDirector` returns control to the authored track.
 
 Names match a full USD prim path or its leaf. A scene with no authored window
-camera remains a deliberate no-camera scene; it does not silently create or
-borrow one.
+camera receives one explicit windowed presentation policy after scene
+projection settles: `luncosim` creates a
+`PresentationFallbackCameraSettings`-framed camera, routes it through
+`ActivateCamera::fallback`, and records `CameraSelectionOwner::Fallback`.
+This is an engine-owned presentation default for an omitted camera, not a USD
+scene fact. The Camera menu and status bus identify it, and the camera-selection
+owner retires it and selects the authored camera when one appears. Headless
+hosts do not create this window-only presentation entity.
 
 ### 6.4 Rover-mounted cameras
 

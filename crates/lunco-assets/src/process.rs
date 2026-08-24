@@ -389,6 +389,17 @@ fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
     }
 }
 
+/// Whether a processed artifact is complete enough for a consumer to load.
+///
+/// The output itself may be a file or a directory (`dem` delivers a terrain
+/// site folder). In both cases the stamp is written only after the processor
+/// has completed successfully, so a partial output cannot be advertised as
+/// installed merely because its path exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn processed_output_present(output_path: &Path) -> bool {
+    (output_path.is_file() || output_path.is_dir()) && bake_stamp_path(output_path).is_file()
+}
+
 /// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a
 /// 908 MB mosaic hashes in seconds vs decoding to ~2 GB of f64), the full
 /// serialized [`ProcessConfig`], and [`PIPELINE_VERSION`]. Deliberately not
