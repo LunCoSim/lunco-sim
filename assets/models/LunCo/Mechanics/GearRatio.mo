@@ -17,17 +17,17 @@ within LunCo.Mechanics;
 // leave Rust at all.
 //
 // Efficiency is applied on the torque path only: a gearbox loses force to friction, not
-// revolutions. The lost power is real and should reach a HeatPort once the driveline is
-// composed thermally; until then it is dropped, which is the honest approximation and is
-// noted here so it is not mistaken for a closed energy balance.
+// revolutions. The authored output rating is a physical torque limit, not a runtime
+// fallback or a Rust-side estimate.
 model GearRatio
   extends LunCo.Icons.Mechanics;
   parameter Real ratio = 1200.0 "Reduction ratio, driving:driven (>1 reduces speed)";
   parameter Real eta = 0.85 "Mechanical efficiency, 0..1";
+  parameter Real max_output_torque = 400.0 "Output-shaft torque rating, N.m";
 
   Flange flange_a "Fast side — the motor";
   Flange flange_b "Slow side — the wheel";
 equation
   flange_a.phi = ratio * flange_b.phi;
-  flange_b.tau = -ratio * eta * flange_a.tau;
+  flange_b.tau = -max(-max_output_torque, min(max_output_torque, ratio * eta * flange_a.tau));
 end GearRatio;

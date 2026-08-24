@@ -43,6 +43,8 @@ fn mechanics_members_compile() {
     compiles("GearRatio", "Mechanics/GearRatio.mo");
     compiles("BearingFriction", "Mechanics/BearingFriction.mo");
     compiles("Torque", "Mechanics/Torque.mo");
+    compiles("AvianShaft", "Mechanics/AvianShaft.mo");
+    compiles("DCMotor", "Electrical/DCMotor.mo");
 }
 
 /// The point of the whole package: rotor — gearbox — wheel, joined at flanges,
@@ -129,7 +131,8 @@ fn gearbox_loses_torque_to_friction_but_never_revolutions() {
         "the speed relation is exact — a gearbox does not lose revolutions"
     );
     assert!(
-        gear.contains("flange_b.tau = -ratio * eta * flange_a.tau"),
-        "efficiency applies on the torque path only, and the sign is the reaction"
+        gear.contains("ratio * eta * flange_a.tau")
+            && gear.contains("flange_b.tau = -max("),
+        "efficiency applies on the torque path and the authored output rating limits it"
     );
 }
