@@ -24,6 +24,11 @@ use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
 const EDGE: f32 = 2000.0;
 
+// This regression preserves the high-resolution numerical reproduction that
+// originally exposed the bridge/interpolation ordering bug. It is deliberately
+// separate from the production eight-substep contract.
+const INTERPOLATION_REPRODUCTION_SUBSTEPS: u32 = 64;
+
 fn shell(app: &mut App) -> Entity {
     let root = app
         .world_mut()
@@ -72,7 +77,7 @@ fn make_app() -> App {
         10_000,
     )));
     app.insert_resource(Gravity(Vector::ZERO));
-    app.insert_resource(SubstepCount(64));
+    app.insert_resource(SubstepCount(INTERPOLATION_REPRODUCTION_SUBSTEPS));
     app.finish();
     app.cleanup();
     app

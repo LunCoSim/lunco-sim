@@ -128,6 +128,11 @@ cargo run --bin lunica      # Modelica workbench
   impls contributed by domain plugins, reading the active Twin from
   `WorkspaceResource`.
 
+The workbench derives `egui::Visuals` once per `Theme` revision and shares
+that snapshot with every panel surface. Panel render paths should consume the
+active style or theme tokens; they must not rebuild a full visuals palette per
+frame.
+
 ## Not yet built
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /

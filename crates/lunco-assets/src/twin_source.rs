@@ -156,6 +156,29 @@ pub(crate) fn resolve_twin_relative_directory(root: &Path, relative: &Path) -> O
 }
 
 impl TwinRoots {
+    /// Register the asset authority for an opened workspace Twin.
+    ///
+    /// The workspace event remains the normal lifecycle trigger, but startup
+    /// composition can admit a Twin and immediately request its default scene
+    /// in the same observer dispatch. Exposing this operation on the asset
+    /// owner lets that composition root establish the `twin://` authority
+    /// before any domain observer resolves the scene; repeated registration is
+    /// idempotent for the same root.
+    pub fn register_twin(&self, twin: &lunco_twin::Twin) -> String {
+        let name = twin
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.name.clone())
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                twin.root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "twin".to_string());
+        self.register(name, twin.root.clone())
+    }
+
     fn clear_overlays_for_names(&self, names: &[String]) {
         if let Ok(mut overlays) = self.overlays.write() {
             overlays.retain(|path, _| {

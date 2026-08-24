@@ -3407,8 +3407,8 @@ fn setup_physical_wheel(
     // the chassis weight — it rings the pitch/roll mode down for 15-20 s after
     // the scene's 5 m spawn drop, can't be damped harder (high damping_ratio
     // diverges), and its effective tuning shifts with substep count. The fix for
-    // *vertical* travel is therefore the rigid axle below + `SubstepCount(32)` at
-    // the app; joint rovers are rigid-axle. See `project_physical_rover_suspension`.
+    // vertical travel is therefore the rigid axle below plus the app's
+    // authoritative physics substep configuration; joint rovers are rigid-axle.
     //
     // Steering is a yaw of the front wheel about the vertical. A physical
     // steering KNUCKLE (an intermediate body on a second revolute) was tried and
@@ -3427,8 +3427,8 @@ fn setup_physical_wheel(
     // carries the rover into an arc — geometric Ackermann through one constraint.
     //
     // (A spring suspension was also rejected — avian's joint SpringDamper is
-    // fragile bearing the chassis weight; the fix for vertical travel is the rigid
-    // axle + `SubstepCount(32)`. See `project_physical_rover_suspension`.)
+    // fragile bearing the chassis weight; the rigid axle remains the authored
+    // suspension load path.)
 
     // The joint starts with the authored motor model disabled. MotorActuator is
     // the sole owner of its velocity-motor drive and evaluates the same
