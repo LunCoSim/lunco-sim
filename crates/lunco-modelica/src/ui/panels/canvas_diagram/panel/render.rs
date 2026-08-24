@@ -48,6 +48,12 @@ pub(crate) fn render_diagram_canvas(
         &mut state.phase_log,
     );
 
+    // Fit only after Canvas::ui has allocated its real response rectangle.
+    // This is shared by initial projection, explicit FitCanvas, and
+    // pulse-driven focus requests; keeping one consumer prevents each caller
+    // from inventing a different viewport estimate.
+    apply_pending_fit(state, render_tab_id, active_doc, response.rect, ui.ctx());
+
     let gesture_down = response.is_pointer_button_down_on();
     let mut gesture = ctx
         .resource::<crate::ui::wasm_autosave::IsGestureActive>()
@@ -345,6 +351,36 @@ pub(crate) fn render_diagram_canvas(
             .join(" ");
         bevy::log::warn!("[CanvasDiagram] slow-frame phases (total={frame_ms:.1}ms): {breakdown}");
     }
+}
+
+fn apply_pending_fit(
+    state: &mut CanvasDiagramState,
+    render_tab_id: Option<crate::model_tabs_types::TabId>,
+    active_doc: Option<lunco_doc::DocumentId>,
+    widget_rect: egui::Rect,
+    egui_ctx: &egui::Context,
+) {
+    let docstate = state.get_mut_for_render(render_tab_id, active_doc);
+    if !docstate.pending_fit || docstate.projection_task.is_some() {
+        return;
+    }
+    let Some(world_rect) = docstate.canvas.scene.bounds() else {
+        return;
+    };
+    let screen_rect = lunco_canvas::Rect::from_min_max(
+        lunco_canvas::Pos::new(widget_rect.min.x, widget_rect.min.y),
+        lunco_canvas::Pos::new(
+            widget_rect.max.x.max(widget_rect.min.x + 1.0),
+            widget_rect.max.y.max(widget_rect.min.y + 1.0),
+        ),
+    );
+    let (center, zoom) = docstate
+        .canvas
+        .viewport
+        .fit_values(world_rect, screen_rect, 40.0);
+    docstate.canvas.viewport.set_target(center, zoom);
+    docstate.pending_fit = false;
+    egui_ctx.request_repaint();
 }
 
 /// Human-readable one-liner for the in-diagram MSL-loading hint, e.g.

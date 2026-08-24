@@ -20,11 +20,12 @@ use rhai::{Dynamic, Engine, Scope, AST};
 
 /// A hook implemented by a rhai function.
 ///
-/// Holds its own `Engine` + compiled `AST` and the initial `Scope` produced by
-/// running the script's top-level once (so `const` tables the function reads are
-/// available). Each [`invoke`](ScriptHook::invoke) runs with a **fresh clone** of
-/// that initial scope — no state carries across calls, which is what makes a hook
-/// safe to mark `deterministic` for convergent use (merge).
+/// Holds its own `Engine` + compiled `AST` with literal top-level constants
+/// propagated into callable functions, and the initial `Scope` produced by
+/// running the script's top-level once. Each [`invoke`](ScriptHook::invoke) runs
+/// with a **fresh clone** of that initial scope — no state carries across calls,
+/// which is what makes a hook safe to mark `deterministic` for convergent use
+/// (merge).
 pub struct RhaiHook {
     engine: Engine,
     ast: AST,
@@ -69,8 +70,9 @@ impl RhaiHook {
         // TODO(multiplayer): apply `rhai_limits::apply(&mut engine)` when hook
         // sources can arrive from a peer; RBAC on hook registration is deferred
         // with it. See REVIEW-2026-07-19.md finding #4 / FUZZ-8.
-        let ast = engine.compile(source).map_err(|e| e.to_string())?;
-        // Run top-level statements once to populate consts into the base scope.
+        let ast = compile_with_script_consts(&engine, source).map_err(|e| e.to_string())?;
+        // Run top-level statements once to populate runtime state into the
+        // base scope; literal constants are propagated at compile time above.
         let mut scope = Scope::new();
         engine
             .run_ast_with_scope(&mut scope, &ast)
@@ -82,6 +84,25 @@ impl RhaiHook {
             entry: entry.into(),
         })
     }
+}
+
+/// Compile a hook so its literal top-level `const`s are visible inside its
+/// functions. Rhai functions do not close over script scope, and hook calls
+/// intentionally run with `eval_ast(false)`, so executing the top level alone
+/// cannot make those names resolvable. Recompile with the constants in the
+/// compile scope; this is generic hook machinery, not policy-specific logic.
+fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai::ParseError> {
+    let first = engine.compile(source)?;
+    let mut constants = Scope::new();
+    for (name, is_const, value) in first.iter_literal_variables(true, false) {
+        if is_const {
+            constants.push_constant_dynamic(name.to_string(), value);
+        }
+    }
+    if constants.is_empty() {
+        return Ok(first);
+    }
+    engine.compile_with_scope(&constants, source)
 }
 
 impl ScriptHook for RhaiHook {
@@ -203,6 +224,49 @@ mod tests {
         // Symmetric.
         let out = hook.invoke(&[b, a]).unwrap();
         assert_eq!(out.as_i64(), Some(2));
+    }
+
+    #[test]
+    fn function_reads_a_top_level_constant() {
+        let hook = RhaiHook::compile(
+            "const SCALE = 3; fn scale(value) { value * SCALE }",
+            "scale",
+        )
+        .expect("literal policy constants must be available inside hook functions");
+        let out = hook
+            .invoke(&[HookValue::Int(4)])
+            .expect("the hook call must resolve its constant");
+        assert_eq!(out, HookValue::Int(12));
+    }
+
+    #[test]
+    fn prefixed_top_level_constants_are_collected() {
+        let engine = Engine::new();
+        let ast = engine
+            .compile(
+                "const WRENCH_ALLOCATION_ITERATIONS = 64; \
+                 const WRENCH_ICON_BOX_HALF_WIDTH = 92;",
+            )
+            .unwrap();
+        let names: Vec<_> = ast
+            .iter_literal_variables(true, false)
+            .map(|(name, _, _)| name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            ["WRENCH_ALLOCATION_ITERATIONS", "WRENCH_ICON_BOX_HALF_WIDTH"]
+        );
+    }
+
+    #[test]
+    fn helper_function_reads_a_top_level_constant() {
+        let hook = RhaiHook::compile(
+            "const RADIUS = 10; fn helper() { RADIUS * 1 } fn entry() { helper() }",
+            "entry",
+        )
+        .expect("helper functions must receive the same constant propagation");
+        let out = hook.invoke(&[]).expect("entry must call helper");
+        assert_eq!(out, HookValue::Int(10));
     }
 
     #[test]

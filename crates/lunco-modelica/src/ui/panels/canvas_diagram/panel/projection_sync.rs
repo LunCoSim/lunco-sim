@@ -196,29 +196,12 @@ pub(crate) fn poll_and_swap_projection(
                 // fitting, so a reopened diagram looks exactly as at exit.
                 docstate.canvas.viewport.snap_to(saved.center, saved.zoom);
             } else {
-                let physical_zoom = lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
-                if let Some(world_rect) = docstate.canvas.scene.bounds() {
-                    let avail = ui.available_size();
-                    let origin = ui.cursor().min;
-                    let screen = lunco_canvas::Rect::from_min_max(
-                        lunco_canvas::Pos::new(origin.x, origin.y),
-                        lunco_canvas::Pos::new(
-                            origin.x + avail.x.max(1.0),
-                            origin.y + avail.y.max(1.0),
-                        ),
-                    );
-                    let (c, z) = docstate
-                        .canvas
-                        .viewport
-                        .fit_values(world_rect, screen, 40.0);
-                    let z = z.min(physical_zoom * 2.0).max(physical_zoom * 0.5);
-                    docstate.canvas.viewport.snap_to(c, z);
-                } else {
-                    docstate
-                        .canvas
-                        .viewport
-                        .snap_to(lunco_canvas::Pos::new(0.0, 0.0), physical_zoom);
-                }
+                // Defer the first fit until `render_diagram_canvas` has
+                // produced the actual canvas response rectangle. The panel
+                // UI may have a toolbar, split, or overlay above it, so the
+                // pre-widget `Ui::available_size()` is not a reliable camera
+                // viewport.
+                docstate.pending_fit = true;
             }
         }
         ui.ctx().request_repaint();

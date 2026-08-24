@@ -97,8 +97,11 @@ pub fn package_roots() -> Vec<String> {
     let mut roots = MODELS_DIR
         .dirs()
         .filter(|dir| {
-            dir.files()
-                .any(|file| file.path().file_name() == Some("package.mo"))
+            dir.files().any(|file| {
+                file.path()
+                    .file_name()
+                    .is_some_and(|name| name == "package.mo")
+            })
         })
         .filter_map(|dir| dir.path().file_name()?.to_str().map(str::to_owned))
         .collect::<Vec<_>>();
@@ -140,9 +143,11 @@ pub fn package_files_live(package: &str) -> Vec<(String, String)> {
         let mut files = Vec::new();
         read_disk_package_files(&root, &mut files);
         files.sort_by(|a, b| a.0.cmp(&b.0));
-        if !files.is_empty() {
-            return files;
-        }
+        // Once the live tree declares a structured package, it is the
+        // authoritative editable source. Do not silently replace an empty or
+        // unreadable package with stale embedded bytes; the resolver must show
+        // the package as unavailable and surface the asset error.
+        return files;
     }
     package_files(package)
 }
@@ -203,5 +208,18 @@ mod tests {
             sorted
         });
         assert!(roots.iter().any(|root| root == "LunCo"));
+    }
+
+    #[test]
+    fn live_package_inventory_keeps_standard_members_visible() {
+        let roots = package_roots_live();
+        assert!(roots.iter().any(|root| root == "LunCo"));
+        let files = package_files_live("LunCo");
+        assert!(
+            files.iter().any(|(path, source)| {
+                path.ends_with("Electrical/Battery.mo") && source.contains("model Battery")
+            }),
+            "the live or embedded structured package must expose Battery.mo"
+        );
     }
 }

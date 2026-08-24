@@ -816,12 +816,13 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
     // extents — the prior `Placement::at` form squashed every icon
     // back to the default 20×20, undoing the user's authored sizes.
     let mut named_with_size: Vec<(String, f32, f32)> = {
+        let Some(tab_id) = crate::ui::commands::nav::visible_tab_for_doc(world, doc_id) else {
+            return;
+        };
         let Some(state) = world.get_resource::<CanvasDiagramState>() else {
             return;
         };
-        let Some(docstate) = state.get_for_doc(doc_id) else {
-            return;
-        };
+        let docstate = state.get_for_tab(tab_id);
         docstate
             .canvas
             .scene
@@ -888,9 +889,17 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
 /// the drilled-in class name (for MSL drill-in tabs); falls back to
 /// the open document's detected model name.
 pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) -> Option<String> {
-    // `DrilledInClassNames` cache).
-    if let Some(c) = crate::sim_default::drilled_class_for_doc(world, doc_id) {
-        return Some(c);
+    // A document may have both its root tab and drilled-in class tabs. The
+    // focused tab, not HashMap iteration order, owns the class that an edit
+    // command such as Auto-Arrange must mutate.
+    if let Some(tab_id) = crate::ui::commands::nav::visible_tab_for_doc(world, doc_id) {
+        if let Some(class) = world
+            .resource::<crate::model_tabs::ModelTabs>()
+            .get(tab_id)
+            .and_then(|tab| tab.drilled_class.clone())
+        {
+            return Some(class);
+        }
     }
     crate::state::detected_name_for(world, doc_id)
 }

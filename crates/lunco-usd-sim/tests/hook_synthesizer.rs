@@ -48,9 +48,6 @@ fn emit(net) {
     let src = "model " + net.model_name + "\n";
     for input in net.inputs { src += "  input Real " + input + ";\n"; }
     for output in net.boundary_outputs { src += "  output Real " + output.name + ";\n"; }
-    for member_output in net.member_outputs {
-        src += "  output Real " + member_output.alias + ";\n";
-    }
     let unit = net.units[0];
     let first = net.components[0];
     let second = net.components[1];
@@ -103,6 +100,15 @@ fn fixture_classes() -> MemberClasses {
     classes
 }
 
+fn scripting_test_source(name: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scripting/tests")
+        .join(name)
+        .canonicalize()
+        .and_then(std::fs::read_to_string)
+        .unwrap_or_else(|error| panic!("read Rhai synthesis contract {name}: {error}"))
+}
+
 #[test]
 fn a_rhai_policy_can_be_the_synthesizer() {
     lunco_hooks_rhai::register_rhai_hook("synth.test-emit", "emit", POLICY, true)
@@ -131,7 +137,7 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     assert!(
         synthesized
             .source
-            .contains("LunCo.Electrical.Battery Rig_x2f_Battery;"),
+            .contains("LunCo.Electrical.Battery Battery;"),
         "the authored emitter's output is what gets compiled:\n{}",
         synthesized.source
     );
@@ -233,6 +239,89 @@ fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
 }
 
 #[test]
+fn a_policy_cannot_extend_the_authored_boundary_surface() {
+    let policy = POLICY.replace(
+        "let unit = net.units[0];",
+        "src += \"  output Real invented;\\n\";\n    let unit = net.units[0];",
+    );
+    lunco_hooks_rhai::register_rhai_hook("synth.extra-port", "emit", &policy, true)
+        .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "extra-port");
+    let synthesizer = registry.get("extra-port").expect("registered").clone();
+    let stage = stage("electrical_network.usda");
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let errors = synthesizer
+        .synthesize(
+            &stage.view(),
+            &root,
+            "Rig_Electrical_System",
+            &SynthContext {
+                classes: &fixture_classes(),
+            },
+        )
+        .expect_err("a policy cannot invent a root boundary output");
+    assert!(errors[0]
+        .message
+        .contains("root declares undeclared boundary output `invented`"));
+}
+
+#[test]
+fn a_policy_cannot_promote_an_output_missing_from_the_loaded_class() {
+    let policy = POLICY.replace(
+        "#{ source: src, member_output_aliases: [] }",
+        r#"#{ source: src, member_output_aliases: [#{ member_path: "/Rig/Battery", output: "not_real", alias: "bad" }] }"#,
+    );
+    lunco_hooks_rhai::register_rhai_hook("synth.bad-member-output", "emit", &policy, true)
+        .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "bad-member-output");
+    let synthesizer = registry
+        .get("bad-member-output")
+        .expect("registered")
+        .clone();
+    let stage = stage("electrical_network.usda");
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let errors = synthesizer
+        .synthesize(
+            &stage.view(),
+            &root,
+            "Rig_Electrical_System",
+            &SynthContext {
+                classes: &fixture_classes(),
+            },
+        )
+        .expect_err("a policy cannot promote an undeclared Modelica output");
+    assert!(errors[0].message.contains("not a declared member output"));
+}
+
+#[test]
+fn a_policy_cannot_overlap_generated_member_layout_positions() {
+    let policy = POLICY_WITH_PLAN.replace("x: member.x + 40, y: member.y", "x: 0, y: 0");
+    lunco_hooks_rhai::register_rhai_hook("synth.overlap-layout", "emit", &policy, true)
+        .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "overlap-layout");
+    let synthesizer = registry.get("overlap-layout").expect("registered").clone();
+    let stage = stage("electrical_network.usda");
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let errors = synthesizer
+        .synthesize(
+            &stage.view(),
+            &root,
+            "Rig_Electrical_System",
+            &SynthContext {
+                classes: &fixture_classes(),
+            },
+        )
+        .expect_err("overlapping member nodes are not a usable generated diagram");
+    assert!(errors[0].message.contains("places") && errors[0].message.contains("on top of"));
+}
+
+#[test]
 fn facts_describe_the_whole_graph() {
     let stage = stage("electrical_network.usda");
     let view = stage.view();
@@ -307,7 +396,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
     assert!(plan.source.contains("LunCo.Electrical.DCMotor"));
     assert!(plan.source_roots.contains("LunCo"));
     assert!(
-        plan.source.contains("Rig_x2f_Motor.demand = drive_left;"),
+        plan.source.contains("Motor.demand = drive_left;"),
         "an authored external boundary source must become a Modelica equation:\n{}",
         plan.source
     );
@@ -391,4 +480,87 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
             }),
         "native members need placements so their authored icons can render"
     );
+}
+
+#[test]
+fn shipped_acausal_policy_contract_runs_in_rhai() {
+    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+        .expect("the shipped synthesis policy is embedded");
+    let contract = scripting_test_source("test_generated_acausal_policy.rhai");
+    lunco_hooks_rhai::register_rhai_hook(
+        "test.synthesized-acausal-contract",
+        "test_generated_acausal_policy",
+        &format!("{policy}\n{contract}"),
+        true,
+    )
+    .expect("the shipped policy and its Rhai contract compile");
+
+    let stage = stage("electrical_network.usda");
+    let network = read_network(
+        &stage.view(),
+        &SdfPath::new("/Rig/Electrical").unwrap(),
+        &fixture_classes(),
+    )
+    .expect("fixture is readable")
+    .expect("fixture is a network");
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
+    let result = lunco_hooks::invoke("test.synthesized-acausal-contract", &[facts])
+        .expect("Rhai contract hook is registered")
+        .expect("the shipped policy satisfies its Rhai contract");
+    assert_eq!(result, lunco_hooks::HookValue::Bool(true));
+}
+
+#[test]
+fn shipped_actuator_policy_contract_runs_in_rhai() {
+    let policy = lunco_assets::scripting::policy("synth_actuator_wrench")
+        .expect("the shipped actuator policy is embedded");
+    let contract = scripting_test_source("test_generated_actuator_policy.rhai");
+    lunco_hooks_rhai::register_rhai_hook(
+        "test.synthesized-actuator-contract",
+        "test_generated_actuator_policy",
+        &format!("{policy}\n{contract}"),
+        true,
+    )
+    .expect("the shipped actuator policy and its Rhai contract compile");
+
+    let facts = lunco_hooks::HookValue::Map(vec![
+        (
+            "model_name".into(),
+            lunco_hooks::HookValue::str("AttitudeActuation"),
+        ),
+        (
+            "root".into(),
+            lunco_hooks::HookValue::str("/Lander/Actuation"),
+        ),
+        (
+            "inputs".into(),
+            lunco_hooks::HookValue::Array(vec![lunco_hooks::HookValue::str("desired_torque_z")]),
+        ),
+        (
+            "outputs".into(),
+            lunco_hooks::HookValue::Array(vec![lunco_hooks::HookValue::str("valve")]),
+        ),
+        (
+            "actuator_paths".into(),
+            lunco_hooks::HookValue::Array(vec![lunco_hooks::HookValue::str("/Lander/Thruster")]),
+        ),
+        (
+            "wrench_matrix".into(),
+            lunco_hooks::HookValue::Array(
+                (0..6)
+                    .map(|row| {
+                        lunco_hooks::HookValue::Array(vec![lunco_hooks::HookValue::Float(
+                            if row == 5 { 1.0 } else { 0.0 },
+                        )])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("allocation_step".into(), lunco_hooks::HookValue::Float(0.1)),
+        ("actuator_count".into(), lunco_hooks::HookValue::Int(1)),
+    ]);
+    let result = lunco_hooks::invoke("test.synthesized-actuator-contract", &[facts])
+        .expect("Rhai actuator contract hook is registered")
+        .expect("the shipped actuator policy satisfies its Rhai contract");
+    assert_eq!(result, lunco_hooks::HookValue::Bool(true));
 }

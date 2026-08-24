@@ -15,7 +15,7 @@ model DCMotor
 
   input Real demand "Normalized motor demand, -1..1";
 
-  Pin p;
+  Pin p annotation(Placement(transformation(extent={{-110,-10},{-90,10}})));
   // OUTPUT, not a plain `Real`, and that is what makes it observable: the domain
   // projection publishes a member's `output` variables as ports on the island and
   // nothing else, so a bare `Real` is computed every step and readable by no one.

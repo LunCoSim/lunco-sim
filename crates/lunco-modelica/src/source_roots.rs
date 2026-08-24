@@ -12,15 +12,7 @@
 //!   (`AnnotatedRocketStage`, `Balloon`, etc.). Loaded via
 //!   [`crate::models::get_model`].
 //! - **Workspace files**: user-authored `.mo` files in the active
-//!   workspace tree. Populated by a workspace scanner (PR-C).
-//!
-//! ## What this PR (PR-A) does
-//!
-//! Builds the inventory. No loads, no dep scanning, no gate. Every
-//! entry starts in [`LoadState::NotLoaded`]. Subsequent PRs wire in:
-//!  - PR-B: AST dep scanner + pre-compile gate + per-kind loaders.
-//!  - PR-C: workspace file enumeration.
-//!  - PR-D: status-bus mirror, retire `MslRemotePlugin`.
+//!   workspace tree.
 //!
 //! ## Design intent
 //!
@@ -58,9 +50,7 @@ pub enum LoadState {
 
 /// How to actually fetch + install the source for one root.
 ///
-/// The dispatch in [`crate::source_roots`] PR-B's loader will match
-/// on this enum to pick the right strategy. Kept inert here; only
-/// metadata.
+/// The source-root loader matches on this enum to pick the correct strategy.
 #[derive(Debug, Clone)]
 pub enum SourceRootKind {
     /// On-disk Modelica library (MSL or third-party). Loaded via
@@ -91,7 +81,7 @@ pub enum SourceRootKind {
     BundledPackage { root: String },
     /// User `.mo` file in the active workspace. Loaded by reading
     /// the file from disk and installing the resulting document.
-    /// Populated by the PR-C workspace scanner.
+    /// Populated when a workspace document contributes a source root.
     WorkspaceFile {
         /// Absolute path on disk.
         path: PathBuf,
@@ -121,9 +111,10 @@ pub struct SourceRoot {
 ///  - Third-party libraries via
 ///    [`crate::package_tree::scanner::discover_third_party_libs`].
 ///  - Bundled examples via [`crate::models::bundled_models`].
+///  - Structured packages via [`lunco_assets::models::package_roots_live`].
 ///
-/// **Inventory only at this stage** — no loads run until PR-B's
-/// pre-compile gate fires.
+/// Loading remains demand-driven: inventory is cheap, and a root is installed
+/// only when a compile or class lookup actually references it.
 #[derive(Resource, Debug, Default)]
 pub struct SourceRootRegistry {
     /// Map of root id → entry. The dep-scanner looks up qualified-
@@ -390,23 +381,9 @@ fn is_builtin_root(root: &str) -> bool {
 /// the caller logs and lets compile fall through (rumoca will
 /// surface a `unresolved type reference` diagnostic).
 ///
-/// PR-C strategy: this function publishes the source root's
-/// location to the process-wide handle that
-/// [`ModelicaCompiler::new`] consults via `preload_from_global`.
-/// The handle store is a cheap `OnceLock` write; the **actual
-/// parse cost** is paid inside the worker thread on its first
-/// `ModelicaCompiler::new()` call. From the main thread's
-/// perspective this function is microseconds.
-///
-/// Per-kind dispatch:
-/// - [`SourceRootKind::SystemLibrary`] with `cache_subdir == "msl"`
-///   → installs via [`lunco_assets::msl::install_global_msl_sources`].
-///   The existing `MslRemotePlugin` plumbing handles the rest.
-/// - Other system libraries (third-party) and Bundled / WorkspaceFile
-///   → not yet supported; logs a warning and marks `Failed`. Their
-///   compile path will surface the missing-type error from rumoca
-///   the same way it did before PR-C. Adding support for these is
-///   the work of a follow-up PR.
+/// The per-kind dispatch sends either a disk package or an in-memory package
+/// to the worker. The worker owns parsing and session installation; this
+/// function only changes registry state and queues the operation.
 ///
 /// Source tag used for [`lunco_workbench::status_bus::StatusBus`]
 /// progress entries during source-root loads.
@@ -575,8 +552,8 @@ pub fn ensure_loaded(
     // (Steps of other live entities may jump ahead, but LoadSourceRoot /
     // Compile / Reset / UpdateParameters never reorder among themselves —
     // see `worker::enqueue_command`), so a Compile sent immediately after
-    // this is guaranteed to see the loaded session. PR-D will add a result
-    // message to transition Loading → Ready based on actual worker progress.
+    // this is guaranteed to see the loaded session. Worker results transition
+    // Loading → Ready or Failed based on the actual load outcome.
     let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
         payload,

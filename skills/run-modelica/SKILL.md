@@ -80,6 +80,28 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" -d '{"type":"ExecuteCommand","command":"Exit","params":{}}'
 ```
 
+### Structured package lookup
+
+Modelica packages under `assets/models/<Root>/` use the standard
+`package.mo`/`package.order` layout and members' `within` declarations. A
+qualified reference such as `LunCo.Electrical.Battery` is resolved by its root
+segment through the normal Modelica search-path inventory; do not add a
+library-specific Rust load call. The compiler loads a cold structured root on
+the unresolved-reference path and retries. A generated policy's `source_roots`
+metadata can prewarm a dependency, but it is not the source of truth for class
+discovery.
+
+For policy-owned generated models, keep contract assertions in
+`assets/scripting/tests/*.rhai`. Rust should provide the composed facts and
+invoke the registered policy; Rhai should assert the generated source,
+topology, layout, and UI metadata.
+
+When reviewing a generated diagram, click its generated browser row first. A
+single-unit network opens the unit-level class and shows its real members;
+multi-unit networks open the root wrapper. Use `FitCanvas` after drill-in when
+the tab was opened alongside the root, since navigation is scoped to the
+focused Modelica tab.
+
 ## 1. The request envelope
 
 Everything is one endpoint: `POST /api/commands`. The JSON shape is always

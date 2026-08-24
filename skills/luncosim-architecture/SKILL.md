@@ -58,8 +58,10 @@ authoritative engine architecture is
 5. Let Avian apply force or torque at the authored actuator frame. Do not add a
    special Rust emitter for one actuator family, convert to world coordinates in
    Modelica, or maintain a parallel actuator registry.
-6. Expose tunable values as typed USD-authored parameters or Modelica
-   parameters. Do not hide magic numbers in Rust, Rhai, or a renderer.
+6. Expose tunable physical values as typed USD-authored parameters or Modelica
+   parameters; do not hide them in Rust, Rhai, or a renderer. Named constants
+   are appropriate for policy-owned presentation geometry, spacing, extents,
+   and typography when they are clearly separated from physical parameters.
 
 ## Build a sensor and controller
 
@@ -99,6 +101,11 @@ string workaround:
   cross-domain signals cross the USD boundary as typed ports.
 - Render the generated Modelica icons and connection graph from the same model
   source; do not create a second visual-only network.
+- Make the generated browser entry useful on first click: a single-unit
+  network opens its unit class so the member graph is visible, while a
+  multi-unit network opens the root wrapper. Keep both classes in the ordinary
+  Modelica source/drill-in hierarchy; this is a navigation choice, not a second
+  generated graph.
 - Keep generated visual synthesis in the selected Rhai policy: standard root /
   unit `Icon` and `Diagram` annotations, policy-owned placements, and any
   domain-specific presentation belong there. Rust may provide generic source
@@ -108,18 +115,30 @@ string workaround:
   outputs from promoted member telemetry, and expose the generated document as
   read-only runtime state with a normal Modelica drill-in path.
 - Validate the returned generated source as a generic strict AST contract:
-  exact root name and boundary, complete policy units, native members nested in
-  their owning units, and no direct native members on the root. Treat missing
-  or loading class definitions as explicit resolver states in the canvas, never
-  as a fabricated resolved node.
+  exact root name and boundary, no undeclared root/unit causal ports, promotions
+  only for outputs present in the loaded member class, non-overlapping policy
+  placements, complete policy units, native members nested in their owning units,
+  and no direct native members on the root. Treat missing or loading class
+  definitions as explicit resolver states in the canvas, never as a fabricated
+  resolved node.
 - Keep generated document lifetime tied to the projection entity. Classify it by
   the `generated/` document origin, retire it on removal/despawn, and keep
-authored document cleanup separate. Load bundled source roots asynchronously
-through the policy-declared `source_roots` and shared Modelica engine, then
-reproject from its generic completion signal.
+  authored document cleanup separate. Structured packages under
+  `assets/models/<Root>/package.mo` are ordinary Modelica search-path roots: the
+  compiler/editor discovers the root segment of a qualified reference
+  generically and loads that package through the shared Modelica engine. A
+  policy-declared `source_roots` list may prewarm dependencies, but it must not
+  be required for class discovery and Rust must not name a particular library.
+  Reproject from the generic completion signal.
 - Let Rhai own the optional `member_output_aliases` promotion table. Rust may
   validate known member/output pairs and identifier uniqueness, but must not
   choose aliases or emit visual source for a policy.
+- Keep policy contracts in Rhai assets under `assets/scripting/tests/`. The
+  Rust host supplies composed facts and invokes the shipped policy; Rhai owns
+  assertions about generated source, topology, layout, and presentation.
+  Literal top-level Rhai constants are supported inside policy helper functions
+  by the shared hook binding, so presentation policy can remain editable without
+  adding Rust-side layout parameters.
 - A cyclic set of separately co-simulated components is explicit: the runtime
   may report its one-step delay. Do not silence that warning or add a Rhai
   workaround. If zero-delay continuous feedback is required, synthesize one

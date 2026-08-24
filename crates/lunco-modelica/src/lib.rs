@@ -1095,8 +1095,8 @@ impl ModelicaCompiler {
     /// Access the underlying `rumoca_compile::Session` — used by a
     /// test helper that needs to inspect loaded source roots.
     #[cfg(test)]
-    pub fn session(&self) -> &Session {
-        &self.session
+    pub fn session(&mut self) -> &mut Session {
+        &mut self.session
     }
 
     /// Merge a Modelica source root into the live session so
@@ -1640,9 +1640,9 @@ impl Plugin for ModelicaPlugin {
             app.add_plugins(lunco_viz::LuncoVizPlugin);
         }
 
-        // PR-A: inventory every source root the workbench can load
-        // into a rumoca compile session. No loads yet — the registry
-        // just enumerates so PR-B's gate has something to look up.
+        // Inventory every source root the workbench can load into a rumoca
+        // compile session. Loading is demand-driven by the qualified root used
+        // by the document or class lookup.
         app.insert_resource(source_roots::SourceRootRegistry::build());
         // A mounted twin may ship its own Modelica packages under `<twin>/models`;
         // load them into the compile session so twin-authored programs resolve their
@@ -2357,6 +2357,27 @@ mod observables_smoke {
         // Just assert we got a DAE at all — shape details vary
         // by rumoca version.
         let _ = r.dae;
+    }
+
+    /// A generated wrapper uses a qualified class from the shipped structured
+    /// package without naming LunCo in the compiler path. The first compile
+    /// fails only because the root is cold; the generic root-segment gate then
+    /// discovers, seats, and retries the package through normal Modelica lookup.
+    #[test]
+    fn qualified_bundled_package_is_loaded_on_demand() {
+        let src = r#"
+            model GeneratedBattery
+              LunCo.Electrical.Battery battery;
+            end GeneratedBattery;
+        "#;
+        let mut compiler = ModelicaCompiler::new();
+        compiler
+            .compile_str("GeneratedBattery", src, "GeneratedBattery.mo")
+            .expect("qualified bundled package should load through the root-segment gate");
+        assert!(compiler
+            .session()
+            .class_lookup_query("LunCo.Electrical.Battery")
+            .is_some());
     }
 
     /// Headline: end-to-end demand-driven compile that pulls MSL

@@ -84,15 +84,15 @@ pub struct IconNodeData {
 ///    across the `extends` chain — the only icon source. Painted via
 ///    [`crate::icon_paint::paint_graphics`] with lyon-tessellated
 ///    fills (EvenOdd, matching OMEdit/Dymola).
-/// 2. A stylised rounded-rectangle fallback with the type label, used
-///    only when the class has no `Icon` annotation anywhere in its
-///    inheritance chain.
+/// 2. An explicit diagnostic card when the resolved class has no `Icon`
+///    annotation anywhere in its inheritance chain. The canvas never invents
+///    a generic component visual: a class must author a standard Modelica icon
+///    or the missing contract is visible and actionable.
 ///
 /// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 pub(super) struct IconNodeVisual {
-    /// Type name ("Resistor", "Capacitor"…) shown under the instance
-    /// label when the class has no Icon at all.
+    /// Type name used in the missing-icon diagnostic.
     pub(super) type_label: String,
     /// Pure-icon class (zero connectors, `.Icons.*` subpackage).
     /// Rendered with a dashed border so users can tell at a glance
@@ -251,8 +251,8 @@ impl NodeVisual for IconNodeVisual {
 
         // No always-on card fill. Icons that need a body (Resistor's
         // white rectangle, Inertia's gray cylinder, …) author it
-        // themselves; classes without an Icon at all get the
-        // placeholder card from the `!drew_icon` branch below.
+        // themselves. A resolved class without an Icon is an authoring
+        // error, not an invitation for the canvas to guess a visual.
         // Matches Dymola/OMEdit — they never paint a "competing"
         // card behind authored icons.
 
@@ -329,30 +329,27 @@ impl NodeVisual for IconNodeVisual {
         }
 
         if !drew_icon {
-            // Placeholder for classes with literally no `Icon` in
-            // their extends chain — same shape as OMEdit's "no icon
-            // authored yet" stand-in: rounded card + class name
-            // centred. Once the user (or the indexer) authors an
-            // Icon annotation, the live path above takes over and
-            // we never run this fallback again.
-            painter.rect_filled(rect, 6.0, theme_snap.card_fill);
-            if !self.type_label.is_empty() && rect.height() > 30.0 {
-                painter.text(
-                    egui::pos2(rect.center().x, rect.center().y),
-                    egui::Align2::CENTER_CENTER,
-                    &self.type_label,
-                    egui::FontId::proportional(10.0),
-                    theme_snap.type_label,
-                );
-            }
+            painter_rect_diagnostic(
+                painter,
+                rect,
+                "Icon missing",
+                if self.type_label.is_empty() {
+                    "author a standard Modelica Icon annotation"
+                } else {
+                    &self.type_label
+                },
+                theme_snap.error_stroke,
+                theme_snap.card_fill,
+                theme_snap.type_label,
+            );
         }
 
         // Border policy:
         //   - Selection ring: always drawn (functional feedback).
         //   - Icon-only / expandable connector accents: always drawn
         //     (carry semantic info — "decorative" / "expandable").
-        //   - Placeholder card outline: always drawn (the card has
-        //     no other body and would melt into the canvas otherwise).
+        //   - Missing-icon diagnostic outline: always drawn so the
+        //     invalid visual contract cannot disappear into the canvas.
         //   - Authored-icon hairline: opt-in via the theme snapshot's
         //     `show_authored_icon_border` flag, off by default. The
         //     icon's own primitives carry its bounds; the workbench

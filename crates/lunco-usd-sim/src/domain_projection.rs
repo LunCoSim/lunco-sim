@@ -500,6 +500,7 @@ impl DomainSynthesizer for HookSynthesizer {
         let member_output_aliases = parse_policy_member_output_aliases(
             hook_map_value(map, "member_output_aliases"),
             &network,
+            Some(ctx.classes),
             &network_root,
             &self.name,
             generated_member_outputs(&network, Some(ctx.classes)),
@@ -669,6 +670,7 @@ fn parse_policy_source_roots(
 fn parse_policy_member_output_aliases(
     value: Option<&lunco_hooks::HookValue>,
     network: &DomainNetwork,
+    classes: Option<&MemberClasses>,
     root: &str,
     policy_name: &str,
     default_aliases: Vec<(String, String, String)>,
@@ -681,7 +683,7 @@ fn parse_policy_member_output_aliases(
             "synthesizer `{policy_name}` returned `member_output_aliases`, which must be an array"
         ));
     };
-    let known: BTreeSet<(String, String)> = generated_member_outputs(network, None)
+    let known: BTreeSet<(String, String)> = generated_member_outputs(network, classes)
         .into_iter()
         .map(|(member, output, _)| (member, output))
         .collect();
@@ -733,6 +735,26 @@ fn parse_validated_root_interface(
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
+
+    let mut expected_root_outputs = outputs.clone();
+    expected_root_outputs.extend(aliases.iter().map(|(_, _, alias)| alias.clone()));
+    for component in root.components.values() {
+        match &component.causality {
+            Causality::Input(_) if !inputs.contains(component.name.as_str()) => {
+                return Err(format!(
+                    "root declares undeclared boundary input `{}`",
+                    component.name
+                ));
+            }
+            Causality::Output(_) if !expected_root_outputs.contains(component.name.as_str()) => {
+                return Err(format!(
+                    "root declares undeclared boundary output `{}`",
+                    component.name
+                ));
+            }
+            _ => {}
+        }
+    }
 
     for input in inputs {
         let Some(component) = root.components.get(input) else {
@@ -842,6 +864,32 @@ fn validate_generated_source(
     for unit in units {
         let class = lunco_modelica::diagram::find_class_by_qualified_name(&ast, &unit.name)
             .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
+        let mut expected_unit_outputs = unit.outputs.clone();
+        expected_unit_outputs.extend(
+            aliases
+                .iter()
+                .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
+                .map(|(_, _, alias)| alias.clone()),
+        );
+        for component in class.components.values() {
+            match &component.causality {
+                Causality::Input(_) if !unit.inputs.contains(component.name.as_str()) => {
+                    return Err(format!(
+                        "unit `{}` declares undeclared boundary input `{}`",
+                        unit.name, component.name
+                    ));
+                }
+                Causality::Output(_)
+                    if !expected_unit_outputs.contains(component.name.as_str()) =>
+                {
+                    return Err(format!(
+                        "unit `{}` declares undeclared boundary output `{}`",
+                        unit.name, component.name
+                    ));
+                }
+                _ => {}
+            }
+        }
         for input in &unit.inputs {
             let Some(component) = class.components.get(input) else {
                 return Err(format!(
@@ -1136,6 +1184,20 @@ fn parse_policy_layout(
             let x = parse_policy_coordinate(placement, "x", &context)?;
             let y = parse_policy_coordinate(placement, "y", &context)?;
             target.insert(identity, (x, y));
+        }
+    }
+    for (section, positions) in [
+        ("unit", &layout.unit_positions),
+        ("member", &layout.member_positions),
+    ] {
+        let mut occupied = BTreeMap::<(i32, i32), &str>::new();
+        for (identity, position) in positions {
+            if let Some(previous) = occupied.insert(*position, identity.as_str()) {
+                return Err(format!(
+                    "synthesizer `{policy_name}` layout.{section} places `{identity}` on top of `{previous}` at ({}, {})",
+                    position.0, position.1
+                ));
+            }
         }
     }
     Ok(layout)
@@ -1814,7 +1876,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             },
         )?;
         let source_roots = parse_policy_source_roots(
-            hook_map_value(map, "source_roots"),
+            hook_map_value(&map, "source_roots"),
             ACTUATOR_WRENCH_SYNTHESIZER,
             BTreeSet::new(),
         )
@@ -3191,8 +3253,40 @@ fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) ->
     omitted
 }
 
+/// Stable, readable Modelica instance name for a composed USD member.
+///
+/// The full prim path remains the authoritative identity in members, signal
+/// provenance, and USD. It is a poor display name, though: emitting the
+/// assembly name made a six-member diagram read SolarRover__Motor__FL.
+/// Prefer the member leaf (Motor_FL) and add its immediate parent only for
+/// nested members (YawHead__SolarPanel). The network root's parent is used
+/// as the common assembly scope because composed members may sit beside the
+/// Electrical collection rather than below it. validate_network still
+/// rejects a same-name collision; it must be fixed in USD rather than hidden
+/// by a numeric fallback.
 fn instance_identifier(root: &str, path: &str) -> String {
-    modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
+    let root_scope = root
+        .trim_matches('/')
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("/{}", parent))
+        .unwrap_or_else(|| root.trim_matches('/').to_string());
+    let relative = path
+        .strip_prefix(root)
+        .or_else(|| path.strip_prefix(root_scope.as_str()))
+        .unwrap_or(path)
+        .trim_matches('/');
+    let mut segments = relative.split('/').filter(|segment| !segment.is_empty());
+    let Some(last) = segments.next_back() else {
+        panic!("generated Modelica member path has no name relative to the network root");
+    };
+    let Some(parent) = segments.next_back() else {
+        return modelica_identifier(last);
+    };
+    format!(
+        "{}__{}",
+        modelica_identifier(parent),
+        modelica_identifier(last)
+    )
 }
 
 /// Whether a generated member output already has an authored operator-facing
@@ -3701,6 +3795,25 @@ mod tests {
         );
         assert_eq!(units[0].inputs, BTreeSet::from(["left_heat".into()]));
         assert_eq!(units[1].outputs, BTreeSet::from(["right_temp".into()]));
+    }
+
+    #[test]
+    fn generated_member_instance_names_are_readable_without_a_collision_fallback() {
+        assert_eq!(
+            instance_identifier(
+                "/SolarRoverTest/SolarRover/Electrical",
+                "/SolarRoverTest/SolarRover/Motor_FL"
+            ),
+            "Motor_FL"
+        );
+        assert_eq!(
+            instance_identifier("/Rig/Electrical", "/Rig/Electrical/Battery"),
+            "Battery"
+        );
+        assert_ne!(
+            instance_identifier("/Rig/Electrical", "/Rig/Motor-A"),
+            instance_identifier("/Rig/Electrical", "/Rig/Motor_A")
+        );
     }
 
     #[test]

@@ -215,9 +215,17 @@ fn render_generated_network_row(
     } else {
         format!("{} member{}", member_count, plural_suffix(member_count))
     };
+    let open_class = generated_network_open_class(entry);
+    let active_doc = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| workspace.active_document);
+    // The row represents the generated document, not only the preferred first
+    // class. Keep it active while the user is viewing the root, a unit, or a
+    // dependency class drilled from that same read-only document.
+    let is_open = active_doc == Some(entry.document);
     let open_hint = format!(
         "Open generated Modelica\nClass: {}\nDocument: {}\nSource is read-only and rebuilt from the composed USD network.",
-        entry.model_name, entry.uri
+        open_class, entry.uri
     );
 
     ui.push_id(&entry.uri, |ui| {
@@ -225,7 +233,7 @@ fn render_generated_network_row(
             let can_open = !entry.document.is_unassigned() && !entry.source.is_empty();
             let response = ui
                 .selectable_label(
-                    false,
+                    is_open,
                     egui::RichText::new(display_name)
                         .strong()
                         .color(if can_open {
@@ -242,15 +250,9 @@ fn render_generated_network_row(
                     "Generated source is still being projected.".to_string()
                 });
             if can_open && response.clicked() {
-                let qualified = entry
-                    .uri
-                    .strip_prefix("generated://")
-                    .and_then(|uri| uri.strip_suffix(".mo"))
-                    .unwrap_or(&entry.uri)
-                    .to_string();
                 ctx.actions.push(BrowserAction::OpenLoadedClass {
                     doc_id: entry.document.raw(),
-                    qualified_path: qualified,
+                    qualified_path: open_class.clone(),
                 });
             }
             ui.colored_label(theme.schematic.class_model_badge, "GENERATED");
@@ -263,10 +265,14 @@ fn render_generated_network_row(
                     .color(theme.schematic.text_muted),
             );
             ui.label(
-                egui::RichText::new(format!("class {}", entry.model_name))
-                    .small()
-                    .color(theme.schematic.text_muted),
-            );
+                egui::RichText::new(format!(
+                    "class {}",
+                    generated_class_display_name(&entry.model_name)
+                ))
+                .small()
+                .color(theme.schematic.text_muted),
+            )
+            .on_hover_text(format!("Modelica class: {}", entry.model_name));
             ui.label(
                 egui::RichText::new(format!(
                     "{} unit{} · {}",
@@ -327,32 +333,47 @@ fn render_generated_network_row(
                     }
                 }
                 for unit in &entry.units {
+                    let unit_label = generated_unit_display_name(unit);
                     ui.collapsing(
-                        format!(
-                            "{} as {} ({} member(s))",
-                            unit.name,
-                            unit.instance,
-                            unit.members.len()
-                        ),
+                        format!("{} · {} member(s)", unit_label, unit.members.len()),
                         |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Modelica class: {}", unit.name))
+                                    .small()
+                                    .color(theme.schematic.text_muted),
+                            );
                             for member in &unit.members {
                                 if let Some((_, asset, class)) =
                                     entry.members.iter().find(|(path, _, _)| path == member)
                                 {
-                                    ui.label(format!("{member} · {class}"))
-                                        .on_hover_text(format!("source asset: {asset}"));
+                                    ui.label(generated_member_display_name(member, class))
+                                        .on_hover_text(format!(
+                                            "USD: {member}\nSource asset: {asset}"
+                                        ));
                                 } else {
-                                    ui.label(member);
+                                    ui.label(generated_path_leaf(member)).on_hover_text(member);
                                 }
                             }
                         },
                     );
                 }
                 if !entry.member_output_aliases.is_empty() {
-                    ui.label("Promoted telemetry:");
-                    for (member, output, alias) in &entry.member_output_aliases {
-                        ui.label(format!("{alias} ← {member}.{output}"));
-                    }
+                    ui.collapsing(
+                        format!("Promoted telemetry ({})", entry.member_output_aliases.len()),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new("Operator-facing member values")
+                                    .small()
+                                    .color(theme.schematic.text_muted),
+                            );
+                            for (member, output, alias) in &entry.member_output_aliases {
+                                ui.label(generated_member_output_display_name(member, output))
+                                    .on_hover_text(format!(
+                                        "Generated alias: {alias}\nUSD: {member}.outputs:{output}"
+                                    ));
+                            }
+                        },
+                    );
                 }
             });
     });
@@ -365,6 +386,54 @@ fn generated_network_display_name(network_root: &str) -> String {
         .find(|segment| !segment.is_empty())
         .map(|segment| format!("{segment} network"))
         .unwrap_or_else(|| "Generated network".to_string())
+}
+
+fn generated_path_leaf(path: &str) -> &str {
+    path.trim_matches('/')
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(path)
+}
+
+fn generated_class_display_name(class_name: &str) -> String {
+    let class_name = class_name.strip_suffix("_System").unwrap_or(class_name);
+    class_name
+        .split("_x2f_")
+        .map(|segment| segment.replace("__", "_"))
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn generated_unit_display_name(unit: &crate::state::GeneratedModelicaUnit) -> String {
+    unit.members
+        .first()
+        .map(|member| format!("{} unit", generated_path_leaf(member)))
+        .unwrap_or_else(|| generated_class_display_name(&unit.name))
+}
+
+fn generated_member_display_name(member: &str, class: &str) -> String {
+    let class_leaf = class.rsplit('.').next().unwrap_or(class);
+    format!("{} · {}", generated_path_leaf(member), class_leaf)
+}
+
+fn generated_member_output_display_name(member: &str, output: &str) -> String {
+    format!("{}.{}", generated_path_leaf(member), output)
+}
+
+/// Select the useful first view for a generated network.
+///
+/// The synthesized root is still the authoritative Modelica wrapper and is
+/// intentionally kept in the document. A single-unit network, however, has
+/// no useful topology at the wrapper level: its diagram is one legitimate
+/// unit instance. Opening the unit class here lets the normal Modelica canvas
+/// show the actual composed members while preserving the root for source,
+/// interface, and multi-unit navigation.
+fn generated_network_open_class(entry: &crate::state::GeneratedModelicaSourceEntry) -> String {
+    if entry.units.len() == 1 {
+        entry.units[0].name.clone()
+    } else {
+        entry.model_name.clone()
+    }
 }
 
 fn plural_suffix(count: usize) -> &'static str {
@@ -1179,5 +1248,86 @@ function F end F;
         assert_eq!(plural_suffix(1), "");
         assert_eq!(plural_suffix(0), "s");
         assert_eq!(plural_suffix(2), "s");
+    }
+
+    #[test]
+    fn single_unit_generated_network_opens_member_class() {
+        let entry = crate::state::GeneratedModelicaSourceEntry {
+            document: DocumentId::new(1),
+            uri: "generated://Rover/Electrical.mo".to_string(),
+            network_root: "/Rover/Electrical".to_string(),
+            model_name: "Rover_Electrical_System".to_string(),
+            source: "model Rover_Electrical_System end Rover_Electrical_System;".to_string(),
+            component_paths: Vec::new(),
+            units: vec![crate::state::GeneratedModelicaUnit {
+                name: "Unit_Rover_Battery".to_string(),
+                ..Default::default()
+            }],
+            members: Vec::new(),
+            source_roots: Vec::new(),
+            boundary_inputs: Vec::new(),
+            boundary_outputs: Vec::new(),
+            member_output_aliases: Vec::new(),
+            error: None,
+        };
+        assert_eq!(generated_network_open_class(&entry), "Unit_Rover_Battery");
+    }
+
+    #[test]
+    fn generated_details_use_readable_names_and_keep_technical_names_for_tooltips() {
+        assert_eq!(
+            generated_path_leaf("/Rover/YawHead/SolarPanel"),
+            "SolarPanel"
+        );
+        assert_eq!(
+            generated_class_display_name("SolarRoverTest_x2f_SolarRover_x2f_Electrical_System"),
+            "SolarRoverTest / SolarRover / Electrical"
+        );
+        assert_eq!(
+            generated_member_display_name(
+                "/SolarRoverTest/SolarRover/Motor_FL",
+                "LunCo.Electrical.DCMotor"
+            ),
+            "Motor_FL · DCMotor"
+        );
+        assert_eq!(
+            generated_member_output_display_name(
+                "/SolarRoverTest/SolarRover/Motor_FL",
+                "electrical_power"
+            ),
+            "Motor_FL.electrical_power"
+        );
+    }
+
+    #[test]
+    fn multi_unit_generated_network_opens_root_class() {
+        let entry = crate::state::GeneratedModelicaSourceEntry {
+            document: DocumentId::new(1),
+            uri: "generated://Rover/Electrical.mo".to_string(),
+            network_root: "/Rover/Electrical".to_string(),
+            model_name: "Rover_Electrical_System".to_string(),
+            source: "model Rover_Electrical_System end Rover_Electrical_System;".to_string(),
+            component_paths: Vec::new(),
+            units: vec![
+                crate::state::GeneratedModelicaUnit {
+                    name: "Unit_Rover_Battery".to_string(),
+                    ..Default::default()
+                },
+                crate::state::GeneratedModelicaUnit {
+                    name: "Unit_Rover_Controller".to_string(),
+                    ..Default::default()
+                },
+            ],
+            members: Vec::new(),
+            source_roots: Vec::new(),
+            boundary_inputs: Vec::new(),
+            boundary_outputs: Vec::new(),
+            member_output_aliases: Vec::new(),
+            error: None,
+        };
+        assert_eq!(
+            generated_network_open_class(&entry),
+            "Rover_Electrical_System"
+        );
     }
 }

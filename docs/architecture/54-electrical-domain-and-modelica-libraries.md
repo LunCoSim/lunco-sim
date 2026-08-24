@@ -237,19 +237,19 @@ set. It says that the quantity may be projected through an authored Scope bounda
 
 Runtime callers read the stable boundary name (`get(thermal, "motor_temp_left")`,
 `ReadPorts` name `soc`). They do not address generated child instances or their
-internal member paths. The generated source/API still uses an injective spelling for
-those internal instances; this is diagnostic metadata rather than another write or
+internal member paths. The generated source/API uses a readable, deterministic spelling
+for those internal instances; this is diagnostic metadata rather than another write or
 wiring surface:
 
-| in the prim path | in generated-source instance name |
+| member path suffix | in generated-source instance name |
 |---|---|
-| `/` | `_x2f_` |
-| `_` | `__` (doubled) |
-| any other non-alphanumeric | `_x<hex>_` |
+| one segment below the network | that segment, Modelica-escaped |
+| two or more segments | escaped parent + `__` + escaped leaf |
+| same readable suffix used twice | projection error; the author must disambiguate the USD member paths |
 
-So `/Rover/RockerL/Motor_FL` is emitted as `Rover_x2f_RockerL_x2f_Motor__FL` — **two**
-underscores in `Motor__FL`. This spelling is useful when inspecting generated source,
-but it is intentionally not a public runtime port name.
+So `/Rover/RockerL/Motor_FL` is emitted as `RockerL__Motor_FL`. The full USD path remains
+the authoritative identity in the generated-source mapping; the shorter spelling keeps
+icons, equations, and diagnostics readable without introducing a collision fallback.
 
 The workbench exposes this generated source as a read-only Modelica document,
 not as a poster. Its root diagram shows generated units, and drilling into a
@@ -327,5 +327,7 @@ library-specific installer or root-name branch.
 
 **Gotcha worth its own line:** `lunco_assets::models::model_files()` is top-level only
 (`MODELS_DIR.files()`), so a package under a subdirectory is embedded but invisible to it.
-Use `package_files(pkg)`, which recurses. This is exactly the bug that made the runtime
-blind to `LunCo/Electrical/*.mo` even though `include_dir!` had baked them in.
+Use `package_files_live(pkg)` in the native runtime, which prefers the editable
+filesystem tree and recurses; `package_files(pkg)` is the embedded/portable
+snapshot API. This is exactly the bug that made the runtime blind to
+`LunCo/Electrical/*.mo` even though `include_dir!` had baked them in.
