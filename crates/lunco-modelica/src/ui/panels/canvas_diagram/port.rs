@@ -349,13 +349,18 @@ pub(super) fn resolve_port_icons(
                     }
                 }
                 if let Some(handle) = handle.as_ref() {
-                    let mut engine = handle.lock();
-                    if let Some(icon) = engine.icon_for(c) {
-                        return Some(icon);
-                    }
-                    if let Some(cd) = engine.class_def(c) {
-                        if let Some(icon) = crate::annotations::extract_icon(&cd.annotation) {
+                    // Port painting runs as part of the background
+                    // projection, but it must still never wait behind a
+                    // parse or library install. A cache miss is retried by
+                    // the source-root completion re-projection.
+                    if let Some(mut engine) = handle.try_lock() {
+                        if let Some(icon) = engine.icon_for(c) {
                             return Some(icon);
+                        }
+                        if let Some(cd) = engine.class_def(c) {
+                            if let Some(icon) = crate::annotations::extract_icon(&cd.annotation) {
+                                return Some(icon);
+                            }
                         }
                     }
                 }

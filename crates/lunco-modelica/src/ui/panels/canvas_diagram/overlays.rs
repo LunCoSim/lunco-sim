@@ -18,15 +18,16 @@ use super::active_doc_from_world_ctx;
 /// Painted when a drill-in / duplicate load failed (e.g. MSL bundle
 /// not yet ready, class missing, parse error). Replaces the spinner
 /// so the tab doesn't sit on "Loading resource…" forever.
-pub(super) fn render_drill_in_error_overlay(
+pub(super) fn render_error_overlay(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,
+    heading: &str,
     class_name: &str,
     error: &str,
     theme: &lunco_theme::Theme,
 ) {
     let card_w = 420.0;
-    let card_h = 110.0;
+    let card_h = 132.0;
     let card_rect = egui::Rect::from_center_size(canvas_rect.center(), egui::vec2(card_w, card_h));
     let painter = ui
         .painter()
@@ -45,7 +46,7 @@ pub(super) fn render_drill_in_error_overlay(
     painter.text(
         egui::pos2(card_rect.min.x + 16.0, card_rect.min.y + 16.0),
         egui::Align2::LEFT_TOP,
-        "Failed to load resource",
+        heading,
         egui::FontId::proportional(14.0),
         theme.tokens.error,
     );
@@ -304,13 +305,10 @@ pub(super) fn empty_overlay_class_info(
     use rumoca_compile::parsing::Causality;
     use rumoca_compile::parsing::ClassType;
 
-    // Engine-driven Icon merge: hand the qualified class path to
-    // [`crate::annotations::extract_icon_via_engine`] which walks
-    // the inheritance chain through rumoca's session — scope-chain
-    // resolution, cross-file walks, and `visible=...` filtering all
-    // happen inside the engine. Replaces the prior resolver-lambda
-    // pattern that mirrored `register_local_class`'s lookup logic
-    // by hand.
+    // Painting is never allowed to start an engine inheritance walk. The
+    // projection task owns that work off-thread and publishes its memoized
+    // result; this overlay only reads a completed cache entry and otherwise
+    // uses the class's own authored Icon while the projection is pending.
     let class_context = match ast_arc.within.as_ref() {
         Some(within) => {
             let pkg = within
@@ -327,10 +325,10 @@ pub(super) fn empty_overlay_class_info(
         }
         None => class_name.to_string(),
     };
-    // Engine owns icon resolution (cached, AST-aware).
     let icon = ctx
         .resource::<crate::engine_resource::ModelicaEngineHandle>()
-        .and_then(|handle| handle.lock().icon_for(&class_context));
+        .and_then(|handle| handle.try_cached_icon_for(&class_context))
+        .or_else(|| crate::annotations::extract_icon(&class.annotation));
     let class_type = match class.class_type {
         ClassType::Model => Some("model"),
         ClassType::Block => Some("block"),

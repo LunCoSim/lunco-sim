@@ -112,11 +112,12 @@ pub(super) struct OrthogonalEdgeVisual {
     pub(super) target_path: String,
     pub(super) flow_vars: Vec<crate::visual_diagram::FlowVarMeta>,
     pub(super) connector_leaf: String,
-    /// Pre-built `("source.fv", "target.fv")` keys for the first
-    /// flow var, materialised at projection time so per-frame `draw`
-    /// does zero allocation on the lookup path. `None` when the edge
-    /// has no flow vars.
-    pub(super) flow_lookup_keys: Option<(String, String)>,
+    /// Pre-built `("source.fv", "target.fv")` keys for every
+    /// declared flow variable, materialised at projection time so
+    /// per-frame `draw` does zero formatting/allocation. An edge may
+    /// carry multiple physical flow variables; the animation chooses
+    /// the first non-zero one at paint time.
+    pub(super) flow_lookup_keys: Vec<(String, String)>,
     /// Render the wire as a smooth curve when set — mirrors the
     /// `smooth=Smooth.Bezier` source annotation.
     pub(super) smooth_bezier: bool,
@@ -136,7 +137,7 @@ impl Default for OrthogonalEdgeVisual {
             target_path: String::new(),
             flow_vars: Vec::new(),
             connector_leaf: String::new(),
-            flow_lookup_keys: None,
+            flow_lookup_keys: Vec::new(),
             smooth_bezier: false,
             thickness_scale: 1.0,
         }
@@ -276,53 +277,21 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             .unwrap_or(0.0);
         let node_state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
         const ACTIVITY_EPS: f64 = 1e-6;
-        let physical_flow = if let (Some(fv), Some((src_key, tgt_key))) =
-            (self.flow_vars.first(), self.flow_lookup_keys.as_ref())
-        {
-            let v_src = node_state.values.get(src_key.as_str()).copied();
-            let v_tgt = node_state.values.get(tgt_key.as_str()).copied();
-            // ── DIAG: log once per (source_path,target_path,fv) which
-            // keys hit/missed, and what near-miss keys exist in
-            // node_state. Helps diagnose why some edges animate only
-            // after a re-projection. Remove once root cause found.
-            diag_log_edge_lookup(
-                &self.source_path,
-                &self.target_path,
-                &fv.name,
-                v_src,
-                v_tgt,
-                &node_state,
-            );
-            if let Some(v) = v_src {
-                Some(-v)
-            } else {
-                v_tgt
-            }
-        } else {
-            // ── DIAG: log once per (source_path,target_path) that
-            // this edge has empty flow_vars (so the projection
-            // didn't resolve the connector's flow declarations).
-            diag_log_empty_flow_vars(
-                &self.source_path,
-                &self.target_path,
-                &self.connector_leaf,
-                &node_state,
-            );
-            node_state
-                .values
-                .get(&self.source_path)
-                .or_else(|| node_state.values.get(&self.target_path))
-                .map(|&v| v.abs())
-        };
+        // Animate only from Modelica's declared `flow` variables. There is
+        // no arbitrary source/target-value fallback: a non-flow scalar is
+        // not evidence of energy/material movement, and inventing a stream
+        // from it makes causal and acausal diagrams misleading. For a
+        // multi-flow connector, use the first currently active physical
+        // flow; the sign convention is the standard Modelica one (positive
+        // into the source connector, hence negated in source→target view).
+        let physical_flow = active_flow_value(&node_state, &self.flow_lookup_keys, ACTIVITY_EPS);
         if let Some(v) = physical_flow {
-            if v.abs() > ACTIVITY_EPS {
-                if v < 0.0 {
-                    let mut rev = polyline.clone();
-                    rev.reverse();
-                    paint_flow_dots(painter, &rev, col, anim_time, scale);
-                } else {
-                    paint_flow_dots(painter, &polyline, col, anim_time, scale);
-                }
+            if v < 0.0 {
+                let mut rev = polyline.clone();
+                rev.reverse();
+                paint_flow_dots(painter, &rev, col, anim_time, scale);
+            } else {
+                paint_flow_dots(painter, &polyline, col, anim_time, scale);
             }
         }
 
@@ -424,6 +393,28 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             || segment_dist_sq(world_pos, p1, p2) <= threshold_sq
             || segment_dist_sq(world_pos, p2, p3) <= threshold_sq
     }
+}
+
+/// Resolve the signed physical flow used by the animation. Modelica defines
+/// a connector's `flow` variable as positive into that connector, so a value
+/// read from the source endpoint is negated to obtain source-to-target
+/// direction. The target value is accepted when the runtime publishes only
+/// that endpoint. The lookup is deliberately limited to declared flow keys;
+/// ordinary scalar values must never create a misleading stream.
+fn active_flow_value(
+    state: &lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot,
+    keys: &[(String, String)],
+    activity_eps: f64,
+) -> Option<f64> {
+    keys.iter().find_map(|(source_key, target_key)| {
+        let value = state
+            .values
+            .get(source_key.as_str())
+            .copied()
+            .map(|v| -v)
+            .or_else(|| state.values.get(target_key.as_str()).copied());
+        value.filter(|v| v.abs() > activity_eps)
+    })
 }
 
 /// Compute an orthogonal polyline routed between two ports, in
@@ -617,106 +608,46 @@ pub(super) fn edge_hover_text(
     out
 }
 
-// ── Diagnostics for the flow-animation lookup ──────────────────────
-//
-// One-shot per (source_path,target_path,key) so the log doesn't drown
-// the console at 60 fps. Drop once the root cause of "tank↔valve only
-// animates after I move a node" is identified.
+#[cfg(test)]
+mod tests {
+    use super::active_flow_value;
+    use lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot;
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DiagStatus {
-    BothMiss,
-    SrcHit,
-    TgtHit,
-    Both,
-}
-
-thread_local! {
-    /// Last logged status per edge lookup; we re-log only on state
-    /// transitions, so the console captures exactly when a key
-    /// becomes available (or disappears) instead of one snapshot at
-    /// startup.
-    static DIAG_LOOKUP_STATE: RefCell<HashMap<String, DiagStatus>> =
-        RefCell::new(HashMap::new());
-    /// Last logged total snapshot-key count per (source,target) edge
-    /// when flow_vars is empty — log when "near_keys" set
-    /// changes size (a proxy for the simulator publishing new
-    /// connector vars).
-    static DIAG_EMPTY_STATE: RefCell<HashMap<String, usize>> =
-        RefCell::new(HashMap::new());
-}
-
-fn diag_log_edge_lookup(
-    source_path: &str,
-    target_path: &str,
-    fv_name: &str,
-    v_src: Option<f64>,
-    v_tgt: Option<f64>,
-    state: &lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot,
-) {
-    let status = match (v_src.is_some(), v_tgt.is_some()) {
-        (false, false) => DiagStatus::BothMiss,
-        (true, false) => DiagStatus::SrcHit,
-        (false, true) => DiagStatus::TgtHit,
-        (true, true) => DiagStatus::Both,
-    };
-    let key = format!("{source_path}|{target_path}|{fv_name}");
-    let changed = DIAG_LOOKUP_STATE.with(|s| {
-        let mut m = s.borrow_mut();
-        match m.get(&key) {
-            Some(prev) if *prev == status => false,
-            _ => {
-                m.insert(key.clone(), status);
-                true
-            }
+    fn state(entries: &[(&str, f64)]) -> NodeStateSnapshot {
+        let mut state = NodeStateSnapshot::default();
+        for (name, value) in entries {
+            state.values.insert((*name).to_string(), *value);
         }
-    });
-    if !changed {
-        return;
+        state
     }
-    let near: Vec<String> = state
-        .values
-        .keys()
-        .filter(|k| k.starts_with(source_path) || k.starts_with(target_path))
-        .cloned()
-        .collect();
-    bevy::log::debug!(
-        "[edge-diag] {source_path} -> {target_path} fv={fv_name} \
-         src={v_src:?} tgt={v_tgt:?} near_keys={near:?}"
-    );
-}
 
-fn diag_log_empty_flow_vars(
-    source_path: &str,
-    target_path: &str,
-    connector_type: &str,
-    state: &lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot,
-) {
-    let near: Vec<String> = state
-        .values
-        .keys()
-        .filter(|k| k.starts_with(source_path) || k.starts_with(target_path))
-        .cloned()
-        .collect();
-    let key = format!("{source_path}|{target_path}");
-    let changed = DIAG_EMPTY_STATE.with(|s| {
-        let mut m = s.borrow_mut();
-        match m.get(&key) {
-            Some(prev) if *prev == near.len() => false,
-            _ => {
-                m.insert(key.clone(), near.len());
-                true
-            }
-        }
-    });
-    if !changed {
-        return;
+    #[test]
+    fn flow_direction_uses_modelica_source_sign() {
+        let state = state(&[("Battery.p.i", 4.0)]);
+        let keys = vec![("Battery.p.i".into(), "Motor.p.i".into())];
+        assert_eq!(active_flow_value(&state, &keys, 1e-6), Some(-4.0));
     }
-    bevy::log::debug!(
-        "[edge-diag] EMPTY flow_vars on edge {source_path} -> {target_path} \
-         connector_type={connector_type:?} near_keys={near:?}"
-    );
+
+    #[test]
+    fn flow_lookup_accepts_target_endpoint_when_source_is_not_published() {
+        let state = state(&[("Motor.p.i", 2.5)]);
+        let keys = vec![("Battery.p.i".into(), "Motor.p.i".into())];
+        assert_eq!(active_flow_value(&state, &keys, 1e-6), Some(2.5));
+    }
+
+    #[test]
+    fn flow_lookup_supports_multiple_declared_flow_variables() {
+        let state = state(&[("source.energy_flow", 0.0), ("target.mass_flow", 3.0)]);
+        let keys = vec![
+            ("source.energy_flow".into(), "target.energy_flow".into()),
+            ("source.mass_flow".into(), "target.mass_flow".into()),
+        ];
+        assert_eq!(active_flow_value(&state, &keys, 1e-6), Some(3.0));
+    }
+
+    #[test]
+    fn scalar_values_without_declared_flow_keys_stay_idle() {
+        let state = state(&[("Battery.p.v", 28.0), ("Battery.terminal_current_a", 4.0)]);
+        assert_eq!(active_flow_value(&state, &[], 1e-6), None);
+    }
 }

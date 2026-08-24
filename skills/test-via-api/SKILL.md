@@ -297,9 +297,9 @@ The complete boundary is in
 - **API returns 500 / silent no-op**: check `params` includes the
   empty object `{}` even for parameterless commands.
 - **Projection deadline exceeded (60s)**: rumoca parse stall, usually
-  from a sync MSL load inside the worker pool. Move heavy loads to a
-  separate `std::thread::spawn` and use the cache-only resolver in the
-  projection (`peek_msl_class_cached`).
+  from a synchronous library load inside the worker pool. Move heavy loads to
+  a separate `std::thread::spawn` and use the cache-only source-aware resolver
+  in the projection (`peek_class_cached`).
 - **Workbench seems stale after rebuild**: it didn't restart. Send
   Exit, verify port 4101 freed, then start.
 

@@ -271,13 +271,14 @@ fn apply_dynamic_fields(
 /// syntax error is logged with the offending file's name and a position relative
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
-pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
+pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, String> {
     // Disk-first (edit -> restart, no rebuild) on native; embedded is the
     // authoritative source on wasm and installed builds without an asset tree.
     // Once a source set is selected, an authored parse error is terminal for
     // this engine construction. Running stale embedded helpers would make the
     // visible source disagree with the policy actually executing.
-    compile_prelude_set(engine, lunco_assets::scripting::prelude_files())
+    let files = lunco_assets::scripting::prelude_files()?;
+    compile_prelude_set(engine, files)
 }
 
 /// Compile a script so its own top-level `const`s are visible inside its `fn`s.
@@ -582,10 +583,7 @@ fn build_task_ast(
     Ok(merged)
 }
 
-fn compile_prelude_set(
-    engine: &Engine,
-    files: Vec<(String, String)>,
-) -> Result<AST, rhai::ParseError> {
+fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<AST, String> {
     let mut acc: Option<AST> = None;
     for (name, src) in files {
         match compile_with_script_consts(engine, &src) {
@@ -597,11 +595,11 @@ fn compile_prelude_set(
             }
             Err(e) => {
                 error!("[rhai] prelude/{name}.rhai failed to parse: {e}");
-                return Err(e);
+                return Err(e.to_string());
             }
         }
     }
-    Ok(acc.expect("prelude set is non-empty"))
+    acc.ok_or_else(|| "active Rhai prelude is empty".to_string())
 }
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded

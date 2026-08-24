@@ -89,3 +89,35 @@ pub fn spawn_tracked_cancellable<T: Send + 'static>(
     });
     TrackedTask { inner: task }
 }
+
+/// Cancellable tracked task whose result carries a user-visible failure.
+///
+/// The generic task helper cannot infer whether an arbitrary result represents
+/// a failed operation. This variant keeps that policy at the async boundary:
+/// an error becomes the status-bus failure, while the caller still receives
+/// the typed result and can decide how to render it.
+pub fn spawn_tracked_cancellable_result<T, E>(
+    bus: &mut StatusBus,
+    scope: BusyScope,
+    source: &'static str,
+    label: impl Into<String>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    fut: impl Future<Output = Result<T, E>> + Send + 'static,
+) -> TrackedTask<Result<T, E>>
+where
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let mut handle = bus.begin_cancellable(scope, source, label, std::sync::Arc::clone(&cancel));
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let out = fut.await;
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            handle.set_outcome(BusyOutcome::Cancelled);
+        } else if let Err(error) = &out {
+            handle.set_outcome(BusyOutcome::Failed(error.to_string()));
+        }
+        drop(handle);
+        out
+    });
+    TrackedTask { inner: task }
+}

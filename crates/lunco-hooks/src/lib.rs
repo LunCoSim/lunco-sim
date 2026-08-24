@@ -76,12 +76,13 @@ impl HookValue {
     pub fn str(s: impl Into<String>) -> Self {
         HookValue::Str(s.into())
     }
-    /// This value as an `i64`, if it is an integer (or a whole float / bool).
+    /// This value as an `i64`, if it is an integer.
+    ///
+    /// Hook contracts are typed at the boundary. Numeric and boolean
+    /// coercions belong to an explicit policy, not to schema validation.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             HookValue::Int(i) => Some(*i),
-            HookValue::Float(f) => Some(*f as i64),
-            HookValue::Bool(b) => Some(*b as i64),
             _ => None,
         }
     }
@@ -295,5 +296,7 @@ mod tests {
         assert_eq!(m.get("lamport").and_then(HookValue::as_i64), Some(7));
         assert_eq!(m.get("author").and_then(HookValue::as_str), Some("peer-1"));
         assert_eq!(m.get("missing"), None);
+        assert_eq!(HookValue::Float(1.0).as_i64(), None);
+        assert_eq!(HookValue::Bool(true).as_i64(), None);
     }
 }

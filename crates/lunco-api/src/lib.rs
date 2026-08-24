@@ -221,26 +221,28 @@ impl Plugin for LunCoApiPlugin {
             // while still capping the worst case; senders await when it is full
             // (see `HttpBridge::execute`).
             let (tx, rx) = tokio::sync::mpsc::channel(256);
-            #[allow(unused_mut)]
-            let mut bridge = HttpBridge::new(tx);
+            let bridge = HttpBridge::new(tx);
 
-            // Hook the winit event loop so requests wake the app immediately
-            // instead of waiting for the next reactive tick. Native + windowed
-            // only (the `winit` feature): the wasm build runs a continuous
-            // requestAnimationFrame loop and a headless server ticks via
-            // ScheduleRunnerPlugin, so neither needs (or has) the waker.
+            // Bind the winit wake-up hook through a shared slot. Plugin build
+            // order is not the event-loop lifecycle: the proxy may not exist
+            // when this transport is constructed. The binding system below
+            // installs it as soon as the real winit resource is available, so
+            // a reactive window cannot sleep through an API request.
             #[cfg(all(feature = "transport-http", feature = "winit"))]
-            if let Some(proxy) = app
-                .world()
-                .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+            let waker_slot = transports::ApiWakerSlot::default();
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
+            let bridge = bridge.with_waker_slot(waker_slot.clone());
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
             {
-                let proxy = (**proxy).clone();
-                bridge = bridge.with_waker(std::sync::Arc::new(move || {
-                    // Ignored by design: a send error means the winit event loop
-                    // has already exited (app shutting down), so there is nothing
-                    // left to wake — warning here would just spam at teardown.
-                    let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
-                }));
+                app.insert_resource(ApiWakerBinding(waker_slot))
+                    .add_systems(
+                        Update,
+                        bind_winit_api_waker.run_if(
+                            bevy::ecs::schedule::common_conditions::resource_exists::<
+                                ApiWakerBinding,
+                            >,
+                        ),
+                    );
             }
 
             app.insert_resource(ApiHttpBridgeReceiver(rx))
@@ -274,6 +276,28 @@ impl Plugin for LunCoApiPlugin {
             // this block valid across every feature combination.
             let _ = bridge;
         }
+    }
+
+    #[cfg(all(feature = "transport-http", feature = "winit"))]
+    fn finish(&self, app: &mut App) {
+        // Winit creates its proxy during plugin build, but all plugin finish
+        // hooks run only after every plugin has completed build. Bind here as
+        // the deterministic lifecycle point; the Update system remains as a
+        // late-binding guard for hosts that create the proxy later.
+        let (slot, proxy) = {
+            let world = app.world();
+            let (Some(binding), Some(proxy)) = (
+                world.get_resource::<ApiWakerBinding>(),
+                world.get_resource::<bevy::winit::EventLoopProxyWrapper>(),
+            ) else {
+                return;
+            };
+            (binding.0.clone(), (**proxy).clone())
+        };
+        slot.install(std::sync::Arc::new(move || {
+            let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+        }));
+        app.world_mut().remove_resource::<ApiWakerBinding>();
     }
 }
 
@@ -320,6 +344,40 @@ pub struct ApiHttpBridgeReceiver(tokio::sync::mpsc::Receiver<transports::BridgeM
 pub struct ApiHttpResponsePending(
     std::collections::HashMap<u64, tokio::sync::oneshot::Sender<schema::ApiResponse>>,
 );
+
+/// Lifecycle hand-off for the native window wake hook. The resource is removed
+/// after binding, so the binding system is not part of the steady-state frame
+/// path. Headless and wasm hosts do not create this resource.
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+#[derive(Resource)]
+struct ApiWakerBinding(transports::ApiWakerSlot);
+
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+fn install_winit_api_waker(
+    slot: transports::ApiWakerSlot,
+    proxy: &bevy::winit::EventLoopProxyWrapper,
+) {
+    let proxy = (**proxy).clone();
+    slot.install(std::sync::Arc::new(move || {
+        // A send error means the event loop is already shutting down. The
+        // bridge's request future will then fail through its normal channel
+        // closure path; emitting a teardown warning here would be noise.
+        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+    }));
+}
+
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+fn bind_winit_api_waker(
+    binding: Option<Res<ApiWakerBinding>>,
+    proxy: Option<Res<bevy::winit::EventLoopProxyWrapper>>,
+    mut commands: Commands,
+) {
+    let (Some(binding), Some(proxy)) = (binding, proxy) else {
+        return;
+    };
+    install_winit_api_waker(binding.0.clone(), &proxy);
+    commands.remove_resource::<ApiWakerBinding>();
+}
 
 /// System that polls the bridge receiver and triggers API requests.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]

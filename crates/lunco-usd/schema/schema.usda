@@ -703,6 +703,32 @@ class "LunCoProgramAPI" (
     )
 }
 
+class "LunCoModelicaTopologyAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Presentation metadata for a Modelica physical component inside a generated
+    topology. This is not a solver direction and it does not change Modelica equations:
+    acausal `flow` variables remain reversible. It tells a presentation policy which
+    side of a visual bus best explains an authored component's intended domain role.
+
+    `source` is a component that normally supplies the connected network, `storage` is
+    a component that can absorb or supply and is preferred as a visual hub, `load` is a
+    component that normally consumes the network, and `neutral` carries no directional
+    presentation preference. The value is deliberately separate from `LunCoProgramAPI`:
+    a program's execution role is derived from its declared ports, while this contract
+    is an optional domain-presentation fact for a Modelica component."""
+)
+{
+    uniform token lunco:modelica:topologyRole = "neutral" (
+        allowedTokens = ["source", "storage", "load", "neutral"]
+        doc = """Presentation role consumed by the selected Rhai Modelica synthesis
+        policy. It never becomes a causal Modelica equation or a runtime source/sink
+        assertion. Omit the API for a component with no useful side preference."""
+    )
+}
+
 class "LunCoEnvironmentProbeAPI" (
     inherits = </APISchemaBase>
     customData = {

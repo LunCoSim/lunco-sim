@@ -5,6 +5,29 @@ use crate::ModelicaModel;
 use bevy_egui::egui;
 use lunco_workbench::PanelCtx;
 
+/// Publish the active diagram's namespace into the canvas snapshot. This is
+/// an explicit Modelica root-scope projection, not a renderer fallback: all
+/// views of a drilled class consume the same unqualified class-local keys.
+fn project_target_unit_scope(
+    values: &mut std::collections::HashMap<String, f64>,
+    instance: Option<&str>,
+) {
+    let Some(instance) = instance.filter(|name| !name.is_empty()) else {
+        return;
+    };
+    let prefix = format!("{instance}.");
+    let scoped: Vec<(String, f64)> = values
+        .iter()
+        .filter_map(|(name, value)| {
+            name.strip_prefix(&prefix)
+                .map(|local| (local.to_string(), *value))
+        })
+        .collect();
+    for (name, value) in scoped {
+        values.insert(name, value);
+    }
+}
+
 /// Resolve the `(min, max)` attributes of an input `member` on a
 /// component of type `ty`, by building (once, cached) a `ModelicaIndex`
 /// over the bundled package `pkg`'s source. This recovers real input
@@ -53,6 +76,7 @@ pub(crate) fn stash_snapshots(
     ui: &egui::Context,
     ctx: &PanelCtx,
     doc_id: Option<lunco_doc::DocumentId>,
+    target_unit_instance: Option<&str>,
 ) {
     // ─── Signals ───
     //
@@ -129,6 +153,7 @@ pub(crate) fn stash_snapshots(
                 for (k, v) in &model.variables {
                     state.values.insert(k.to_string(), *v);
                 }
+                project_target_unit_scope(&mut state.values, target_unit_instance);
             }
         }
         lunco_viz::kinds::canvas_plot_node::stash_node_state(ui, state);

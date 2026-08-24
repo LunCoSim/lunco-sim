@@ -473,8 +473,12 @@ fn lander_actuator_projection_uses_all_authored_force_geometry() {
     };
     assert_eq!(plan.component_paths.len(), 12);
     assert_eq!(plan.outputs.len(), 12);
+    assert!(plan.source_roots.contains("LunCo"));
     assert!(plan.source.contains("LunCo.Actuation.WrenchAllocator"));
     assert!(!plan.source.contains("RcsValveAllocator"));
+    assert!(plan.source.contains("Diagram(coordinateSystem"));
+    assert!(plan.source.contains("Placement(transformation"));
+    assert!(!plan.source.contains("\\n"));
 }
 
 #[test]

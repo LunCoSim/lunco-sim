@@ -1020,6 +1020,8 @@ impl MSLIndexer {
                     children: Vec::new(),
                     equation_count: 0,
                     experiment: None,
+                    resolution: crate::index::ClassResolutionState::Resolved,
+                    resolution_message: None,
                 });
             }
         }

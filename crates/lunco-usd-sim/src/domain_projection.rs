@@ -15,6 +15,7 @@ use lunco_modelica::{
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
+use rumoca_compile::parsing::Causality;
 
 // The USD side of a Modelica program facet — the class an asset names, the
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
@@ -30,6 +31,34 @@ fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
         .remove::<(lunco_cosim::SimComponent, crate::cosim::UsdModelicaSchedule)>();
+}
+
+/// Generated documents are runtime projections, unlike authored documents
+/// whose source must outlive a scene entity. Retire only the generated origin;
+/// this guard keeps ordinary document lifecycle semantics untouched.
+fn retire_generated_document(
+    document: lunco_doc::DocumentId,
+    documents: &mut lunco_modelica::state::ModelicaDocumentRegistry,
+) {
+    if document.is_unassigned() {
+        return;
+    }
+    let generated = documents
+        .host(document)
+        .is_some_and(|host| lunco_modelica::state::is_generated_document(host.document()));
+    if generated {
+        documents.remove_document(document);
+    }
+}
+
+fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc::DocumentId) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut documents) =
+            world.get_resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+        {
+            retire_generated_document(document, &mut documents);
+        }
+    });
 }
 
 /// Fingerprint of the generated wrapper currently installed on a network scope.
@@ -60,6 +89,10 @@ pub struct GeneratedModelicaSource {
     /// `(prim path, source asset, instantiated class)` per member — the
     /// attribution a `generated://` compile error needs.
     pub members: Vec<(String, String, String)>,
+    /// Bundled Modelica source roots required by the emitted classes. This is
+    /// returned by the policy so the UI can load real dependencies without
+    /// parsing generated source or hardcoding a library name in Rust.
+    pub source_roots: Vec<String>,
     /// Causal outputs of generated members promoted to the wrapper boundary.
     /// Each tuple is `(member USD path, member output, wrapper output)`.
     ///
@@ -71,6 +104,11 @@ pub struct GeneratedModelicaSource {
     pub member_output_aliases: Vec<(String, String, String)>,
     /// Deterministic composite units selected by the synthesizer.
     pub units: Vec<SynthesisUnit>,
+    /// Public causal inputs on the generated root. Kept separate from
+    /// promoted member telemetry so the workbench can explain the interface.
+    pub boundary_inputs: Vec<String>,
+    /// Public causal outputs authored on the generated root.
+    pub boundary_outputs: Vec<String>,
     /// Unit and member positions selected by the synthesizer policy.
     pub layout: SynthesisLayout,
 }
@@ -96,6 +134,10 @@ pub struct DomainComponent {
     pub inputs: BTreeMap<String, String>,
     /// Public causal outputs declared by the reusable model facet.
     pub declared_outputs: BTreeSet<String>,
+    /// Optional presentation role for a generated Modelica topology. This is
+    /// USD-authored metadata, not a solver direction: acausal Modelica flow
+    /// remains reversible and runtime sign still controls animated direction.
+    pub topology_role: String,
 }
 
 /// One network scope and its public causal boundary.
@@ -133,6 +175,9 @@ pub struct DomainNetwork {
 pub struct SynthesisUnit {
     /// Stable generated Modelica class name for the composite unit.
     pub name: String,
+    /// Modelica instance name chosen by the synthesis policy. Runtime signal
+    /// mapping follows this exact name; the policy result must provide it.
+    pub instance: String,
     /// Composed USD members absorbed into the unit.
     pub component_paths: Vec<String>,
     /// Root boundary inputs consumed by this unit.
@@ -153,7 +198,9 @@ pub struct SynthesisUnit {
 pub struct SynthesisLayout {
     /// Generated child-unit class name to Modelica diagram position.
     pub unit_positions: BTreeMap<String, (i32, i32)>,
-    /// Composed USD member path to Modelica diagram position.
+    /// Composed USD member path to Modelica diagram position, local to the
+    /// generated unit that owns the member. Unit diagrams are independent
+    /// coordinate systems; root diagrams use `unit_positions` instead.
     pub member_positions: BTreeMap<String, (i32, i32)>,
 }
 
@@ -184,6 +231,8 @@ pub struct SynthesisPlan {
     pub outputs: BTreeSet<String>,
     /// Composed USD paths absorbed into this unit.
     pub component_paths: Vec<String>,
+    /// Bundled Modelica source roots required by the policy-emitted source.
+    pub source_roots: BTreeSet<String>,
     /// `(prim, source asset, class)` per member — attribution + class audit.
     pub members: Vec<(String, String, String)>,
     /// Causal output aliases emitted for composed members. This is collected
@@ -357,10 +406,12 @@ impl SynthesizerRegistry {
 /// of it should require a rebuild to change.
 ///
 /// The hook receives one argument — [`network_facts`] — and returns a map with
-/// a required `source` key. It may also return `units` and `layout`: those are
-/// the policy's explicit merge and presentation decisions. Omitting either
-/// keeps the documented deterministic default, which is supplied as facts to
-/// the policy and remains visible in the resulting plan.
+/// required `source`, `units`, `layout`, `source_roots`, and
+/// `member_output_aliases` keys. `layout` must contain both `units` and
+/// `members`, even when a policy has no entries in one section. Unit positions
+/// are root-diagram coordinates; member positions are local to their owning
+/// unit diagram. Rust validates the policy-owned result but never fills an
+/// omitted synthesis decision from a second emitter.
 ///
 /// Registered through [`register_hook_synthesizer`]; the hook id is by convention
 /// `synth.<name>`, reached exactly like `lint.usd`.
@@ -390,7 +441,15 @@ impl DomainSynthesizer for HookSynthesizer {
             return Ok(SynthOutcome::Pending);
         }
         let network_root = network.root.clone();
-        let facts = network_facts(&network, model_name, Some(ctx.classes));
+        let facts = network_facts(&network, model_name, Some(ctx.classes)).map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message: format!(
+                    "synthesizer `{}` could not build policy facts: {message}",
+                    self.name
+                ),
+            }]
+        })?;
         let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
             vec![DomainProjectionError {
                 path: network_root.clone(),
@@ -428,13 +487,11 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]);
         };
-        let default_units = partition_network(&network);
         let units = parse_policy_units(
             hook_map_value(map, "units"),
             &network,
             &network_root,
             &self.name,
-            default_units,
         )
         .map_err(|message| {
             vec![DomainProjectionError {
@@ -455,6 +512,38 @@ impl DomainSynthesizer for HookSynthesizer {
                 message,
             }]
         })?;
+        let source_roots =
+            parse_policy_source_roots(hook_map_value(map, "source_roots"), &self.name).map_err(
+                |message| {
+                    vec![DomainProjectionError {
+                        path: network_root.clone(),
+                        message,
+                    }]
+                },
+            )?;
+        let member_output_aliases = parse_policy_member_output_aliases(
+            hook_map_value(map, "member_output_aliases"),
+            &network,
+            Some(ctx.classes),
+            &network_root,
+            &self.name,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message,
+            }]
+        })?;
+        validate_generated_source(source, model_name, &network, &units, &member_output_aliases)
+            .map_err(|message| {
+                vec![DomainProjectionError {
+                    path: network_root.clone(),
+                    message: format!(
+                        "synthesizer `{}` returned invalid Modelica: {message}",
+                        self.name
+                    ),
+                }]
+            })?;
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             // The BOUNDARY remains Rust's composed-USD answer. The policy owns
@@ -468,6 +557,7 @@ impl DomainSynthesizer for HookSynthesizer {
                 .iter()
                 .map(|component| component.path.clone())
                 .collect(),
+            source_roots,
             members: network
                 .components
                 .iter()
@@ -479,7 +569,7 @@ impl DomainSynthesizer for HookSynthesizer {
                     )
                 })
                 .collect(),
-            member_output_aliases: generated_member_outputs(&network, Some(ctx.classes)),
+            member_output_aliases,
             units,
             layout,
             communication_period_secs: network.communication_period_secs,
@@ -500,19 +590,11 @@ pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: impl 
     });
 }
 
-/// Remove a policy-owned hook synthesizer. Removing a policy that overrides a
-/// shipped name restores that name's documented built-in synthesizer; a custom
-/// policy name simply leaves the open registry without that entry.
+/// Remove a policy-owned hook synthesizer. A removed selector has no runtime
+/// owner; selecting it therefore reports the missing registration instead of
+/// silently restoring a compiled policy.
 pub fn unregister_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &str) {
     registry.0.remove(name);
-    match name {
-        DEFAULT_SYNTHESIZER => registry.register(HookSynthesizer {
-            hook_id: format!("synth.{DEFAULT_SYNTHESIZER}"),
-            name: DEFAULT_SYNTHESIZER.to_string(),
-        }),
-        ACTUATOR_WRENCH_SYNTHESIZER => registry.register(ActuatorWrenchSynthesizer),
-        _ => {}
-    }
 }
 
 fn hook_map_value<'a>(
@@ -558,6 +640,361 @@ fn hook_map_string_array(
         .collect()
 }
 
+fn parse_policy_source_roots(
+    value: Option<&lunco_hooks::HookValue>,
+    policy_name: &str,
+) -> Result<BTreeSet<String>, String> {
+    let Some(value) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` must return `source_roots`"
+        ));
+    };
+    let lunco_hooks::HookValue::Array(values) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `source_roots`, which must be an array of strings"
+        ));
+    };
+    let roots: Vec<String> = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                format!("synthesizer `{policy_name}` source_roots[{index}] must be a string")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    roots
+        .into_iter()
+        .map(|root| {
+            if is_modelica_identifier(&root) {
+                Ok(root)
+            } else {
+                Err(format!(
+                    "synthesizer `{policy_name}` returned invalid source root `{root}`"
+                ))
+            }
+        })
+        .collect()
+}
+
+/// Parse the policy-owned telemetry promotion table. The policy must return the
+/// table explicitly, even when it is empty; Rust only validates its references.
+fn parse_policy_member_output_aliases(
+    value: Option<&lunco_hooks::HookValue>,
+    network: &DomainNetwork,
+    classes: Option<&MemberClasses>,
+    root: &str,
+    policy_name: &str,
+) -> Result<Vec<(String, String, String)>, String> {
+    let Some(value) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` must return `member_output_aliases`"
+        ));
+    };
+    let lunco_hooks::HookValue::Array(entries) = value else {
+        return Err(format!(
+            "synthesizer `{policy_name}` returned `member_output_aliases`, which must be an array"
+        ));
+    };
+    let known: BTreeSet<(String, String)> = generated_member_outputs(network, classes)?
+        .into_iter()
+        .map(|(member, output, _)| (member, output))
+        .collect();
+    let mut aliases = Vec::with_capacity(entries.len());
+    let mut seen = BTreeSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let context = format!("synthesizer `{policy_name}` member_output_aliases[{index}]");
+        let lunco_hooks::HookValue::Map(map) = entry else {
+            return Err(format!("{context} must be a map"));
+        };
+        let member = hook_map_string(map, "member_path", &context)?;
+        let output = hook_map_string(map, "output", &context)?;
+        let alias = hook_map_string(map, "alias", &context)?;
+        if !known.contains(&(member.clone(), output.clone())) {
+            return Err(format!(
+                "{context} refers to `{member}.outputs:{output}`, which is not a declared member output in `{root}`"
+            ));
+        }
+        if !is_modelica_identifier(&alias) {
+            return Err(format!(
+                "{context}.alias `{alias}` is not a valid Modelica identifier"
+            ));
+        }
+        if network.inputs.contains(&alias) || network.outputs.contains_key(&alias) {
+            return Err(format!(
+                "{context}.alias `{alias}` collides with a root boundary port"
+            ));
+        }
+        if !seen.insert(alias.clone()) {
+            return Err(format!("{context}.alias `{alias}` is duplicated"));
+        }
+        aliases.push((member, output, alias));
+    }
+    Ok(aliases)
+}
+
+/// Parse a policy result and validate the root interface shared by every
+/// generated Modelica synthesizer. Returning the AST keeps callers from
+/// parsing the same generated source twice before they inspect policy-specific
+/// structure.
+fn parse_validated_root_interface(
+    source: &str,
+    model_name: &str,
+    inputs: &BTreeSet<String>,
+    outputs: &BTreeSet<String>,
+    aliases: &[(String, String, String)],
+) -> Result<rumoca_compile::parsing::ast::StoredDefinition, String> {
+    let ast = rumoca_phase_parse::parse_to_ast(source, "generated-policy.mo")
+        .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
+    let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
+        .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
+
+    let mut expected_root_outputs = outputs.clone();
+    expected_root_outputs.extend(aliases.iter().map(|(_, _, alias)| alias.clone()));
+    for component in root.components.values() {
+        match &component.causality {
+            Causality::Input(_) if !inputs.contains(component.name.as_str()) => {
+                return Err(format!(
+                    "root declares undeclared boundary input `{}`",
+                    component.name
+                ));
+            }
+            Causality::Output(_) if !expected_root_outputs.contains(component.name.as_str()) => {
+                return Err(format!(
+                    "root declares undeclared boundary output `{}`",
+                    component.name
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    for input in inputs {
+        let Some(component) = root.components.get(input) else {
+            return Err(format!("root boundary input `{input}` is missing"));
+        };
+        if !matches!(component.causality, Causality::Input(_)) {
+            return Err(format!("root boundary `{input}` is not declared as input"));
+        }
+    }
+    for output in outputs {
+        let Some(component) = root.components.get(output) else {
+            return Err(format!("root boundary output `{output}` is missing"));
+        };
+        if !matches!(component.causality, Causality::Output(_)) {
+            return Err(format!(
+                "root boundary `{output}` is not declared as output"
+            ));
+        }
+    }
+    for (_, _, alias) in aliases {
+        let Some(component) = root.components.get(alias) else {
+            return Err(format!(
+                "promoted output `{alias}` is missing from the root"
+            ));
+        };
+        if !matches!(component.causality, Causality::Output(_)) {
+            return Err(format!(
+                "promoted output `{alias}` is not declared as output"
+            ));
+        }
+    }
+    Ok(ast)
+}
+
+/// Validate the policy's actual Modelica source against the Rust-owned graph
+/// facts. Parsing only is insufficient: a policy can return a syntactically
+/// valid empty model while the runtime later falls back to an invented class
+/// name or silently loses every member. This validator is intentionally an AST
+/// mechanism, not a knowledge of the shipped emitter, so future Rhai policies
+/// can change layout, equations, and partition without Rust changes.
+fn validate_generated_source(
+    source: &str,
+    model_name: &str,
+    network: &DomainNetwork,
+    units: &[SynthesisUnit],
+    aliases: &[(String, String, String)],
+) -> Result<(), String> {
+    let outputs: BTreeSet<String> = network.outputs.keys().cloned().collect();
+    let ast =
+        parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
+    let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
+        .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
+
+    let expected_members: BTreeMap<String, String> = network
+        .components
+        .iter()
+        .map(|component| {
+            instance_identifier(&network.root, &component.path)
+                .map(|instance| (instance, component.model_class.clone()))
+        })
+        .collect::<Result<_, _>>()?;
+    let expected_unit_instances: BTreeSet<String> =
+        units.iter().map(|unit| unit.instance.clone()).collect();
+    if expected_unit_instances.len() != units.len() {
+        return Err("generated unit instances must be unique".into());
+    }
+    for unit in units {
+        let instance = &unit.instance;
+        if network.inputs.contains(instance)
+            || outputs.contains(instance)
+            || aliases.iter().any(|(_, _, alias)| alias == instance)
+        {
+            return Err(format!(
+                "generated unit instance `{instance}` collides with a root interface name"
+            ));
+        }
+        let Some(component) = root.components.get(instance) else {
+            return Err(format!("root unit instance `{instance}` is missing"));
+        };
+        if component.type_name.to_string() != unit.name {
+            return Err(format!(
+                "root unit `{instance}` has type `{}`, expected `{}`",
+                component.type_name, unit.name
+            ));
+        }
+    }
+    for component in root.components.values() {
+        let name = component.name.as_str();
+        if expected_members.contains_key(name)
+            || expected_members
+                .values()
+                .any(|class| class == &component.type_name.to_string())
+        {
+            return Err(format!(
+                "root directly declares native member `{name}`; members must live inside generated units"
+            ));
+        }
+        if component.type_name.to_string().starts_with("Unit_")
+            && !expected_unit_instances.contains(name)
+        {
+            return Err(format!("root contains undeclared generated unit `{name}`"));
+        }
+    }
+
+    for unit in units {
+        let class = lunco_modelica::diagram::find_class_by_qualified_name(&ast, &unit.name)
+            .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
+        let mut expected_unit_outputs = unit.outputs.clone();
+        expected_unit_outputs.extend(
+            aliases
+                .iter()
+                .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
+                .map(|(_, _, alias)| alias.clone()),
+        );
+        for component in class.components.values() {
+            match &component.causality {
+                Causality::Input(_) if !unit.inputs.contains(component.name.as_str()) => {
+                    return Err(format!(
+                        "unit `{}` declares undeclared boundary input `{}`",
+                        unit.name, component.name
+                    ));
+                }
+                Causality::Output(_)
+                    if !expected_unit_outputs.contains(component.name.as_str()) =>
+                {
+                    return Err(format!(
+                        "unit `{}` declares undeclared boundary output `{}`",
+                        unit.name, component.name
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for input in &unit.inputs {
+            let Some(component) = class.components.get(input) else {
+                return Err(format!(
+                    "unit `{}` is missing boundary input `{input}`",
+                    unit.name
+                ));
+            };
+            if !matches!(component.causality, Causality::Input(_)) {
+                return Err(format!(
+                    "unit `{}` boundary `{input}` is not declared as input",
+                    unit.name
+                ));
+            }
+        }
+        for output in &unit.outputs {
+            let Some(component) = class.components.get(output) else {
+                return Err(format!(
+                    "unit `{}` is missing boundary output `{output}`",
+                    unit.name
+                ));
+            };
+            if !matches!(component.causality, Causality::Output(_)) {
+                return Err(format!(
+                    "unit `{}` boundary `{output}` is not declared as output",
+                    unit.name
+                ));
+            }
+        }
+        for member_path in &unit.component_paths {
+            let instance = instance_identifier(&network.root, member_path)?;
+            let expected_type = network
+                .components
+                .iter()
+                .find(|component| component.path == *member_path)
+                .map(|component| component.model_class.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "unit `{}` references unknown member `{member_path}`",
+                        unit.name
+                    )
+                })?;
+            let Some(component) = class.components.get(&instance) else {
+                return Err(format!(
+                    "unit `{}` is missing member instance `{instance}`",
+                    unit.name
+                ));
+            };
+            if component.type_name.to_string() != expected_type {
+                return Err(format!(
+                    "unit `{}` member `{instance}` has type `{}`, expected `{expected_type}`",
+                    unit.name, component.type_name
+                ));
+            }
+        }
+        let expected_instances: BTreeSet<String> = unit
+            .component_paths
+            .iter()
+            .map(|path| instance_identifier(&network.root, path))
+            .collect::<Result<_, _>>()?;
+        let native_types: BTreeSet<String> = network
+            .components
+            .iter()
+            .map(|component| component.model_class.clone())
+            .collect();
+        for component in class.components.values() {
+            let is_native = native_types.contains(&component.type_name.to_string());
+            if is_native && !expected_instances.contains(&component.name) {
+                return Err(format!(
+                    "unit `{}` contains unassigned native member `{}`",
+                    unit.name, component.name
+                ));
+            }
+        }
+        for (member, _, alias) in aliases {
+            if !unit.component_paths.iter().any(|path| path == member) {
+                continue;
+            }
+            let Some(component) = class.components.get(alias) else {
+                return Err(format!(
+                    "unit `{}` is missing promoted output `{alias}` for member `{member}`",
+                    unit.name
+                ));
+            };
+            if !matches!(component.causality, Causality::Output(_)) {
+                return Err(format!(
+                    "unit `{}` promoted output `{alias}` is not declared as output",
+                    unit.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Read a policy-owned unit partition and prove that it is only rearranging
 /// the composed graph. USD facts stay authoritative for membership and public
 /// boundaries; Rhai chooses how those members are merged into Modelica units.
@@ -566,10 +1003,9 @@ fn parse_policy_units(
     network: &DomainNetwork,
     root: &str,
     policy_name: &str,
-    default_units: Vec<SynthesisUnit>,
 ) -> Result<Vec<SynthesisUnit>, String> {
     let Some(value) = value else {
-        return Ok(default_units);
+        return Err(format!("synthesizer `{policy_name}` must return `units`"));
     };
     let lunco_hooks::HookValue::Array(raw_units) = value else {
         return Err(format!(
@@ -585,6 +1021,7 @@ fn parse_policy_units(
     let known_outputs: BTreeSet<_> = network.outputs.keys().map(String::as_str).collect();
     let mut seen_components = BTreeSet::new();
     let mut seen_names = BTreeSet::new();
+    let mut seen_instances = BTreeSet::new();
     let mut units = Vec::with_capacity(raw_units.len());
 
     for (index, raw_unit) in raw_units.iter().enumerate() {
@@ -600,6 +1037,20 @@ fn parse_policy_units(
         }
         if !seen_names.insert(name.clone()) {
             return Err(format!("{context}.name `{name}` is duplicated"));
+        }
+        let instance = hook_map_string(map, "instance", &context)?;
+        if !is_modelica_identifier(&instance) {
+            return Err(format!(
+                "{context}.instance `{instance}` is not a valid Modelica identifier"
+            ));
+        }
+        if !seen_instances.insert(instance.clone()) {
+            return Err(format!("{context}.instance `{instance}` is duplicated"));
+        }
+        if known_inputs.contains(&instance) || known_outputs.contains(instance.as_str()) {
+            return Err(format!(
+                "{context}.instance `{instance}` collides with a network boundary name"
+            ));
         }
         let component_paths = hook_map_string_array(map, "components", &context)?;
         if component_paths.is_empty() {
@@ -639,6 +1090,7 @@ fn parse_policy_units(
         }
         units.push(SynthesisUnit {
             name,
+            instance,
             component_paths,
             inputs,
             outputs,
@@ -675,9 +1127,9 @@ fn parse_policy_coordinate(
         .map_err(|_| format!("{context}.{key} is outside Modelica coordinate range"))
 }
 
-/// Read the optional policy-owned unit/member diagram placements. Missing
-/// entries use the deterministic default only as an authored-schema default;
-/// every returned placement is still checked against the composed plan.
+/// Read the policy-owned unit/member diagram placements. Both sections and
+/// every placement are required; Rust validates the result but never fills in
+/// omitted coordinates from a second presentation policy.
 fn parse_policy_layout(
     value: Option<&lunco_hooks::HookValue>,
     network: &DomainNetwork,
@@ -685,9 +1137,8 @@ fn parse_policy_layout(
     root: &str,
     policy_name: &str,
 ) -> Result<SynthesisLayout, String> {
-    let mut layout = default_synthesis_layout(network, units);
     let Some(value) = value else {
-        return Ok(layout);
+        return Err(format!("synthesizer `{policy_name}` must return `layout`"));
     };
     let lunco_hooks::HookValue::Map(map) = value else {
         return Err(format!(
@@ -701,6 +1152,7 @@ fn parse_policy_layout(
         .map(|component| component.path.as_str())
         .collect();
 
+    let mut layout = SynthesisLayout::default();
     for (section, key, known, target) in [
         ("unit", "units", known_units, &mut layout.unit_positions),
         (
@@ -711,7 +1163,9 @@ fn parse_policy_layout(
         ),
     ] {
         let Some(value) = hook_map_value(map, key) else {
-            continue;
+            return Err(format!(
+                "synthesizer `{policy_name}` layout must contain `{key}`"
+            ));
         };
         let lunco_hooks::HookValue::Array(placements) = value else {
             return Err(format!(
@@ -740,6 +1194,40 @@ fn parse_policy_layout(
             let y = parse_policy_coordinate(placement, "y", &context)?;
             target.insert(identity, (x, y));
         }
+        let provided: BTreeSet<_> = target.keys().map(String::as_str).collect();
+        if provided != known {
+            let missing = known.difference(&provided).copied().collect::<Vec<_>>();
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.{key} is missing: {}",
+                missing.join(", ")
+            ));
+        }
+    }
+    let mut occupied_units = BTreeMap::<(i32, i32), &str>::new();
+    for (identity, position) in &layout.unit_positions {
+        if let Some(previous) = occupied_units.insert(*position, identity.as_str()) {
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.units places `{identity}` on top of `{previous}` at ({}, {})",
+                position.0, position.1
+            ));
+        }
+    }
+    for unit in units {
+        let mut occupied_members = BTreeMap::<(i32, i32), &str>::new();
+        for identity in &unit.component_paths {
+            let Some(position) = layout.member_positions.get(identity) else {
+                return Err(format!(
+                    "synthesizer `{policy_name}` layout.members is missing `{identity}` in unit `{}`",
+                    unit.name
+                ));
+            };
+            if let Some(previous) = occupied_members.insert(*position, identity.as_str()) {
+                return Err(format!(
+                    "synthesizer `{policy_name}` layout.members places `{identity}` on top of `{previous}` in unit `{}` at ({}, {})",
+                    unit.name, position.0, position.1
+                ));
+            }
+        }
     }
     Ok(layout)
 }
@@ -754,11 +1242,17 @@ pub fn network_facts(
     network: &DomainNetwork,
     model_name: &str,
     classes: Option<&MemberClasses>,
-) -> lunco_hooks::HookValue {
+) -> Result<lunco_hooks::HookValue, String> {
     use lunco_hooks::HookValue as H;
     let units = partition_network(network);
     let layout = default_synthesis_layout(network, &units);
-    let member_outputs = generated_member_outputs(network, classes);
+    let member_outputs = generated_member_outputs(network, classes)?;
+    let source_roots: BTreeSet<String> = network
+        .components
+        .iter()
+        .filter_map(|component| component.model_class.split('.').next())
+        .map(str::to_string)
+        .collect();
     let component_paths: BTreeSet<_> = network
         .components
         .iter()
@@ -769,7 +1263,7 @@ pub fn network_facts(
     let mut causal_links = BTreeSet::new();
     let mut boundary_links = BTreeSet::new();
     for component in &network.components {
-        let target_instance = instance_identifier(&network.root, &component.path);
+        let target_instance = instance_identifier(&network.root, &component.path)?;
         for (connector, targets) in &component.connectors {
             for target in targets {
                 let Some((target_path, target_connector)) = target.split_once(".connectors:")
@@ -825,40 +1319,40 @@ pub fn network_facts(
     let connection_facts = connections
         .into_iter()
         .map(|(left_path, left_connector, right_path, right_connector)| {
-            H::map([
+            Ok(H::map([
                 ("left_path", H::str(left_path.clone())),
                 (
                     "left_instance",
-                    H::str(instance_identifier(&network.root, &left_path)),
+                    H::str(instance_identifier(&network.root, &left_path)?),
                 ),
                 ("left_connector", H::str(left_connector)),
                 ("right_path", H::str(right_path.clone())),
                 (
                     "right_instance",
-                    H::str(instance_identifier(&network.root, &right_path)),
+                    H::str(instance_identifier(&network.root, &right_path)?),
                 ),
                 ("right_connector", H::str(right_connector)),
-            ])
+            ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let causal_link_facts = causal_links
         .into_iter()
         .map(
             |(source_path, source_output, target_path, target_instance, target_input)| {
-                H::map([
+                Ok(H::map([
                     ("source_path", H::str(source_path.clone())),
                     (
                         "source_instance",
-                        H::str(instance_identifier(&network.root, &source_path)),
+                        H::str(instance_identifier(&network.root, &source_path)?),
                     ),
                     ("source_output", H::str(source_output)),
                     ("target_path", H::str(target_path)),
                     ("target_instance", H::str(target_instance)),
                     ("target_input", H::str(target_input)),
-                ])
+                ]))
             },
         )
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let boundary_link_facts = boundary_links
         .into_iter()
         .map(|(input, target_path, target_instance, target_input)| {
@@ -873,42 +1367,46 @@ pub fn network_facts(
     let boundary_output_facts = network
         .outputs
         .iter()
-        .filter_map(|(name, target)| {
-            let (source_path, source_output) = target.split_once(".outputs:")?;
-            Some(H::map([
+        .map(|(name, target)| {
+            let (source_path, source_output) = target.split_once(".outputs:").ok_or_else(|| {
+                format!(
+                    "network output `{name}` points to malformed target `{target}`; expected `.outputs:`"
+                )
+            })?;
+            Ok(H::map([
                 ("name", H::str(name.clone())),
                 ("source_path", H::str(source_path)),
                 (
                     "source_instance",
-                    H::str(instance_identifier(&network.root, source_path)),
+                    H::str(instance_identifier(&network.root, source_path)?),
                 ),
                 ("source_output", H::str(source_output)),
             ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let member_output_facts = member_outputs
         .iter()
         .map(|(member_path, output, alias)| {
-            H::map([
+            Ok(H::map([
                 ("member_path", H::str(member_path.clone())),
                 (
                     "member_instance",
-                    H::str(instance_identifier(&network.root, member_path)),
+                    H::str(instance_identifier(&network.root, member_path)?),
                 ),
                 ("output", H::str(output.clone())),
                 ("alias", H::str(alias.clone())),
-            ])
+            ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let components: Vec<H> = network
         .components
         .iter()
         .map(|component| {
-            H::map([
+            Ok(H::map([
                 ("path", H::str(component.path.clone())),
                 (
                     "instance",
-                    H::str(instance_identifier(&network.root, &component.path)),
+                    H::str(instance_identifier(&network.root, &component.path)?),
                 ),
                 ("class", H::str(component.model_class.clone())),
                 ("source_asset", H::str(component.source_asset.clone())),
@@ -984,12 +1482,17 @@ pub fn network_facts(
                             .collect(),
                     ),
                 ),
-            ])
+                ("topology_role", H::str(component.topology_role.clone())),
+            ]))
         })
-        .collect();
-    H::map([
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(H::map([
         ("model_name", H::str(model_name.to_string())),
         ("root", H::str(network.root.clone())),
+        (
+            "source_roots",
+            H::Array(source_roots.into_iter().map(H::str).collect()),
+        ),
         ("components", H::Array(components)),
         (
             "inputs",
@@ -1025,15 +1528,11 @@ pub fn network_facts(
             H::Array(
                 units
                     .into_iter()
-                    .enumerate()
-                    .map(|(index, unit)| {
+                    .map(|unit| {
                         let unit_name = unit.name.clone();
                         H::map([
                             ("name", H::str(unit_name.clone())),
-                            (
-                                "instance",
-                                H::str(unit_instance_identifier(&unit_name, index)),
-                            ),
+                            ("instance", H::str(unit.instance.clone())),
                             (
                                 "components",
                                 H::Array(unit.component_paths.into_iter().map(H::str).collect()),
@@ -1088,7 +1587,7 @@ pub fn network_facts(
                 ),
             ]),
         ),
-    ])
+    ]))
 }
 
 /// Partition a composed network once, at the synthesizer boundary.
@@ -1133,7 +1632,8 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
     graph
         .connected_components()
         .into_iter()
-        .map(|component_paths| {
+        .enumerate()
+        .map(|(unit_index, component_paths)| {
             let members: BTreeSet<_> = component_paths.iter().map(String::as_str).collect();
             let inputs = network
                 .components
@@ -1162,6 +1662,7 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
                 .iter()
                 .all(|path| component_by_path.contains_key(path.as_str())));
             SynthesisUnit {
+                instance: unit_instance_identifier(&name, unit_index),
                 name,
                 component_paths,
                 inputs,
@@ -1398,20 +1899,40 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message: "actuator-wrench synthesis policy returned no string `source` key".into(),
             }]);
         };
-        let unit = SynthesisUnit {
-            name: format!("{model_name}_ActuatorWrench"),
-            component_paths: component_paths.clone(),
-            inputs: inputs.clone(),
-            outputs: outputs.clone(),
-        };
+        parse_validated_root_interface(source, model_name, &inputs, &outputs, &[]).map_err(
+            |message| {
+                vec![DomainProjectionError {
+                    path: root_string.clone(),
+                    message: format!(
+                        "actuator-wrench synthesis policy returned invalid Modelica: {message}"
+                    ),
+                }]
+            },
+        )?;
+        let source_roots = parse_policy_source_roots(
+            hook_map_value(&map, "source_roots"),
+            ACTUATOR_WRENCH_SYNTHESIZER,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: root_string.clone(),
+                message,
+            }]
+        })?;
+        // Force actuators are Avian/USD members, not Modelica component
+        // members. Do not invent a generated unit class for them: the policy
+        // emits one ordinary root model whose real Modelica child is the
+        // allocator, and the source UI must not promise a drill-down class
+        // that does not exist.
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             inputs,
             outputs,
             component_paths,
+            source_roots,
             members: Vec::new(),
             member_output_aliases: Vec::new(),
-            units: vec![unit],
+            units: Vec::new(),
             layout: SynthesisLayout::default(),
             communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
         })))
@@ -1461,9 +1982,14 @@ fn actuator_wrench_matrix(
 /// stable topology-derived starting arrangement in the facts map.
 const GENERATED_UNIT_COLUMN_SPACING: i32 = 150;
 const GENERATED_UNIT_ROW_SPACING: i32 = 100;
+const NETWORK_LAYOUT_ORIGIN_X: i32 = -100;
+const NETWORK_LAYOUT_LAYER_SPACING: i32 = 55;
+const NETWORK_LAYOUT_ROW_SPACING: i32 = 22;
+const NETWORK_LAYOUT_ROW_CENTER_STEP: i32 = 2;
 
-/// Stable Modelica name for a synthesized unit instance used by telemetry
-/// address mapping. This is an identity function, not a visual emitter.
+/// Deterministic default Modelica name for a synthesized unit instance. A
+/// policy may replace this name in its returned unit table; this helper is not
+/// a visual emitter or a second policy.
 fn unit_instance_identifier(unit_name: &str, unit_index: usize) -> String {
     let encoded_path = unit_name.strip_prefix("Unit_").unwrap_or(unit_name);
     let path_parts = encoded_path.split("_x2f_").collect::<Vec<_>>();
@@ -1525,27 +2051,24 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
         for target in component.connectors.values().flatten() {
             if let Some((target, _)) = target.split_once(".connectors:") {
                 if paths.contains(target) {
-                    neighbours
-                        .get_mut(&component.path)
-                        .expect("component path indexed")
-                        .insert(target.to_string());
-                    neighbours
-                        .get_mut(target)
-                        .expect("component path indexed")
-                        .insert(component.path.clone());
+                    if let Some(component_neighbours) = neighbours.get_mut(&component.path) {
+                        component_neighbours.insert(target.to_string());
+                    }
+                    if let Some(target_neighbours) = neighbours.get_mut(target) {
+                        target_neighbours.insert(component.path.clone());
+                    }
                 }
             }
         }
         for target in component.inputs.values() {
             if let Some((source, _)) = target.split_once(".outputs:") {
                 if paths.contains(source) {
-                    neighbours
-                        .get_mut(source)
-                        .expect("component path indexed")
-                        .insert(component.path.clone());
-                    *incoming
-                        .get_mut(&component.path)
-                        .expect("component path indexed") += 1;
+                    if let Some(source_neighbours) = neighbours.get_mut(source) {
+                        source_neighbours.insert(component.path.clone());
+                    }
+                    if let Some(component_incoming) = incoming.get_mut(&component.path) {
+                        *component_incoming += 1;
+                    }
                 }
             }
         }
@@ -1553,7 +2076,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
     let mut roots: Vec<_> = network
         .components
         .iter()
-        .filter(|component| incoming[&component.path] == 0)
+        .filter(|component| incoming.get(&component.path).copied() == Some(0))
         .map(|component| component.path.clone())
         .collect();
     roots.sort();
@@ -1568,7 +2091,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
                 continue;
             }
             rank.insert(path.clone(), layer);
-            for neighbour in &neighbours[&path] {
+            for neighbour in neighbours.get(&path).into_iter().flatten() {
                 if !rank.contains_key(neighbour) {
                     queue.push_back((neighbour.clone(), layer + 1));
                 }
@@ -1585,7 +2108,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
                 continue;
             }
             rank.insert(path.clone(), layer);
-            for neighbour in &neighbours[&path] {
+            for neighbour in neighbours.get(&path).into_iter().flatten() {
                 if !rank.contains_key(neighbour) {
                     queue.push_back((neighbour.clone(), layer + 1));
                 }
@@ -1602,7 +2125,11 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
         for (row, path) in paths.into_iter().enumerate() {
             placements.insert(
                 path,
-                (-100 + layer as i32 * 55, (count - 1 - row as i32 * 2) * 22),
+                (
+                    NETWORK_LAYOUT_ORIGIN_X + layer as i32 * NETWORK_LAYOUT_LAYER_SPACING,
+                    (count - 1 - row as i32 * NETWORK_LAYOUT_ROW_CENTER_STEP)
+                        * NETWORK_LAYOUT_ROW_SPACING,
+                ),
             );
         }
     }
@@ -1614,39 +2141,39 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
 /// remain visible in USD need a first-class boundary name. The prefix keeps
 /// these derived names separate from authored network outputs; the escaped
 /// instance identifier keeps the mapping injective for arbitrary USD paths.
-pub(crate) fn generated_member_output_name(root: &str, member: &str, output: &str) -> String {
-    format!(
+pub(crate) fn generated_member_output_name(
+    root: &str,
+    member: &str,
+    output: &str,
+) -> Result<String, String> {
+    Ok(format!(
         "__member_{}_{}",
-        instance_identifier(root, member),
+        instance_identifier(root, member)?,
         modelica_identifier(output)
-    )
+    ))
 }
 
 fn generated_member_outputs(
     network: &DomainNetwork,
     classes: Option<&MemberClasses>,
-) -> Vec<(String, String, String)> {
-    network
-        .components
-        .iter()
-        .flat_map(|component| {
-            let modelica_outputs =
-                classes.and_then(|classes| classes.output_names(&component.source_asset));
-            component
-                .declared_outputs
-                .iter()
-                .filter(move |output| {
-                    modelica_outputs.is_none_or(|outputs| outputs.contains(*output))
-                })
-                .map(|output| {
-                    (
-                        component.path.clone(),
-                        output.clone(),
-                        generated_member_output_name(&network.root, &component.path, output),
-                    )
-                })
-        })
-        .collect()
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut member_outputs = Vec::new();
+    for component in &network.components {
+        let modelica_outputs =
+            classes.and_then(|classes| classes.output_names(&component.source_asset));
+        for output in component
+            .declared_outputs
+            .iter()
+            .filter(|output| modelica_outputs.is_none_or(|outputs| outputs.contains(*output)))
+        {
+            member_outputs.push((
+                component.path.clone(),
+                output.clone(),
+                generated_member_output_name(&network.root, &component.path, output)?,
+            ));
+        }
+    }
+    Ok(member_outputs)
 }
 
 /// Reactively compile every ordinary `Scope` containing a standard component
@@ -1765,6 +2292,9 @@ pub fn project_domain_islands(
                 });
                 error!("[domain-projection] `{}` rejected: {message}", prim.path);
                 retire_sim_interface(&mut commands, entity);
+                if let Some(model) = installed_model {
+                    queue_retire_generated_document(&mut commands, model.document);
+                }
                 // A rejected projection has no interface to hold anyone to; the
                 // rejection itself is the error the user must act on.
                 commands
@@ -1788,8 +2318,11 @@ pub fn project_domain_islands(
                         source: String::new(),
                         component_paths: Vec::new(),
                         members: Vec::new(),
+                        source_roots: Vec::new(),
                         member_output_aliases: Vec::new(),
                         units: Vec::new(),
+                        boundary_inputs: Vec::new(),
+                        boundary_outputs: Vec::new(),
                         layout: SynthesisLayout::default(),
                     },
                 ));
@@ -1807,6 +2340,9 @@ pub fn project_domain_islands(
                 // network. Retire its runtime projection in the same update;
                 // keeping the old solver would simulate stale authoring.
                 retire_sim_interface(&mut commands, entity);
+                if let Some(model) = installed_model {
+                    queue_retire_generated_document(&mut commands, model.document);
+                }
                 commands.entity(entity).remove::<(
                     ModelicaModel,
                     ModelicaSignalLayout,
@@ -1845,6 +2381,42 @@ pub fn project_domain_islands(
             resume_after_compile: true,
             ..default()
         };
+        // The policy result carries the member-output facts collected by the
+        // one composed-USD reader. Filter them against the actual generated
+        // root interface so a policy that deliberately omits an optional
+        // output cannot create a telemetry/layout entry with no solver value.
+        let member_output_aliases = synthesized
+            .member_output_aliases
+            .iter()
+            .filter(|(_, _, alias)| interface.outputs.contains(alias))
+            .cloned()
+            .collect::<Vec<_>>();
+        let signal_layout = match generated_signal_layout(
+            &view,
+            &root_path,
+            &prim.path,
+            &synthesized.outputs,
+            &synthesized.members,
+            &member_output_aliases,
+            &synthesized.units,
+            &classes,
+        ) {
+            Ok(layout) => layout,
+            Err(message) => {
+                let message = format!("generated signal layout failed: {message}");
+                model.is_stepping = false;
+                model.is_compiling = false;
+                model.last_error = Some(message.clone());
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
+                    text: format!("[{}] Projection error: {message}", model.model_name),
+                });
+                error!("[domain-projection] {} rejected: {message}", prim.path);
+                retire_sim_interface(&mut commands, entity);
+                commands.entity(entity).try_insert(model);
+                continue;
+            }
+        };
         let dispatch = channels.tx.send(ModelicaCommand::Compile {
             entity,
             session_id,
@@ -1876,33 +2448,17 @@ pub fn project_domain_islands(
                 text: format!("[{}] Compile error: {message}", model.model_name),
             });
         }
-        // The policy result carries the member-output facts collected by the
-        // one composed-USD reader. Filter them against the actual generated
-        // root interface so a policy that deliberately omits an optional
-        // output cannot create a telemetry/layout entry with no solver value.
-        let member_output_aliases = synthesized
-            .member_output_aliases
-            .into_iter()
-            .filter(|(_, _, alias)| interface.outputs.contains(alias))
-            .collect::<Vec<_>>();
-        let signal_layout = generated_signal_layout(
-            &view,
-            &root_path,
-            &prim.path,
-            &synthesized.outputs,
-            &synthesized.members,
-            &member_output_aliases,
-            &synthesized.units,
-            &classes,
-        );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
             doc_uri: doc_uri.clone(),
             source: source_for_diagnostics,
             component_paths: synthesized.component_paths,
             members: synthesized.members,
+            source_roots: synthesized.source_roots.into_iter().collect(),
             member_output_aliases,
             units: synthesized.units,
+            boundary_inputs: synthesized.inputs.iter().cloned().collect(),
+            boundary_outputs: synthesized.outputs.iter().cloned().collect(),
             layout: synthesized.layout,
         };
         // A changed wrapper may expose a different port interface. Rebuild the
@@ -1925,16 +2481,9 @@ pub fn project_domain_islands(
             // what turns a promise the DAE does not keep into one durable,
             // actionable error instead of an island that steps and publishes
             // nothing.
-            // The generated wrapper is the sole runtime participant. Its
-            // complete parsed Modelica interface is therefore the port
-            // contract, including promoted member outputs that authored USD
-            // telemetry and causal connections address through the wrapper.
-            // Using only the network boundary here leaves valid member ports
-            // absent from `DeclaredOutputPorts` until the first solver result,
-            // turning loading order into a permanent missing-port diagnostic.
             UsdModelicaPortContract::new(
                 synthesized.inputs.iter().cloned(),
-                interface.outputs.iter().cloned(),
+                synthesized.outputs.iter().cloned(),
             ),
             crate::cosim::UsdModelicaSchedule {
                 communication_period_secs: synthesized.communication_period_secs,
@@ -1965,6 +2514,23 @@ pub fn sync_generated_network_documents(
         if source.source.is_empty() {
             continue;
         }
+        // Generated documents use the same source-aware class resolver as
+        // authored Modelica documents. Request every referenced bundled root
+        // asynchronously; the canvas shows an explicit loading state until
+        // the shared engine publishes the generic completion notification.
+        if let Some(handle) = lunco_modelica::engine_resource::global_engine_handle() {
+            let mut roots: BTreeSet<String> = source.source_roots.iter().cloned().collect();
+            roots.extend(
+                source
+                    .members
+                    .iter()
+                    .filter_map(|(_, _, class)| class.split('.').next())
+                    .map(str::to_string),
+            );
+            for root in roots {
+                let _ = handle.ensure_library_root_async(&root);
+            }
+        }
         let document =
             if !model.document.is_unassigned() && documents.host(model.document).is_some() {
                 model.document
@@ -1979,6 +2545,57 @@ pub fn sync_generated_network_documents(
         documents.checkpoint_source(document, source.source.clone());
         documents.link(entity, document);
         model.document = document;
+    }
+}
+
+/// Remove the ephemeral source/document metadata when a generated component is
+/// removed for any reason, including scene despawn. The normal Modelica
+/// cleanup intentionally keeps authored documents, so generated lifecycle has
+/// its own narrowly classified observer.
+pub fn on_remove_generated_source(
+    trigger: On<Remove, GeneratedModelicaSource>,
+    source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
+    mut documents: Option<ResMut<lunco_modelica::state::ModelicaDocumentRegistry>>,
+    mut generated: Option<ResMut<lunco_modelica::state::GeneratedModelicaSources>>,
+) {
+    let (network_root, doc_uri, model_document) = source_query
+        .get(trigger.entity)
+        .map(|(source, model)| {
+            (
+                Some(source.network_root.clone()),
+                Some(source.doc_uri.clone()),
+                model.map(|m| m.document),
+            )
+        })
+        .unwrap_or((None, None, None));
+    let document = documents.as_deref_mut().and_then(|registry| {
+        let document = model_document
+            .filter(|document| !document.is_unassigned())
+            .or_else(|| {
+                let model_name = doc_uri
+                    .as_deref()?
+                    .strip_prefix("generated://")?
+                    .strip_suffix(".mo")?;
+                registry.find_bundled(&format!("generated/{model_name}.mo"))
+            })?;
+        let is_generated = registry
+            .host(document)
+            .is_some_and(|host| lunco_modelica::state::is_generated_document(host.document()));
+        if is_generated {
+            registry.remove_document(document);
+            Some(document)
+        } else {
+            None
+        }
+    });
+    if let Some(metadata) = generated.as_deref_mut() {
+        metadata.entries.retain(|entry| {
+            network_root
+                .as_deref()
+                .is_none_or(|root| entry.network_root != root)
+                && document.is_none_or(|doc| entry.document != doc)
+        });
+        metadata.dirty = true;
     }
 }
 
@@ -2001,11 +2618,41 @@ pub fn publish_generated_sources(
                         )
                     }),
                 network_root: source.network_root.clone(),
+                model_name: model
+                    .map(|m| m.model_name.clone())
+                    .unwrap_or_else(|| source.network_root.trim_matches('/').replace('/', "_")),
                 source: source.source.clone(),
+                component_paths: source.component_paths.clone(),
+                units: source
+                    .units
+                    .iter()
+                    .map(|unit| lunco_modelica::state::GeneratedModelicaUnit {
+                        name: unit.name.clone(),
+                        instance: unit.instance.clone(),
+                        members: unit.component_paths.clone(),
+                        inputs: unit.inputs.iter().cloned().collect(),
+                        outputs: unit.outputs.iter().cloned().collect(),
+                    })
+                    .collect(),
+                members: source.members.clone(),
+                source_roots: source.source_roots.clone(),
+                boundary_inputs: source.boundary_inputs.clone(),
+                boundary_outputs: source.boundary_outputs.clone(),
+                member_output_aliases: source.member_output_aliases.clone(),
                 error: model.and_then(|m| m.last_error.clone()),
             },
         )
         .collect();
+    generated.dirty = false;
+}
+
+/// Change gate for the generated metadata publisher. The resource flag covers
+/// removals, while ECS change detection covers source/model error transitions.
+pub fn generated_sources_need_publish(
+    changed: Query<(), Or<(Changed<GeneratedModelicaSource>, Changed<ModelicaModel>)>>,
+    generated: Res<lunco_modelica::state::GeneratedModelicaSources>,
+) -> bool {
+    generated.dirty || !changed.is_empty()
 }
 
 /// `GeneratedModelicaSource` — read back the exact Modelica text a projected
@@ -2040,6 +2687,9 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                     "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
                     "doc_uri": generated.doc_uri,
                     "error": model.and_then(|model| model.last_error.clone()),
+                    "boundary_inputs": generated.boundary_inputs,
+                    "boundary_outputs": generated.boundary_outputs,
+                    "member_output_aliases": generated.member_output_aliases,
                     "components": generated.component_paths,
                     "members": generated
                         .members
@@ -2048,11 +2698,13 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
                             "prim": prim, "source_asset": asset, "class": class,
                         }))
                         .collect::<Vec<_>>(),
+                    "source_roots": generated.source_roots,
                     "units": generated
                         .units
                         .iter()
                         .map(|unit| serde_json::json!({
                             "name": unit.name,
+                            "instance": unit.instance,
                             "components": unit.component_paths,
                             "inputs": unit.inputs,
                             "outputs": unit.outputs,
@@ -2256,6 +2908,29 @@ pub fn read_network(
         let mut declared_connectors = BTreeSet::new();
         let mut inputs = BTreeMap::new();
         let mut declared_outputs = BTreeSet::new();
+        let topology_role = if view.has_api_schema(&path, "LunCoModelicaTopologyAPI") {
+            match view.text(&path, "lunco:modelica:topologyRole").as_deref() {
+                Some(role @ ("source" | "storage" | "load" | "neutral")) => role.to_string(),
+                Some(role) => {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.lunco:modelica:topologyRole"),
+                        message: format!(
+                            "unsupported Modelica topology role `{role}`; expected source, storage, load, or neutral"
+                        ),
+                    });
+                    "neutral".to_string()
+                }
+                None => {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.lunco:modelica:topologyRole"),
+                        message: "LunCoModelicaTopologyAPI is applied but its topology role is unauthored".into(),
+                    });
+                    "neutral".to_string()
+                }
+            }
+        } else {
+            "neutral".to_string()
+        };
         for attr in attrs {
             if let Some(name) = attr.strip_prefix("connectors:") {
                 declared_connectors.insert(name.to_string());
@@ -2313,6 +2988,7 @@ pub fn read_network(
             declared_connectors,
             inputs,
             declared_outputs,
+            topology_role,
         });
     }
     if !extraction_errors.is_empty() {
@@ -2485,7 +3161,16 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
 
     let mut generated_names = BTreeMap::<String, String>::new();
     for component in &network.components {
-        let generated = instance_identifier(&network.root, &component.path);
+        let generated = match instance_identifier(&network.root, &component.path) {
+            Ok(generated) => generated,
+            Err(message) => {
+                errors.push(DomainProjectionError {
+                    path: component.path.clone(),
+                    message,
+                });
+                continue;
+            }
+        };
         if let Some(previous) = generated_names.insert(generated.clone(), component.path.clone()) {
             errors.push(DomainProjectionError {
                 path: component.path.clone(),
@@ -2650,8 +3335,42 @@ fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) ->
     omitted
 }
 
-fn instance_identifier(root: &str, path: &str) -> String {
-    modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
+/// Stable, readable Modelica instance name for a composed USD member.
+///
+/// The full prim path remains the authoritative identity in members, signal
+/// provenance, and USD. It is a poor display name, though: emitting the
+/// assembly name made a six-member diagram read SolarRover__Motor__FL.
+/// Prefer the member leaf (Motor_FL) and add its immediate parent only for
+/// nested members (YawHead__SolarPanel). The network root's parent is used
+/// as the common assembly scope because composed members may sit beside the
+/// Electrical collection rather than below it. validate_network still
+/// rejects a same-name collision; it must be fixed in USD rather than hidden
+/// by a numeric fallback.
+fn instance_identifier(root: &str, path: &str) -> Result<String, String> {
+    let root_scope = root
+        .trim_matches('/')
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("/{}", parent))
+        .unwrap_or_else(|| root.trim_matches('/').to_string());
+    let relative = path
+        .strip_prefix(root)
+        .or_else(|| path.strip_prefix(root_scope.as_str()))
+        .unwrap_or(path)
+        .trim_matches('/');
+    let mut segments = relative.split('/').filter(|segment| !segment.is_empty());
+    let Some(last) = segments.next_back() else {
+        return Err(format!(
+            "generated Modelica member path `{path}` has no name relative to network root `{root}`"
+        ));
+    };
+    let Some(parent) = segments.next_back() else {
+        return Ok(modelica_identifier(last));
+    };
+    Ok(format!(
+        "{}__{}",
+        modelica_identifier(parent),
+        modelica_identifier(last)
+    ))
 }
 
 /// Whether a generated member output already has an authored operator-facing
@@ -2705,7 +3424,7 @@ fn generated_signal_layout(
     member_output_aliases: &[(String, String, String)],
     units: &[SynthesisUnit],
     classes: &MemberClasses,
-) -> ModelicaSignalLayout {
+) -> Result<ModelicaSignalLayout, String> {
     let mut layout = ModelicaSignalLayout {
         root_path: root.to_string(),
         ..default()
@@ -2808,12 +3527,12 @@ fn generated_signal_layout(
         }
     }
 
-    // The synthesizer emits every component under a deterministic unit
-    // instance.  A longest-prefix lookup assigns all public and internal
+    // The synthesizer emits every component under its policy-selected unit
+    // instance. A longest-prefix lookup assigns all public and internal
     // variables of that member—including variables introduced by a later
     // Modelica revision—to the authored member without an output annotation.
-    for (unit_index, unit) in units.iter().enumerate() {
-        let unit_prefix = unit_instance_identifier(&unit.name, unit_index);
+    for unit in units {
+        let unit_prefix = unit.instance.clone();
         for (output, owner) in layout.exact_paths.clone() {
             let qualified = format!("{unit_prefix}.{output}");
             layout.exact_paths.insert(qualified.clone(), owner);
@@ -2840,7 +3559,7 @@ fn generated_signal_layout(
                 .insert(format!("{unit_prefix}.{alias}"), member.clone());
         }
         for member in &unit.component_paths {
-            let member_prefix = instance_identifier(root, member);
+            let member_prefix = instance_identifier(root, member)?;
             let prefix = format!("{unit_prefix}.{member_prefix}.");
             layout.prefixes.push((prefix.clone(), member.clone()));
             if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
@@ -2872,7 +3591,7 @@ fn generated_signal_layout(
     debug_assert!(members.iter().all(|(member, _, _)| units
         .iter()
         .any(|unit| unit.component_paths.contains(member))));
-    layout
+    Ok(layout)
 }
 
 /// What class a member's source asset actually declares.
@@ -3115,6 +3834,7 @@ mod tests {
             declared_connectors: BTreeSet::from(["p".into()]),
             inputs: BTreeMap::new(),
             declared_outputs: BTreeSet::new(),
+            topology_role: "neutral".into(),
         }
     }
 
@@ -3160,6 +3880,112 @@ mod tests {
         );
         assert_eq!(units[0].inputs, BTreeSet::from(["left_heat".into()]));
         assert_eq!(units[1].outputs, BTreeSet::from(["right_temp".into()]));
+    }
+
+    #[test]
+    fn member_layout_coordinates_are_scoped_to_their_owning_unit() {
+        let network = DomainNetwork {
+            root: "/Rig".into(),
+            components: vec![
+                component("/Rig/Source_A", Some("/Rig/Load_A")),
+                component("/Rig/Load_A", Some("/Rig/Source_A")),
+                component("/Rig/Source_B", Some("/Rig/Load_B")),
+                component("/Rig/Load_B", Some("/Rig/Source_B")),
+            ],
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            pending_sources: false,
+        };
+        let units = vec![
+            SynthesisUnit {
+                name: "PowerUnit_1".into(),
+                instance: "power_unit_1".into(),
+                component_paths: vec!["/Rig/Source_A".into(), "/Rig/Load_A".into()],
+                ..Default::default()
+            },
+            SynthesisUnit {
+                name: "PowerUnit_2".into(),
+                instance: "power_unit_2".into(),
+                component_paths: vec!["/Rig/Source_B".into(), "/Rig/Load_B".into()],
+                ..Default::default()
+            },
+        ];
+        let layout = lunco_hooks::HookValue::map([
+            (
+                "units",
+                lunco_hooks::HookValue::Array(vec![
+                    lunco_hooks::HookValue::map([
+                        ("name", lunco_hooks::HookValue::str("PowerUnit_1")),
+                        ("x", lunco_hooks::HookValue::Int(-200)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("name", lunco_hooks::HookValue::str("PowerUnit_2")),
+                        ("x", lunco_hooks::HookValue::Int(200)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                ]),
+            ),
+            (
+                "members",
+                lunco_hooks::HookValue::Array(vec![
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Source_A")),
+                        ("x", lunco_hooks::HookValue::Int(-170)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Load_A")),
+                        ("x", lunco_hooks::HookValue::Int(0)),
+                        ("y", lunco_hooks::HookValue::Int(80)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Source_B")),
+                        ("x", lunco_hooks::HookValue::Int(-170)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Load_B")),
+                        ("x", lunco_hooks::HookValue::Int(0)),
+                        ("y", lunco_hooks::HookValue::Int(80)),
+                    ]),
+                ]),
+            ),
+        ]);
+
+        let parsed = parse_policy_layout(Some(&layout), &network, &units, "/Rig", "local-layout")
+            .expect("independent unit diagrams may reuse local coordinates");
+        assert_eq!(parsed.member_positions["/Rig/Source_A"], (-170, 0));
+        assert_eq!(parsed.member_positions["/Rig/Source_B"], (-170, 0));
+    }
+
+    #[test]
+    fn generated_member_instance_names_are_readable_without_a_collision_fallback() {
+        assert_eq!(
+            instance_identifier(
+                "/SolarRoverTest/SolarRover/Electrical",
+                "/SolarRoverTest/SolarRover/Motor_FL"
+            )
+            .unwrap(),
+            "Motor_FL"
+        );
+        assert_eq!(
+            instance_identifier("/Rig/Electrical", "/Rig/Electrical/Battery").unwrap(),
+            "Battery"
+        );
+        assert_ne!(
+            instance_identifier("/Rig/Electrical", "/Rig/Motor-A").unwrap(),
+            instance_identifier("/Rig/Electrical", "/Rig/Motor_A").unwrap()
+        );
+    }
+
+    #[test]
+    fn member_path_without_a_name_is_reported_instead_of_panicking() {
+        let error = instance_identifier("/Rig/Electrical", "/Rig/Electrical")
+            .expect_err("the network root is not a member instance");
+        assert!(error.contains("has no name"), "{error}");
     }
 
     #[test]
@@ -3219,7 +4045,8 @@ mod tests {
             &aliases,
             &plan.units,
             &classes,
-        );
+        )
+        .expect("validated generated member paths");
 
         let soc = layout.provenance("soc").expect("boundary output identity");
         assert_eq!(soc.model_class.as_deref(), Some("LunCo.Electrical.Battery"));
@@ -3242,7 +4069,7 @@ mod tests {
         let solver_name = format!(
             "{}.{}.soc_out",
             unit_instance_identifier(battery_unit.name.as_str(), 0),
-            instance_identifier("/Rig/Electrical", "/Rig/Battery"),
+            instance_identifier("/Rig/Electrical", "/Rig/Battery").unwrap(),
         );
         let internal = layout
             .provenance(&solver_name)
@@ -3464,8 +4291,11 @@ def Scope "Rig"
                     source: "model Electrical end Electrical;".into(),
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
+                    source_roots: Vec::new(),
                     member_output_aliases: Vec::new(),
                     units: Vec::new(),
+                    boundary_inputs: Vec::new(),
+                    boundary_outputs: Vec::new(),
                     layout: SynthesisLayout::default(),
                 },
                 lunco_cosim::SimComponent {
@@ -3483,6 +4313,82 @@ def Scope "Rig"
                 .is_none(),
             "a changed or rejected projection must not retain solved values from its previous topology"
         );
+    }
+
+    #[test]
+    fn removing_generated_source_retires_only_its_ephemeral_document() {
+        let mut app = App::new();
+        app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+            .add_observer(on_remove_generated_source);
+        let document = app
+            .world_mut()
+            .resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .allocate_with_origin(
+                "model Generated end Generated;".into(),
+                lunco_doc::DocumentOrigin::Bundled {
+                    filename: "generated/Generated.mo".into(),
+                },
+            );
+        let entity = app
+            .world_mut()
+            .spawn((
+                ModelicaModel {
+                    document,
+                    ..default()
+                },
+                GeneratedModelicaSource {
+                    network_root: "/Rig/Electrical".into(),
+                    doc_uri: "generated://Generated.mo".into(),
+                    source: "model Generated end Generated;".into(),
+                    component_paths: Vec::new(),
+                    members: Vec::new(),
+                    source_roots: Vec::new(),
+                    member_output_aliases: Vec::new(),
+                    units: Vec::new(),
+                    boundary_inputs: Vec::new(),
+                    boundary_outputs: Vec::new(),
+                    layout: SynthesisLayout::default(),
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .link(entity, document);
+        app.world_mut()
+            .resource_mut::<lunco_modelica::state::GeneratedModelicaSources>()
+            .entries
+            .push(lunco_modelica::state::GeneratedModelicaSourceEntry {
+                document,
+                uri: "generated://Generated.mo".into(),
+                network_root: "/Rig/Electrical".into(),
+                model_name: "Generated".into(),
+                source: "model Generated end Generated;".into(),
+                component_paths: Vec::new(),
+                units: Vec::new(),
+                members: Vec::new(),
+                source_roots: Vec::new(),
+                boundary_inputs: Vec::new(),
+                boundary_outputs: Vec::new(),
+                member_output_aliases: Vec::new(),
+                error: None,
+            });
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<GeneratedModelicaSource>();
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .host(document)
+            .is_none());
+        assert!(app
+            .world()
+            .resource::<lunco_modelica::state::GeneratedModelicaSources>()
+            .entries
+            .is_empty());
     }
 
     #[test]
@@ -3599,7 +4505,7 @@ def Scope "Rig"
         assert!(source.contains("allocator.desired_torque_z = desired_torque_z;"));
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));
-        assert!(source.contains("USD FORCE-ACTUATOR ALLOCATION\\n"));
+        assert!(source.contains("Force allocation | 1 actuator(s)"));
         let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
         let class =

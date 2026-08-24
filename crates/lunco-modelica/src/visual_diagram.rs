@@ -552,6 +552,8 @@ mod tests {
             diagram_graphics: None,
             icon_text: None,
             category: category.to_owned(),
+            resolution: crate::index::ClassResolutionState::Resolved,
+            resolution_message: None,
         };
         let expected = MslIndex {
             components: vec![

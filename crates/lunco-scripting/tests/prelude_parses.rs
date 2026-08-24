@@ -29,7 +29,7 @@ fn runtime_engine() -> Engine {
 #[test]
 fn prelude_files_all_parse() {
     let engine = runtime_engine();
-    let files = lunco_assets::scripting::prelude_files();
+    let files = lunco_assets::scripting::prelude_files().expect("active prelude source");
     assert!(!files.is_empty(), "no prelude files found at all");
 
     for (stem, src) in &files {
@@ -54,6 +54,7 @@ fn embedded_prelude_files_all_parse() {
 #[test]
 fn authored_timeline_requires_one_explicit_operation() {
     let source = lunco_assets::scripting::prelude_files()
+        .expect("active prelude source")
         .into_iter()
         .map(|(_, source)| source)
         .collect::<Vec<_>>()
@@ -81,6 +82,7 @@ fn authored_timeline_requires_one_explicit_operation() {
 #[test]
 fn set_property_helper_uses_the_reflected_command_fields() {
     let (_, src) = lunco_assets::scripting::prelude_files()
+        .expect("active prelude source")
         .into_iter()
         .find(|(stem, _)| stem == "control")
         .expect("control.rhai must be in the prelude");
@@ -122,6 +124,7 @@ fn bundled_tutorial_scripts_all_parse() {
 #[test]
 fn links_prelude_exposes_the_routing_surface() {
     let (_, src) = lunco_assets::scripting::prelude_files()
+        .expect("active prelude source")
         .into_iter()
         .find(|(stem, _)| stem == "links")
         .expect("links.rhai must be in the prelude");
@@ -148,18 +151,16 @@ fn links_prelude_exposes_the_routing_surface() {
 
 /// Every shipped policy must parse.
 ///
-/// A policy that does not compile is registered as *nothing*: the seam falls back
-/// to its Rust built-in and the app runs, quietly, on rules nobody chose. That is
-/// the worst failure mode a policy file has — no crash, no wrong answer, just an
-/// authored decision that silently stopped applying.
+/// A policy that does not compile is registered as *nothing*: the app reports a
+/// visible startup error and the selected policy cannot silently disappear.
 #[test]
 fn policy_files_all_parse() {
     let engine = runtime_engine();
-    let files = lunco_assets::scripting::policies();
+    let files = lunco_assets::scripting::policy_files().expect("active policy source");
     assert!(!files.is_empty(), "no policy files found at all");
 
     for (stem, src) in &files {
-        if let Err(e) = engine.compile(*src) {
+        if let Err(e) = engine.compile(src.as_str()) {
             panic!("policy '{stem}.rhai' does not parse: {e}");
         }
     }
@@ -171,7 +172,8 @@ fn policy_files_all_parse() {
 /// reopened by the role rule.
 #[test]
 fn link_policy_allows_rover_earth_or_relay() {
-    let (_, src) = lunco_assets::scripting::policies()
+    let (_, src) = lunco_assets::scripting::policy_files()
+        .expect("active policy source")
         .into_iter()
         .find(|(stem, _)| *stem == "link")
         .expect("link.rhai must be a shipped policy");
@@ -211,7 +213,8 @@ fn link_policy_allows_rover_earth_or_relay() {
 fn readiness_policy_agrees_with_the_engines_builtin() {
     use lunco_readiness::{kinds, Action, Subject};
 
-    let (_, src) = lunco_assets::scripting::policies()
+    let (_, src) = lunco_assets::scripting::policy_files()
+        .expect("active policy source")
         .into_iter()
         .find(|(stem, _)| *stem == "readiness")
         .expect("readiness.rhai must be a shipped policy");

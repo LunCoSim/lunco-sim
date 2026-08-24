@@ -11,9 +11,15 @@
 def Xform "Motor" (
     doc = "Reusable DC motor with electrical and mechanical Modelica boundaries."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = [
+        "LunCoCatalogAPI",
+        "PhysicsMassAPI",
+        "LunCoProgramAPI",
+        "LunCoModelicaTopologyAPI",
+    ]
 )
 {
+    uniform token lunco:modelica:topologyRole = "load"
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@

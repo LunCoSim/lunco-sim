@@ -31,7 +31,7 @@ use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.
-use crate::state::ModelicaDocumentRegistry;
+use crate::state::{is_generated_document, ModelicaDocumentRegistry};
 use crate::visual_diagram::msl_class_library;
 use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
@@ -187,8 +187,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
         let mut generated: Vec<_> = registry
             .docs()
             .filter(|(id, host)| {
-                !workspace_docs.contains(id)
-                    && matches!(host.document().origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/"))
+                !workspace_docs.contains(id) && is_generated_document(host.document())
             })
             .collect();
         generated.sort_by_key(|(id, _)| id.raw());
@@ -1136,8 +1135,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
                 return err_doc_not_found(doc_id);
             };
             let document = host.document();
-            if !matches!(document.origin(), DocumentOrigin::Bundled { filename } if filename.starts_with("generated/"))
-            {
+            if !is_generated_document(document) {
                 return err_doc_not_found(doc_id);
             }
             return ApiResponse::ok(serde_json::json!({
@@ -1323,10 +1321,18 @@ impl ApiQueryProvider for DescribeModelProvider {
         // [`ModelicaEngineHandle`]. The engine is kept in sync with
         // the document registry by `drive_engine_sync` so this query
         // sees every open document without a per-call upsert loop.
-        let inherited_members = world
+        let inherited_members = match world
             .get_resource::<crate::engine_resource::ModelicaEngineHandle>()
-            .map(|handle| handle.lock().inherited_members_typed(short))
-            .unwrap_or_default();
+            .and_then(crate::engine_resource::ModelicaEngineHandle::try_lock)
+        {
+            Some(mut engine) => engine.inherited_members_typed(short),
+            None => {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    "Modelica engine is still indexing; retry DescribeModel",
+                );
+            }
+        };
 
         ApiResponse::ok(serde_json::json!({
             "doc_id": doc_id.raw(),

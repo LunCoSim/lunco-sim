@@ -61,7 +61,8 @@ fn reads_a_composed_collection_into_network_facts() {
         "an unconnected input is the model's parameter"
     );
 
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+        .expect("network facts are valid");
     assert_eq!(
         facts.get("model_name").and_then(|value| value.as_str()),
         Some("Rig_Electrical_System")
@@ -123,7 +124,8 @@ fn an_explicitly_resolved_source_class_is_exposed_to_policy_facts() {
     let network = read_network(&view, &root, &classes)
         .expect("declaring a class is not an authoring error")
         .expect("still a network");
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&classes));
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&classes))
+        .expect("network facts are valid");
     let Some(lunco_hooks::HookValue::Array(components)) = facts.get("components") else {
         panic!("component facts");
     };

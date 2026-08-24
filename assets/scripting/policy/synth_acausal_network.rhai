@@ -1,20 +1,63 @@
 // The shipped generated Modelica schema.
 //
 // Rust reads the composed USD graph once and supplies these facts. This policy
-// owns the generated source and the visual schema: changing the presentation,
-// merge shape, or a domain-independent wiring rule does not require a Rust
-// edit. The Rust seam still proves that the returned source only represents
-// the composed members, boundary, units, and placements.
+// owns the generated source, hierarchy, visual annotations, and layout. The
+// Rust seam validates that the returned source represents only the composed
+// members, boundary, units, and placements.
+
+// Presentation policy is intentionally tunable here. These are diagram
+// coordinates, extents, and typography choices—not Rust/runtime behavior.
+const UNIT_POSITION_SCALE = 2;
+const HUB_X = -170;
+const BUS_Y = 0;
+const BRANCH_FIRST_X = 0;
+const BRANCH_LEFT_X = -320;
+const BRANCH_LEFT_FIRST_ROW_Y = -80;
+const BRANCH_RIGHT_FIRST_ROW_Y = 80;
+const BRANCH_ROW_SPACING = 150;
+const BUS_RAIL_MARGIN = 35;
+
+const MEMBER_MIN_HALF_WIDTH = 180;
+const MEMBER_MIN_HALF_HEIGHT = 130;
+const MEMBER_EXTENT_MARGIN_X = 70;
+const MEMBER_EXTENT_MARGIN_Y = 55;
+const UNIT_MIN_HALF_WIDTH = 240;
+const UNIT_MIN_HALF_HEIGHT = 120;
+const UNIT_EXTENT_MARGIN_X = 130;
+const UNIT_EXTENT_MARGIN_Y = 75;
+
+const COMPONENT_HALF_WIDTH = 55;
+const COMPONENT_HALF_HEIGHT = 35;
+const UNIT_HALF_WIDTH = 110;
+const UNIT_HALF_HEIGHT = 55;
+
+const ICON_COORDINATE_HALF_WIDTH = 100;
+const ICON_COORDINATE_HALF_HEIGHT = 70;
+const ICON_BOX_HALF_WIDTH = 92;
+const ICON_BOX_HALF_HEIGHT = 58;
+const ICON_CORNER_RADIUS_TEXT = "10";
+const DIAGRAM_TITLE_INSET_X = 20;
+const DIAGRAM_TITLE_TOP_INSET = 34;
+const DIAGRAM_TITLE_BOTTOM_INSET = 12;
+const DIAGRAM_TITLE_FONT_SIZE_TEXT = "16";
+const ICON_TEXT_COLOR = "{255,255,255}";
+const UNIT_ICON_LINE_COLOR = "{60,90,145}";
+const UNIT_ICON_FILL_COLOR = "{75,130,190}";
+const ROOT_ICON_LINE_COLOR = "{70,85,130}";
+const ROOT_ICON_FILL_COLOR = "{105,120,180}";
+const DIAGRAM_TITLE_COLOR = "{165,175,205}";
 
 fn string_literal(value) {
-    // USD identifiers and Modelica class names are validated before they reach
-    // this policy; they do not contain quote characters.
     "\"" + value + "\""
 }
 
-fn color(r, g, b) {
-    "{" + r.to_string() + "," + g.to_string() + "," + b.to_string() + "}"
-}
+// Rhai hook functions resolve the long-lived presentation constants above.
+// Keep the bus style behind named policy helpers so the route and the
+// diagram decoration cannot drift apart.
+fn power_rail_x() { HUB_X / 2 }
+fn power_rail_color() { DIAGRAM_TITLE_COLOR }
+fn power_wire_color() { DIAGRAM_TITLE_COLOR }
+fn power_line_thickness_text() { "2" }
 
 fn rect(x1, y1, x2, y2) {
     "{{" + x1.to_string() + "," + y1.to_string() + "},{"
@@ -22,7 +65,7 @@ fn rect(x1, y1, x2, y2) {
 }
 
 fn position(layout, path) {
-    for item in layout {
+    for item in layout.members {
         if item.path == path {
             let result = #{};
             result.x = item.x;
@@ -30,14 +73,11 @@ fn position(layout, path) {
             return result;
         }
     }
-    let result = #{};
-    result.x = 0;
-    result.y = 0;
-    result
+    throw "generated Modelica layout is missing member position: " + path
 }
 
 fn unit_position(layout, name) {
-    for item in layout {
+    for item in layout.units {
         if item.name == name {
             let result = #{};
             result.x = item.x;
@@ -45,10 +85,7 @@ fn unit_position(layout, name) {
             return result;
         }
     }
-    let result = #{};
-    result.x = 0;
-    result.y = 0;
-    result
+    throw "generated Modelica layout is missing unit position: " + name
 }
 
 fn has_member(members, path) {
@@ -62,18 +99,189 @@ fn component_for(net, path) {
     for component in net.components {
         if component.path == path { return component; }
     }
-    #{}
+    throw "generated Modelica facts are missing component: " + path
 }
 
-fn extent(net, members) {
-    let half_width = 300;
-    let half_height = 200;
+fn path_leaf(path) {
+    let leaf = path;
+    for segment in path.split("/") {
+        if segment != "" { leaf = segment; }
+    }
+    leaf
+}
+
+fn connection_degree(net, path, members) {
+    let degree = 0;
+    for edge in net.connections {
+        if !members.contains(edge.left_path) || !members.contains(edge.right_path) {
+            continue;
+        }
+        if edge.left_path == path { degree += 1; }
+        if edge.right_path == path { degree += 1; }
+    }
+    degree
+}
+
+// Acausal flow has no compile-time source or sink: Pin.i can reverse sign at
+// runtime. The topology role is therefore an explicit USD presentation fact,
+// not an inference from a connector name or a Modelica class string. It only
+// chooses a readable side of the visual bus; runtime Pin.i sign controls
+// animated direction, never the diagram's geometry.
+fn topology_role(net, path) {
+    let component = component_for(net, path);
+    if component.contains("topology_role") {
+        component.topology_role
+    } else {
+        "neutral"
+    }
+}
+
+fn hub_role_priority(net, path) {
+    if topology_role(net, path) == "storage" { 1 } else { 0 }
+}
+
+fn stable_path_precedes(path, best) {
+    if best == "" { return true; }
+    path < best
+}
+
+fn should_replace_hub(path, degree, role_priority, best, best_degree, best_role_priority) {
+    if degree != best_degree {
+        return degree > best_degree;
+    }
+    if role_priority != best_role_priority {
+        return role_priority > best_role_priority;
+    }
+    stable_path_precedes(path, best)
+}
+
+fn topology_hub(net, members) {
+    let best = "";
+    let best_degree = -1;
+    let best_role_priority = -1;
     for path in members {
-        let p = position(net.layout.members, path);
-        if p.x + 70 > half_width { half_width = p.x + 70; }
-        if -p.x + 70 > half_width { half_width = -p.x + 70; }
-        if p.y + 70 > half_height { half_height = p.y + 70; }
-        if -p.y + 70 > half_height { half_height = -p.y + 70; }
+        let degree = connection_degree(net, path, members);
+        let role_priority = hub_role_priority(net, path);
+        let replace = should_replace_hub(
+            path, degree, role_priority, best, best_degree, best_role_priority
+        );
+        if replace {
+            best = path;
+            best_degree = degree;
+            best_role_priority = role_priority;
+        }
+    }
+    if best == "" {
+        throw "generated acausal unit has no topology members"
+    }
+    best
+}
+
+fn branch_placement(path, side, index) {
+    let x = if side == "left" { BRANCH_LEFT_X } else { BRANCH_FIRST_X };
+    let y = if side == "left" {
+        BRANCH_LEFT_FIRST_ROW_Y - index * BRANCH_ROW_SPACING
+    } else {
+        BRANCH_RIGHT_FIRST_ROW_Y + index * BRANCH_ROW_SPACING
+    };
+    #{
+        path: path,
+        x: x,
+        y: y
+    }
+}
+
+fn visual_layout(net, units) {
+    let layout = #{ units: [], members: [] };
+    for unit in units {
+        // `source_name` is the partition identity from the Rust facts. `name`
+        // is the readable Modelica class name presented to the user.
+        let item = unit_position(net.layout, unit.source_name);
+        layout.units.push(#{
+            name: unit.name,
+            x: item.x * UNIT_POSITION_SCALE,
+            y: item.y * UNIT_POSITION_SCALE
+        });
+    }
+    // Unit positions belong to the generated root diagram. Member positions
+    // belong to each unit's own diagram, so every group gets the same local
+    // coordinate system; root-level spacing never leaks into a child class.
+    let groups = [];
+    if units.len == 0 {
+        let all = [];
+        for component in net.components { all.push(component.path); }
+        groups.push(all);
+    } else {
+        for unit in units { groups.push(unit.components); }
+    }
+    for members in groups {
+        let hub = topology_hub(net, members);
+        layout.members.push(#{
+            path: hub,
+            x: HUB_X,
+            y: BUS_Y
+        });
+        let sources = [];
+        let loads = [];
+        let neutral = [];
+        for path in members {
+            if path == hub { continue; }
+            let role = topology_role(net, path);
+            if role == "source" {
+                sources.push(path);
+            } else if role == "load" {
+                loads.push(path);
+            } else {
+                neutral.push(path);
+            }
+        }
+        // Explicit source/load roles form opposite banks of the bus. This is
+        // a semantic layout policy, not an electrical direction assumption:
+        // the generated equations remain the authored acausal connect graph.
+        let left_count = 0;
+        for path in sources {
+            layout.members.push(branch_placement(path, "left", left_count));
+            left_count += 1;
+        }
+        let right_count = 0;
+        for path in loads {
+            layout.members.push(branch_placement(path, "right", right_count));
+            right_count += 1;
+        }
+        // Components without a side preference remain fully supported. Pack
+        // them onto the shorter bank, with a deterministic left tie, so a new
+        // Modelica domain does not need a Rust layout branch merely because it
+        // has neutral components.
+        for path in neutral {
+            if left_count <= right_count {
+                layout.members.push(branch_placement(path, "left", left_count));
+                left_count += 1;
+            } else {
+                layout.members.push(branch_placement(path, "right", right_count));
+                right_count += 1;
+            }
+        }
+    }
+    layout
+}
+
+fn member_extent(layout, members) {
+    let half_width = MEMBER_MIN_HALF_WIDTH;
+    let half_height = MEMBER_MIN_HALF_HEIGHT;
+    for path in members {
+        let p = position(layout, path);
+        if p.x + MEMBER_EXTENT_MARGIN_X > half_width {
+            half_width = p.x + MEMBER_EXTENT_MARGIN_X;
+        }
+        if -p.x + MEMBER_EXTENT_MARGIN_X > half_width {
+            half_width = -p.x + MEMBER_EXTENT_MARGIN_X;
+        }
+        if p.y + MEMBER_EXTENT_MARGIN_Y > half_height {
+            half_height = p.y + MEMBER_EXTENT_MARGIN_Y;
+        }
+        if -p.y + MEMBER_EXTENT_MARGIN_Y > half_height {
+            half_height = -p.y + MEMBER_EXTENT_MARGIN_Y;
+        }
     }
     let result = #{};
     result.width = half_width;
@@ -81,62 +289,65 @@ fn extent(net, members) {
     result
 }
 
-fn text_graphic(x1, y1, x2, y2, text, size, text_color) {
-    let graphic = "Text(extent=";
-    graphic += rect(x1, y1, x2, y2);
-    graphic += ", textString=";
-    graphic += string_literal(text);
-    graphic += ", textColor=";
-    graphic += text_color;
-    graphic += ", fontSize=";
-    graphic += size.to_string();
-    graphic += ")";
-    graphic
-}
-
-fn endpoint_x(a, b, right) {
-    if right {
-        if a.x <= b.x { return a.x + 35; }
-        return a.x - 35;
+fn unit_extent(layout, units) {
+    let half_width = UNIT_MIN_HALF_WIDTH;
+    let half_height = UNIT_MIN_HALF_HEIGHT;
+    for unit in units {
+        let p = unit_position(layout, unit.name);
+        if p.x + UNIT_EXTENT_MARGIN_X > half_width {
+            half_width = p.x + UNIT_EXTENT_MARGIN_X;
+        }
+        if -p.x + UNIT_EXTENT_MARGIN_X > half_width {
+            half_width = -p.x + UNIT_EXTENT_MARGIN_X;
+        }
+        if p.y + UNIT_EXTENT_MARGIN_Y > half_height {
+            half_height = p.y + UNIT_EXTENT_MARGIN_Y;
+        }
+        if -p.y + UNIT_EXTENT_MARGIN_Y > half_height {
+            half_height = -p.y + UNIT_EXTENT_MARGIN_Y;
+        }
     }
-    if a.x <= b.x { return b.x - 35; }
-    b.x + 35
+    let result = #{};
+    result.width = half_width;
+    result.height = half_height;
+    result
 }
 
-fn line_graphic(x1, y1, x2, y2) {
-    let graphic = "Line(points=";
-    graphic += rect(x1, y1, x2, y2);
-    graphic += ", color=";
-    graphic += color(45, 105, 75);
-    graphic += ", thickness=2)";
-    graphic
+fn compact_icon(line_color, fill_color) {
+    let rectangle = "Rectangle(extent=" + rect(
+            -ICON_BOX_HALF_WIDTH,
+            -ICON_BOX_HALF_HEIGHT,
+            ICON_BOX_HALF_WIDTH,
+            ICON_BOX_HALF_HEIGHT
+        )
+        + ", lineColor=" + line_color
+        + ", fillColor=" + fill_color
+        + ", fillPattern=FillPattern.Solid, radius=" + ICON_CORNER_RADIUS_TEXT + ")";
+    let bus = "Line(points={{-52,0},{52,0}}, color={245,250,255}, thickness=2)";
+    let left_node = "Ellipse(extent={{-68,-12},{-44,12}}, lineColor="
+        + line_color + ", fillColor=" + ICON_TEXT_COLOR + ", fillPattern=FillPattern.Solid)";
+    let right_node = "Ellipse(extent={{44,-12},{68,12}}, lineColor="
+        + line_color + ", fillColor=" + ICON_TEXT_COLOR + ", fillPattern=FillPattern.Solid)";
+    "Icon(coordinateSystem(extent=" + rect(
+            -ICON_COORDINATE_HALF_WIDTH,
+            -ICON_COORDINATE_HALF_HEIGHT,
+            ICON_COORDINATE_HALF_WIDTH,
+            ICON_COORDINATE_HALF_HEIGHT
+        )
+        + "), graphics={" + rectangle + "," + bus + "," + left_node + "," + right_node + "})"
 }
 
-fn port_graphic(x, y) {
-    let graphic = "Ellipse(extent=";
-    graphic += rect(x - 4, y - 4, x + 4, y + 4);
-    graphic += ", lineColor=";
-    graphic += color(35, 75, 55);
-    graphic += ", fillColor=";
-    graphic += color(245, 250, 245);
-    graphic += ", fillPattern=FillPattern.Solid)";
-    graphic
-}
-
-fn node_graphic(x, y, component) {
-    let rectangle = "Rectangle(extent=";
-    rectangle += rect(x - 30, y - 14, x + 30, y + 14);
-    rectangle += ", lineColor=";
-    rectangle += color(45, 85, 70);
-    rectangle += ", fillColor=";
-    rectangle += color(184, 135, 196);
-    rectangle += ", fillPattern=FillPattern.Solid, radius=4)";
-    let graphics = [rectangle];
-    graphics.push(text_graphic(x - 27, y - 9, x + 27, y + 9,
-        component.instance, 11, color(25, 40, 35)));
-    graphics.push(text_graphic(x - 27, y - 23, x + 27, y - 14,
-        component.class, 7, color(45, 75, 60)));
-    graphics
+fn diagram_annotation(width, height, title) {
+    let heading = "Text(extent=" + rect(
+            -width + DIAGRAM_TITLE_INSET_X,
+            height - DIAGRAM_TITLE_TOP_INSET,
+            width - DIAGRAM_TITLE_INSET_X,
+            height - DIAGRAM_TITLE_BOTTOM_INSET
+        )
+        + ", textString=" + string_literal(title)
+        + ", textColor=" + DIAGRAM_TITLE_COLOR + ", fontSize=" + DIAGRAM_TITLE_FONT_SIZE_TEXT + ")";
+    "Diagram(coordinateSystem(extent=" + rect(-width, -height, width, height)
+        + "), graphics={" + heading + "})"
 }
 
 fn connect_equation(edge) {
@@ -148,8 +359,122 @@ fn connect_equation(edge) {
     line += edge.right_instance;
     line += ".";
     line += edge.right_connector;
-    line += ");\n";
+    line += ")";
     line
+}
+
+// Keep common-pin electrical wiring legible. The authored topology remains
+// the connect() equation; these are standard Modelica Line waypoints only.
+// Every branch visits the policy-owned bus rail before reaching its member,
+// so a SolarPanel-to-motor equation cannot render as a direct wire.
+fn power_bus_annotation(edge, layout) {
+    let left = position(layout, edge.left_path);
+    let right = position(layout, edge.right_path);
+    let rail_x = power_rail_x();
+    // Include the horizontal icon stubs as well as the rail crossing. A
+    // two-point vertical annotation leaves the renderer's default straight
+    // wire visible, making a panel appear directly connected to a motor.
+    let left_port_x = if left.x < rail_x {
+        left.x + COMPONENT_HALF_WIDTH
+    } else {
+        left.x - COMPONENT_HALF_WIDTH
+    };
+    let right_port_x = if right.x < rail_x {
+        right.x + COMPONENT_HALF_WIDTH
+    } else {
+        right.x - COMPONENT_HALF_WIDTH
+    };
+    let line = " annotation(Line(points={{";
+    line += left_port_x.to_string();
+    line += ",";
+    line += left.y.to_string();
+    line += "},{";
+    line += rail_x.to_string();
+    line += ",";
+    line += left.y.to_string();
+    line += "},{";
+    line += rail_x.to_string();
+    line += ",";
+    line += right.y.to_string();
+    line += "},{";
+    line += right_port_x.to_string();
+    line += ",";
+    line += right.y.to_string();
+    line += "}}, color=";
+    line += power_wire_color();
+    line += ", thickness=";
+    line += power_line_thickness_text();
+    line += "))";
+    line
+}
+
+fn bus_bounds(layout, members) {
+    let min_y = 0;
+    let max_y = 0;
+    let first = true;
+    for path in members {
+        let p = position(layout, path);
+        if first {
+            min_y = p.y;
+            max_y = p.y;
+            first = false;
+        } else {
+            if p.y < min_y { min_y = p.y; }
+            if p.y > max_y { max_y = p.y; }
+        }
+    }
+    let result = #{};
+    result.min_y = min_y - BUS_RAIL_MARGIN;
+    result.max_y = max_y + BUS_RAIL_MARGIN;
+    result
+}
+
+fn unit_bus_graphics(layout, members) {
+    let bounds = bus_bounds(layout, members);
+    let rail = "Line(points={{";
+    rail += power_rail_x().to_string();
+    rail += ",";
+    rail += bounds.min_y.to_string();
+    rail += "},{";
+    rail += power_rail_x().to_string();
+    rail += ",";
+    rail += bounds.max_y.to_string();
+    rail += "}}, color=";
+    rail += power_rail_color();
+    rail += ", thickness=";
+    rail += power_line_thickness_text();
+    rail += ")";
+    let label_y = bounds.max_y + 22;
+    let label = "Text(extent=" + rect(
+            power_rail_x() - 75,
+            label_y,
+            power_rail_x() + 75,
+            label_y + 20
+        )
+        + ", textString=\"POWER BUS\", textColor=" + power_rail_color() + ", fontSize=" + DIAGRAM_TITLE_FONT_SIZE_TEXT + ")";
+    rail + "," + label
+}
+
+fn policy_units(net) {
+    let result = [];
+    let index = 0;
+    for unit in net.units {
+        let instance = "power_unit_" + (index + 1).to_string();
+        if net.units.len == 1 { instance = "power_system"; }
+        let class_name = "PowerUnit_" + (index + 1).to_string();
+        if net.units.len == 1 { class_name = "PowerSystem"; }
+        let rewritten = #{
+            name: class_name,
+            source_name: unit.name,
+            instance: instance,
+            components: unit.components,
+            inputs: unit.inputs,
+            outputs: unit.outputs
+        };
+        result.push(rewritten);
+        index += 1;
+    }
+    result
 }
 
 fn boundary_equation(link) {
@@ -198,60 +523,7 @@ fn member_output_equation(output, instance) {
     line
 }
 
-fn member_paths(net) {
-    let paths = [];
-    for component in net.components { paths.push(component.path); }
-    paths
-}
-
-fn join_strings(values, separator) {
-    let result = "";
-    for index in 0..values.len {
-        let value = values[index];
-        if index > 0 { result += separator; }
-        result += value;
-    }
-    result
-}
-
-fn graph_graphics(net, members, title) {
-    let size = extent(net, members);
-    let graphics = [];
-    graphics.push("Rectangle(extent=" + rect(-size.width, -size.height, size.width, size.height)
-        + ", lineColor=" + color(45, 85, 70)
-        + ", fillColor=" + color(215, 235, 225)
-        + ", fillPattern=FillPattern.Solid, radius=10)");
-    graphics.push(text_graphic(-size.width + 10, size.height - 28, size.width - 10,
-        size.height - 8, title, 13, color(35, 75, 55)));
-
-    // A line and two explicit port markers are emitted for every authored
-    // acausal edge. Nothing is collapsed by component family or domain name.
-    for edge in net.connections {
-        if !has_member(members, edge.left_path) || !has_member(members, edge.right_path) {
-            continue;
-        }
-        let left = position(net.layout.members, edge.left_path);
-        let right = position(net.layout.members, edge.right_path);
-        let start_x = endpoint_x(left, right, true);
-        let end_x = endpoint_x(left, right, false);
-        graphics.push(line_graphic(start_x, left.y, end_x, right.y));
-        graphics.push(port_graphic(start_x, left.y));
-        graphics.push(port_graphic(end_x, right.y));
-        graphics.push(text_graphic(start_x - 22, left.y + 6, start_x + 22, left.y + 18,
-            edge.left_connector, 8, color(35, 75, 55)));
-        graphics.push(text_graphic(end_x - 22, right.y + 6, end_x + 22, right.y + 18,
-            edge.right_connector, 8, color(35, 75, 55)));
-    }
-
-    for path in members {
-        let component = component_for(net, path);
-        let p = position(net.layout.members, path);
-        for graphic in node_graphic(p.x, p.y, component) { graphics.push(graphic); }
-    }
-    graphics
-}
-
-fn component_declaration(component, net) {
+fn component_declaration(component, layout) {
     let line = "  " + component.class + " " + component.instance;
     if component.constant_modifications.len > 0 {
         line += "(";
@@ -262,13 +534,21 @@ fn component_declaration(component, net) {
         }
         line += ")";
     }
-    let p = position(net.layout.members, component.path);
-    line += " annotation(Placement(transformation(origin = {" + p.x.to_string()
-        + ", " + p.y.to_string() + "}, extent = {{-10, -10}, {10, 10}})));\n";
+    let p = position(layout, component.path);
+    let component_extent = rect(
+        -COMPONENT_HALF_WIDTH,
+        -COMPONENT_HALF_HEIGHT,
+        COMPONENT_HALF_WIDTH,
+        COMPONENT_HALF_HEIGHT
+    );
+    let origin = p.x.to_string() + ", " + p.y.to_string();
+    let placement = " annotation(Placement(transformation(origin = {"
+        + origin + "}, extent = " + component_extent + ")));\n";
+    line += placement;
     line
 }
 
-fn emit_unit(net, unit) {
+fn emit_unit(net, unit, layout) {
     let source = "model " + unit.name + "\n";
     let mutable = source;
     for input in unit.inputs { mutable += "  input Real " + input + ";\n"; }
@@ -279,12 +559,14 @@ fn emit_unit(net, unit) {
         }
     }
     for path in unit.components {
-        mutable += component_declaration(component_for(net, path), net);
+        mutable += component_declaration(component_for(net, path), layout);
     }
     mutable += "equation\n";
     for edge in net.connections {
         if has_member(unit.components, edge.left_path) && has_member(unit.components, edge.right_path) {
             mutable += connect_equation(edge);
+            mutable += power_bus_annotation(edge, layout);
+            mutable += ";\n";
         }
     }
     for link in net.boundary_links {
@@ -304,8 +586,7 @@ fn emit_unit(net, unit) {
     }
     for member_output in net.member_outputs {
         if has_member(unit.components, member_output.member_path) {
-            let line = "  ";
-            line += member_output.alias;
+            let line = "  " + member_output.alias;
             line += " = ";
             line += member_output.member_instance;
             line += ".";
@@ -314,56 +595,61 @@ fn emit_unit(net, unit) {
             mutable += line;
         }
     }
-    let title = "COMPOSED TOPOLOGY\\n" + unit.components.len.to_string()
-        + " component(s) | " + net.connections.len.to_string() + " connection(s)";
-    let graphics = graph_graphics(net, unit.components, title);
-    let size = extent(net, unit.components);
-    mutable += "annotation(Icon(coordinateSystem(extent=" + rect(-size.width, -size.height,
-        size.width, size.height) + "), graphics={" + join_strings(graphics, ", ")
-        + "}), Diagram(coordinateSystem(extent=" + rect(-size.width, -size.height,
-        size.width, size.height) + "), graphics={}));\n";
+    let size = member_extent(layout, unit.components);
+    mutable += "annotation(" + compact_icon(UNIT_ICON_LINE_COLOR, UNIT_ICON_FILL_COLOR) + ","
+        + "Diagram(coordinateSystem(extent=" + rect(-size.width, -size.height, size.width, size.height)
+        + "), graphics={" + unit_bus_graphics(layout, unit.components) + "})" + ");\n";
     mutable += "end " + unit.name + ";\n\n";
     mutable
 }
 
 fn synthesize(net) {
+    let units = policy_units(net);
+    let layout = visual_layout(net, units);
     let source = "model " + net.model_name + "\n";
     let mutable = source;
     for input in net.inputs { mutable += "  input Real " + input + ";\n"; }
     for boundary in net.boundary_outputs { mutable += "  output Real " + boundary.name + ";\n"; }
-    for member_output in net.member_outputs {
-        mutable += "  output Real " + member_output.alias + ";\n";
-    }
-    for unit in net.units {
-        let p = unit_position(net.layout.units, unit.name);
-        mutable += "  " + unit.name + " " + unit.instance
-            + " annotation(Placement(transformation(origin = {" + p.x.to_string()
-            + ", " + p.y.to_string() + "}, extent = {{-135, -68}, {135, 68}})));\n";
+    for member_output in net.member_outputs { mutable += "  output Real " + member_output.alias + ";\n"; }
+    for unit in units {
+        let p = unit_position(layout, unit.name);
+        let unit_extent = rect(
+            -UNIT_HALF_WIDTH,
+            -UNIT_HALF_HEIGHT,
+            UNIT_HALF_WIDTH,
+            UNIT_HALF_HEIGHT
+        );
+        let origin = p.x.to_string() + ", " + p.y.to_string();
+        let placement = " annotation(Placement(transformation(origin = {"
+            + origin + "}, extent = " + unit_extent + ")));\n";
+        mutable += "  " + unit.name + " " + unit.instance + placement;
     }
     mutable += "equation\n";
-    for unit in net.units {
-        for input in unit.inputs {
-            mutable += "  " + unit.instance + "." + input + " = " + input + ";\n";
-        }
-        for output in unit.outputs {
-            mutable += "  " + output + " = " + unit.instance + "." + output + ";\n";
-        }
+    for unit in units {
+        for input in unit.inputs { mutable += "  " + unit.instance + "." + input + " = " + input + ";\n"; }
+        for output in unit.outputs { mutable += "  " + output + " = " + unit.instance + "." + output + ";\n"; }
     }
     for member_output in net.member_outputs {
-        for unit in net.units {
+        for unit in units {
             if has_member(unit.components, member_output.member_path) {
                 mutable += member_output_equation(member_output, unit.instance);
             }
         }
     }
-    let paths = member_paths(net);
-    let graphics = graph_graphics(net, paths, "COMPOSED MODEL: " + net.model_name);
-    let size = extent(net, member_paths(net));
-    mutable += "annotation(Icon(coordinateSystem(extent=" + rect(-size.width, -size.height,
-        size.width, size.height) + "), graphics={" + join_strings(graphics, ", ")
-        + "}), Diagram(coordinateSystem(extent=" + rect(-size.width, -size.height,
-        size.width, size.height) + "), graphics={}));\n";
+    let size = unit_extent(layout, units);
+    let title = path_leaf(net.root) + " network | " + units.len.to_string() + " unit(s)";
+    mutable += "annotation(" + compact_icon(ROOT_ICON_LINE_COLOR, ROOT_ICON_FILL_COLOR) + ","
+        + diagram_annotation(size.width, size.height, title) + ");\n";
     mutable += "end " + net.model_name + ";\n\n";
-    for unit in net.units { mutable += emit_unit(net, unit); }
-    #{ source: mutable, units: net.units, layout: net.layout }
+    for unit in units { mutable += emit_unit(net, unit, layout); }
+    #{
+        source: mutable,
+        units: units,
+        layout: layout,
+        source_roots: net.source_roots,
+        // Promotion is policy-owned. The default policy exposes every
+        // declared member output; a scenario policy can omit or rename these
+        // entries without a Rust change.
+        member_output_aliases: net.member_outputs,
+    }
 }

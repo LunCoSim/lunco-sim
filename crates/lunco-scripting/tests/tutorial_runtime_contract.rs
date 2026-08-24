@@ -43,6 +43,7 @@ fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
 
 fn combined_source(script: &str) -> String {
     let preludes = lunco_assets::scripting::prelude_files()
+        .expect("active prelude source")
         .into_iter()
         .map(|(_, source)| source)
         .collect::<Vec<_>>()
