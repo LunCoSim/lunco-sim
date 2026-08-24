@@ -237,10 +237,7 @@ impl TwinRoots {
     /// owner lets that composition root establish the `twin://` authority
     /// before any domain observer resolves the scene; repeated registration is
     /// idempotent for the same root.
-    pub fn register_twin(
-        &self,
-        twin: &lunco_twin::Twin,
-    ) -> Result<String, TwinRootsError> {
+    pub fn register_twin(&self, twin: &lunco_twin::Twin) -> Result<String, TwinRootsError> {
         let name = twin
             .manifest
             .as_ref()

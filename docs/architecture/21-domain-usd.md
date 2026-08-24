@@ -255,7 +255,8 @@ section.
 #### Wheel Type Declaration
 The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavior:
 - `raycast` (default): `WheelRaycast`, `RayCaster`, entity splitting.
-- `physical`: `RigidBody`, `Collider`, `MotorActuator`.
+- `physical`: `RigidBody`, `Collider`, authored USD joints, and the generic
+  Modelica/engine shaft boundary.
 
 #### Entity Layout (Raycast Rover)
 Raycast wheels need identity rotation so `RayCaster` casts straight down. The system splits the USD wheel into:
