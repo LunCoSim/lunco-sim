@@ -12,9 +12,9 @@ const HUB_X = -170;
 const BUS_Y = 0;
 const BRANCH_FIRST_X = 0;
 const BRANCH_LEFT_X = -320;
-const BRANCH_FIRST_ROW_Y = 80;
+const BRANCH_LEFT_FIRST_ROW_Y = -80;
+const BRANCH_RIGHT_FIRST_ROW_Y = 80;
 const BRANCH_ROW_SPACING = 150;
-const BRANCH_SIDE_COUNT = 2;
 const BUS_RAIL_MARGIN = 35;
 
 const MEMBER_MIN_HALF_WIDTH = 180;
@@ -123,29 +123,72 @@ fn connection_degree(net, path, members) {
 }
 
 // Acausal flow has no compile-time source or sink: Pin.i can reverse sign at
-// runtime. Layout therefore uses only graph topology. The highest-incidence
-// component is the visual bus hub; all other members become deterministic
-// branch lanes. Runtime Pin.i sign controls animated direction, never the
-// diagram's geometry.
+// runtime. The topology role is therefore an explicit USD presentation fact,
+// not an inference from a connector name or a Modelica class string. It only
+// chooses a readable side of the visual bus; runtime Pin.i sign controls
+// animated direction, never the diagram's geometry.
+fn topology_role(net, path) {
+    let component = component_for(net, path);
+    if component.contains("topology_role") {
+        component.topology_role
+    } else {
+        "neutral"
+    }
+}
+
+fn hub_role_priority(net, path) {
+    if topology_role(net, path) == "storage" { 1 } else { 0 }
+}
+
+fn stable_path_precedes(path, best) {
+    if best == "" { return true; }
+    path < best
+}
+
+fn should_replace_hub(path, degree, role_priority, best, best_degree, best_role_priority) {
+    if degree != best_degree {
+        return degree > best_degree;
+    }
+    if role_priority != best_role_priority {
+        return role_priority > best_role_priority;
+    }
+    stable_path_precedes(path, best)
+}
+
 fn topology_hub(net, members) {
     let best = "";
     let best_degree = -1;
+    let best_role_priority = -1;
     for path in members {
         let degree = connection_degree(net, path, members);
-        let replace = degree > best_degree;
-        if !replace && degree == best_degree {
-            replace = best == "";
-            if !replace { replace = path < best; }
-        }
+        let role_priority = hub_role_priority(net, path);
+        let replace = should_replace_hub(
+            path, degree, role_priority, best, best_degree, best_role_priority
+        );
         if replace {
             best = path;
             best_degree = degree;
+            best_role_priority = role_priority;
         }
     }
     if best == "" {
         throw "generated acausal unit has no topology members"
     }
     best
+}
+
+fn branch_placement(path, side, index) {
+    let x = if side == "left" { BRANCH_LEFT_X } else { BRANCH_FIRST_X };
+    let y = if side == "left" {
+        BRANCH_LEFT_FIRST_ROW_Y - index * BRANCH_ROW_SPACING
+    } else {
+        BRANCH_RIGHT_FIRST_ROW_Y + index * BRANCH_ROW_SPACING
+    };
+    #{
+        path: path,
+        x: x,
+        y: y
+    }
 }
 
 fn visual_layout(net, units) {
@@ -178,26 +221,45 @@ fn visual_layout(net, units) {
             x: HUB_X,
             y: BUS_Y
         });
-        let branches = [];
+        let sources = [];
+        let loads = [];
+        let neutral = [];
         for path in members {
-            if path != hub { branches.push(path); }
-        }
-        let branch_index = 0;
-        for path in branches {
-            let row = branch_index / BRANCH_SIDE_COUNT;
-            let placement = #{};
-            placement.path = path;
-            // At most one member occupies each side of a row. The two-sided
-            // bank keeps the diagram compact while ensuring a rail segment
-            // cannot pass through another member on its way to the endpoint.
-            placement.x = if branch_index % BRANCH_SIDE_COUNT == 0 {
-                BRANCH_FIRST_X
+            if path == hub { continue; }
+            let role = topology_role(net, path);
+            if role == "source" {
+                sources.push(path);
+            } else if role == "load" {
+                loads.push(path);
             } else {
-                BRANCH_LEFT_X
-            };
-            placement.y = BRANCH_FIRST_ROW_Y - row * BRANCH_ROW_SPACING;
-            layout.members.push(placement);
-            branch_index += 1;
+                neutral.push(path);
+            }
+        }
+        // Explicit source/load roles form opposite banks of the bus. This is
+        // a semantic layout policy, not an electrical direction assumption:
+        // the generated equations remain the authored acausal connect graph.
+        let left_count = 0;
+        for path in sources {
+            layout.members.push(branch_placement(path, "left", left_count));
+            left_count += 1;
+        }
+        let right_count = 0;
+        for path in loads {
+            layout.members.push(branch_placement(path, "right", right_count));
+            right_count += 1;
+        }
+        // Components without a side preference remain fully supported. Pack
+        // them onto the shorter bank, with a deterministic left tie, so a new
+        // Modelica domain does not need a Rust layout branch merely because it
+        // has neutral components.
+        for path in neutral {
+            if left_count <= right_count {
+                layout.members.push(branch_placement(path, "left", left_count));
+                left_count += 1;
+            } else {
+                layout.members.push(branch_placement(path, "right", right_count));
+                right_count += 1;
+            }
         }
     }
     layout

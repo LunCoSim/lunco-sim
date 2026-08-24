@@ -27,9 +27,10 @@
 def Xform "SolarPanel" (
     doc = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoModelicaTopologyAPI"]
 )
 {
+    uniform token lunco:modelica:topologyRole = "source"
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@

@@ -110,11 +110,16 @@ connection. Each route includes the icon-to-rail stubs and rail crossing, so a
 panel is not visually mistaken for a direct motor connection. The rail is drawn
 in the unit `Diagram`; it is not a second graph
 or an inferred runtime connection. The policy chooses the highest-incidence
-member in each connected unit as the visual bus hub, then places every other
-member in deterministic branch lanes with an adaptive multi-column matrix.
-This is topology-driven rather than a battery/motor/solar class rule, and the
-member coordinates are local to their owning unit diagram. As the member count
-grows, the policy expands the diagram extents with the same source/AST path, so
+member in each connected unit as the visual bus hub, with an authored
+`LunCoModelicaTopologyAPI` `storage` role breaking equal-incidence ties. It
+places authored `source` members on one bank and `load` members on the opposite
+bank, then packs `neutral` members onto the shorter bank. This is a generic
+presentation contract, not a battery/motor/solar class rule: Modelica's
+acausal `flow` direction remains runtime data and can reverse. The member
+source and load banks use disjoint lane ranges around the hub, so a horizontal
+route cannot be mistaken for a direct source-to-load wire. Coordinates are
+local to their owning unit diagram. As the member count grows,
+the policy expands the diagram extents with the same source/AST path, so
 `FitCanvas` can show the complete topology without a Rust layout branch.
 
 Electrical activity uses the same generic canvas flow animation as the rocket

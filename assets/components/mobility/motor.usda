@@ -60,9 +60,11 @@ def Xform "Motor" (
         "PhysicsMassAPI",
         "LunCoMotorAPI",
         "LunCoProgramAPI",
+        "LunCoModelicaTopologyAPI",
     ]
 )
 {
+    uniform token lunco:modelica:topologyRole = "load"
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@

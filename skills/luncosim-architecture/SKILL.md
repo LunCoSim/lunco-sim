@@ -114,11 +114,16 @@ string workaround:
 - For a power-network policy, make common-bus semantics visible with standard
   Modelica `Line` waypoints and a policy-owned diagram rail. Use adaptive,
   extent-aware placement for repeated members. Derive the visual hub from
-  graph incidence and place other members in deterministic branch lanes; do
-  not use component-class branches or let a fixed demo layout imply a direct
-  source-to-load wire when the composed graph has many members. Member
-  coordinates are local to the owning unit diagram; root coordinates place
-  unit instances.
+  graph incidence, using the typed `LunCoModelicaTopologyAPI` `storage` role
+  only to break equal-incidence ties; place `source` and `load` roles on
+  opposite deterministic banks and pack `neutral` members onto the shorter
+  bank. Do not branch on component class names or let a fixed demo layout
+  imply a direct source-to-load wire when the composed graph has many members.
+  These roles are presentation metadata, not Modelica solver direction:
+  acausal flow can reverse at runtime. Keep source/load lane ranges disjoint
+  around the hub so a horizontal route cannot imply a direct connection.
+  Member coordinates are local to the
+  owning unit diagram; root coordinates place unit instances.
 - Reuse the generic Modelica flow animation for electrical networks. A native
   `flow Real` such as `LunCo.Electrical.Pin.i` must be discovered by connector
   metadata and sampled from live node state; Rhai emits ordinary `Pin`/

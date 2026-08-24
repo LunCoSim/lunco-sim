@@ -200,10 +200,16 @@ The generated document must be inspectable as ordinary Modelica:
 The shipped electrical policy gives the generated unit a standard diagram-level
 power-bus rail and routes each acausal connection through it with ordinary
 Modelica `Line` annotations. The policy chooses the highest-incidence member
-in each connected unit as the visual bus hub and places the remaining members
-in deterministic branch lanes using an adaptive matrix. This is topology
-driven, not a battery/motor/solar class rule, and it avoids the misleading
-appearance of a solar panel wired directly to a motor. Member coordinates are
+in each connected unit as the visual bus hub; an authored
+`LunCoModelicaTopologyAPI` `storage` role only breaks equal-incidence ties.
+Authored `source` members occupy one branch bank and `load` members the
+opposite bank, while `neutral` members are packed onto the shorter bank. This
+is topology plus typed presentation metadata, not a battery/motor/solar class
+rule, and it avoids the misleading appearance of a solar panel wired directly
+to a motor. Because the Modelica graph is acausal, these roles never assert a
+solver direction; runtime signed `flow` values still determine animation.
+The two banks use disjoint lane ranges around the hub, so a horizontal route
+cannot be mistaken for a direct source-to-load wire. Member coordinates are
 local to their owning unit diagram; root coordinates place the unit instances.
 The policy also uses readable generated unit instances (`power_system` or
 `power_unit_N`); full USD paths remain the identity mapping, not the display
@@ -280,7 +286,7 @@ solver session.
 
 ```text
 cargo test -p lunco-usd-sim --test hook_synthesizer -j4
-13 passed, 0 failed, 0 ignored
+15 passed, 0 failed, 0 ignored (baseline before the topology-role edit)
 
 cargo test -p lunco-usd-sim --test domain_projection_reader -j4
 6 passed, 0 failed, 0 ignored
@@ -314,6 +320,11 @@ The policy-specific contracts live in:
 
 - `assets/scripting/tests/test_generated_acausal_policy.rhai`
 - `assets/scripting/tests/test_generated_actuator_policy.rhai`
+
+The acausal policy asset also contains
+`test_topology_roles_put_sources_opposite_loads`, covering the typed
+source/storage/load-bank algorithm. It can be exercised through the live
+`RunRhai` path without rebuilding or restarting native tests.
 
 The Rust test supplies composed facts, registers the same shipped policy used
 in production, and invokes the Rhai contract. Assertions for generated source

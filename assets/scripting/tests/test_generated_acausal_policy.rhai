@@ -19,6 +19,16 @@ fn require_distinct_branch_lanes(layout, hub_path, message) {
     }
 }
 
+fn require_connection(connections, left_path, right_path, message) {
+    for edge in connections {
+        if (edge.left_path == left_path && edge.right_path == right_path)
+            || (edge.left_path == right_path && edge.right_path == left_path) {
+            return;
+        }
+    }
+    throw message;
+}
+
 fn test_generated_acausal_policy(net) {
     let result = synthesize(net);
     let source = result.source;
@@ -44,6 +54,7 @@ fn test_generated_acausal_policy(net) {
     require(result.layout.members.len == net.components.len, "member layout is incomplete");
     require(result.member_output_aliases.len == net.member_outputs.len,
         "member output promotion is incomplete");
+    test_topology_roles_put_sources_opposite_loads();
     true
 }
 
@@ -91,6 +102,61 @@ fn test_repeated_power_components() {
     let hub = position(layout, "/Rig/Battery_A");
     require(hub.x == HUB_X && hub.y == BUS_Y,
         "highest-incidence topology member must own the bus hub position");
+    true
+}
+
+fn test_topology_roles_put_sources_opposite_loads() {
+    let components = [];
+    components.push(#{
+        path: "/Rig/Battery",
+        class: "Vendor.Storage",
+        topology_role: "storage"
+    });
+    components.push(#{
+        path: "/Rig/Solar",
+        class: "Vendor.Source",
+        topology_role: "source"
+    });
+    components.push(#{
+        path: "/Rig/Motor_A",
+        class: "Vendor.Load",
+        topology_role: "load"
+    });
+    components.push(#{
+        path: "/Rig/Motor_B",
+        class: "Vendor.Load",
+        topology_role: "load"
+    });
+    let connections = [];
+    connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Solar" });
+    connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Motor_A" });
+    connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Motor_B" });
+    let members = [];
+    for component in components {
+        members.push(#{ path: component.path, x: 0, y: 0 });
+    }
+    let net = #{
+        components: components,
+        connections: connections,
+        layout: #{ units: [], members: members }
+    };
+    let layout = visual_layout(net, []);
+    require_connection(connections, "/Rig/Battery", "/Rig/Solar",
+        "the source must be connected to the storage hub");
+    let battery = position(layout, "/Rig/Battery");
+    let solar = position(layout, "/Rig/Solar");
+    let motor_a = position(layout, "/Rig/Motor_A");
+    let motor_b = position(layout, "/Rig/Motor_B");
+    require(battery.x == HUB_X && battery.y == BUS_Y,
+        "storage hub must remain at the topology center");
+    require(solar.x < power_rail_x(),
+        "source components must occupy the source bank");
+    require(motor_a.x >= BRANCH_FIRST_X && motor_b.x >= BRANCH_FIRST_X,
+        "load components must occupy the opposite load bank");
+    require(solar.x < power_rail_x() && motor_a.x > power_rail_x(),
+        "source and load banks must be separated by the visual bus");
+    require(solar.y != motor_a.y && solar.y != motor_b.y,
+        "source and load banks must not share a horizontal lane");
     true
 }
 

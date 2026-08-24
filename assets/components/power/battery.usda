@@ -14,9 +14,10 @@
 def Xform "Battery" (
     doc = "Reusable battery pack with mass, collision, electrical state, capacity, and state-of-charge telemetry."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI", "LunCoModelicaTopologyAPI"]
 )
 {
+    uniform token lunco:modelica:topologyRole = "storage"
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@

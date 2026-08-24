@@ -119,6 +119,9 @@ bus and follow at least one routed `connect(...)` branch through the rail. The
 Rhai policy uses readable `power_system`/`power_unit_N` unit instances and a
 topology-derived hub with adaptive branch lanes, so inspect a larger network
 with `FitCanvas` rather than assuming the six-member demo's geometry scales.
+Components that need directional presentation apply
+`LunCoModelicaTopologyAPI` with `source`, `storage`, or `load`; this metadata
+does not alter acausal solver direction.
 Member icons must resolve from
 their native Modelica classes; a fabricated card or direct solar-to-motor wire
 is a projection defect, not an acceptable fallback.

@@ -134,6 +134,10 @@ pub struct DomainComponent {
     pub inputs: BTreeMap<String, String>,
     /// Public causal outputs declared by the reusable model facet.
     pub declared_outputs: BTreeSet<String>,
+    /// Optional presentation role for a generated Modelica topology. This is
+    /// USD-authored metadata, not a solver direction: acausal Modelica flow
+    /// remains reversible and runtime sign still controls animated direction.
+    pub topology_role: String,
 }
 
 /// One network scope and its public causal boundary.
@@ -1467,6 +1471,7 @@ pub fn network_facts(
                             .collect(),
                     ),
                 ),
+                ("topology_role", H::str(component.topology_role.clone())),
             ]))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -2898,6 +2903,29 @@ pub fn read_network(
         let mut declared_connectors = BTreeSet::new();
         let mut inputs = BTreeMap::new();
         let mut declared_outputs = BTreeSet::new();
+        let topology_role = if view.has_api_schema(&path, "LunCoModelicaTopologyAPI") {
+            match view.text(&path, "lunco:modelica:topologyRole").as_deref() {
+                Some(role @ ("source" | "storage" | "load" | "neutral")) => role.to_string(),
+                Some(role) => {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.lunco:modelica:topologyRole"),
+                        message: format!(
+                            "unsupported Modelica topology role `{role}`; expected source, storage, load, or neutral"
+                        ),
+                    });
+                    "neutral".to_string()
+                }
+                None => {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.lunco:modelica:topologyRole"),
+                        message: "LunCoModelicaTopologyAPI is applied but its topology role is unauthored".into(),
+                    });
+                    "neutral".to_string()
+                }
+            }
+        } else {
+            "neutral".to_string()
+        };
         for attr in attrs {
             if let Some(name) = attr.strip_prefix("connectors:") {
                 declared_connectors.insert(name.to_string());
@@ -2955,6 +2983,7 @@ pub fn read_network(
             declared_connectors,
             inputs,
             declared_outputs,
+            topology_role,
         });
     }
     if !extraction_errors.is_empty() {
@@ -3800,6 +3829,7 @@ mod tests {
             declared_connectors: BTreeSet::from(["p".into()]),
             inputs: BTreeMap::new(),
             declared_outputs: BTreeSet::new(),
+            topology_role: "neutral".into(),
         }
     }
 
