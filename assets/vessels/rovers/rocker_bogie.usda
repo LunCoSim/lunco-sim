@@ -1085,6 +1085,7 @@ def Xform "RockerBogie" (
                 float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
                 float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
                 float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+                float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a
@@ -1137,6 +1138,40 @@ def Xform "RockerBogie" (
                     float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
                     custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
                 }
+            }
+
+            over "RockerL" {
+                over "Wheel_FL" {
+                    float inputs:drive.connect = </RockerBogie/RockerL/Motor_FL.outputs:available_demand>
+                }
+            }
+            over "BogieL" {
+                over "Wheel_ML" {
+                    float inputs:drive.connect = </RockerBogie/BogieL/Motor_ML.outputs:available_demand>
+                }
+                over "Wheel_RL" {
+                    float inputs:drive.connect = </RockerBogie/BogieL/Motor_RL.outputs:available_demand>
+                }
+            }
+            over "RockerR" {
+                over "Wheel_FR" {
+                    float inputs:drive.connect = </RockerBogie/RockerR/Motor_FR.outputs:available_demand>
+                }
+            }
+            over "BogieR" {
+                over "Wheel_MR" {
+                    float inputs:drive.connect = </RockerBogie/BogieR/Motor_MR.outputs:available_demand>
+                }
+                over "Wheel_RR" {
+                    float inputs:drive.connect = </RockerBogie/BogieR/Motor_RR.outputs:available_demand>
+                }
+            }
+            def LunCoEvent "BatteryDrained" {
+                float inputs:trigger.connect = </RockerBogie/Electrical.outputs:battery_drained>
+                uniform token lunco:event:name = "battery_drained"
+                uniform token lunco:event:severity = "warning"
+                uniform bool lunco:event:latched = true
+                double lunco:event:qualificationTime = 0.0
             }
 
         }

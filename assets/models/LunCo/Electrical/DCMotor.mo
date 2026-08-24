@@ -26,12 +26,14 @@ model DCMotor
   output Real terminal_voltage_v(unit="V") "Voltage supplied to the motor drive";
   output Real terminal_current_a(unit="A") "Current drawn by the motor drive";
   output Real mechanical_power_w(unit="W") "Estimated mechanical power available after electrical losses";
+  output Real available_demand "Demand after the bus voltage limits motor authority";
 equation
-  // A MOTOR DRIVE IS CURRENT-CONTROLLED. The inner loop of every real controller
-  // regulates current (torque ∝ current); the bus voltage sets how much SPEED
-  // that current can be pushed to, not how much current is drawn. So demand maps
-  // to current, and this is both the physical direction and the causal one.
-  p.i = (rated_power / v_rated) * abs(demand) / max(0.01, efficiency);
+  // A motor cannot produce its commanded torque without terminal voltage. The
+  // normalized command is therefore limited by the solved bus potential. This
+  // is a motor equation, not a battery case: any source, storage device, or
+  // domain that changes `p.v` changes the available mechanical authority.
+  available_demand = demand * max(0.0, min(1.0, p.v / v_rated));
+  p.i = (rated_power / v_rated) * abs(available_demand) / max(0.01, efficiency);
 
   // Power drawn FOLLOWS from the current and the voltage actually present.
   electrical_power = p.i * p.v;
@@ -42,10 +44,4 @@ equation
   terminal_voltage_v = p.v;
   terminal_current_a = p.i;
   mechanical_power_w = max(0.0, electrical_power) * efficiency;
-
-  // ⚠ This model HID the loop rather than causing it. As `p.i = power / p.v`,
-  // `demand = 0` made the draw zero, `0/p.v` collapsed, and a parked rover's bus
-  // solved fine and looked healthy — it would have failed the moment the rover
-  // drew current. The solar panel only made it fail at t=0, because its
-  // photocurrent is there from the first step. See `SolarPanel` for the full note.
 end DCMotor;

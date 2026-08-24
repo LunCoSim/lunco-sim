@@ -351,6 +351,7 @@ def Xform "SixWheelRover" (
                 float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
                 float outputs:soc.connect = </SixWheelRover/Battery.outputs:soc_out>
+                float outputs:battery_drained.connect = </SixWheelRover/Battery.outputs:drained>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_L0.connect = </SixWheelRover/Motor_L0.outputs:heat>
@@ -393,6 +394,31 @@ def Xform "SixWheelRover" (
             over "Motor_R2" {
                 float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Wheel_L0" {
+                float inputs:drive.connect = </SixWheelRover/Motor_L0.outputs:available_demand>
+            }
+            over "Wheel_L1" {
+                float inputs:drive.connect = </SixWheelRover/Motor_L1.outputs:available_demand>
+            }
+            over "Wheel_L2" {
+                float inputs:drive.connect = </SixWheelRover/Motor_L2.outputs:available_demand>
+            }
+            over "Wheel_R0" {
+                float inputs:drive.connect = </SixWheelRover/Motor_R0.outputs:available_demand>
+            }
+            over "Wheel_R1" {
+                float inputs:drive.connect = </SixWheelRover/Motor_R1.outputs:available_demand>
+            }
+            over "Wheel_R2" {
+                float inputs:drive.connect = </SixWheelRover/Motor_R2.outputs:available_demand>
+            }
+            def LunCoEvent "BatteryDrained" {
+                float inputs:trigger.connect = </SixWheelRover/Electrical.outputs:battery_drained>
+                uniform token lunco:event:name = "battery_drained"
+                uniform token lunco:event:severity = "warning"
+                uniform bool lunco:event:latched = true
+                double lunco:event:qualificationTime = 0.0
             }
         }
     }

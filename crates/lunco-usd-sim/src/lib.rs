@@ -494,10 +494,12 @@ mod wheel_wiring_tests {
                     stage_handle: stage,
                     path: "/World/Rover/Wheel".into(),
                 },
-                PendingWheelWiring {
+                WheelPortEndpoints {
                     p_drive: drive_port,
                     p_steer: drive_port,
-                    drive_port_name: "drive_left".to_owned(),
+                },
+                PendingWheelWiring {
+                    drive_port_name: Some("drive_left".to_owned()),
                     steer_port_name: steer_name.map(str::to_owned),
                 },
             ))
@@ -742,16 +744,22 @@ pub struct PhysicalWheel {
 /// Marker for wheels waiting for their FSW root to be spawned to complete wiring.
 #[derive(Component)]
 pub struct PendingWheelWiring {
-    pub p_drive: Entity,
-    pub p_steer: Entity,
     /// USD-authored actuator binding — the port name resolved from the wheel's
     /// required `inputs:drive.connect` connection (the target property minus its
     /// `outputs:` prefix). Drive topology is authored, never inferred from wheel
     /// order or parity.
-    pub drive_port_name: String,
+    pub drive_port_name: Option<String>,
     /// USD-authored steer binding, resolved the same way from the optional
     /// `inputs:steer.connect`. Unsteered wheels leave this absent explicitly.
     pub steer_port_name: Option<String>,
+}
+
+/// Runtime endpoints for scalar USD connections owned by a wheel. The authored
+/// wheel sink maps to these physical ports for both raycast and joint wheels.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct WheelPortEndpoints {
+    pub p_drive: Entity,
+    pub p_steer: Entity,
 }
 
 /// An authored `PhysxPhysicsGearJoint`, held until the bodies it gears together have
@@ -2421,8 +2429,10 @@ fn process_usd_sim_prim_read(
         // its own instance's port rather than at whatever prim happens to share
         // the name. The port it names is the property, so `outputs:drive_left`
         // resolves to the FSW port `drive_left`.
+        let connected_source =
+            |attr: &str| -> Option<String> { reader.connection_source(&sdf_path, attr) };
         let connected_port = |attr: &str| -> Option<String> {
-            let source = reader.connection_source(&sdf_path, attr)?;
+            let source = connected_source(attr)?;
             let (_, property) = source.rsplit_once('.')?;
             property.strip_prefix("outputs:").map(str::to_string)
         };
@@ -2436,13 +2446,41 @@ fn process_usd_sim_prim_read(
         };
         let steer_port_name = connected_port("inputs:steer");
 
-        // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
-        commands.entity(entity).try_insert(PendingWheelWiring {
-            p_drive,
-            p_steer,
-            drive_port_name,
-            steer_port_name: steer_port_name.clone(),
-        });
+        // A source on a vehicle control surface is consumed by the existing
+        // FSW actuator registry. Any other authored output, including a
+        // generated Modelica motor output, is a generic scalar connection.
+        let source_is_vehicle_surface = |attr: &str| {
+            let Some(source) = connected_source(attr) else {
+                return false;
+            };
+            let Some((source_prim, _)) = source.rsplit_once('.') else {
+                return false;
+            };
+            let Ok(source_path) = SdfPath::new(source_prim) else {
+                return false;
+            };
+            reader.has_api_schema(&source_path, "PhysxVehicleContextAPI")
+        };
+        let drive_is_structural = source_is_vehicle_surface("inputs:drive");
+        let steer_is_structural =
+            steer_port_name.is_some() && source_is_vehicle_surface("inputs:steer");
+
+        commands.entity(entity).try_insert((
+            WheelPortEndpoints { p_drive, p_steer },
+            lunco_core::PortSurfaceReady,
+        ));
+
+        // Structural vehicle-surface connections are resolved by the FSW port
+        // registry. Connections from a projected Modelica output are ordinary
+        // scalar wires and are resolved by the generic USD wiring pass.
+        if drive_is_structural || steer_is_structural {
+            commands.entity(entity).try_insert(PendingWheelWiring {
+                drive_port_name: drive_is_structural.then_some(drive_port_name),
+                steer_port_name: steer_is_structural
+                    .then_some(steer_port_name.clone())
+                    .flatten(),
+            });
+        }
 
         // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
         // pointing at this wheel via `physics:body1` ⇒ joint-based.
@@ -3923,6 +3961,7 @@ fn on_add_usd_sim_prim(
 /// exists.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
+    q_endpoints: Query<&WheelPortEndpoints>,
     // `ActuatorPorts` does double duty here: it LOCATES the vehicle root (only a rover
     // root carries one) and it is the actuator index the wiring below looks ports up in.
     q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::ActuatorPorts)>,
@@ -3945,21 +3984,26 @@ fn try_wire_wheel(
             // partially wired vehicle is unsafe: one wheel receiving drive while
             // another authored endpoint is absent must be a terminal scene fault,
             // not a warning followed by a ready API response.
-            let drive_port_name = pending.drive_port_name.as_str();
-            let Some(d_port) = actuators.get(drive_port_name) else {
-                let detail = format!(
-                    "wheel {} requires actuator output '{}' but the vehicle authored no such output",
-                    prim_path.path, drive_port_name
-                );
-                error!("{detail}");
-                faults.raise(
-                    "vehicle-port-wiring-invalid",
-                    Some(ent),
-                    prim_path.path.as_str(),
-                    detail,
-                );
-                commands.entity(ent).remove::<PendingWheelWiring>();
-                continue;
+            let d_port = match pending.drive_port_name.as_deref() {
+                None => None,
+                Some(drive_port_name) => match actuators.get(drive_port_name) {
+                    Some(port) => Some(port),
+                    None => {
+                        let detail = format!(
+                            "wheel {} requires actuator output '{}' but the vehicle authored no such output",
+                            prim_path.path, drive_port_name
+                        );
+                        error!("{detail}");
+                        faults.raise(
+                            "vehicle-port-wiring-invalid",
+                            Some(ent),
+                            prim_path.path.as_str(),
+                            detail,
+                        );
+                        commands.entity(ent).remove::<PendingWheelWiring>();
+                        continue;
+                    }
+                },
             };
 
             let steer_port = match pending.steer_port_name.as_deref() {
@@ -3984,24 +4028,31 @@ fn try_wire_wheel(
                 },
             };
 
+            let endpoints = q_endpoints
+                .get(ent)
+                .expect("wheel endpoints are installed with PendingWheelWiring");
             // Drive is an authored USD connection. No inferred mapping.
             // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
             // on scene swap — the same general lifecycle contract the ports/joint use.
-            commands.spawn((
-                SimConnection {
-                    start_element: d_port,
-                    start_connector: PORT_NAME.to_string(),
-                    end_element: pending.p_drive,
-                    end_connector: PORT_NAME.to_string(),
-                    ..Default::default()
-                },
-                Name::new(format!("Conn_Drive_{drive_port_name}")),
-                ChildOf(ent),
-            ));
-            debug!(
-                "Wired wheel {} drive to FSW port {}",
-                prim_path.path, drive_port_name
-            );
+            if let (Some(d_port), Some(drive_port_name)) =
+                (d_port, pending.drive_port_name.as_deref())
+            {
+                commands.spawn((
+                    SimConnection {
+                        start_element: d_port,
+                        start_connector: PORT_NAME.to_string(),
+                        end_element: endpoints.p_drive,
+                        end_connector: PORT_NAME.to_string(),
+                        ..Default::default()
+                    },
+                    Name::new(format!("Conn_Drive_{drive_port_name}")),
+                    ChildOf(ent),
+                ));
+                debug!(
+                    "Wired wheel {} drive to FSW port {}",
+                    prim_path.path, drive_port_name
+                );
+            }
 
             // Steering is optional, but if present it is also an authored USD
             // connection. An unsteered wheel has no steering endpoint.
@@ -4010,7 +4061,7 @@ fn try_wire_wheel(
                     SimConnection {
                         start_element: s_port,
                         start_connector: PORT_NAME.to_string(),
-                        end_element: pending.p_steer,
+                        end_element: endpoints.p_steer,
                         end_connector: PORT_NAME.to_string(),
                         ..Default::default()
                     },

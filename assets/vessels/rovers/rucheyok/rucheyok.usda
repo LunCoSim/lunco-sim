@@ -129,6 +129,7 @@ def Xform "Rucheyok" (
         float inputs:drive_left.connect = </Rucheyok.outputs:drive_left>
         float inputs:drive_right.connect = </Rucheyok.outputs:drive_right>
         float outputs:soc.connect = </Rucheyok/Battery.outputs:soc_out>
+        float outputs:battery_drained.connect = </Rucheyok/Battery.outputs:drained>
         float outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
         float outputs:solar_incidence.connect = </Rucheyok/SolarPanel.outputs:cos_incidence>
         uniform token collection:components:expansionRule = "explicitOnly"
@@ -140,6 +141,26 @@ def Xform "Rucheyok" (
             </Rucheyok/Motor_RL>,
             </Rucheyok/Motor_RR>,
         ]
+    }
+
+    over "Wheel_FL" {
+        float inputs:drive.connect = </Rucheyok/Motor_FL.outputs:available_demand>
+    }
+    over "Wheel_FR" {
+        float inputs:drive.connect = </Rucheyok/Motor_FR.outputs:available_demand>
+    }
+    over "Wheel_RL" {
+        float inputs:drive.connect = </Rucheyok/Motor_RL.outputs:available_demand>
+    }
+    over "Wheel_RR" {
+        float inputs:drive.connect = </Rucheyok/Motor_RR.outputs:available_demand>
+    }
+    def LunCoEvent "BatteryDrained" {
+        float inputs:trigger.connect = </Rucheyok/Electrical.outputs:battery_drained>
+        uniform token lunco:event:name = "battery_drained"
+        uniform token lunco:event:severity = "warning"
+        uniform bool lunco:event:latched = true
+        double lunco:event:qualificationTime = 0.0
     }
 
     # --- Wheels (from component) ---
