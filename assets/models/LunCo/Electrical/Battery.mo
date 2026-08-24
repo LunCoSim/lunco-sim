@@ -23,10 +23,14 @@ model Battery
   output Real discharge_power_w(unit="W") "Power currently supplied by the battery; zero while charging";
   output Real charge_current_a(unit="A") "Current entering the battery; positive while charging";
   output Real discharge_current_a(unit="A") "Current leaving the battery; positive while discharging";
+  output Real drained "1 at the empty storage boundary, otherwise 0";
   Real soc_rate(unit="1/s") "State-of-charge rate limited to the physical storage interval";
 equation
   // Terminal voltage droops with SoC and with the current drawn through the ESR.
-  p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;
+  // The usable bus potential follows the stored fraction. At empty the
+  // storage element contributes no voltage; any remaining bus potential must
+  // come from another authored source on the electrical node.
+  p.v = max(0.0, voltage_nom * max(0.0, min(1.0, soc)) + p.i * R_internal);
   soc_rate = p.i / (capacity * 3600.0);
   // A finite battery cannot store less than empty or more than full. The
   // current remains the solved terminal current, while only the storage state
@@ -43,4 +47,7 @@ equation
   discharge_power_w = max(0.0, -net_power_w);
   charge_current_a = max(0.0, p.i);
   discharge_current_a = max(0.0, -p.i);
+  // Event bindings consume normalized predicates, not a depletion fraction:
+  // the notification becomes active only at the physical empty boundary.
+  drained = if soc <= 0.0 then 1.0 else 0.0;
 end Battery;

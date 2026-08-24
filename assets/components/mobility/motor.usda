@@ -261,6 +261,7 @@ def Xform "Motor" (
     float outputs:terminal_voltage_v
     float outputs:terminal_current_a
     float outputs:mechanical_power_w
+    float outputs:available_demand
 
     # --- Telemetry ---
     # Drive command as a RETAINED channel, so "was this motor actually being

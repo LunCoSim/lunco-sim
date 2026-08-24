@@ -301,7 +301,19 @@ pub fn find_binding_for_wheel(
     let mut sources = Vec::with_capacity(motors.len());
     for motor in &motors {
         let source = one_connection(reader, motor, "inputs:demand")?;
-        if source.as_deref() != Some(expected.as_str()) {
+        // The wheel may consume the motor's authored mechanical command output
+        // instead of the raw vehicle command. The connection itself is the
+        // contract: accept any output authored on this motor prim, without
+        // teaching Rust a model-specific output name. The Modelica projection
+        // publishes the declared output through the normal generated-domain
+        // boundary, and USD selects which output feeds the wheel.
+        let wheel_uses_motor_output =
+            expected
+                .rsplit_once('.')
+                .is_some_and(|(source_prim, source_property)| {
+                    source_prim == motor.as_str() && source_property.starts_with("outputs:")
+                });
+        if source.as_deref() != Some(expected.as_str()) && !wheel_uses_motor_output {
             return Err(PowertrainError::MotorDemandMismatch {
                 wheel: wheel.clone(),
                 motor: motor.clone(),

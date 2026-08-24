@@ -21,8 +21,16 @@ fn battery_discharge_current_reduces_soc() {
         "finite storage must keep the battery state inside the physical [0, 1] interval"
     );
     assert!(
+        source.contains("drained = if soc <= 0.0 then 1.0 else 0.0;"),
+        "battery drained must be a normalized empty-boundary predicate for authored notification"
+    );
+    assert!(
         source.contains("+ p.i * R_internal"),
         "negative discharge current must lower, not raise, terminal voltage"
+    );
+    assert!(
+        source.contains("p.v = max(0.0, voltage_nom *"),
+        "an empty battery must not expose a negative physical bus voltage"
     );
 }
 
@@ -60,6 +68,10 @@ fn electrical_observables_follow_the_physical_power_chain() {
     assert!(
         motor.contains("heat = max(0.0, electrical_power) * (1.0 - efficiency);"),
         "motor heat must be the electrical loss, not a second synthetic load"
+    );
+    assert!(
+        motor.contains("available_demand = demand * max(0.0, min(1.0, p.v / v_rated));"),
+        "motor authority must follow the solved terminal voltage rather than a battery-specific branch"
     );
 }
 

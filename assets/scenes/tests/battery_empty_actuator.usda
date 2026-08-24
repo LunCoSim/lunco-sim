@@ -1,0 +1,69 @@
+#usda 1.0
+(
+    defaultPrim = "BatteryEmptyActuator"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production regression for the physical empty-bus boundary. The battery is
+# authored empty and no generation source is composed. The test must observe
+# the generic electrical model drive the motor authority to zero; no runtime
+# actuator stop branch is involved.
+def Xform "BatteryEmptyActuator" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "An empty battery rover has no solved electrical authority for its actuators."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (0.0, 6.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </BatteryEmptyActuator/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "battery"
+            string generation = "none"
+        }
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.6, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        over "Battery" {
+            float inputs:soc_init = 0.0
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "battery-empty-actuator"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/battery_empty_actuator.rhai@
+        }
+    }
+}

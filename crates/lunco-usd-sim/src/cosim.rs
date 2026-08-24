@@ -2311,10 +2311,12 @@ const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
     // into a static `WheelParams`. Live axle torque is written every tick by
     // `MotorActuator`, never through this port.
     ("torque", "LunCoGearboxAPI"),
-    // `Wheel.inputs:drive` / `inputs:steer`. Read by `connected_port` in
-    // `crate::lib`, which resolves the authored connection to the FSW port NAME
-    // the wheel subscribes to (`PendingWheelWiring`). The value then flows
-    // through the port registry, not along this structural edge.
+    // `Wheel.inputs:drive` / `inputs:steer` when the authored source is a
+    // vehicle control surface. Read by `connected_port` in `crate::lib`, which
+    // resolves the authored connection to the FSW port NAME the wheel
+    // subscribes to (`PendingWheelWiring`). A source from another authored
+    // output, such as a generated domain member, is a normal scalar wire and
+    // is intentionally not listed here.
     ("drive", "LunCoWheelAPI"),
     ("steer", "LunCoWheelAPI"),
 ];
@@ -2362,6 +2364,7 @@ pub fn rewire_usd_connections(
             Has<ModelicaModel>,
             Option<&GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
+            Option<&crate::WheelPortEndpoints>,
         ),
         Or<(With<lunco_core::PortSurfaceReady>, With<SimComponent>)>,
     >,
@@ -2446,9 +2449,9 @@ pub fn rewire_usd_connections(
     > = HashMap::new();
     let environment_probe_entities: std::collections::HashSet<Entity> = q_all
         .iter()
-        .filter_map(|(entity, _, _, _, is_probe)| is_probe.then_some(entity))
+        .filter_map(|(entity, _, _, _, is_probe, _)| is_probe.then_some(entity))
         .collect();
-    for (e, p, _, generated, _) in q_all.iter() {
+    for (e, p, _, generated, _, _) in q_all.iter() {
         let instance = instance_of(e);
         let key = (p.stage_handle.id(), instance, p.path.clone());
         by_path.insert(key, e);
@@ -2494,7 +2497,7 @@ pub fn rewire_usd_connections(
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica, _, _) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _, _, wheel_endpoints) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages
@@ -2591,7 +2594,24 @@ pub fn rewire_usd_connections(
             let sink_conn = sink_conn.strip_suffix(".connect").unwrap_or(sink_conn);
             // A structural binding is already resolved; building a phantom wire
             // for it manufactures a dangling-wire report that can never clear.
-            if is_structural_binding(&view, &sink_sdf, sink_conn) {
+            let wheel_source_is_structural = if matches!(sink_conn, "drive" | "steer")
+                && view.has_api_schema(&sink_sdf, "LunCoWheelAPI")
+            {
+                view.connections(&sink_sdf, &attr).iter().all(|source| {
+                    let Some((source_prim, _)) = source.rsplit_once('.') else {
+                        return false;
+                    };
+                    let Ok(source_path) = SdfPath::new(source_prim) else {
+                        return false;
+                    };
+                    view.has_api_schema(&source_path, "PhysxVehicleContextAPI")
+                })
+            } else {
+                false
+            };
+            if is_structural_binding(&view, &sink_sdf, sink_conn)
+                && (!matches!(sink_conn, "drive" | "steer") || wheel_source_is_structural)
+            {
                 continue;
             }
             // Same reasoning, one level up — but for `outputs:` ONLY.
@@ -2840,9 +2860,23 @@ pub fn rewire_usd_connections(
                     continue;
                 }
 
-                let (end_element, end_connector) = forward
-                    .clone()
-                    .unwrap_or_else(|| (entity, sink_conn.to_string()));
+                let (end_element, end_connector) =
+                    if view.has_api_schema(&sink_sdf, "LunCoWheelAPI") {
+                        match sink_conn {
+                            "drive" => wheel_endpoints.map(|endpoints| {
+                                (endpoints.p_drive, lunco_cosim::PORT_NAME.to_string())
+                            }),
+                            "steer" => wheel_endpoints.map(|endpoints| {
+                                (endpoints.p_steer, lunco_cosim::PORT_NAME.to_string())
+                            }),
+                            _ => None,
+                        }
+                        .unwrap_or_else(|| (entity, sink_conn.to_string()))
+                    } else {
+                        forward
+                            .clone()
+                            .unwrap_or_else(|| (entity, sink_conn.to_string()))
+                    };
                 commands.spawn((
                     SimConnection {
                         start_element,

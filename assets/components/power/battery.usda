@@ -35,6 +35,7 @@ def Xform "Battery" (
     float inputs:R_internal = 0.01
     float inputs:soc_init = 1.0
     float outputs:soc_out
+    float outputs:drained
     float outputs:soc_percent
     float outputs:capacity_ah
     float outputs:charge_remaining_ah
