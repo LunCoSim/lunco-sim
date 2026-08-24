@@ -716,11 +716,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                             .collect(),
                     ),
                 ),
-                // The selected domain synthesizer owns the interpretation of
-                // this CollectionAPI:components scope.  The default empty
-                // value is the documented acausal-network synthesizer; an
-                // authored name is a different domain contract and must not
-                // be judged by the generic Modelica cardinality rules below.
+                // Preserve only the authored selector here. The command-layer
+                // USD lint aggregator resolves omitted selectors from composed
+                // member roles before invoking policy; generic Avian facts do
+                // not own domain selection.
                 (
                     "synthesizer",
                     H::str(reader.text(p, "lunco:synthesizer").unwrap_or_default()),

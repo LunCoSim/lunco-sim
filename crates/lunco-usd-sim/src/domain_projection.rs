@@ -234,7 +234,7 @@ pub enum SynthOutcome {
     /// declares is not knowable. The projection simply waits and is re-triggered
     /// when the source lands.
     Pending,
-    Ready(SynthesisPlan),
+    Ready(Box<SynthesisPlan>),
 }
 
 /// Read-only facts a synthesizer may need beyond the stage itself.
@@ -247,6 +247,25 @@ pub struct SynthContext<'a> {
 pub const DEFAULT_SYNTHESIZER: &str = "acausal-network";
 /// The generic force-actuator allocator used by the shipped lander.
 pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = "actuator-wrench";
+
+/// Select the domain owner for a composed network scope.
+///
+/// An authored `LunCoDomainSynthesisAPI` is an explicit contract. Without that
+/// API, ownership is derived from the composed member role schemas. Keeping
+/// this selection in one function makes the runtime projector and the linter
+/// agree on both the explicit-selector default and the role-derived owner.
+pub(crate) fn select_synthesizer_name(
+    view: &lunco_usd_bevy::StageView<'_>,
+    root: &SdfPath,
+) -> Result<String, String> {
+    if view.has_api_schema(root, "LunCoDomainSynthesisAPI") {
+        return Ok(view
+            .text(root, "lunco:synthesizer")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string()));
+    }
+    derive_synthesizer_name(view, root)
+}
 
 /// Derive the domain owner from the composed USD role schemas.
 ///
@@ -436,7 +455,7 @@ impl DomainSynthesizer for HookSynthesizer {
                 message,
             }]
         })?;
-        Ok(SynthOutcome::Ready(SynthesisPlan {
+        Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             // The BOUNDARY remains Rust's composed-USD answer. The policy owns
             // the emitted source, merge partition, and visual placement, but
@@ -464,7 +483,7 @@ impl DomainSynthesizer for HookSynthesizer {
             units,
             layout,
             communication_period_secs: network.communication_period_secs,
-        }))
+        })))
     }
 }
 
@@ -1385,7 +1404,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             inputs: inputs.clone(),
             outputs: outputs.clone(),
         };
-        Ok(SynthOutcome::Ready(SynthesisPlan {
+        Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             inputs,
             outputs,
@@ -1395,7 +1414,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             units: vec![unit],
             layout: SynthesisLayout::default(),
             communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
-        }))
+        })))
     }
 }
 
@@ -1710,17 +1729,11 @@ pub fn project_domain_islands(
         // policy for a generic Modelica collection; physical actuator
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
-        let requested = if view.has_api_schema(&root_path, "LunCoDomainSynthesisAPI") {
-            view.text(&root_path, "lunco:synthesizer")
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string())
-        } else {
-            match derive_synthesizer_name(&view, &root_path) {
-                Ok(name) => name,
-                Err(message) => {
-                    error!("[domain-projection] `{}` rejected: {message}", prim.path);
-                    continue;
-                }
+        let requested = match select_synthesizer_name(&view, &root_path) {
+            Ok(name) => name,
+            Err(message) => {
+                error!("[domain-projection] `{}` rejected: {message}", prim.path);
+                continue;
             }
         };
         let Some(synthesizer) = registry.get(&requested).cloned() else {

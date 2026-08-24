@@ -131,10 +131,9 @@ fn schemas_of(facts, path) {
 }
 
 /// Whether a component collection uses the standard generated Modelica owner.
-/// The empty string is retained for hand-built policy fixtures; composed facts
-/// use the explicit `acausal-network` name from the runtime classifier.
+/// The fact producer resolves omitted selectors to the canonical owner name.
 fn is_modelica_network(scope) {
-    scope.synthesizer == "" || scope.synthesizer == "acausal-network"
+    scope.synthesizer == "acausal-network"
 }
 
 fn lint_usd(facts) {

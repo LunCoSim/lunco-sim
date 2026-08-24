@@ -69,7 +69,7 @@ pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
 /// Twin name and the Twin-relative path. [`parse_twin_uri`] for callers that
 /// hold the full URI.
 pub fn split_twin_rel(rest: &str) -> Option<(&str, &str)> {
-    rest.split_once(|separator| separator == '/' || separator == '\\')
+    rest.split_once(['/', '\\'])
 }
 
 /// The key an overlay is stored under — the reader-facing relative path

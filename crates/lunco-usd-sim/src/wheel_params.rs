@@ -367,9 +367,7 @@ impl WheelParams {
     ) -> Result<WheelParams, Vec<String>> {
         let mut missing = Vec::new();
         let tire = attachment_tire.unwrap_or(wheel);
-        if attachment_tire.is_none() {
-            missing.push("PhysxVehicleTireAPI".to_owned());
-        } else if !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
+        if attachment_tire.is_none() || !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
             missing.push("PhysxVehicleTireAPI".to_owned());
         }
         let axle_axis = match reader.text(wheel, "axis").as_deref() {

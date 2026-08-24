@@ -40,7 +40,10 @@ fn main() -> lunco_luncosim::AppExit {
             // scripting plugin cannot register the authored lint policies.
             // Use the same registration owner as the live runtime before the
             // shared ValidateAsset entry point is called.
-            lunco_scripting::register_builtin_policies();
+            if let Err(error) = lunco_scripting::register_builtin_policies() {
+                eprintln!("--validate cannot register built-in policies: {error}");
+                std::process::exit(1);
+            }
             std::process::exit(lunco_scene_commands::validate::run_cli(&paths));
         }
     }

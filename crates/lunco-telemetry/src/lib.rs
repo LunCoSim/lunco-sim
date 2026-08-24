@@ -648,7 +648,7 @@ fn sample_parameters(world: &mut World) {
     // Absolute epoch for wall-clock labelling; the per-channel domain gives the
     // precise timebase (see `SampledParameter::sim_secs`). Both come from the
     // unified mission-time spine installed above.
-    let world_time = world.resource::<WorldTime>().clone();
+    let world_time = *world.resource::<WorldTime>();
     // The sampling plan: which entities to visit. Rebuilt ONLY when the channel
     // set changed (see `mark_sampling_plan_dirty`) — steady state pays a Vec
     // walk, not a query + per-channel `Parameter` clone. The plan is taken OUT

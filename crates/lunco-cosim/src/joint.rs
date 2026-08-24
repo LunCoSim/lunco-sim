@@ -574,16 +574,17 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
 /// via position control — same enable-on-write, finite-guard, and default-fill
 /// contract as [`write_motor_angle`].
 fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
-        return false;
-    };
-    if !value.is_finite() {
-        return true;
+    {
+        let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
+            return false;
+        };
+        if !value.is_finite() {
+            return true;
+        }
+        j.motor.enabled = true;
+        j.motor.target_position = value;
+        j.motor.target_velocity = 0.0;
     }
-    j.motor.enabled = true;
-    j.motor.target_position = value;
-    j.motor.target_velocity = 0.0;
-    drop(j);
     if let Some(mut target) = world.get_mut::<PrismaticDriveTargetVelocity>(entity) {
         target.0 = 0.0;
     }

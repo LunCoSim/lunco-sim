@@ -11,8 +11,8 @@ use lunco_usd_bevy::{StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
 use crate::{
-    domain_projection::{derive_synthesizer_name, DEFAULT_SYNTHESIZER},
-    read_gear_drive_type, read_gear_drive_values, DifferentialDriveType,
+    domain_projection::select_synthesizer_name, is_gear_drive, read_gear_drive_type,
+    read_gear_drive_values, read_gear_ratio, DifferentialDriveType,
 };
 
 /// Add the domain owner selected by the same composed-USD classifier used by
@@ -53,16 +53,7 @@ pub fn append_network_synthesizer_facts(reader: &StageView<'_>, facts: &mut H) {
             continue;
         };
 
-        let selected = if reader.has_api_schema(&root, "LunCoDomainSynthesisAPI") {
-            Ok(reader
-                .text(&root, "lunco:synthesizer")
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| DEFAULT_SYNTHESIZER.to_string()))
-        } else {
-            derive_synthesizer_name(reader, &root)
-        };
-
-        match selected {
+        match select_synthesizer_name(reader, &root) {
             Ok(name) => {
                 set_scope_fact(scope, "synthesizer", H::str(name));
                 set_scope_fact(scope, "synthesizer_error", H::str(""));
@@ -104,20 +95,15 @@ pub fn append_gear_drive_facts(reader: &StageView<'_>, facts: &mut H) {
 fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
     let mut facts = Vec::new();
     for path in reader.prim_paths() {
-        if reader.prim_type_name(&path).as_deref() != Some("PhysxPhysicsGearJoint")
-            || !reader.has_api_schema(&path, "PhysicsDriveAPI:angular")
-        {
+        if !is_gear_drive(reader, &path) {
             continue;
         }
 
-        let ratio = reader.real(&path, "physxGearJoint:gearRatio");
+        let ratio = read_gear_ratio(reader, &path);
         let values = read_gear_drive_values(reader, &path);
         let drive_type = read_gear_drive_type(reader, &path);
-        let valid = ratio.is_some_and(|value| value.is_finite() && value != 0.0)
-            && values.is_ok()
-            && drive_type.is_some();
-        let (rest_offset, target_velocity, stiffness, damping, max_force) =
-            values.unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0));
+        let valid = ratio.is_some() && values.is_ok() && drive_type.is_some();
+        let values = values.ok();
         let realization = match drive_type {
             Some(DifferentialDriveType::Force) => "implicit_force",
             Some(DifferentialDriveType::Acceleration) => "implicit_acceleration",
@@ -129,17 +115,29 @@ fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
             ("valid", H::Bool(valid)),
             ("realization", H::str(realization)),
             ("ratio", ratio.map(H::Float).unwrap_or(H::Unit)),
-            ("rest_offset", H::Float(rest_offset)),
-            ("target_velocity", H::Float(target_velocity)),
-            ("stiffness", H::Float(stiffness)),
-            ("damping", H::Float(damping)),
+            (
+                "rest_offset",
+                values.map(|values| H::Float(values.0)).unwrap_or(H::Unit),
+            ),
+            (
+                "target_velocity",
+                values.map(|values| H::Float(values.1)).unwrap_or(H::Unit),
+            ),
+            (
+                "stiffness",
+                values.map(|values| H::Float(values.2)).unwrap_or(H::Unit),
+            ),
+            (
+                "damping",
+                values.map(|values| H::Float(values.3)).unwrap_or(H::Unit),
+            ),
             (
                 "max_force",
-                if max_force.is_finite() {
-                    H::Float(max_force)
-                } else {
-                    H::Unit
-                },
+                values
+                    .map(|values| values.4)
+                    .filter(|value| value.is_finite())
+                    .map(H::Float)
+                    .unwrap_or(H::Unit),
             ),
         ]));
     }
@@ -208,5 +206,7 @@ mod tests {
         };
         assert_eq!(gear_facts.len(), 1);
         assert_eq!(gear_facts[0].get("valid"), Some(&H::Bool(false)));
+        assert_eq!(gear_facts[0].get("stiffness"), Some(&H::Unit));
+        assert_eq!(gear_facts[0].get("damping"), Some(&H::Unit));
     }
 }

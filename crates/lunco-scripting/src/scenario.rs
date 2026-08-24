@@ -428,6 +428,7 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
 
 /// Neutral per-entity lifecycle bookkeeping — the FSM the driver owns. Kept
 /// separate from the backend's compiled state so the policy stays language-free.
+#[derive(Default)]
 struct Fsm {
     /// `ScriptDocument.generation` the current program was compiled from.
     generation: u64,
@@ -440,23 +441,10 @@ struct Fsm {
     /// Whether the backend currently holds a compiled program for this entity.
     compiled: bool,
     /// Last-known host gid — so `on_stop` has a meaningful `self` after despawn.
+    /// The derived default `0` is the telemetry bus' explicit global/no-entity
+    /// source. A local script host has no GlobalEntityId, so `-1` would leak
+    /// `u64::MAX` into emitted events.
     gid: i64,
-}
-
-impl Default for Fsm {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            attempted_generation: None,
-            started: false,
-            compiled: false,
-            // `0` is the telemetry bus' explicit global/no-entity source. A
-            // local script host has no GlobalEntityId, so using `-1` here
-            // leaked `u64::MAX` into emitted events and made lifecycle
-            // consumers unable to recognise a legitimate local emission.
-            gid: 0,
-        }
-    }
 }
 
 /// Generic scenario runtime resource: a language backend `R` + the neutral FSM.

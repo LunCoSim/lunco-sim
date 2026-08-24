@@ -214,19 +214,10 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
 /// distinguish a real active-frame handoff from BigSpace's representation-only
 /// cell re-split and apply one rigid coordinate conversion to the complete
 /// Avian state before the solver sees it.
-#[derive(Resource, Debug, Clone, Copy)]
+#[derive(Resource, Debug, Clone, Copy, Default)]
 struct PhysicsFrameTransportState {
     frame: Option<Entity>,
     pending_solver_reset: bool,
-}
-
-impl Default for PhysicsFrameTransportState {
-    fn default() -> Self {
-        Self {
-            frame: None,
-            pending_solver_reset: false,
-        }
-    }
 }
 
 impl PhysicsFrameTransportState {

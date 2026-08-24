@@ -1166,6 +1166,20 @@ fn read_gear_drive_real(
     }
 }
 
+pub(crate) fn is_gear_drive(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath) -> bool {
+    reader.prim_type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
+        && reader.has_api_schema(prim, "PhysicsDriveAPI:angular")
+}
+
+pub(crate) fn read_gear_ratio(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<f64> {
+    reader
+        .real(prim, "physxGearJoint:gearRatio")
+        .filter(|value| value.is_finite() && *value != 0.0)
+}
+
 fn read_gear_drive_values(
     reader: &lunco_usd_bevy::StageView<'_>,
     prim: &SdfPath,
@@ -1460,7 +1474,7 @@ fn process_usd_sim_prim_read(
         match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "USD prim {} has malformed `lunco:avatar`; prim ignored",
                     prim_path.path
@@ -1511,7 +1525,7 @@ fn process_usd_sim_prim_read(
         match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "USD prim {} has malformed `lunco:billboard`; label ignored",
                     prim_path.path
@@ -1562,7 +1576,7 @@ fn process_usd_sim_prim_read(
         match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:waypoint") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "USD prim {} has malformed `lunco:waypoint`; marker ignored",
                     prim_path.path
@@ -2180,9 +2194,7 @@ fn process_usd_sim_prim_read(
     // solver stiffness.
     //
     // Defer-resolved once both geared bodies spawn.
-    if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint")
-        && reader.has_api_schema(&sdf_path, "PhysicsDriveAPI:angular")
-    {
+    if is_gear_drive(reader, &sdf_path) {
         let hinges = (
             reader.rel_target(&sdf_path, "physxGearJoint:hinge0"),
             reader.rel_target(&sdf_path, "physxGearJoint:hinge1"),
@@ -2198,10 +2210,7 @@ fn process_usd_sim_prim_read(
             ))
         };
         if let (Some((body_a, frame)), Some((body_b, _))) = (geared(&hinges.0), geared(&hinges.1)) {
-            let Some(ratio) = reader
-                .real(&sdf_path, "physxGearJoint:gearRatio")
-                .filter(|value| value.is_finite() && *value != 0.0)
-            else {
+            let Some(ratio) = read_gear_ratio(reader, &sdf_path) else {
                 warn!(
                     "Gear joint {} has no valid non-zero physxGearJoint:gearRatio; coupling ignored",
                     prim_path.path
@@ -4133,7 +4142,7 @@ fn resolve_behavior_targets(
             // until the resolver can publish the complete binding set.
             commands
                 .entity(vessel)
-                .insert(lunco_autopilot::usd_tree::TargetBindings::default());
+                .try_insert(lunco_autopilot::usd_tree::TargetBindings::default());
             warn_once!(
                 "[resolve_behavior_targets] vessel {:?} has unresolved route targets; waiting for composed prim projection",
                 vessel
