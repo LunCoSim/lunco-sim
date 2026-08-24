@@ -369,7 +369,7 @@ impl ModelicaIndex {
         // Walk top-level classes; nested classes go into their own
         // entry so panels can drill in by qualified name.
         for (qualified, class_def) in &ast.classes {
-            insert_class_recursive(self, qualified.clone(), class_def);
+            insert_class_recursive(self, qualified.clone(), class_def, source);
         }
     }
 
@@ -794,7 +794,12 @@ fn sim_tier(c: &ClassEntry, used: &std::collections::HashSet<&str>) -> u8 {
 // AST → Index helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def: &ast::ClassDef) {
+fn insert_class_recursive(
+    idx: &mut ModelicaIndex,
+    qualified: String,
+    class_def: &ast::ClassDef,
+    source: &str,
+) {
     // Description from the class header (`model X "desc"`).
     let description = class_def
         .description
@@ -931,9 +936,17 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
         if let ast::Equation::Connect { lhs, rhs } = eq {
             let from = endpoint_from_component_ref(lhs);
             let to = endpoint_from_component_ref(rhs);
-            // Connect annotation is no longer carried on Equation::Connect
-            // in rumoca main. Line waypoints are unavailable here.
-            let waypoints = Vec::new();
+            // Rumoca currently drops connect-equation annotations from the
+            // AST. Read the authored Line route from this equation's source
+            // span through the shared annotation projection instead of
+            // manufacturing a UI-only route or losing the user's layout.
+            let waypoints = lhs
+                .get_location()
+                .and_then(|location| {
+                    crate::annotations::line_route_for_connect(source, location.start as usize)
+                })
+                .map(|route| route.points)
+                .unwrap_or_default();
             let key = idx.alloc_connection_key();
             let entry = ConnectionEntry {
                 key,
@@ -963,7 +976,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // Recurse nested classes (e.g. examples inside a package).
     for (nested_name, nested_def) in class_def.iter_classes() {
         let nested_qualified = format!("{}.{}", qualified, nested_name);
-        insert_class_recursive(idx, nested_qualified, nested_def);
+        insert_class_recursive(idx, nested_qualified, nested_def, source);
     }
 }
 
@@ -1268,15 +1281,7 @@ mod tests {
         // No panic, no state change.
     }
 
-    // IGNORED: rumoca main (eb9864d8) drops the connect-equation
-    // annotation at parse time — `Equation::Connect { lhs, rhs }` carries
-    // no annotation field (see rumoca-phase-parse equations.rs), so the
-    // `Line(points=…)` waypoints never reach our AST. `rebuild_from_ast`
-    // correctly returns empty waypoints (index.rs ~910). Re-enable when
-    // upstream restores connect annotations, or wire a source-text
-    // annotation re-parse keyed off the connect's source range.
     #[test]
-    #[ignore = "rumoca main drops connect-equation annotations at parse; waypoints unavailable from AST"]
     fn rebuild_extracts_connect_annotation_waypoints() {
         let src = "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b) annotation(Line(points={{0,0},{10,5},{20,10}}));\nend M;\n";
         let ast = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parses");

@@ -104,59 +104,16 @@ fn scan_component_declarations_from_ast(
     out
 }
 
-/// Build a lookup of `connect(...) annotation(Line(points=...))`
-/// waypoints, keyed by canonicalised edge endpoints
-/// `((a_inst, a_port), (b_inst, b_port))` — unordered so
-/// `connect(a.p, b.q)` and `connect(b.q, a.p)` hash to the same key.
-///
-/// Walks every class's `equations` Vec across the whole AST and pulls
-/// `Equation::Connect.annotation` via
-/// [`crate::annotations::extract_line_points`]. The bare-connector
-/// case (`connect(u, P.u)` where `u` is a top-level connector with
-/// no `.port` part) is preserved: when a `ComponentReference` has
-/// only one part, its instance string is empty and the port string
-/// holds the identifier — matches the way `canonical_edge_key`
-/// indexes those endpoints.
-/// Per-edge routing data lifted from `connect(...)` annotations:
-/// interior polyline + the `smooth=Bezier` flag. Future fields
-/// (color, thickness) slot in here without changing the scan signature.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ConnectRoute {
-    pub points: Vec<(f32, f32)>,
-    pub smooth_bezier: bool,
-    /// `Line(color={r,g,b})` override — when present, overrides the
-    /// connector-derived wire colour.
-    pub color: Option<[u8; 3]>,
-    /// `Line(thickness=…)` override — present only when source
-    /// explicitly set a non-default value.
-    pub thickness: Option<f32>,
-}
-
+/// Build a lookup of authored `connect(...) annotation(Line(...))` routes.
+/// The shared source projection owns the parser because the Modelica AST does
+/// not retain connect-equation annotations in the current Rumoca API.
 pub(crate) fn scan_connect_annotations(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> std::collections::HashMap<((String, String), (String, String)), ConnectRoute> {
-    let mut out = std::collections::HashMap::new();
-    for class in ast.classes.values() {
-        collect_connect_waypoints_recursive(class, &mut out);
-    }
-    out
-}
-
-fn collect_connect_waypoints_recursive(
-    class: &rumoca_compile::parsing::ast::ClassDef,
-    _out: &mut std::collections::HashMap<((String, String), (String, String)), ConnectRoute>,
-) {
-    use rumoca_compile::parsing::ast::Equation;
-    for eq in &class.equations {
-        let Equation::Connect { .. } = eq else {
-            continue;
-        };
-        // Connect annotation no longer carried on Equation::Connect in rumoca main.
-        // Waypoint extraction from annotation is unavailable until upstream restores it.
-    }
-    for nested in class.classes.values() {
-        collect_connect_waypoints_recursive(nested, _out);
-    }
+    source: &str,
+    target_class: Option<&str>,
+) -> std::collections::HashMap<((String, String), (String, String)), crate::annotations::LineRoute>
+{
+    crate::annotations::connect_line_routes(ast, source, target_class)
 }
 
 fn canonical_edge_key(
@@ -285,7 +242,7 @@ fn ast_looks_like_package(ast: &rumoca_compile::parsing::ast::StoredDefinition) 
 
 pub fn import_model_to_diagram_from_ast(
     ast: std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
-    _source: &str,
+    source: &str,
     max_nodes: usize,
     target_class: Option<&str>,
     layout: &DiagramAutoLayoutSettings,
@@ -339,10 +296,10 @@ pub fn import_model_to_diagram_from_ast(
         builder = builder.target_class(target);
     }
     let graph = builder.build();
-    // Authored connection-route waypoints (from `connect(...) annotation(Line(
-    // points=...))`) are lost by the AST path, so we regex them out of the
-    // raw source and use the (instance,port)-pair lookup below.
-    let waypoint_map = scan_connect_annotations(&ast);
+    // Authored connection-route annotations are read from the source span by
+    // the shared annotation projection. The graph itself still comes from
+    // the parsed AST, so source and semantic topology remain separate concerns.
+    let waypoint_map = scan_connect_annotations(&ast, source, resolved_target.as_deref());
 
     // If the AST-based graph has no components, fall back to a
     // source-text scan before concluding the model is equation-only.
@@ -1051,7 +1008,7 @@ pub fn import_model_to_diagram_from_ast(
     // Backfill edges that the rumoca AST graph dropped — most
     // commonly `connect(<top-level connector>, <sub.port>)` style,
     // which the AST builder skips because the top-level connector
-    // isn't a sub-component. The regex-scanned waypoint_map already
+    // isn't a sub-component. The authored-source waypoint map already
     // has the (a_inst, a_port, b_inst, b_port) for every authored
     // connect, so we replay any pair whose nodes both exist in the
     // diagram but no edge connects them yet. Bare-connector
@@ -1061,8 +1018,9 @@ pub fn import_model_to_diagram_from_ast(
     // Two passes: (1) attach waypoints to existing edges that match
     // by node-id pair, regardless of port-name shape — covers the
     // first-pass loop above where `waypoint_map.get(&key)` missed
-    // because the rumoca-AST graph and the regex use different
-    // (inst, port) shapes for top-level connectors. (2) add any
+    // because the rumoca AST graph and the source projection use
+    // different (instance, port) shapes for top-level connectors.
+    // (2) add any
     // remaining waypoint_map entries that have no edge yet.
     let mut to_add: Vec<(
         crate::visual_diagram::DiagramNodeId,

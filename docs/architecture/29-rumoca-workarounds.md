@@ -139,14 +139,15 @@ source ids), and accept an identical redefinition instead of erroring.
 — it pins the number of sites that seat documents into the compile session, so a
 new un-evicted seat can't be added silently.
 
-> **Known hole (latent):** `ModelicaCompiler::load_source_root_in_memory`
-> (`lib.rs`, called from the `LoadSourceRoot` command on both worker twins) calls
-> `session.add_document` directly and does NOT record the URI in
-> `seated_user_uris` — so those docs are never evictable. A library root seated
-> there holding package `P`, plus a later `compile_str` of a `P`-member file under
-> a different URI, reproduces exactly the duplicate-class failure this workaround
-> exists to prevent. Durable-root semantics make it *intended*; nothing enforces
-> the disjointness.
+> **Local ownership guard:** `ModelicaCompiler::load_source_root_in_memory`
+> (`lib.rs`, called from the `LoadSourceRoot` command on both worker twins)
+> intentionally keeps durable source-root documents outside
+> `seated_user_uris`. It now records the authored top-level namespaces from
+> every successfully parsed document in `installed_roots`, independent of the
+> transport id (`twin:school`, for example). A later `compile_str` of a
+> `within P;` member therefore resolves the already-seated root and never adds
+> the same class under a second URI. The regression is
+> `observables_smoke::source_root_namespace_owns_later_package_member_compiles`.
 
 **Probe — must go at a RAW `rumoca_compile::Session`.** Probing through
 `ModelicaCompiler::compile_str` is worthless: it evicts first, so it tests the
@@ -263,8 +264,13 @@ and the modelica lint policy enforce that rule.
 `connect(...) annotation(Line(points={...}))` waypoints never reach the AST.
 Diagram connection routing can't be *read back* from a parsed model.
 
-**Workaround (read side).** `rebuild_from_ast` returns empty waypoints; the
-diagram falls back to straight lines.
+**Read-side projection.** Rumoca still does not expose the annotation on
+`Equation::Connect`, so `annotations::source` locates the authored connect
+statement from the equation span, parses its standard annotation expression
+through the normal Modelica parser, and sends the typed `LineRoute` to both
+`ModelicaIndex` and the canvas projection. The source remains authoritative and
+there is one shared reader; no UI-only route cache or second annotation grammar
+is involved.
 
 **Write side: fixed by the splice engine.** `set_connection_line` and
 `set_connection_line_style` used to be **silent no-ops** — with no AST field to
@@ -277,9 +283,9 @@ annotation plainly is, so routing and styling work without waiting on upstream.
 Fields the caller didn't name are left as authored: re-routing a line keeps a
 hand-written `color=`/`thickness=` on the same `Line`.
 
-**Probe.** `index.rs::tests::rebuild_extracts_connect_annotation_waypoints`
-(`#[ignore]`d) — un-ignore when the AST carries the annotation, which would let
-the *read* path recover routing too.
+**Probe.** `index.rs::tests::rebuild_extracts_connect_annotation_waypoints` —
+asserts that the authored route is present in the index even while Rumoca's AST
+continues to omit the connect annotation.
 
 ---
 

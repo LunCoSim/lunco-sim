@@ -204,6 +204,7 @@ impl DynExtent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct LineRoute {
     pub points: Vec<(f32, f32)>,
     pub smooth_bezier: bool,
