@@ -12,6 +12,21 @@ use bevy::prelude::*;
 use crate::lunco_source::lunco_asset_source;
 use crate::twin_source::{twin_asset_source, TwinRoots};
 
+/// A workspace Twin has a usable `twin://` asset authority.
+///
+/// [`TwinAdded`](lunco_workspace::TwinAdded) announces workspace ownership;
+/// this event announces the later asset-boundary invariant that the authority
+/// has actually been registered. Domain consumers must observe this event
+/// when they need to read Twin assets, rather than relying on observer
+/// registration order for `TwinAdded`.
+#[derive(Event, Clone, Debug)]
+pub struct TwinAuthorityMounted {
+    /// Workspace identity of the mounted Twin.
+    pub twin: lunco_workspace::TwinId,
+    /// The authority actually assigned by [`TwinRoots::register`].
+    pub name: String,
+}
+
 /// Mounts workspace Twins into the shared `twin://` asset source.
 ///
 /// This is asset lifecycle, not USD lifecycle: Modelica-only lunica still
@@ -44,6 +59,7 @@ fn register_twin_root(
     trigger: On<lunco_workspace::TwinAdded>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     roots: Res<TwinRoots>,
+    mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
         return;
@@ -57,6 +73,10 @@ fn register_twin_root(
         "[twin-roots] mounted `{assigned}` at {}",
         twin.root.display()
     );
+    commands.trigger(TwinAuthorityMounted {
+        twin: twin_id,
+        name: assigned,
+    });
 }
 
 fn unregister_twin_root(trigger: On<lunco_workspace::TwinClosed>, roots: Res<TwinRoots>) {

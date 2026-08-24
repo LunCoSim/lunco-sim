@@ -12,12 +12,12 @@
 //!
 //! Flow (doc-first: the document exists and its composed source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
-//! 1. On `TwinAdded` with a `[usd] default_scene`, kick an async
-//!    [`UsdSourceText`] load of `twin://<name>/<scene>` (raw base layer, read
-//!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
-//!    No mount yet — mounting first built the stage from the raw base, and the
-//!    open-time `restore_runtime` then forced a whole-scene rebuild (every prim
-//!    spawned twice ~70 ms apart).
+//! 1. On [`TwinAuthorityMounted`](lunco_assets::TwinAuthorityMounted) for a
+//!    Twin with a `[usd] default_scene`, kick an async [`UsdSourceText`] load
+//!    of `twin://<name>/<scene>` (raw base layer, read through the twin source —
+//!    web-ready) and record it in [`PendingTwinDocs`]. No mount yet — mounting
+//!    first built the stage from the raw base, and the open-time `restore_runtime`
+//!    then forced a whole-scene rebuild (every prim spawned twice ~70 ms apart).
 //! 2. [`drain_pending_twin_docs`] — once the source text is in hand, allocate a
 //!    [`UsdDocument`](crate::document) for it (origin = the on-disk path, so Save
 //!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
