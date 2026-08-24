@@ -139,6 +139,27 @@ the `connect()` equations from the same generated AST, so opening the root shows
 runtime unit topology and drilling into a unit shows its real member topology. This is
 inspection of the executable projection, not a second visual-only network.
 
+For the shipped electrical policy, the unit diagram also includes a labelled
+power-bus rail. Every generated `connect(...)` carries a standard Modelica
+`Line` route through that rail, including the horizontal icon stubs and rail
+crossing, so a panel-to-load edge is visibly a branch of the common bus rather
+than a direct solar-to-motor wire. The policy derives the visual hub from graph
+incidence and lays the remaining members into deterministic branch lanes; no
+component class is special-cased. Member coordinates are local to each owning
+unit diagram, while unit coordinates belong to the generated root diagram. The
+diagram extent is derived from actual member positions, which keeps larger
+twins such as the eight-motor Summer Space School rover legible. These are Rhai
+presentation decisions, not Rust-owned electrical knowledge.
+
+The same `flow Real i` supplies the live energy-flow cue in the diagram. The
+standard Modelica connector resolver records `Pin.i`, and the existing canvas
+edge renderer reads the corresponding live node-state values to animate
+directional dots along the authored `connect(...)` route. This is the same
+generic mechanism used by the rocket/lander `FluidPort` diagrams; no electrical
+special case or second visual graph is needed. A zero current intentionally
+looks idle, and a missing flow state is an explicit diagnostic rather than an
+invented animation.
+
 The generated document has normal workbench provenance but no authored lifetime:
 its `generated/` origin is classified from the document registry, not from a
 copied UI list. The browser shows the root boundary separately from promoted
@@ -149,13 +170,15 @@ engine announces completion; an unknown class is an explicit error card. When
 the USD network disappears, its generated document and metadata are retired,
 while authored `.mo` documents remain open.
 
-The Rhai result may include `member_output_aliases` to choose which declared
-member outputs become root telemetry and what aliases they use. Omitting the
-field selects the deterministic default. Rust validates the table and the
-returned AST against the composed facts, but does not emit or infer the visual
-schema. A policy may also return `source_roots` for generated classes that are
-not USD members; the shared engine loads those roots asynchronously before the
-canvas resolves their icons and ports.
+The Rhai result must explicitly return `member_output_aliases`, even when the
+policy promotes no member outputs. It chooses which declared member outputs
+become root telemetry and what aliases they use. The result must also include
+`units`, both layout sections, and `source_roots`; Rust validates those fields
+and the returned AST against the composed facts, but does not emit or infer the
+visual schema. `source_roots` is dependency metadata for generated classes that
+are not USD members; standard Modelica root-segment discovery remains the class
+resolver's source of truth, and the shared engine loads roots asynchronously
+before the canvas resolves their authored icons and ports.
 
 Each returned unit may set its `instance` independently of its generated class
 `name`. The facts provide the deterministic default, while the policy owns any

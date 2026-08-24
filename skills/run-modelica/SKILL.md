@@ -94,13 +94,56 @@ discovery.
 For policy-owned generated models, keep contract assertions in
 `assets/scripting/tests/*.rhai`. Rust should provide the composed facts and
 invoke the registered policy; Rhai should assert the generated source,
-topology, layout, and UI metadata.
+topology, layout, and UI metadata. The policy result is strict: it must return
+`source`, `units`, `layout.units`, `layout.members`, `source_roots`, and
+`member_output_aliases` (the last may be an explicit empty array). Missing or
+invalid fields are projection errors; do not add a Rust-side generated-model
+fallback. `layout.units` uses root-diagram coordinates, while each entry in
+`layout.members` is local to the owning unit diagram; member overlaps are
+checked within that unit coordinate system.
+
+On native development checkouts, the active prelude and policy files are read
+from `assets/scripting/` at startup, so Rhai edits require a restart rather than
+a Rust rebuild. A present editable directory is authoritative: unreadable or
+empty directories and parse failures are errors. Packaged/wasm builds use their
+compiled-in asset set because no editable source tree is available.
 
 When reviewing a generated diagram, click its generated browser row first. A
 single-unit network opens the unit-level class and shows its real members;
 multi-unit networks open the root wrapper. Use `FitCanvas` after drill-in when
 the tab was opened alongside the root, since navigation is scoped to the
 focused Modelica tab.
+
+For electrical generated networks, verify the unit diagram's labelled power
+bus and follow at least one routed `connect(...)` branch through the rail. The
+Rhai policy uses readable `power_system`/`power_unit_N` unit instances and a
+topology-derived hub with adaptive branch lanes, so inspect a larger network
+with `FitCanvas` rather than assuming the six-member demo's geometry scales.
+Member icons must resolve from
+their native Modelica classes; a fabricated card or direct solar-to-motor wire
+is a projection defect, not an acceptable fallback.
+
+Node movement has two valid outcomes. On an editable `.mo` document, drag a
+component and verify that the standard `annotation(Placement(...))` changes in
+the source and survives a re-projection. On a generated document, the canvas
+is intentionally read-only because USD plus the Rhai policy owns the source;
+use `Duplicate to edit`, then perform the same placement check. A drag that
+appears to work but disappears on reload is a product bug, not an acceptable
+generated-model editing mode.
+
+Projection must remain responsive while a native package or inherited icon is
+being resolved. Verify that `/api/ready` stays responsive, the canvas shows an
+explicit loading/error state, and the completion event reprojects the authored
+icons. Do not add a synchronous parse, mutex wait, invented icon, or domain
+specific visual retry path to hide a miss.
+
+Energy-flow animation is generic Modelica behavior, not generated-policy code:
+`LunCo.Electrical.Pin.i` is a standard `flow Real`, just like the rocket and
+lander `FluidPort` flow variables. Confirm the connector projection reports the
+flow variable and that a non-zero live `instance.p.i` moves dots along the
+rendered edge; zero current must remain visually idle. If dots are absent,
+inspect the flow metadata and node-state keys at the shared canvas owner before
+adding any policy-specific renderer.
 
 ## 1. The request envelope
 

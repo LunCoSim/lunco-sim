@@ -66,10 +66,21 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
     let Some(handle) = crate::engine_resource::global_engine_handle() else {
         return ClassAvailability::Loading;
     };
+    let root = qualified.split('.').next().unwrap_or(qualified);
+    let is_bundled_root = lunco_assets::models::package_roots_live()
+        .iter()
+        .any(|candidate| candidate == root);
     let (has_class, has_root, root_failed) = {
-        let mut engine = handle.lock();
+        let Some(mut engine) = handle.try_lock() else {
+            // The query is made from the projection worker. Contention is a
+            // normal in-flight state, never a reason to wait behind parsing
+            // or source-root installation.
+            if is_bundled_root {
+                let _ = handle.ensure_library_root_async(root);
+            }
+            return ClassAvailability::Loading;
+        };
         let has_class = engine.has_class(qualified);
-        let root = qualified.split('.').next().unwrap_or(qualified);
         let has_root = engine.has_class(root);
         let root_failed = engine.library_root_failure(root).is_some();
         (has_class, has_root, root_failed)
@@ -78,10 +89,7 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
         return ClassAvailability::Ready;
     }
     let root = qualified.split('.').next().unwrap_or(qualified);
-    if lunco_assets::models::package_roots_live()
-        .iter()
-        .any(|candidate| candidate == root)
-    {
+    if is_bundled_root {
         // A qualified reference is itself a normal Modelica search-path
         // request. If the bundled root is not resident yet, start the shared
         // asynchronous load here; callers do not need generated-document
@@ -108,7 +116,7 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
 pub fn class_resolution_message(qualified: &str) -> Option<String> {
     let handle = crate::engine_resource::global_engine_handle()?;
     let root = qualified.split('.').next().unwrap_or(qualified);
-    let engine = handle.lock();
+    let engine = handle.try_lock()?;
     engine
         .library_root_failure(root)
         .map(|error| format!("source root `{root}` failed: {error}"))
@@ -201,7 +209,7 @@ pub fn peek_or_load_class_blocking(
             {
                 bevy::log::warn!(
                     "[class_cache] MSL cache miss for {qualified} (uri={uri}); \
-                     wasm refuses sync parse — rendering default until worker fills"
+                     wasm refuses sync parse — class remains unresolved until worker fills"
                 );
                 return None;
             }
@@ -253,7 +261,7 @@ pub fn peek_or_load_class_blocking(
 /// a parent rumoca parse stalls for the projection deadline.
 pub fn peek_class_cached(qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;
-    let mut engine = handle.lock();
+    let mut engine = handle.try_lock()?;
     if !engine.has_class(qualified) {
         return None;
     }

@@ -81,6 +81,28 @@ impl ModelicaEngineHandle {
         self.0.lock().expect("modelica engine mutex poisoned")
     }
 
+    /// Attempt a short engine read without waiting.
+    ///
+    /// Update/UI systems use this at contention boundaries so a background
+    /// Modelica query can never turn into a window stall. A `None` result is a
+    /// normal retry signal for the next update; it is not a fabricated model
+    /// result.
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, ModelicaEngine>> {
+        self.0.try_lock().ok()
+    }
+
+    /// Nonblocking UI read of a completed merged icon.
+    ///
+    /// A canvas paint must not wait for the shared engine mutex: a background
+    /// Modelica inheritance query may legitimately hold it while resolving a
+    /// standard-library class. Cache misses are therefore left to the
+    /// background projection task, and the caller can use a local AST icon
+    /// until that task requests a repaint.
+    pub fn try_cached_icon_for(&self, qualified: &str) -> Option<crate::annotations::Icon> {
+        let mut engine = self.0.try_lock().ok()?;
+        engine.cached_icon_for(qualified).flatten()
+    }
+
     /// Make a bundled source root available to the shared engine. This is a
     /// generic source-loading seam used by generated documents before the
     /// canvas asks the resolver for class icons, ports, or inherited members.
@@ -88,30 +110,44 @@ impl ModelicaEngineHandle {
         self.lock().ensure_library_root(root)
     }
 
-    /// Begin loading a bundled source root without blocking the Bevy update
-    /// thread. Returns `false` when the root is resident, pending, or absent.
+    /// Schedule loading of a bundled source root without blocking the caller.
+    ///
+    /// The reservation is deliberately made inside the worker, rather than
+    /// before spawning it. A projection, parse install, or MSL bootstrap may
+    /// be using the engine when a generated document first requests its
+    /// library; waiting for that mutex on the update thread was the second
+    /// source of apparent "projection stalls" after the recursive projection
+    /// lock was fixed. Duplicate requests are harmless: the first worker
+    /// reserves the root and the others observe the pending/resident state.
+    ///
+    /// Returns `true` when a worker was scheduled. Completion is published by
+    /// `ModelicaLibraryBecameReady`; the return value is not a readiness claim.
     pub fn ensure_library_root_async(&self, root: &str) -> bool {
         let root = root.to_string();
-        {
-            let mut engine = self.lock();
-            if !engine.begin_library_root_load(&root) {
-                return false;
-            }
-        }
         let handle = self.clone();
         bevy::tasks::AsyncComputeTaskPool::get()
             .spawn(async move {
+                {
+                    let mut engine = handle.lock();
+                    if !engine.begin_library_root_load(&root) {
+                        return;
+                    }
+                }
+                bevy::log::info!("[ModelicaLibrary] loading source root `{root}` asynchronously");
                 let files = lunco_assets::models::package_files_live(&root);
-                let parsed = files
-                    .into_iter()
-                    .filter_map(|(uri, source)| {
-                        rumoca_phase_parse::parse_to_ast(&source, &uri)
-                            .ok()
-                            .map(|ast| (uri, ast))
-                    })
-                    .collect();
+                let mut parsed = Vec::with_capacity(files.len());
+                let mut diagnostics = Vec::new();
+                for (uri, source) in files {
+                    match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+                        Ok(ast) => parsed.push((uri, ast)),
+                        Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
+                    }
+                }
                 let mut engine = handle.lock();
-                engine.finish_library_root_load(&root, parsed);
+                let count = engine.finish_library_root_load(&root, parsed, diagnostics);
+                bevy::log::info!(
+                    "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)",
+                );
             })
             .detach();
         true
@@ -303,7 +339,12 @@ pub fn drive_engine_sync(
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
 ) {
-    let completed_roots = handle.lock().drain_completed_library_roots();
+    let completed_roots = {
+        let Some(mut engine) = handle.try_lock() else {
+            return;
+        };
+        engine.drain_completed_library_roots()
+    };
     for root in completed_roots {
         commands.trigger(ModelicaLibraryBecameReady { root });
     }
@@ -316,8 +357,24 @@ pub fn drive_engine_sync(
     // tick. For each, fetch the strict AST from the session and
     // backfill the doc's local SyntaxCache + AstCache so panels see
     // the parsed state without needing a separate `ast_refresh` pass.
-    let completed = handle.lock().drain_completed();
-    for (doc_id, parse_gen) in completed {
+    let completed_results: Vec<_> = {
+        let Some(mut engine) = handle.try_lock() else {
+            return;
+        };
+        engine
+            .drain_completed()
+            .into_iter()
+            .map(|(doc_id, parse_gen)| {
+                (
+                    doc_id,
+                    parse_gen,
+                    engine.parsed_for_doc(doc_id).cloned(),
+                    engine.take_parse_diags(doc_id),
+                )
+            })
+            .collect()
+    };
+    for (doc_id, parse_gen, parsed_ast, parse_diags) in completed_results {
         // Snapshot current doc gen + URI under a brief engine lock —
         // we'll backfill if the doc still matches the gen this parse
         // ran against.
@@ -334,13 +391,6 @@ pub fn drive_engine_sync(
             );
             continue;
         }
-        let (parsed_ast, parse_diags) = {
-            let mut engine = handle.lock();
-            (
-                engine.parsed_for_doc(doc_id).cloned(),
-                engine.take_parse_diags(doc_id),
-            )
-        };
         match (parsed_ast, registry.host_mut(doc_id)) {
             (Some(ast), Some(host)) => {
                 let arc_ast = std::sync::Arc::new(ast);
@@ -469,7 +519,9 @@ pub fn drive_engine_sync(
         }
     }
     {
-        let mut engine = handle.lock();
+        let Some(mut engine) = handle.try_lock() else {
+            return;
+        };
         for (doc_id, gen, ast) in sync_only {
             engine.upsert_document_with_ast(doc_id, (*ast).clone());
             bevy::log::info!(
@@ -516,7 +568,9 @@ pub fn drive_engine_sync(
 
     for (doc_id, gen, source) in async_only {
         let pending_count = {
-            let eng = handle.lock();
+            let Some(eng) = handle.try_lock() else {
+                return;
+            };
             if eng.is_doc_pending(doc_id) {
                 continue;
             }
@@ -771,6 +825,7 @@ impl Plugin for ModelicaEnginePlugin {
             .init_resource::<EngineSyncCursor>()
             .init_resource::<ParsePacing>()
             .init_resource::<MslBootstrapState>()
+            .init_resource::<MslBootstrapTask>()
             .add_systems(
                 Update,
                 (
@@ -789,8 +844,19 @@ impl Plugin for ModelicaEnginePlugin {
 pub enum MslBootstrapState {
     #[default]
     Pending,
+    Loading,
     Done,
 }
+
+/// Background source-index install for a resident MSL bundle.
+///
+/// `Session::replace_parsed_source_set` builds the cross-file scope index and
+/// can take hundreds of milliseconds even when parsing has already happened.
+/// Keep that work off the Bevy update thread; the shared engine mutex is the
+/// only rendezvous and UI readers use `try_lock`/cache-only APIs while it is
+/// held.
+#[derive(Resource, Default)]
+struct MslBootstrapTask(Option<bevy::tasks::Task<usize>>);
 
 /// Notification event emitted exactly once per session by
 /// [`drive_msl_bootstrap`] the frame MSL is installed into the
@@ -841,92 +907,61 @@ fn drive_msl_bootstrap(
     handle: Res<ModelicaEngineHandle>,
     msl_state: Option<Res<lunco_assets::msl::MslLoadState>>,
     mut bootstrap: ResMut<MslBootstrapState>,
+    mut task: ResMut<MslBootstrapTask>,
     mut commands: Commands,
 ) {
     if matches!(*bootstrap, MslBootstrapState::Done) {
         return;
     }
+
+    // The source-set index is a CPU-heavy session mutation. Poll only the
+    // completion here; the actual clone and index build run in the task below.
+    // This keeps the Bevy update thread available for input, rendering, and
+    // API wakeups while the shared engine is being prepared.
+    if let Some(background) = task.0.as_mut() {
+        if let Some(count) =
+            futures_lite::future::block_on(futures_lite::future::poll_once(background))
+        {
+            task.0 = None;
+            *bootstrap = MslBootstrapState::Done;
+            bevy::log::info!(
+                "[EngineBootstrap] installed MSL into workspace engine: {count} pre-parsed docs"
+            );
+            commands.trigger(MslBecameReady);
+            #[cfg(target_arch = "wasm32")]
+            crate::worker_transport::prewarm_pool_on_msl_ready();
+        }
+        return;
+    }
+
     let Some(state) = msl_state else { return };
     if !matches!(*state, lunco_assets::msl::MslLoadState::Ready { .. }) {
         return;
     }
-    // Eager bulk install iff the bundle is already resident in memory — the
-    // single predicate for both targets (web: post worker-decode; native:
-    // post background warmup or lazy load).
-    let parsed = crate::msl_remote::global_parsed_msl();
-    if let Some(docs) = parsed {
-        // PERF TODO (web, ~850 ms main-thread freeze): profiling (2026-06-24)
-        // shows this install is the single biggest hitch after MSL lands —
-        // `clone ≈ 90–260 ms` + `replace_parsed_source_set ≈ 760–810 ms`, all
-        // on the main thread, so egui+bevy freeze for ~1 s. Two parts, both
-        // needing an UPSTREAM rumoca change (don't hack locally):
-        //   1. The clone below materialises an owned `Vec<(String, AST)>`
-        //      because `replace_parsed_source_set` consumes a `Vec`. We can't
-        //      `take` the shared `global_parsed_msl` bundle — it has 20+
-        //      post-install readers (class_cache, engine class-lookup,
-        //      document drill-in, package_tree). FIX: give rumoca a
-        //      borrowed/`Arc`-input variant so we pass the bundle by reference
-        //      and drop the clone entirely.
-        //   2. `replace_parsed_source_set` (the ~800 ms) builds MSL scope
-        //      tables in one blocking FFI call. FIX: a chunked/streaming
-        //      install (yield across frames) or an off-thread build — but the
-        //      engine session is `Arc<Mutex>` main-thread-bound, so off-thread
-        //      needs rumoca to support a detached index build too.
-        // Until then this is an inherent one-time freeze; the `MslLoadState`
-        // hint covers the icon side but there's no spinner during this frame.
-        let t_clone = web_time::Instant::now();
-        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
-            docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
-        let clone_ms = t_clone.elapsed().as_secs_f64() * 1000.0;
+
+    // A resident bundle is an immutable input snapshot. Clone only its Arc on
+    // the update thread; copying the definitions and building the source index
+    // happen on the worker. The install still uses the one shared Modelica
+    // session, so all readers observe the same standard Modelica namespace.
+    let Some(docs) = crate::msl_remote::global_parsed_msl().cloned() else {
+        return;
+    };
+    let handle = handle.clone();
+    task.0 = Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> = docs
+            .iter()
+            .map(|(uri, definition)| (uri.clone(), definition.clone()))
+            .collect();
         let count = defs.len();
-        let t_lock = web_time::Instant::now();
         let mut engine = handle.lock();
-        let lock_ms = t_lock.elapsed().as_secs_f64() * 1000.0;
-        let t_replace = web_time::Instant::now();
         engine.session_mut().replace_parsed_source_set(
             "msl",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
             None,
         );
-        let replace_ms = t_replace.elapsed().as_secs_f64() * 1000.0;
-        bevy::log::info!(
-            "[EngineBootstrap] installed MSL into workspace engine: {} pre-parsed docs \
-             [TIMING clone={:.0}ms lock={:.0}ms replace_parsed_source_set={:.0}ms]",
-            count,
-            clone_ms,
-            lock_ms,
-            replace_ms
-        );
-        *bootstrap = MslBootstrapState::Done;
-
-        // Make the baked class-metadata index (`msl_index.json`) resident now
-        // that MSL is ready. On web the source bundle (which carries the index)
-        // is fetched but kept compressed and was previously only unpacked lazily
-        // on the first editor drill-in — so the palette / "add component" menu /
-        // welcome list / bundled-examples tree / diagram icons (all of which read
-        // `msl_index.json` via `msl_class_library`) stayed empty until a drill-in.
-        // Unpack it here, at the single point MSL becomes ready, so those views
-        // populate without user interaction. Idempotent + no-op on native (the
-        // index is read straight off the on-disk source root). This is the same
-        // unpack the drill-in path performs, just done proactively once.
-        #[cfg(target_arch = "wasm32")]
-        crate::msl_remote::ensure_msl_source_unpacked();
-
-        // Notify observers so they can react immediately (e.g. the canvas
-        // diagram reprojection that resolves standard-library icons, and the
-        // bundled-examples tree rebuild now that the index is resident). This
-        // fires once per session — the system becomes a no-op on the next
-        // tick once `bootstrap` is `Done`.
-        commands.trigger(MslBecameReady);
-
-        // Pre-warm the compile/run worker pool now that MSL is resident, so the
-        // user's first compile doesn't pay the lazy cold start (profiled at
-        // ~40 s of worker startup on top of a ~4.5 s compile). Diagrams already
-        // rendered on the main thread, so this overlaps the worker startup with
-        // the user reading the diagram. Guarded (no-op until the MSL seed
-        // envelope is retained) so it can never strand an unseeded worker.
-        #[cfg(target_arch = "wasm32")]
-        crate::worker_transport::prewarm_pool_on_msl_ready();
-    }
+        count
+    }));
+    *bootstrap = MslBootstrapState::Loading;
+    bevy::log::info!("[EngineBootstrap] installing resident MSL source index in background");
 }

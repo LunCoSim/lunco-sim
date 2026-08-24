@@ -49,27 +49,61 @@ pub struct BridgeMessage {
 /// Wakes the host event loop after pushing a message into the
 /// bridge's mpsc. Without this, an HTTP request handed to the bridge
 /// only gets drained on the next Bevy tick — which, in reactive
-/// `WinitSettings`, may not arrive for a full second. The waker is
-/// optional so headless tests / non-winit hosts (and wasm, which runs
-/// a continuous rAF loop) can still use the bridge without it.
+/// `WinitSettings`, may never arrive while the window is idle.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub type ApiWaker = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+/// Late-bound host wake-up hook.
+///
+/// The transport can be built before a host installs its event-loop resources.
+/// Keeping the slot separate from [`HttpBridge`] lets the host bind its real
+/// wake mechanism at the lifecycle point where that resource exists, while
+/// every bridge clone observes the same binding. A missing hook is valid for
+/// hosts that deliberately run continuously (headless and wasm); a windowed
+/// host binds it before its first idle period.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+pub struct ApiWakerSlot(std::sync::Arc<std::sync::RwLock<Option<ApiWaker>>>);
+
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+impl ApiWakerSlot {
+    pub fn install(&self, waker: ApiWaker) {
+        if let Ok(mut slot) = self.0.write() {
+            *slot = Some(waker);
+        }
+    }
+
+    fn wake(&self) {
+        let waker = self.0.read().ok().and_then(|slot| slot.clone());
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+}
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct HttpBridge {
     pub tx: tokio::sync::mpsc::Sender<BridgeMessage>,
-    pub waker: Option<ApiWaker>,
+    pub waker: ApiWakerSlot,
 }
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 impl HttpBridge {
     pub fn new(tx: tokio::sync::mpsc::Sender<BridgeMessage>) -> Self {
-        Self { tx, waker: None }
+        Self {
+            tx,
+            waker: ApiWakerSlot::default(),
+        }
     }
 
-    pub fn with_waker(mut self, waker: ApiWaker) -> Self {
-        self.waker = Some(waker);
+    pub fn with_waker(self, waker: ApiWaker) -> Self {
+        self.waker.install(waker);
+        self
+    }
+
+    pub fn with_waker_slot(mut self, waker: ApiWakerSlot) -> Self {
+        self.waker = waker;
         self
     }
 
@@ -93,10 +127,36 @@ impl HttpBridge {
             .send(BridgeMessage { request, reply: tx })
             .await
             .map_err(|_| ())?;
-        if let Some(waker) = &self.waker {
-            waker();
-        }
+        self.waker.wake();
         rx.await.map_err(|_| ())
+    }
+}
+
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use super::ApiWakerSlot;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[test]
+    fn a_waker_can_be_bound_after_the_bridge_is_created() {
+        let slot = ApiWakerSlot::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        // Before the host lifecycle reaches its event-loop binding point,
+        // requests remain queueable and no invalid wake target is guessed.
+        slot.wake();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        let calls_for_waker = Arc::clone(&calls);
+        slot.install(Arc::new(move || {
+            calls_for_waker.fetch_add(1, Ordering::Relaxed);
+        }));
+        slot.wake();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }
 

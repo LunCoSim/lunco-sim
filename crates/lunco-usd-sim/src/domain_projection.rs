@@ -172,8 +172,7 @@ pub struct SynthesisUnit {
     /// Stable generated Modelica class name for the composite unit.
     pub name: String,
     /// Modelica instance name chosen by the synthesis policy. Runtime signal
-    /// mapping follows this exact name; Rust only supplies the deterministic
-    /// default when a policy omits it.
+    /// mapping follows this exact name; the policy result must provide it.
     pub instance: String,
     /// Composed USD members absorbed into the unit.
     pub component_paths: Vec<String>,
@@ -195,7 +194,9 @@ pub struct SynthesisUnit {
 pub struct SynthesisLayout {
     /// Generated child-unit class name to Modelica diagram position.
     pub unit_positions: BTreeMap<String, (i32, i32)>,
-    /// Composed USD member path to Modelica diagram position.
+    /// Composed USD member path to Modelica diagram position, local to the
+    /// generated unit that owns the member. Unit diagrams are independent
+    /// coordinate systems; root diagrams use `unit_positions` instead.
     pub member_positions: BTreeMap<String, (i32, i32)>,
 }
 
@@ -382,10 +383,12 @@ impl SynthesizerRegistry {
 /// of it should require a rebuild to change.
 ///
 /// The hook receives one argument — [`network_facts`] — and returns a map with
-/// a required `source` key. It may also return `units` and `layout`: those are
-/// the policy's explicit merge and presentation decisions. Omitting either
-/// keeps the documented deterministic default, which is supplied as facts to
-/// the policy and remains visible in the resulting plan.
+/// required `source`, `units`, `layout`, `source_roots`, and
+/// `member_output_aliases` keys. `layout` must contain both `units` and
+/// `members`, even when a policy has no entries in one section. Unit positions
+/// are root-diagram coordinates; member positions are local to their owning
+/// unit diagram. Rust validates the policy-owned result but never fills an
+/// omitted synthesis decision from a second emitter.
 ///
 /// Registered through [`register_hook_synthesizer`]; the hook id is by convention
 /// `synth.<name>`, reached exactly like `lint.usd`.
@@ -415,7 +418,15 @@ impl DomainSynthesizer for HookSynthesizer {
             return Ok(SynthOutcome::Pending);
         }
         let network_root = network.root.clone();
-        let facts = network_facts(&network, model_name, Some(ctx.classes));
+        let facts = network_facts(&network, model_name, Some(ctx.classes)).map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message: format!(
+                    "synthesizer `{}` could not build policy facts: {message}",
+                    self.name
+                ),
+            }]
+        })?;
         let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
             vec![DomainProjectionError {
                 path: network_root.clone(),
@@ -453,13 +464,11 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]);
         };
-        let default_units = partition_network(&network);
         let units = parse_policy_units(
             hook_map_value(map, "units"),
             &network,
             &network_root,
             &self.name,
-            default_units,
         )
         .map_err(|message| {
             vec![DomainProjectionError {
@@ -480,30 +489,21 @@ impl DomainSynthesizer for HookSynthesizer {
                 message,
             }]
         })?;
-        let default_source_roots = network
-            .components
-            .iter()
-            .filter_map(|component| component.model_class.split('.').next())
-            .map(str::to_string)
-            .collect();
-        let source_roots = parse_policy_source_roots(
-            hook_map_value(map, "source_roots"),
-            &self.name,
-            default_source_roots,
-        )
-        .map_err(|message| {
-            vec![DomainProjectionError {
-                path: network_root.clone(),
-                message,
-            }]
-        })?;
+        let source_roots =
+            parse_policy_source_roots(hook_map_value(map, "source_roots"), &self.name).map_err(
+                |message| {
+                    vec![DomainProjectionError {
+                        path: network_root.clone(),
+                        message,
+                    }]
+                },
+            )?;
         let member_output_aliases = parse_policy_member_output_aliases(
             hook_map_value(map, "member_output_aliases"),
             &network,
             Some(ctx.classes),
             &network_root,
             &self.name,
-            generated_member_outputs(&network, Some(ctx.classes)),
         )
         .map_err(|message| {
             vec![DomainProjectionError {
@@ -567,9 +567,9 @@ pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: impl 
     });
 }
 
-/// Remove a policy-owned hook synthesizer. Removing a policy that overrides a
-/// shipped name restores that name's documented built-in synthesizer; a custom
-/// policy name simply leaves the open registry without that entry.
+/// Remove a policy-owned hook synthesizer. Shipped selector names keep an empty
+/// registry entry so a later selection fails through the normal missing-hook
+/// diagnostic until a policy is registered again; custom names simply disappear.
 pub fn unregister_hook_synthesizer(registry: &mut SynthesizerRegistry, name: &str) {
     registry.0.remove(name);
     match name {
@@ -628,10 +628,11 @@ fn hook_map_string_array(
 fn parse_policy_source_roots(
     value: Option<&lunco_hooks::HookValue>,
     policy_name: &str,
-    default_roots: BTreeSet<String>,
 ) -> Result<BTreeSet<String>, String> {
     let Some(value) = value else {
-        return Ok(default_roots);
+        return Err(format!(
+            "synthesizer `{policy_name}` must return `source_roots`"
+        ));
     };
     let lunco_hooks::HookValue::Array(values) = value else {
         return Err(format!(
@@ -661,29 +662,26 @@ fn parse_policy_source_roots(
         .collect()
 }
 
-/// Parse the optional policy-owned telemetry promotion table.
-///
-/// The default table is a semantic default derived from the composed member
-/// declarations. A policy may return an empty or renamed table, but it may not
-/// invent a member/output pair. This keeps the address mechanism generic while
-/// leaving promotion policy in Rhai.
+/// Parse the policy-owned telemetry promotion table. The policy must return the
+/// table explicitly, even when it is empty; Rust only validates its references.
 fn parse_policy_member_output_aliases(
     value: Option<&lunco_hooks::HookValue>,
     network: &DomainNetwork,
     classes: Option<&MemberClasses>,
     root: &str,
     policy_name: &str,
-    default_aliases: Vec<(String, String, String)>,
 ) -> Result<Vec<(String, String, String)>, String> {
     let Some(value) = value else {
-        return Ok(default_aliases);
+        return Err(format!(
+            "synthesizer `{policy_name}` must return `member_output_aliases`"
+        ));
     };
     let lunco_hooks::HookValue::Array(entries) = value else {
         return Err(format!(
             "synthesizer `{policy_name}` returned `member_output_aliases`, which must be an array"
         ));
     };
-    let known: BTreeSet<(String, String)> = generated_member_outputs(network, classes)
+    let known: BTreeSet<(String, String)> = generated_member_outputs(network, classes)?
         .into_iter()
         .map(|(member, output, _)| (member, output))
         .collect();
@@ -812,12 +810,10 @@ fn validate_generated_source(
         .components
         .iter()
         .map(|component| {
-            (
-                instance_identifier(&network.root, &component.path),
-                component.model_class.clone(),
-            )
+            instance_identifier(&network.root, &component.path)
+                .map(|instance| (instance, component.model_class.clone()))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let expected_unit_instances: BTreeSet<String> =
         units.iter().map(|unit| unit.instance.clone()).collect();
     if expected_unit_instances.len() != units.len() {
@@ -919,7 +915,7 @@ fn validate_generated_source(
             }
         }
         for member_path in &unit.component_paths {
-            let instance = instance_identifier(&network.root, member_path);
+            let instance = instance_identifier(&network.root, member_path)?;
             let expected_type = network
                 .components
                 .iter()
@@ -948,7 +944,7 @@ fn validate_generated_source(
             .component_paths
             .iter()
             .map(|path| instance_identifier(&network.root, path))
-            .collect();
+            .collect::<Result<_, _>>()?;
         let native_types: BTreeSet<String> = network
             .components
             .iter()
@@ -992,10 +988,9 @@ fn parse_policy_units(
     network: &DomainNetwork,
     root: &str,
     policy_name: &str,
-    default_units: Vec<SynthesisUnit>,
 ) -> Result<Vec<SynthesisUnit>, String> {
     let Some(value) = value else {
-        return Ok(default_units);
+        return Err(format!("synthesizer `{policy_name}` must return `units`"));
     };
     let lunco_hooks::HookValue::Array(raw_units) = value else {
         return Err(format!(
@@ -1028,10 +1023,7 @@ fn parse_policy_units(
         if !seen_names.insert(name.clone()) {
             return Err(format!("{context}.name `{name}` is duplicated"));
         }
-        let instance = hook_map_value(map, "instance")
-            .and_then(lunco_hooks::HookValue::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| unit_instance_identifier(&name, index));
+        let instance = hook_map_string(map, "instance", &context)?;
         if !is_modelica_identifier(&instance) {
             return Err(format!(
                 "{context}.instance `{instance}` is not a valid Modelica identifier"
@@ -1120,9 +1112,9 @@ fn parse_policy_coordinate(
         .map_err(|_| format!("{context}.{key} is outside Modelica coordinate range"))
 }
 
-/// Read the optional policy-owned unit/member diagram placements. Missing
-/// entries use the deterministic default only as an authored-schema default;
-/// every returned placement is still checked against the composed plan.
+/// Read the policy-owned unit/member diagram placements. Both sections and
+/// every placement are required; Rust validates the result but never fills in
+/// omitted coordinates from a second presentation policy.
 fn parse_policy_layout(
     value: Option<&lunco_hooks::HookValue>,
     network: &DomainNetwork,
@@ -1130,9 +1122,8 @@ fn parse_policy_layout(
     root: &str,
     policy_name: &str,
 ) -> Result<SynthesisLayout, String> {
-    let mut layout = default_synthesis_layout(network, units);
     let Some(value) = value else {
-        return Ok(layout);
+        return Err(format!("synthesizer `{policy_name}` must return `layout`"));
     };
     let lunco_hooks::HookValue::Map(map) = value else {
         return Err(format!(
@@ -1146,6 +1137,7 @@ fn parse_policy_layout(
         .map(|component| component.path.as_str())
         .collect();
 
+    let mut layout = SynthesisLayout::default();
     for (section, key, known, target) in [
         ("unit", "units", known_units, &mut layout.unit_positions),
         (
@@ -1156,7 +1148,9 @@ fn parse_policy_layout(
         ),
     ] {
         let Some(value) = hook_map_value(map, key) else {
-            continue;
+            return Err(format!(
+                "synthesizer `{policy_name}` layout must contain `{key}`"
+            ));
         };
         let lunco_hooks::HookValue::Array(placements) = value else {
             return Err(format!(
@@ -1185,17 +1179,37 @@ fn parse_policy_layout(
             let y = parse_policy_coordinate(placement, "y", &context)?;
             target.insert(identity, (x, y));
         }
+        let provided: BTreeSet<_> = target.keys().map(String::as_str).collect();
+        if provided != known {
+            let missing = known.difference(&provided).copied().collect::<Vec<_>>();
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.{key} is missing: {}",
+                missing.join(", ")
+            ));
+        }
     }
-    for (section, positions) in [
-        ("unit", &layout.unit_positions),
-        ("member", &layout.member_positions),
-    ] {
-        let mut occupied = BTreeMap::<(i32, i32), &str>::new();
-        for (identity, position) in positions {
-            if let Some(previous) = occupied.insert(*position, identity.as_str()) {
+    let mut occupied_units = BTreeMap::<(i32, i32), &str>::new();
+    for (identity, position) in &layout.unit_positions {
+        if let Some(previous) = occupied_units.insert(*position, identity.as_str()) {
+            return Err(format!(
+                "synthesizer `{policy_name}` layout.units places `{identity}` on top of `{previous}` at ({}, {})",
+                position.0, position.1
+            ));
+        }
+    }
+    for unit in units {
+        let mut occupied_members = BTreeMap::<(i32, i32), &str>::new();
+        for identity in &unit.component_paths {
+            let Some(position) = layout.member_positions.get(identity) else {
                 return Err(format!(
-                    "synthesizer `{policy_name}` layout.{section} places `{identity}` on top of `{previous}` at ({}, {})",
-                    position.0, position.1
+                    "synthesizer `{policy_name}` layout.members is missing `{identity}` in unit `{}`",
+                    unit.name
+                ));
+            };
+            if let Some(previous) = occupied_members.insert(*position, identity.as_str()) {
+                return Err(format!(
+                    "synthesizer `{policy_name}` layout.members places `{identity}` on top of `{previous}` in unit `{}` at ({}, {})",
+                    unit.name, position.0, position.1
                 ));
             }
         }
@@ -1213,11 +1227,11 @@ pub fn network_facts(
     network: &DomainNetwork,
     model_name: &str,
     classes: Option<&MemberClasses>,
-) -> lunco_hooks::HookValue {
+) -> Result<lunco_hooks::HookValue, String> {
     use lunco_hooks::HookValue as H;
     let units = partition_network(network);
     let layout = default_synthesis_layout(network, &units);
-    let member_outputs = generated_member_outputs(network, classes);
+    let member_outputs = generated_member_outputs(network, classes)?;
     let source_roots: BTreeSet<String> = network
         .components
         .iter()
@@ -1234,7 +1248,7 @@ pub fn network_facts(
     let mut causal_links = BTreeSet::new();
     let mut boundary_links = BTreeSet::new();
     for component in &network.components {
-        let target_instance = instance_identifier(&network.root, &component.path);
+        let target_instance = instance_identifier(&network.root, &component.path)?;
         for (connector, targets) in &component.connectors {
             for target in targets {
                 let Some((target_path, target_connector)) = target.split_once(".connectors:")
@@ -1290,40 +1304,40 @@ pub fn network_facts(
     let connection_facts = connections
         .into_iter()
         .map(|(left_path, left_connector, right_path, right_connector)| {
-            H::map([
+            Ok(H::map([
                 ("left_path", H::str(left_path.clone())),
                 (
                     "left_instance",
-                    H::str(instance_identifier(&network.root, &left_path)),
+                    H::str(instance_identifier(&network.root, &left_path)?),
                 ),
                 ("left_connector", H::str(left_connector)),
                 ("right_path", H::str(right_path.clone())),
                 (
                     "right_instance",
-                    H::str(instance_identifier(&network.root, &right_path)),
+                    H::str(instance_identifier(&network.root, &right_path)?),
                 ),
                 ("right_connector", H::str(right_connector)),
-            ])
+            ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let causal_link_facts = causal_links
         .into_iter()
         .map(
             |(source_path, source_output, target_path, target_instance, target_input)| {
-                H::map([
+                Ok(H::map([
                     ("source_path", H::str(source_path.clone())),
                     (
                         "source_instance",
-                        H::str(instance_identifier(&network.root, &source_path)),
+                        H::str(instance_identifier(&network.root, &source_path)?),
                     ),
                     ("source_output", H::str(source_output)),
                     ("target_path", H::str(target_path)),
                     ("target_instance", H::str(target_instance)),
                     ("target_input", H::str(target_input)),
-                ])
+                ]))
             },
         )
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let boundary_link_facts = boundary_links
         .into_iter()
         .map(|(input, target_path, target_instance, target_input)| {
@@ -1338,42 +1352,46 @@ pub fn network_facts(
     let boundary_output_facts = network
         .outputs
         .iter()
-        .filter_map(|(name, target)| {
-            let (source_path, source_output) = target.split_once(".outputs:")?;
-            Some(H::map([
+        .map(|(name, target)| {
+            let (source_path, source_output) = target.split_once(".outputs:").ok_or_else(|| {
+                format!(
+                    "network output `{name}` points to malformed target `{target}`; expected `.outputs:`"
+                )
+            })?;
+            Ok(H::map([
                 ("name", H::str(name.clone())),
                 ("source_path", H::str(source_path)),
                 (
                     "source_instance",
-                    H::str(instance_identifier(&network.root, source_path)),
+                    H::str(instance_identifier(&network.root, source_path)?),
                 ),
                 ("source_output", H::str(source_output)),
             ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let member_output_facts = member_outputs
         .iter()
         .map(|(member_path, output, alias)| {
-            H::map([
+            Ok(H::map([
                 ("member_path", H::str(member_path.clone())),
                 (
                     "member_instance",
-                    H::str(instance_identifier(&network.root, member_path)),
+                    H::str(instance_identifier(&network.root, member_path)?),
                 ),
                 ("output", H::str(output.clone())),
                 ("alias", H::str(alias.clone())),
-            ])
+            ]))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let components: Vec<H> = network
         .components
         .iter()
         .map(|component| {
-            H::map([
+            Ok(H::map([
                 ("path", H::str(component.path.clone())),
                 (
                     "instance",
-                    H::str(instance_identifier(&network.root, &component.path)),
+                    H::str(instance_identifier(&network.root, &component.path)?),
                 ),
                 ("class", H::str(component.model_class.clone())),
                 ("source_asset", H::str(component.source_asset.clone())),
@@ -1449,10 +1467,10 @@ pub fn network_facts(
                             .collect(),
                     ),
                 ),
-            ])
+            ]))
         })
-        .collect();
-    H::map([
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(H::map([
         ("model_name", H::str(model_name.to_string())),
         ("root", H::str(network.root.clone())),
         (
@@ -1553,7 +1571,7 @@ pub fn network_facts(
                 ),
             ]),
         ),
-    ])
+    ]))
 }
 
 /// Partition a composed network once, at the synthesizer boundary.
@@ -1878,7 +1896,6 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         let source_roots = parse_policy_source_roots(
             hook_map_value(&map, "source_roots"),
             ACTUATOR_WRENCH_SYNTHESIZER,
-            BTreeSet::new(),
         )
         .map_err(|message| {
             vec![DomainProjectionError {
@@ -1949,6 +1966,10 @@ fn actuator_wrench_matrix(
 /// stable topology-derived starting arrangement in the facts map.
 const GENERATED_UNIT_COLUMN_SPACING: i32 = 150;
 const GENERATED_UNIT_ROW_SPACING: i32 = 100;
+const NETWORK_LAYOUT_ORIGIN_X: i32 = -100;
+const NETWORK_LAYOUT_LAYER_SPACING: i32 = 55;
+const NETWORK_LAYOUT_ROW_SPACING: i32 = 22;
+const NETWORK_LAYOUT_ROW_CENTER_STEP: i32 = 2;
 
 /// Deterministic default Modelica name for a synthesized unit instance. A
 /// policy may replace this name in its returned unit table; this helper is not
@@ -2014,27 +2035,24 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
         for target in component.connectors.values().flatten() {
             if let Some((target, _)) = target.split_once(".connectors:") {
                 if paths.contains(target) {
-                    neighbours
-                        .get_mut(&component.path)
-                        .expect("component path indexed")
-                        .insert(target.to_string());
-                    neighbours
-                        .get_mut(target)
-                        .expect("component path indexed")
-                        .insert(component.path.clone());
+                    if let Some(component_neighbours) = neighbours.get_mut(&component.path) {
+                        component_neighbours.insert(target.to_string());
+                    }
+                    if let Some(target_neighbours) = neighbours.get_mut(target) {
+                        target_neighbours.insert(component.path.clone());
+                    }
                 }
             }
         }
         for target in component.inputs.values() {
             if let Some((source, _)) = target.split_once(".outputs:") {
                 if paths.contains(source) {
-                    neighbours
-                        .get_mut(source)
-                        .expect("component path indexed")
-                        .insert(component.path.clone());
-                    *incoming
-                        .get_mut(&component.path)
-                        .expect("component path indexed") += 1;
+                    if let Some(source_neighbours) = neighbours.get_mut(source) {
+                        source_neighbours.insert(component.path.clone());
+                    }
+                    if let Some(component_incoming) = incoming.get_mut(&component.path) {
+                        *component_incoming += 1;
+                    }
                 }
             }
         }
@@ -2042,7 +2060,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
     let mut roots: Vec<_> = network
         .components
         .iter()
-        .filter(|component| incoming[&component.path] == 0)
+        .filter(|component| incoming.get(&component.path).copied() == Some(0))
         .map(|component| component.path.clone())
         .collect();
     roots.sort();
@@ -2057,7 +2075,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
                 continue;
             }
             rank.insert(path.clone(), layer);
-            for neighbour in &neighbours[&path] {
+            for neighbour in neighbours.get(&path).into_iter().flatten() {
                 if !rank.contains_key(neighbour) {
                     queue.push_back((neighbour.clone(), layer + 1));
                 }
@@ -2074,7 +2092,7 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
                 continue;
             }
             rank.insert(path.clone(), layer);
-            for neighbour in &neighbours[&path] {
+            for neighbour in neighbours.get(&path).into_iter().flatten() {
                 if !rank.contains_key(neighbour) {
                     queue.push_back((neighbour.clone(), layer + 1));
                 }
@@ -2091,7 +2109,11 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
         for (row, path) in paths.into_iter().enumerate() {
             placements.insert(
                 path,
-                (-100 + layer as i32 * 55, (count - 1 - row as i32 * 2) * 22),
+                (
+                    NETWORK_LAYOUT_ORIGIN_X + layer as i32 * NETWORK_LAYOUT_LAYER_SPACING,
+                    (count - 1 - row as i32 * NETWORK_LAYOUT_ROW_CENTER_STEP)
+                        * NETWORK_LAYOUT_ROW_SPACING,
+                ),
             );
         }
     }
@@ -2103,39 +2125,39 @@ fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
 /// remain visible in USD need a first-class boundary name. The prefix keeps
 /// these derived names separate from authored network outputs; the escaped
 /// instance identifier keeps the mapping injective for arbitrary USD paths.
-pub(crate) fn generated_member_output_name(root: &str, member: &str, output: &str) -> String {
-    format!(
+pub(crate) fn generated_member_output_name(
+    root: &str,
+    member: &str,
+    output: &str,
+) -> Result<String, String> {
+    Ok(format!(
         "__member_{}_{}",
-        instance_identifier(root, member),
+        instance_identifier(root, member)?,
         modelica_identifier(output)
-    )
+    ))
 }
 
 fn generated_member_outputs(
     network: &DomainNetwork,
     classes: Option<&MemberClasses>,
-) -> Vec<(String, String, String)> {
-    network
-        .components
-        .iter()
-        .flat_map(|component| {
-            let modelica_outputs =
-                classes.and_then(|classes| classes.output_names(&component.source_asset));
-            component
-                .declared_outputs
-                .iter()
-                .filter(move |output| {
-                    modelica_outputs.is_none_or(|outputs| outputs.contains(*output))
-                })
-                .map(|output| {
-                    (
-                        component.path.clone(),
-                        output.clone(),
-                        generated_member_output_name(&network.root, &component.path, output),
-                    )
-                })
-        })
-        .collect()
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut member_outputs = Vec::new();
+    for component in &network.components {
+        let modelica_outputs =
+            classes.and_then(|classes| classes.output_names(&component.source_asset));
+        for output in component
+            .declared_outputs
+            .iter()
+            .filter(|output| modelica_outputs.is_none_or(|outputs| outputs.contains(*output)))
+        {
+            member_outputs.push((
+                component.path.clone(),
+                output.clone(),
+                generated_member_output_name(&network.root, &component.path, output)?,
+            ));
+        }
+    }
+    Ok(member_outputs)
 }
 
 /// Reactively compile every ordinary `Scope` containing a standard component
@@ -2349,6 +2371,42 @@ pub fn project_domain_islands(
             resume_after_compile: true,
             ..default()
         };
+        // The policy result carries the member-output facts collected by the
+        // one composed-USD reader. Filter them against the actual generated
+        // root interface so a policy that deliberately omits an optional
+        // output cannot create a telemetry/layout entry with no solver value.
+        let member_output_aliases = synthesized
+            .member_output_aliases
+            .iter()
+            .filter(|(_, _, alias)| interface.outputs.contains(alias))
+            .cloned()
+            .collect::<Vec<_>>();
+        let signal_layout = match generated_signal_layout(
+            &view,
+            &root_path,
+            &prim.path,
+            &synthesized.outputs,
+            &synthesized.members,
+            &member_output_aliases,
+            &synthesized.units,
+            &classes,
+        ) {
+            Ok(layout) => layout,
+            Err(message) => {
+                let message = format!("generated signal layout failed: {message}");
+                model.is_stepping = false;
+                model.is_compiling = false;
+                model.last_error = Some(message.clone());
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
+                    text: format!("[{}] Projection error: {message}", model.model_name),
+                });
+                error!("[domain-projection] {} rejected: {message}", prim.path);
+                retire_sim_interface(&mut commands, entity);
+                commands.entity(entity).try_insert(model);
+                continue;
+            }
+        };
         let dispatch = channels.tx.send(ModelicaCommand::Compile {
             entity,
             session_id,
@@ -2380,25 +2438,6 @@ pub fn project_domain_islands(
                 text: format!("[{}] Compile error: {message}", model.model_name),
             });
         }
-        // The policy result carries the member-output facts collected by the
-        // one composed-USD reader. Filter them against the actual generated
-        // root interface so a policy that deliberately omits an optional
-        // output cannot create a telemetry/layout entry with no solver value.
-        let member_output_aliases = synthesized
-            .member_output_aliases
-            .into_iter()
-            .filter(|(_, _, alias)| interface.outputs.contains(alias))
-            .collect::<Vec<_>>();
-        let signal_layout = generated_signal_layout(
-            &view,
-            &root_path,
-            &prim.path,
-            &synthesized.outputs,
-            &synthesized.members,
-            &member_output_aliases,
-            &synthesized.units,
-            &classes,
-        );
         let generated_source = GeneratedModelicaSource {
             network_root: prim.path.clone(),
             doc_uri: doc_uri.clone(),
@@ -3088,7 +3127,16 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
 
     let mut generated_names = BTreeMap::<String, String>::new();
     for component in &network.components {
-        let generated = instance_identifier(&network.root, &component.path);
+        let generated = match instance_identifier(&network.root, &component.path) {
+            Ok(generated) => generated,
+            Err(message) => {
+                errors.push(DomainProjectionError {
+                    path: component.path.clone(),
+                    message,
+                });
+                continue;
+            }
+        };
         if let Some(previous) = generated_names.insert(generated.clone(), component.path.clone()) {
             errors.push(DomainProjectionError {
                 path: component.path.clone(),
@@ -3264,7 +3312,7 @@ fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) ->
 /// Electrical collection rather than below it. validate_network still
 /// rejects a same-name collision; it must be fixed in USD rather than hidden
 /// by a numeric fallback.
-fn instance_identifier(root: &str, path: &str) -> String {
+fn instance_identifier(root: &str, path: &str) -> Result<String, String> {
     let root_scope = root
         .trim_matches('/')
         .rsplit_once('/')
@@ -3277,16 +3325,18 @@ fn instance_identifier(root: &str, path: &str) -> String {
         .trim_matches('/');
     let mut segments = relative.split('/').filter(|segment| !segment.is_empty());
     let Some(last) = segments.next_back() else {
-        panic!("generated Modelica member path has no name relative to the network root");
+        return Err(format!(
+            "generated Modelica member path `{path}` has no name relative to network root `{root}`"
+        ));
     };
     let Some(parent) = segments.next_back() else {
-        return modelica_identifier(last);
+        return Ok(modelica_identifier(last));
     };
-    format!(
+    Ok(format!(
         "{}__{}",
         modelica_identifier(parent),
         modelica_identifier(last)
-    )
+    ))
 }
 
 /// Whether a generated member output already has an authored operator-facing
@@ -3340,7 +3390,7 @@ fn generated_signal_layout(
     member_output_aliases: &[(String, String, String)],
     units: &[SynthesisUnit],
     classes: &MemberClasses,
-) -> ModelicaSignalLayout {
+) -> Result<ModelicaSignalLayout, String> {
     let mut layout = ModelicaSignalLayout {
         root_path: root.to_string(),
         ..default()
@@ -3475,7 +3525,7 @@ fn generated_signal_layout(
                 .insert(format!("{unit_prefix}.{alias}"), member.clone());
         }
         for member in &unit.component_paths {
-            let member_prefix = instance_identifier(root, member);
+            let member_prefix = instance_identifier(root, member)?;
             let prefix = format!("{unit_prefix}.{member_prefix}.");
             layout.prefixes.push((prefix.clone(), member.clone()));
             if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
@@ -3507,7 +3557,7 @@ fn generated_signal_layout(
     debug_assert!(members.iter().all(|(member, _, _)| units
         .iter()
         .any(|unit| unit.component_paths.contains(member))));
-    layout
+    Ok(layout)
 }
 
 /// What class a member's source asset actually declares.
@@ -3798,22 +3848,109 @@ mod tests {
     }
 
     #[test]
+    fn member_layout_coordinates_are_scoped_to_their_owning_unit() {
+        let network = DomainNetwork {
+            root: "/Rig".into(),
+            components: vec![
+                component("/Rig/Source_A", Some("/Rig/Load_A")),
+                component("/Rig/Load_A", Some("/Rig/Source_A")),
+                component("/Rig/Source_B", Some("/Rig/Load_B")),
+                component("/Rig/Load_B", Some("/Rig/Source_B")),
+            ],
+            inputs: BTreeSet::new(),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            pending_sources: false,
+        };
+        let units = vec![
+            SynthesisUnit {
+                name: "PowerUnit_1".into(),
+                instance: "power_unit_1".into(),
+                component_paths: vec!["/Rig/Source_A".into(), "/Rig/Load_A".into()],
+                ..Default::default()
+            },
+            SynthesisUnit {
+                name: "PowerUnit_2".into(),
+                instance: "power_unit_2".into(),
+                component_paths: vec!["/Rig/Source_B".into(), "/Rig/Load_B".into()],
+                ..Default::default()
+            },
+        ];
+        let layout = lunco_hooks::HookValue::map([
+            (
+                "units",
+                lunco_hooks::HookValue::Array(vec![
+                    lunco_hooks::HookValue::map([
+                        ("name", lunco_hooks::HookValue::str("PowerUnit_1")),
+                        ("x", lunco_hooks::HookValue::Int(-200)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("name", lunco_hooks::HookValue::str("PowerUnit_2")),
+                        ("x", lunco_hooks::HookValue::Int(200)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                ]),
+            ),
+            (
+                "members",
+                lunco_hooks::HookValue::Array(vec![
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Source_A")),
+                        ("x", lunco_hooks::HookValue::Int(-170)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Load_A")),
+                        ("x", lunco_hooks::HookValue::Int(0)),
+                        ("y", lunco_hooks::HookValue::Int(80)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Source_B")),
+                        ("x", lunco_hooks::HookValue::Int(-170)),
+                        ("y", lunco_hooks::HookValue::Int(0)),
+                    ]),
+                    lunco_hooks::HookValue::map([
+                        ("path", lunco_hooks::HookValue::str("/Rig/Load_B")),
+                        ("x", lunco_hooks::HookValue::Int(0)),
+                        ("y", lunco_hooks::HookValue::Int(80)),
+                    ]),
+                ]),
+            ),
+        ]);
+
+        let parsed = parse_policy_layout(Some(&layout), &network, &units, "/Rig", "local-layout")
+            .expect("independent unit diagrams may reuse local coordinates");
+        assert_eq!(parsed.member_positions["/Rig/Source_A"], (-170, 0));
+        assert_eq!(parsed.member_positions["/Rig/Source_B"], (-170, 0));
+    }
+
+    #[test]
     fn generated_member_instance_names_are_readable_without_a_collision_fallback() {
         assert_eq!(
             instance_identifier(
                 "/SolarRoverTest/SolarRover/Electrical",
                 "/SolarRoverTest/SolarRover/Motor_FL"
-            ),
+            )
+            .unwrap(),
             "Motor_FL"
         );
         assert_eq!(
-            instance_identifier("/Rig/Electrical", "/Rig/Electrical/Battery"),
+            instance_identifier("/Rig/Electrical", "/Rig/Electrical/Battery").unwrap(),
             "Battery"
         );
         assert_ne!(
-            instance_identifier("/Rig/Electrical", "/Rig/Motor-A"),
-            instance_identifier("/Rig/Electrical", "/Rig/Motor_A")
+            instance_identifier("/Rig/Electrical", "/Rig/Motor-A").unwrap(),
+            instance_identifier("/Rig/Electrical", "/Rig/Motor_A").unwrap()
         );
+    }
+
+    #[test]
+    fn member_path_without_a_name_is_reported_instead_of_panicking() {
+        let error = instance_identifier("/Rig/Electrical", "/Rig/Electrical")
+            .expect_err("the network root is not a member instance");
+        assert!(error.contains("has no name"), "{error}");
     }
 
     #[test]
@@ -3873,7 +4010,8 @@ mod tests {
             &aliases,
             &plan.units,
             &classes,
-        );
+        )
+        .expect("validated generated member paths");
 
         let soc = layout.provenance("soc").expect("boundary output identity");
         assert_eq!(soc.model_class.as_deref(), Some("LunCo.Electrical.Battery"));
@@ -3896,7 +4034,7 @@ mod tests {
         let solver_name = format!(
             "{}.{}.soc_out",
             unit_instance_identifier(battery_unit.name.as_str(), 0),
-            instance_identifier("/Rig/Electrical", "/Rig/Battery"),
+            instance_identifier("/Rig/Electrical", "/Rig/Battery").unwrap(),
         );
         let internal = layout
             .provenance(&solver_name)

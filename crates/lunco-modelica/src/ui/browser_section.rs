@@ -200,7 +200,7 @@ fn render_generated_network_row(
     theme: &lunco_theme::Theme,
     entry: &crate::state::GeneratedModelicaSourceEntry,
 ) {
-    let display_name = generated_network_display_name(&entry.network_root);
+    let display_name = crate::state::generated_network_display_name(&entry.network_root);
     let member_count = entry
         .units
         .iter()
@@ -267,7 +267,7 @@ fn render_generated_network_row(
             ui.label(
                 egui::RichText::new(format!(
                     "class {}",
-                    generated_class_display_name(&entry.model_name)
+                    crate::state::generated_class_display_name(&entry.model_name)
                 ))
                 .small()
                 .color(theme.schematic.text_muted),
@@ -333,7 +333,7 @@ fn render_generated_network_row(
                     }
                 }
                 for unit in &entry.units {
-                    let unit_label = generated_unit_display_name(unit);
+                    let unit_label = crate::state::generated_unit_display_name(unit);
                     ui.collapsing(
                         format!("{} · {} member(s)", unit_label, unit.members.len()),
                         |ui| {
@@ -346,12 +346,13 @@ fn render_generated_network_row(
                                 if let Some((_, asset, class)) =
                                     entry.members.iter().find(|(path, _, _)| path == member)
                                 {
-                                    ui.label(generated_member_display_name(member, class))
-                                        .on_hover_text(format!(
-                                            "USD: {member}\nSource asset: {asset}"
-                                        ));
+                                    ui.label(crate::state::generated_member_display_name(
+                                        member, class,
+                                    ))
+                                    .on_hover_text(format!("USD: {member}\nSource asset: {asset}"));
                                 } else {
-                                    ui.label(generated_path_leaf(member)).on_hover_text(member);
+                                    ui.label(crate::state::generated_path_leaf(member))
+                                        .on_hover_text(member);
                                 }
                             }
                         },
@@ -367,57 +368,18 @@ fn render_generated_network_row(
                                     .color(theme.schematic.text_muted),
                             );
                             for (member, output, alias) in &entry.member_output_aliases {
-                                ui.label(generated_member_output_display_name(member, output))
-                                    .on_hover_text(format!(
-                                        "Generated alias: {alias}\nUSD: {member}.outputs:{output}"
-                                    ));
+                                ui.label(crate::state::generated_member_output_display_name(
+                                    member, output,
+                                ))
+                                .on_hover_text(format!(
+                                    "Generated alias: {alias}\nUSD: {member}.outputs:{output}"
+                                ));
                             }
                         },
                     );
                 }
             });
     });
-}
-
-fn generated_network_display_name(network_root: &str) -> String {
-    network_root
-        .trim_matches('/')
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .map(|segment| format!("{segment} network"))
-        .unwrap_or_else(|| "Generated network".to_string())
-}
-
-fn generated_path_leaf(path: &str) -> &str {
-    path.trim_matches('/')
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(path)
-}
-
-fn generated_class_display_name(class_name: &str) -> String {
-    let class_name = class_name.strip_suffix("_System").unwrap_or(class_name);
-    class_name
-        .split("_x2f_")
-        .map(|segment| segment.replace("__", "_"))
-        .collect::<Vec<_>>()
-        .join(" / ")
-}
-
-fn generated_unit_display_name(unit: &crate::state::GeneratedModelicaUnit) -> String {
-    unit.members
-        .first()
-        .map(|member| format!("{} unit", generated_path_leaf(member)))
-        .unwrap_or_else(|| generated_class_display_name(&unit.name))
-}
-
-fn generated_member_display_name(member: &str, class: &str) -> String {
-    let class_leaf = class.rsplit('.').next().unwrap_or(class);
-    format!("{} · {}", generated_path_leaf(member), class_leaf)
-}
-
-fn generated_member_output_display_name(member: &str, output: &str) -> String {
-    format!("{}.{}", generated_path_leaf(member), output)
 }
 
 /// Select the useful first view for a generated network.
@@ -1233,14 +1195,17 @@ function F end F;
     #[test]
     fn generated_network_name_uses_the_composed_scope_leaf() {
         assert_eq!(
-            generated_network_display_name("/Rover/Electrical"),
+            crate::state::generated_network_display_name("/Rover/Electrical"),
             "Electrical network"
         );
         assert_eq!(
-            generated_network_display_name("/Rover/Electrical/"),
+            crate::state::generated_network_display_name("/Rover/Electrical/"),
             "Electrical network"
         );
-        assert_eq!(generated_network_display_name("/"), "Generated network");
+        assert_eq!(
+            crate::state::generated_network_display_name("/"),
+            "Generated network"
+        );
     }
 
     #[test]
@@ -1276,22 +1241,24 @@ function F end F;
     #[test]
     fn generated_details_use_readable_names_and_keep_technical_names_for_tooltips() {
         assert_eq!(
-            generated_path_leaf("/Rover/YawHead/SolarPanel"),
+            crate::state::generated_path_leaf("/Rover/YawHead/SolarPanel"),
             "SolarPanel"
         );
         assert_eq!(
-            generated_class_display_name("SolarRoverTest_x2f_SolarRover_x2f_Electrical_System"),
+            crate::state::generated_class_display_name(
+                "SolarRoverTest_x2f_SolarRover_x2f_Electrical_System"
+            ),
             "SolarRoverTest / SolarRover / Electrical"
         );
         assert_eq!(
-            generated_member_display_name(
+            crate::state::generated_member_display_name(
                 "/SolarRoverTest/SolarRover/Motor_FL",
                 "LunCo.Electrical.DCMotor"
             ),
             "Motor_FL · DCMotor"
         );
         assert_eq!(
-            generated_member_output_display_name(
+            crate::state::generated_member_output_display_name(
                 "/SolarRoverTest/SolarRover/Motor_FL",
                 "electrical_power"
             ),

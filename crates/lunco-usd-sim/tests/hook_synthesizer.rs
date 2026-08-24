@@ -32,7 +32,13 @@ fn emit(net) {
     src += "  " + first.class + " " + first.instance + ";\n";
     src += "  " + second.class + " " + second.instance + ";\n";
     src += "equation\nend " + unit.name + ";\n";
-    #{ source: src, member_output_aliases: [] }
+    #{
+        source: src,
+        units: net.units,
+        layout: net.layout,
+        source_roots: net.source_roots,
+        member_output_aliases: [],
+    }
 }
 "#;
 
@@ -70,6 +76,7 @@ fn emit(net) {
             outputs: unit.outputs,
         }],
         layout: layout,
+        source_roots: net.source_roots,
         member_output_aliases: [],
     }
 }
@@ -208,6 +215,32 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
 }
 
 #[test]
+fn a_policy_must_return_the_complete_synthesis_schema() {
+    let policy = POLICY.replace(
+        "units: net.units,\n        layout: net.layout,\n        source_roots: net.source_roots,\n        member_output_aliases: [],",
+        "member_output_aliases: [],",
+    );
+    lunco_hooks_rhai::register_rhai_hook("synth.incomplete-plan", "emit", &policy, true)
+        .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "incomplete-plan");
+    let synthesizer = registry.get("incomplete-plan").expect("registered").clone();
+    let stage = stage("electrical_network.usda");
+    let errors = synthesizer
+        .synthesize(
+            &stage.view(),
+            &SdfPath::new("/Rig/Electrical").unwrap(),
+            "Rig_Electrical_System",
+            &SynthContext {
+                classes: &fixture_classes(),
+            },
+        )
+        .expect_err("omitted policy schema fields must be rejected");
+    assert!(errors[0].message.contains("must return `units`"));
+}
+
+#[test]
 fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
     lunco_hooks_rhai::register_rhai_hook(
         "synth.invalid-source",
@@ -233,7 +266,8 @@ fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
         )
         .expect_err("an empty wrapper must not be admitted as a generated network");
     assert!(
-        errors[0].message.contains("root boundary input")
+        errors[0].message.contains("must return `units`")
+            || errors[0].message.contains("root boundary input")
             || errors[0].message.contains("generated unit")
     );
 }
@@ -270,8 +304,8 @@ fn a_policy_cannot_extend_the_authored_boundary_surface() {
 #[test]
 fn a_policy_cannot_promote_an_output_missing_from_the_loaded_class() {
     let policy = POLICY.replace(
-        "#{ source: src, member_output_aliases: [] }",
-        r#"#{ source: src, member_output_aliases: [#{ member_path: "/Rig/Battery", output: "not_real", alias: "bad" }] }"#,
+        "member_output_aliases: [],",
+        r#"member_output_aliases: [#{ member_path: "/Rig/Battery", output: "not_real", alias: "bad" }],"#,
     );
     lunco_hooks_rhai::register_rhai_hook("synth.bad-member-output", "emit", &policy, true)
         .expect("policy compiles");
@@ -330,7 +364,8 @@ fn facts_describe_the_whole_graph() {
         .expect("well-formed")
         .expect("a network");
 
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+        .expect("network facts are valid");
     let components = facts.get("components").expect("components");
     let lunco_hooks::HookValue::Array(components) = components else {
         panic!("components is an array");
@@ -503,10 +538,68 @@ fn shipped_acausal_policy_contract_runs_in_rhai() {
     )
     .expect("fixture is readable")
     .expect("fixture is a network");
-    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()));
+    let facts = network_facts(&network, "Rig_Electrical_System", Some(&fixture_classes()))
+        .expect("network facts are valid");
     let result = lunco_hooks::invoke("test.synthesized-acausal-contract", &[facts])
         .expect("Rhai contract hook is registered")
         .expect("the shipped policy satisfies its Rhai contract");
+    assert_eq!(result, lunco_hooks::HookValue::Bool(true));
+}
+
+#[test]
+fn shipped_acausal_policy_places_repeated_power_components_in_rhai() {
+    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+        .expect("the shipped synthesis policy is embedded");
+    let contract = scripting_test_source("test_generated_acausal_policy.rhai");
+    lunco_hooks_rhai::register_rhai_hook(
+        "test.synthesized-acausal-repeated-layout",
+        "test_repeated_power_components",
+        &format!("{policy}\n{contract}"),
+        true,
+    )
+    .expect("the shipped policy and its repeated-layout contract compile");
+
+    let result = lunco_hooks::invoke("test.synthesized-acausal-repeated-layout", &[])
+        .expect("Rhai contract hook is registered")
+        .expect("repeated power layout contract passes");
+    assert_eq!(result, lunco_hooks::HookValue::Bool(true));
+}
+
+#[test]
+fn shipped_acausal_policy_scales_power_layout_for_many_members_in_rhai() {
+    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+        .expect("the shipped synthesis policy is embedded");
+    let contract = scripting_test_source("test_generated_acausal_policy.rhai");
+    lunco_hooks_rhai::register_rhai_hook(
+        "test.synthesized-acausal-many-layout",
+        "test_many_power_components",
+        &format!("{policy}\n{contract}"),
+        true,
+    )
+    .expect("the shipped policy and its many-member layout contract compile");
+
+    let result = lunco_hooks::invoke("test.synthesized-acausal-many-layout", &[])
+        .expect("Rhai contract hook is registered")
+        .expect("many-member power layout contract passes");
+    assert_eq!(result, lunco_hooks::HookValue::Bool(true));
+}
+
+#[test]
+fn shipped_acausal_policy_keeps_multi_unit_layouts_local_in_rhai() {
+    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+        .expect("the shipped synthesis policy is embedded");
+    let contract = scripting_test_source("test_generated_acausal_policy.rhai");
+    lunco_hooks_rhai::register_rhai_hook(
+        "test.synthesized-acausal-local-units",
+        "test_multi_unit_layout_uses_local_coordinates",
+        &format!("{policy}\n{contract}"),
+        true,
+    )
+    .expect("the shipped policy and its multi-unit layout contract compile");
+
+    let result = lunco_hooks::invoke("test.synthesized-acausal-local-units", &[])
+        .expect("Rhai contract hook is registered")
+        .expect("multi-unit local layout contract passes");
     assert_eq!(result, lunco_hooks::HookValue::Bool(true));
 }
 

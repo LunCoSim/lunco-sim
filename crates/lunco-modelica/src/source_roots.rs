@@ -86,6 +86,12 @@ pub enum SourceRootKind {
         /// Absolute path on disk.
         path: PathBuf,
     },
+    /// Source already synchronized from an untitled editor document.
+    ///
+    /// This is deliberately distinct from [`SourceRootKind::Bundled`]: an
+    /// untitled document has no embedded filename and must never be sent
+    /// through the bundled-model loader.
+    SessionDocument { id: String },
 }
 
 /// One source root the workbench knows about. Keyed by the
@@ -276,13 +282,7 @@ impl SourceRootRegistry {
         }
         let kind = match path {
             Some(p) => SourceRootKind::WorkspaceFile { path: p },
-            None => SourceRootKind::Bundled {
-                // Untitled docs don't have a filename; rumoca only
-                // sees them via engine_resource sync. The `Bundled`
-                // variant is a stand-in marker: never actually
-                // loaded by the gate (state is already Ready).
-                filename: format!("untitled:{id}"),
-            },
+            None => SourceRootKind::SessionDocument { id: id.clone() },
         };
         self.roots.insert(
             id.clone(),
@@ -545,6 +545,13 @@ pub fn ensure_loaded(
                 },
                 summary,
             )
+        }
+        SourceRootKind::SessionDocument { id: document_id } => {
+            let message =
+                format!("session document source root `{document_id}` has no standalone loader");
+            bevy::log::error!("[source-roots] {message}");
+            entry.state = LoadState::Failed(message);
+            return false;
         }
     };
 

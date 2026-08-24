@@ -267,9 +267,16 @@ fn register_builtin_policies() {
         // an authored `link.connected` hook overrides the verdict, and routing is
         // rhai over `query("Links")` — see doc 49 / prelude/links.rhai.)
     ];
+    let sources = match lunco_assets::scripting::policy_files() {
+        Ok(sources) => sources,
+        Err(error) => {
+            error!("[policy] active policy assets could not be loaded: {error}");
+            return;
+        }
+    };
     for (stem, hook_id, entry) in BUILTINS {
-        let Some(src) = lunco_assets::scripting::policy(stem) else {
-            warn!("[policy] built-in policy '{stem}' missing from embedded assets");
+        let Some((_, src)) = sources.iter().find(|(candidate, _)| candidate == stem) else {
+            warn!("[policy] built-in policy '{stem}' missing from active policy assets");
             continue;
         };
         match lunco_hooks_rhai::register_rhai_hook(*hook_id, *entry, src, false) {

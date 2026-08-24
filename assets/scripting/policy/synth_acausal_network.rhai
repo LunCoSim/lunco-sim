@@ -8,18 +8,14 @@
 // Presentation policy is intentionally tunable here. These are diagram
 // coordinates, extents, and typography choices—not Rust/runtime behavior.
 const UNIT_POSITION_SCALE = 2;
-const BATTERY_X = -360;
-const SOLAR_PANEL_X = 420;
-const MOTOR_COLUMN_SPACING = 260;
-const MOTOR_FIRST_ROW_Y = 230;
-const MOTOR_ROW_SPACING = 460;
-const MOTOR_COLUMN_COUNT = 2;
+const HUB_X = -170;
 const BUS_Y = 0;
-const OTHER_ORIGIN_X = -120;
-const OTHER_COLUMN_SPACING = 240;
-const OTHER_ORIGIN_Y = 500;
-const OTHER_ROW_SPACING = 180;
-const OTHER_COLUMN_COUNT = 3;
+const BRANCH_FIRST_X = 0;
+const BRANCH_LEFT_X = -320;
+const BRANCH_FIRST_ROW_Y = 80;
+const BRANCH_ROW_SPACING = 150;
+const BRANCH_SIDE_COUNT = 2;
+const BUS_RAIL_MARGIN = 35;
 
 const MEMBER_MIN_HALF_WIDTH = 180;
 const MEMBER_MIN_HALF_HEIGHT = 130;
@@ -39,10 +35,7 @@ const ICON_COORDINATE_HALF_WIDTH = 100;
 const ICON_COORDINATE_HALF_HEIGHT = 70;
 const ICON_BOX_HALF_WIDTH = 92;
 const ICON_BOX_HALF_HEIGHT = 58;
-const ICON_LABEL_HALF_WIDTH = 82;
-const ICON_LABEL_HALF_HEIGHT = 16;
 const ICON_CORNER_RADIUS_TEXT = "10";
-const ICON_LABEL_FONT_SIZE_TEXT = "14";
 const DIAGRAM_TITLE_INSET_X = 20;
 const DIAGRAM_TITLE_TOP_INSET = 34;
 const DIAGRAM_TITLE_BOTTOM_INSET = 12;
@@ -57,6 +50,14 @@ const DIAGRAM_TITLE_COLOR = "{165,175,205}";
 fn string_literal(value) {
     "\"" + value + "\""
 }
+
+// Rhai hook functions resolve the long-lived presentation constants above.
+// Keep the bus style behind named policy helpers so the route and the
+// diagram decoration cannot drift apart.
+fn power_rail_x() { HUB_X / 2 }
+fn power_rail_color() { DIAGRAM_TITLE_COLOR }
+fn power_wire_color() { DIAGRAM_TITLE_COLOR }
+fn power_line_thickness_text() { "2" }
 
 fn rect(x1, y1, x2, y2) {
     "{{" + x1.to_string() + "," + y1.to_string() + "},{"
@@ -109,72 +110,95 @@ fn path_leaf(path) {
     leaf
 }
 
-fn is_class(component, leaf) {
-    component.path.split("/").contains(leaf)
-        || component.class.split(".").contains(leaf)
+fn connection_degree(net, path, members) {
+    let degree = 0;
+    for edge in net.connections {
+        if !members.contains(edge.left_path) || !members.contains(edge.right_path) {
+            continue;
+        }
+        if edge.left_path == path { degree += 1; }
+        if edge.right_path == path { degree += 1; }
+    }
+    degree
 }
 
-// The Rust facts deliberately use compact topology coordinates. The policy
-// owns the presentation arrangement so a future policy can replace this with
-// a domain-specific layout without changing Rust. Power networks get a
-// source/load arrangement: the battery is the explicit bus anchor on the
-// left, the panel is a source on the right, and the motors occupy two rows
-// above/below the bus. This makes every generated connect() edge legible and
-// prevents a routed solar edge from visually terminating at a motor.
-fn visual_layout(net) {
+// Acausal flow has no compile-time source or sink: Pin.i can reverse sign at
+// runtime. Layout therefore uses only graph topology. The highest-incidence
+// component is the visual bus hub; all other members become deterministic
+// branch lanes. Runtime Pin.i sign controls animated direction, never the
+// diagram's geometry.
+fn topology_hub(net, members) {
+    let best = "";
+    let best_degree = -1;
+    for path in members {
+        let degree = connection_degree(net, path, members);
+        let replace = degree > best_degree;
+        if !replace && degree == best_degree {
+            replace = best == "";
+            if !replace { replace = path < best; }
+        }
+        if replace {
+            best = path;
+            best_degree = degree;
+        }
+    }
+    if best == "" {
+        throw "generated acausal unit has no topology members"
+    }
+    best
+}
+
+fn visual_layout(net, units) {
     let layout = #{ units: [], members: [] };
-    for item in net.layout.units {
+    for unit in units {
+        // `source_name` is the partition identity from the Rust facts. `name`
+        // is the readable Modelica class name presented to the user.
+        let item = unit_position(net.layout, unit.source_name);
         layout.units.push(#{
-            name: item.name,
+            name: unit.name,
             x: item.x * UNIT_POSITION_SCALE,
             y: item.y * UNIT_POSITION_SCALE
         });
     }
-    let motors = [];
-    let battery = "";
-    let solar = "";
-    let other = [];
-    for item in net.layout.members {
-        let component = component_for(net, item.path);
-        if is_class(component, "Battery") {
-            battery = item.path;
-        } else if is_class(component, "SolarPanel") {
-            solar = item.path;
-        } else if is_class(component, "DCMotor") || is_class(component, "Motor") {
-            motors.push(item.path);
-        } else {
-            other.push(item.path);
+    // Unit positions belong to the generated root diagram. Member positions
+    // belong to each unit's own diagram, so every group gets the same local
+    // coordinate system; root-level spacing never leaks into a child class.
+    let groups = [];
+    if units.len == 0 {
+        let all = [];
+        for component in net.components { all.push(component.path); }
+        groups.push(all);
+    } else {
+        for unit in units { groups.push(unit.components); }
+    }
+    for members in groups {
+        let hub = topology_hub(net, members);
+        layout.members.push(#{
+            path: hub,
+            x: HUB_X,
+            y: BUS_Y
+        });
+        let branches = [];
+        for path in members {
+            if path != hub { branches.push(path); }
         }
-    }
-    if battery != "" {
-        layout.members.push(#{ path: battery, x: BATTERY_X, y: BUS_Y });
-    }
-    if solar != "" {
-        layout.members.push(#{ path: solar, x: SOLAR_PANEL_X, y: BUS_Y });
-    }
-    let motor_index = 0;
-    for path in motors {
-        let column = motor_index % MOTOR_COLUMN_COUNT;
-        let row = motor_index / MOTOR_COLUMN_COUNT;
-        layout.members.push(#{
-            path: path,
-            x: column * MOTOR_COLUMN_SPACING,
-            y: MOTOR_FIRST_ROW_Y - row * MOTOR_ROW_SPACING
-        });
-        motor_index += 1;
-    }
-    let other_index = 0;
-    for path in other {
-        let column = other_index % OTHER_COLUMN_COUNT;
-        let row = other_index / OTHER_COLUMN_COUNT;
-        let x = OTHER_ORIGIN_X + column * OTHER_COLUMN_SPACING;
-        let y = OTHER_ORIGIN_Y + row * OTHER_ROW_SPACING;
-        layout.members.push(#{
-            path: path,
-            x: x,
-            y: y
-        });
-        other_index += 1;
+        let branch_index = 0;
+        for path in branches {
+            let row = branch_index / BRANCH_SIDE_COUNT;
+            let placement = #{};
+            placement.path = path;
+            // At most one member occupies each side of a row. The two-sided
+            // bank keeps the diagram compact while ensuring a rail segment
+            // cannot pass through another member on its way to the endpoint.
+            placement.x = if branch_index % BRANCH_SIDE_COUNT == 0 {
+                BRANCH_FIRST_X
+            } else {
+                BRANCH_LEFT_X
+            };
+            placement.y = BRANCH_FIRST_ROW_Y - row * BRANCH_ROW_SPACING;
+            layout.members.push(placement);
+            branch_index += 1;
+        }
     }
     layout
 }
@@ -227,7 +251,7 @@ fn unit_extent(layout, units) {
     result
 }
 
-fn compact_icon(title, line_color, fill_color) {
+fn compact_icon(line_color, fill_color) {
     let rectangle = "Rectangle(extent=" + rect(
             -ICON_BOX_HALF_WIDTH,
             -ICON_BOX_HALF_HEIGHT,
@@ -237,21 +261,18 @@ fn compact_icon(title, line_color, fill_color) {
         + ", lineColor=" + line_color
         + ", fillColor=" + fill_color
         + ", fillPattern=FillPattern.Solid, radius=" + ICON_CORNER_RADIUS_TEXT + ")";
-    let name = "Text(extent=" + rect(
-            -ICON_LABEL_HALF_WIDTH,
-            -ICON_LABEL_HALF_HEIGHT,
-            ICON_LABEL_HALF_WIDTH,
-            ICON_LABEL_HALF_HEIGHT
-        )
-        + ", textString=" + string_literal(title)
-        + ", textColor=" + ICON_TEXT_COLOR + ", fontSize=" + ICON_LABEL_FONT_SIZE_TEXT + ")";
+    let bus = "Line(points={{-52,0},{52,0}}, color={245,250,255}, thickness=2)";
+    let left_node = "Ellipse(extent={{-68,-12},{-44,12}}, lineColor="
+        + line_color + ", fillColor=" + ICON_TEXT_COLOR + ", fillPattern=FillPattern.Solid)";
+    let right_node = "Ellipse(extent={{44,-12},{68,12}}, lineColor="
+        + line_color + ", fillColor=" + ICON_TEXT_COLOR + ", fillPattern=FillPattern.Solid)";
     "Icon(coordinateSystem(extent=" + rect(
             -ICON_COORDINATE_HALF_WIDTH,
             -ICON_COORDINATE_HALF_HEIGHT,
             ICON_COORDINATE_HALF_WIDTH,
             ICON_COORDINATE_HALF_HEIGHT
         )
-        + "), graphics={" + rectangle + "," + name + "})"
+        + "), graphics={" + rectangle + "," + bus + "," + left_node + "," + right_node + "})"
 }
 
 fn diagram_annotation(width, height, title) {
@@ -276,8 +297,122 @@ fn connect_equation(edge) {
     line += edge.right_instance;
     line += ".";
     line += edge.right_connector;
-    line += ");\n";
+    line += ")";
     line
+}
+
+// Keep common-pin electrical wiring legible. The authored topology remains
+// the connect() equation; these are standard Modelica Line waypoints only.
+// Every branch visits the policy-owned bus rail before reaching its member,
+// so a SolarPanel-to-motor equation cannot render as a direct wire.
+fn power_bus_annotation(edge, layout) {
+    let left = position(layout, edge.left_path);
+    let right = position(layout, edge.right_path);
+    let rail_x = power_rail_x();
+    // Include the horizontal icon stubs as well as the rail crossing. A
+    // two-point vertical annotation leaves the renderer's default straight
+    // wire visible, making a panel appear directly connected to a motor.
+    let left_port_x = if left.x < rail_x {
+        left.x + COMPONENT_HALF_WIDTH
+    } else {
+        left.x - COMPONENT_HALF_WIDTH
+    };
+    let right_port_x = if right.x < rail_x {
+        right.x + COMPONENT_HALF_WIDTH
+    } else {
+        right.x - COMPONENT_HALF_WIDTH
+    };
+    let line = " annotation(Line(points={{";
+    line += left_port_x.to_string();
+    line += ",";
+    line += left.y.to_string();
+    line += "},{";
+    line += rail_x.to_string();
+    line += ",";
+    line += left.y.to_string();
+    line += "},{";
+    line += rail_x.to_string();
+    line += ",";
+    line += right.y.to_string();
+    line += "},{";
+    line += right_port_x.to_string();
+    line += ",";
+    line += right.y.to_string();
+    line += "}}, color=";
+    line += power_wire_color();
+    line += ", thickness=";
+    line += power_line_thickness_text();
+    line += "))";
+    line
+}
+
+fn bus_bounds(layout, members) {
+    let min_y = 0;
+    let max_y = 0;
+    let first = true;
+    for path in members {
+        let p = position(layout, path);
+        if first {
+            min_y = p.y;
+            max_y = p.y;
+            first = false;
+        } else {
+            if p.y < min_y { min_y = p.y; }
+            if p.y > max_y { max_y = p.y; }
+        }
+    }
+    let result = #{};
+    result.min_y = min_y - BUS_RAIL_MARGIN;
+    result.max_y = max_y + BUS_RAIL_MARGIN;
+    result
+}
+
+fn unit_bus_graphics(layout, members) {
+    let bounds = bus_bounds(layout, members);
+    let rail = "Line(points={{";
+    rail += power_rail_x().to_string();
+    rail += ",";
+    rail += bounds.min_y.to_string();
+    rail += "},{";
+    rail += power_rail_x().to_string();
+    rail += ",";
+    rail += bounds.max_y.to_string();
+    rail += "}}, color=";
+    rail += power_rail_color();
+    rail += ", thickness=";
+    rail += power_line_thickness_text();
+    rail += ")";
+    let label_y = bounds.max_y + 22;
+    let label = "Text(extent=" + rect(
+            power_rail_x() - 75,
+            label_y,
+            power_rail_x() + 75,
+            label_y + 20
+        )
+        + ", textString=\"POWER BUS\", textColor=" + power_rail_color() + ", fontSize=" + DIAGRAM_TITLE_FONT_SIZE_TEXT + ")";
+    rail + "," + label
+}
+
+fn policy_units(net) {
+    let result = [];
+    let index = 0;
+    for unit in net.units {
+        let instance = "power_unit_" + (index + 1).to_string();
+        if net.units.len == 1 { instance = "power_system"; }
+        let class_name = "PowerUnit_" + (index + 1).to_string();
+        if net.units.len == 1 { class_name = "PowerSystem"; }
+        let rewritten = #{
+            name: class_name,
+            source_name: unit.name,
+            instance: instance,
+            components: unit.components,
+            inputs: unit.inputs,
+            outputs: unit.outputs
+        };
+        result.push(rewritten);
+        index += 1;
+    }
+    result
 }
 
 fn boundary_equation(link) {
@@ -368,6 +503,8 @@ fn emit_unit(net, unit, layout) {
     for edge in net.connections {
         if has_member(unit.components, edge.left_path) && has_member(unit.components, edge.right_path) {
             mutable += connect_equation(edge);
+            mutable += power_bus_annotation(edge, layout);
+            mutable += ";\n";
         }
     }
     for link in net.boundary_links {
@@ -397,21 +534,22 @@ fn emit_unit(net, unit, layout) {
         }
     }
     let size = member_extent(layout, unit.components);
-    let title = path_leaf(net.root) + " network | " + unit.components.len.to_string() + " member(s)";
-    mutable += "annotation(" + compact_icon("Generated unit", UNIT_ICON_LINE_COLOR, UNIT_ICON_FILL_COLOR) + ","
-        + diagram_annotation(size.width, size.height, title) + ");\n";
+    mutable += "annotation(" + compact_icon(UNIT_ICON_LINE_COLOR, UNIT_ICON_FILL_COLOR) + ","
+        + "Diagram(coordinateSystem(extent=" + rect(-size.width, -size.height, size.width, size.height)
+        + "), graphics={" + unit_bus_graphics(layout, unit.components) + "})" + ");\n";
     mutable += "end " + unit.name + ";\n\n";
     mutable
 }
 
 fn synthesize(net) {
-    let layout = visual_layout(net);
+    let units = policy_units(net);
+    let layout = visual_layout(net, units);
     let source = "model " + net.model_name + "\n";
     let mutable = source;
     for input in net.inputs { mutable += "  input Real " + input + ";\n"; }
     for boundary in net.boundary_outputs { mutable += "  output Real " + boundary.name + ";\n"; }
     for member_output in net.member_outputs { mutable += "  output Real " + member_output.alias + ";\n"; }
-    for unit in net.units {
+    for unit in units {
         let p = unit_position(layout, unit.name);
         let unit_extent = rect(
             -UNIT_HALF_WIDTH,
@@ -425,26 +563,26 @@ fn synthesize(net) {
         mutable += "  " + unit.name + " " + unit.instance + placement;
     }
     mutable += "equation\n";
-    for unit in net.units {
+    for unit in units {
         for input in unit.inputs { mutable += "  " + unit.instance + "." + input + " = " + input + ";\n"; }
         for output in unit.outputs { mutable += "  " + output + " = " + unit.instance + "." + output + ";\n"; }
     }
     for member_output in net.member_outputs {
-        for unit in net.units {
+        for unit in units {
             if has_member(unit.components, member_output.member_path) {
                 mutable += member_output_equation(member_output, unit.instance);
             }
         }
     }
-    let size = unit_extent(layout, net.units);
-    let title = "Generated network | " + net.units.len.to_string() + " unit(s)";
-    mutable += "annotation(" + compact_icon("Generated network", ROOT_ICON_LINE_COLOR, ROOT_ICON_FILL_COLOR) + ","
+    let size = unit_extent(layout, units);
+    let title = path_leaf(net.root) + " network | " + units.len.to_string() + " unit(s)";
+    mutable += "annotation(" + compact_icon(ROOT_ICON_LINE_COLOR, ROOT_ICON_FILL_COLOR) + ","
         + diagram_annotation(size.width, size.height, title) + ");\n";
     mutable += "end " + net.model_name + ";\n\n";
-    for unit in net.units { mutable += emit_unit(net, unit, layout); }
+    for unit in units { mutable += emit_unit(net, unit, layout); }
     #{
         source: mutable,
-        units: net.units,
+        units: units,
         layout: layout,
         source_roots: net.source_roots,
         // Promotion is policy-owned. The default policy exposes every

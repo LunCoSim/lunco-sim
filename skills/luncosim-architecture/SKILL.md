@@ -111,16 +111,46 @@ string workaround:
   domain-specific presentation belong there. Rust may provide generic source
   loading, class resolution, and typed projection metadata, but must not encode
   a domain poster or duplicate the policy's graph.
+- For a power-network policy, make common-bus semantics visible with standard
+  Modelica `Line` waypoints and a policy-owned diagram rail. Use adaptive,
+  extent-aware placement for repeated members. Derive the visual hub from
+  graph incidence and place other members in deterministic branch lanes; do
+  not use component-class branches or let a fixed demo layout imply a direct
+  source-to-load wire when the composed graph has many members. Member
+  coordinates are local to the owning unit diagram; root coordinates place
+  unit instances.
+- Reuse the generic Modelica flow animation for electrical networks. A native
+  `flow Real` such as `LunCo.Electrical.Pin.i` must be discovered by connector
+  metadata and sampled from live node state; Rhai emits ordinary `Pin`/
+  `connect(...)` equations and must not grow a generated-electrical animation
+  branch. Non-zero signed flow animates in the resolved direction; zero or
+  missing state remains idle/diagnostic.
+- The flow renderer reads all declared connector flow variables and live
+  runtime state keys, not a domain-specific value or generated policy field.
+  Precompute lookup keys during projection and keep the per-frame walk linear
+  in route segments plus visible dots.
 - Keep generated browser metadata explicit: distinguish root boundary inputs and
   outputs from promoted member telemetry, and expose the generated document as
   read-only runtime state with a normal Modelica drill-in path.
+- Keep editing semantics honest: an editable Modelica document moves nodes by
+  emitting the generic canvas `NodeMoved` event and persisting standard
+  `Placement` annotations through `ModelicaOp::SetPlacement`. A generated
+  document stays read-only because USD plus Rhai owns its source; expose
+  `Duplicate to edit` instead of accepting a non-persistent drag.
+- Keep projection responsive: Modelica root loading, parse, and inheritance/icon
+  walks run off the UI thread. UI readers use completed caches or a nonblocking
+  lock and show an explicit loading/error state until the generic completion
+  event requests reprojection. Never hold the engine mutex across painting.
 - Validate the returned generated source as a generic strict AST contract:
-  exact root name and boundary, no undeclared root/unit causal ports, promotions
-  only for outputs present in the loaded member class, non-overlapping policy
-  placements, complete policy units, native members nested in their owning units,
-  and no direct native members on the root. Treat missing or loading class
-  definitions as explicit resolver states in the canvas, never as a fabricated
-  resolved node.
+  exact root name and boundary, required `source`, `units`, `layout.units`,
+  `layout.members`, `source_roots`, and `member_output_aliases` fields, no
+  undeclared root/unit causal ports, promotions only for outputs present in the
+  loaded member class, non-overlapping policy placements, complete policy units,
+  native members nested in their owning units, and no direct native members on
+  the root. Member-placement overlap is invalid within one unit coordinate
+  system; different unit diagrams may legitimately reuse local coordinates.
+  Treat missing or loading class definitions as explicit resolver
+  states in the canvas, never as a fabricated resolved node.
 - Keep generated document lifetime tied to the projection entity. Classify it by
   the `generated/` document origin, retire it on removal/despawn, and keep
   authored document cleanup separate. Structured packages under
@@ -130,9 +160,10 @@ string workaround:
   policy-declared `source_roots` list may prewarm dependencies, but it must not
   be required for class discovery and Rust must not name a particular library.
   Reproject from the generic completion signal.
-- Let Rhai own the optional `member_output_aliases` promotion table. Rust may
-  validate known member/output pairs and identifier uniqueness, but must not
-  choose aliases or emit visual source for a policy.
+- Let Rhai own the required `member_output_aliases` promotion table, including
+  the explicit empty-table case. Rust may validate known member/output pairs and
+  identifier uniqueness, but must not choose aliases or emit visual source for a
+  policy.
 - Keep policy contracts in Rhai assets under `assets/scripting/tests/`. The
   Rust host supplies composed facts and invokes the shipped policy; Rhai owns
   assertions about generated source, topology, layout, and presentation.

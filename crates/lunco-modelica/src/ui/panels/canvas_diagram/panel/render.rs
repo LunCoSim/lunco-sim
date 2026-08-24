@@ -16,7 +16,6 @@ pub(crate) fn render_diagram_canvas(
 ) {
     let _frame_t0 = web_time::Instant::now();
     let render_tab_id = ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id);
-    let trace_phases = std::env::var_os("RENDER_CANVAS_TRACE").is_some();
     let mut phase_t = web_time::Instant::now();
     state.phase_log.clear();
 
@@ -33,7 +32,11 @@ pub(crate) fn render_diagram_canvas(
         .filter(|s| s.enabled)
         .map(|s| lunco_canvas::SnapSettings { step: s.step });
 
-    stash_snapshots(ui.ctx(), ctx, doc_id);
+    let target_unit_instance = state
+        .get_for_render(render_tab_id, doc_id)
+        .target_unit_instance
+        .clone();
+    stash_snapshots(ui.ctx(), ctx, doc_id, target_unit_instance.as_deref());
     mark("snapshots+sigreg", &mut phase_t, &mut state.phase_log);
 
     let (response, events) = {
@@ -83,61 +86,76 @@ pub(crate) fn render_diagram_canvas(
                     .and_then(|tabs| tabs.get(tid).and_then(|t| t.drilled_class.clone()))
             })
             .unwrap_or_default();
-        let lifecycle = {
-            let docstate = state.get_for_render(render_tab_id, active_doc);
-            let has_content = docstate.canvas.scene.node_count() > 0;
-            active_doc
-                .and_then(|d| {
-                    ctx.resource::<lunco_workbench::status_bus::StatusBus>()
-                        .map(|bus| {
-                            bus.lifecycle(
-                                lunco_workbench::status_bus::BusyScope::Document(d.0),
-                                has_content,
-                            )
-                        })
-                })
-                .unwrap_or(lunco_workbench::status_bus::LifecycleState::Empty)
-        };
+        let projection_error = state
+            .get_for_render(render_tab_id, active_doc)
+            .projection_error
+            .clone();
 
         use lunco_workbench::status_bus::LifecycleState;
-        match lifecycle {
-            LifecycleState::Loading => {
-                if let (Some(doc_id), Some(bus)) = (
-                    active_doc,
-                    ctx.resource::<lunco_workbench::status_bus::StatusBus>(),
-                ) {
-                    lunco_ui::busy::LoadingIndicator::for_scope(
-                        lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
-                    )
-                    .overlay_on(ui, response.rect, bus, &theme);
+        if let Some(error) = projection_error {
+            overlays::render_error_overlay(
+                ui,
+                response.rect,
+                "Diagram projection failed",
+                &drilled_class,
+                &error,
+                &theme,
+            );
+        } else {
+            let lifecycle = {
+                let docstate = state.get_for_render(render_tab_id, active_doc);
+                let has_content = docstate.canvas.scene.node_count() > 0;
+                active_doc
+                    .and_then(|d| {
+                        ctx.resource::<lunco_workbench::status_bus::StatusBus>()
+                            .map(|bus| {
+                                bus.lifecycle(
+                                    lunco_workbench::status_bus::BusyScope::Document(d.0),
+                                    has_content,
+                                )
+                            })
+                    })
+                    .unwrap_or(lunco_workbench::status_bus::LifecycleState::Empty)
+            };
+            match lifecycle {
+                LifecycleState::Loading => {
+                    if let (Some(doc_id), Some(bus)) = (
+                        active_doc,
+                        ctx.resource::<lunco_workbench::status_bus::StatusBus>(),
+                    ) {
+                        lunco_ui::busy::LoadingIndicator::for_scope(
+                            lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+                        )
+                        .overlay_on(ui, response.rect, bus, &theme);
+                    }
+                    ui.ctx().request_repaint();
                 }
-                ui.ctx().request_repaint();
+                LifecycleState::Failed(msg) => {
+                    overlays::render_error_overlay(
+                        ui,
+                        response.rect,
+                        "Failed to load resource",
+                        &drilled_class,
+                        &msg,
+                        &theme,
+                    );
+                }
+                LifecycleState::Empty => {
+                    overlays::render_empty_diagram_overlay(ui, response.rect, ctx);
+                }
+                LifecycleState::Content => {}
             }
-            LifecycleState::Failed(msg) => {
-                overlays::render_drill_in_error_overlay(
-                    ui,
-                    response.rect,
-                    &drilled_class,
-                    &msg,
-                    &theme,
-                );
-            }
-            LifecycleState::Empty => {
-                overlays::render_empty_diagram_overlay(ui, response.rect, ctx);
-            }
-            LifecycleState::Content => {}
         }
     }
 
     // ─── "Icons update when MSL loaded" hint ───
     //
     // On web the MSL bundle decodes in the background (~tens of
-    // seconds) while the diagram already renders with provisional
-    // partial types — standard-library components resolve to gray
-    // placeholder boxes (`node.rs` `!drew_icon` path) until MSL
-    // installs and the `MslBecameReady` observer reprojects every
-    // open tab with real icons. Surface that so the gray boxes read
-    // as "still loading", not "broken render".
+    // seconds). Until the source root is installed, the diagram stays
+    // in its explicit loading/error lifecycle; it must not present a
+    // fabricated gray component as if that were the class's icon.
+    // `MslBecameReady` reprojects every open tab with the authored
+    // Modelica annotation graphics once the standard library is ready.
     //
     // Visible until icons actually resolve, not just until MSL bytes
     // land: `MslLoadState` flips to `Ready` a step *before* the
@@ -342,7 +360,7 @@ pub(crate) fn render_diagram_canvas(
     // the `RENDER_CANVAS_TRACE` env var, which is always absent on wasm
     // (no process env) — so the browser never got the breakdown that
     // localises a stall to a phase. Now any slow frame self-reports.
-    if (trace_phases || frame_ms > 16.0) && !state.phase_log.is_empty() {
+    if frame_ms > 16.0 && !state.phase_log.is_empty() {
         let breakdown = state
             .phase_log
             .iter()

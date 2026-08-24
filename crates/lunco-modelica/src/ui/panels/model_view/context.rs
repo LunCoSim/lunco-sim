@@ -1,7 +1,7 @@
 //! Helpers for syncing tab state with global workspace state.
 
 use crate::model_tabs::ModelTabs;
-use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::state::{GeneratedModelicaSources, ModelicaDocumentRegistry, WorkbenchState};
 use crate::ui::panels::code_editor::EditorBufferState;
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
@@ -25,6 +25,19 @@ pub fn resolve_tab_title(
     doc: DocumentId,
     drilled_class: Option<&str>,
 ) -> (String, bool, bool) {
+    // Generated documents carry a readable network/unit contract beside the
+    // exact compiler class name. Resolve this before the ordinary document
+    // origin so generated tabs never expose encoded USD paths as their title.
+    if let Some(entry) = world
+        .get_resource::<GeneratedModelicaSources>()
+        .and_then(|sources| sources.entries.iter().find(|entry| entry.document == doc))
+    {
+        let base = drilled_class
+            .map(crate::state::generated_class_display_name)
+            .unwrap_or_else(|| crate::state::generated_network_display_name(&entry.network_root));
+        return (base, false, true);
+    }
+
     if let Some(host) = world
         .get_resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.host(doc))

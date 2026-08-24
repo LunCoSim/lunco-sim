@@ -436,6 +436,18 @@ impl ModelicaCompiler {
             let files = Self::read_package_dir(&dir);
             if !files.is_empty() {
                 let report = self.seat_library_files(root, &dir.display().to_string(), files);
+                if !report.diagnostics.is_empty() || report.inserted_file_count == 0 {
+                    log::error!(
+                        "[ModelicaCompiler] source root `{root}` failed from {}: {}",
+                        dir.display(),
+                        if report.diagnostics.is_empty() {
+                            "no Modelica definitions were inserted".to_string()
+                        } else {
+                            report.diagnostics.join("; ")
+                        },
+                    );
+                    return false;
+                }
                 log::info!(
                     "[ModelicaCompiler] seated library `{root}` from {} ({} docs)",
                     dir.display(),
@@ -454,7 +466,18 @@ impl ModelicaCompiler {
              ({} docs) — no on-disk `assets/models/{root}`",
             files.len(),
         );
-        let _ = self.seat_library_files(root, root, files);
+        let report = self.seat_library_files(root, root, files);
+        if !report.diagnostics.is_empty() || report.inserted_file_count == 0 {
+            log::error!(
+                "[ModelicaCompiler] embedded source root `{root}` failed: {}",
+                if report.diagnostics.is_empty() {
+                    "no Modelica definitions were inserted".to_string()
+                } else {
+                    report.diagnostics.join("; ")
+                },
+            );
+            return false;
+        }
         self.installed_roots.insert(root.to_string());
         true
     }

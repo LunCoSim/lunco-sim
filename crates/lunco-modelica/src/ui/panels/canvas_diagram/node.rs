@@ -687,9 +687,9 @@ pub(super) fn paint_hover_card(
 
 /// Paint a chain of small bright dots along a polyline that march
 /// from the first to the last vertex at constant screen-pixel speed.
-/// Phase keyed off wall-clock `time` so all wires stay in sync.
-/// Used as the "this connection is alive" overlay during simulation
-/// — Simulink/SPICE-style, no per-edge flow data needed yet.
+/// Phase keyed off wall-clock `time` so all wires stay in sync. The caller
+/// enables this only for a non-zero Modelica `flow` value; this function is
+/// presentation geometry, independent of any particular physical domain.
 pub(super) fn paint_flow_dots(
     painter: &egui::Painter,
     polyline: &[egui::Pos2],
@@ -707,7 +707,14 @@ pub(super) fn paint_flow_dots(
     if total_len < 1.0 {
         return;
     }
-    // Spacing + speed in screen pixels. Tuned iteratively: 64 px
+    // Spacing + speed in screen pixels. Named constants keep the visual
+    // policy explicit and make tuning one edit. The flow source itself is
+    // Modelica metadata/runtime state; these values are only presentation.
+    const FLOW_DOT_SPACING_PX: f32 = 16.0;
+    const FLOW_DOT_SPEED_PX_S: f32 = 36.0;
+    const FLOW_DOT_RADIUS_PX: f32 = 2.6;
+    const FLOW_DOT_ALPHA: u8 = 180;
+    // Tuned iteratively: 64 px
     // looked empty; 28 px read as a dotted wire ("bumpy"); 32 px
     // was OK but still felt sparse on long runs; 22 px was better
     // but on short wire segments (a half-inch fluid line between
@@ -721,28 +728,37 @@ pub(super) fn paint_flow_dots(
     // Spacing/speed scale strictly with canvas zoom so the dots are
     // anchored to *world* distance: at 2× zoom they move twice as
     // fast on screen but cover the same wire length per second.
-    const SPACING_PX: f32 = 16.0;
-    const SPEED_PX_S: f32 = 36.0;
-    let spacing = SPACING_PX * scale;
-    let speed = SPEED_PX_S * scale;
+    let spacing = FLOW_DOT_SPACING_PX * scale;
+    let speed = FLOW_DOT_SPEED_PX_S * scale;
     let phase = ((time as f32) * speed).rem_euclid(spacing);
-    let dot_color =
-        egui::Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), 180);
+    let dot_color = egui::Color32::from_rgba_unmultiplied(
+        base_color.r(),
+        base_color.g(),
+        base_color.b(),
+        FLOW_DOT_ALPHA,
+    );
     let mut s = phase;
+    let mut segment_index = 0usize;
+    let mut segment_start = 0.0_f32;
     while s < total_len {
-        // Walk the polyline to find the segment containing arc-length s.
-        let mut acc = 0.0_f32;
-        for w in polyline.windows(2) {
-            let seg_len = (w[1] - w[0]).length();
-            if s <= acc + seg_len {
-                let t = ((s - acc) / seg_len).clamp(0.0, 1.0);
-                let p = w[0] + (w[1] - w[0]) * t;
-                // Slightly larger radius (was 2.2 × scale) so
-                // the dot is unambiguous at low canvas zoom.
-                painter.circle_filled(p, 2.6 * scale, dot_color);
+        // `s` increases monotonically, so advance the segment cursor once
+        // rather than rescanning the whole polyline for every dot. This is
+        // O(segments + dots), not O(segments × dots), for long routed wires.
+        while segment_index + 1 < polyline.len() {
+            let seg_len = (polyline[segment_index + 1] - polyline[segment_index]).length();
+            if s <= segment_start + seg_len || segment_index + 2 >= polyline.len() {
+                let t = if seg_len > f32::EPSILON {
+                    ((s - segment_start) / seg_len).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let p = polyline[segment_index]
+                    + (polyline[segment_index + 1] - polyline[segment_index]) * t;
+                painter.circle_filled(p, FLOW_DOT_RADIUS_PX * scale, dot_color);
                 break;
             }
-            acc += seg_len;
+            segment_start += seg_len;
+            segment_index += 1;
         }
         s += spacing;
     }

@@ -1,7 +1,8 @@
 //! Projection task management and polling.
 
 use super::super::projection::{
-    project_scene, projection_relevant_source_hash, recover_edges_from_ast,
+    project_scene, projection_relevant_source_hash, recover_edges_from_ast, target_unit_instance,
+    ProjectedScene,
 };
 use super::super::{
     active_doc_from_world_ctx, decorations, render_target_ctx, CanvasDiagramState,
@@ -43,6 +44,10 @@ pub(crate) fn poll_and_swap_projection(
                 "[CanvasDiagram] projection exceeded {:.1}s deadline — cancelled.",
                 t.deadline.as_secs_f32()
             );
+            docstate.projection_error = Some(format!(
+                "diagram projection exceeded its {:.1}s time limit; the source may be too large or unresolved",
+                t.deadline.as_secs_f32()
+            ));
         }
         docstate.projection_task = None;
         if let Some(g) = current_gen_for_deadline {
@@ -51,27 +56,51 @@ pub(crate) fn poll_and_swap_projection(
     }
 
     let done_task = docstate.projection_task.as_mut().and_then(|t| {
-        t.task.poll_once().map(|scene| {
+        t.task.poll_once().map(|projected| {
             (
                 t.gen_at_spawn,
                 t.doc_at_spawn,
                 t.target_at_spawn.clone(),
                 t.source_hash,
-                scene,
+                projected,
             )
         })
     });
 
-    let done_task = done_task.and_then(|(gen, doc, target, source_hash, scene)| {
+    let done_task = done_task.and_then(|(gen, doc, target, source_hash, projected)| {
         if gen < docstate.canvas_acked_gen {
             docstate.projection_task = None;
             None
         } else {
-            Some((gen, doc, target, source_hash, scene))
+            Some((gen, doc, target, source_hash, projected))
         }
     });
 
-    if let Some((gen, task_doc, target, source_hash, scene)) = done_task {
+    if let Some((gen, task_doc, target, source_hash, projected)) = done_task {
+        let projected = match projected {
+            Ok(projected) => projected,
+            Err(error) => {
+                bevy::log::error!(
+                    "[CanvasDiagram] projection failed for target {:?}: {}",
+                    target,
+                    error
+                );
+                docstate.projection_task = None;
+                docstate.target_unit_instance = None;
+                docstate.projection_error = Some(error);
+                docstate.canvas.scene = Scene::new();
+                docstate.canvas.selection.clear();
+                docstate.last_seen_gen = gen;
+                docstate.last_seen_target = target;
+                docstate.last_seen_source_hash = source_hash;
+                ui.ctx().request_repaint();
+                return;
+            }
+        };
+        let ProjectedScene {
+            scene,
+            target_unit_instance: projected_target_unit_instance,
+        } = projected;
         bevy::log::info!(
             "[CanvasDiagram] poll_done gen={} target={:?} new_scene_nodes={} old_scene_nodes={}",
             gen,
@@ -80,6 +109,8 @@ pub(crate) fn poll_and_swap_projection(
             docstate.canvas.scene.node_count(),
         );
         docstate.projection_task = None;
+        docstate.target_unit_instance = projected_target_unit_instance;
+        docstate.projection_error = None;
         if scene.node_count() == 0 && docstate.canvas.scene.node_count() > 0 {
             docstate.last_seen_gen = gen;
             docstate.last_seen_target = target;
@@ -372,6 +403,7 @@ fn spawn_projection_task(
         if docstate.last_seen_target != target_class {
             docstate.last_seen_gen = 0;
         }
+        docstate.projection_error = None;
 
         let bg_handle = docstate.background_diagram.clone();
         let diag =
@@ -393,6 +425,10 @@ fn spawn_projection_task(
     let cancel_for_task = std::sync::Arc::clone(&cancel);
     let target_for_log = target_class.clone();
     let source_hash = projection_relevant_source_hash(&source);
+    let root_model_name = crate::state::simulator_for_ctx(ctx, doc_id)
+        .and_then(|entity| ctx.get::<crate::ModelicaModel>(entity))
+        .map(|model| model.model_name.clone())
+        .or_else(|| crate::ast_extract::extract_model_name_from_ast(ast_arc.as_ref()));
     let label = match &target_class {
         Some(t) => format!("Projecting {t}"),
         None => "Projecting…".to_string(),
@@ -403,7 +439,7 @@ fn spawn_projection_task(
     // the panel level; we hold the threaded `state` directly). The bus
     // and the canvas state are disjoint, so this is safe.
     let task = ctx.resource_scope::<lunco_workbench::status_bus::StatusBus, _>(|_ctx, bus| {
-        lunco_workbench::tracked_task::spawn_tracked_cancellable(
+        lunco_workbench::tracked_task::spawn_tracked_cancellable_result(
             bus,
             lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
             "projection",
@@ -412,7 +448,10 @@ fn spawn_projection_task(
             async move {
                 use std::sync::atomic::Ordering;
                 if cancel_for_task.load(Ordering::Relaxed) {
-                    return Scene::new();
+                    return Ok(ProjectedScene {
+                        scene: Scene::new(),
+                        target_unit_instance: None,
+                    });
                 }
                 futures_lite::future::yield_now().await;
                 let ast_for_recover = std::sync::Arc::clone(&ast_arc);
@@ -423,13 +462,19 @@ fn spawn_projection_task(
                         max_nodes,
                         target_for_log.as_deref(),
                         &layout,
-                    )
-                    .unwrap_or_default();
+                    )?;
                 futures_lite::future::yield_now().await;
                 recover_edges_from_ast(&ast_for_recover, &mut diagram);
                 futures_lite::future::yield_now().await;
                 let (scene, _) = project_scene(&diagram);
-                scene
+                Ok(ProjectedScene {
+                    scene,
+                    target_unit_instance: target_unit_instance(
+                        &ast_for_recover,
+                        root_model_name.as_deref().unwrap_or_default(),
+                        target_for_log.as_deref(),
+                    ),
+                })
             },
         )
     });

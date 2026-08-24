@@ -1321,10 +1321,18 @@ impl ApiQueryProvider for DescribeModelProvider {
         // [`ModelicaEngineHandle`]. The engine is kept in sync with
         // the document registry by `drive_engine_sync` so this query
         // sees every open document without a per-call upsert loop.
-        let inherited_members = world
+        let inherited_members = match world
             .get_resource::<crate::engine_resource::ModelicaEngineHandle>()
-            .map(|handle| handle.lock().inherited_members_typed(short))
-            .unwrap_or_default();
+            .and_then(crate::engine_resource::ModelicaEngineHandle::try_lock)
+        {
+            Some(mut engine) => engine.inherited_members_typed(short),
+            None => {
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    "Modelica engine is still indexing; retry DescribeModel",
+                );
+            }
+        };
 
         ApiResponse::ok(serde_json::json!({
             "doc_id": doc_id.raw(),

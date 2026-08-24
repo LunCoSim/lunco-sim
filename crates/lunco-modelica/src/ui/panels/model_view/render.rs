@@ -255,11 +255,9 @@ impl InstancePanel for ModelViewPanel {
                             .color(theme.tokens.warning)
                             .size(12.0),
                         );
-                        if !generated_document {
-                            ui.add_space(ui.available_width() - 170.0);
-                            if ui.button("Duplicate to edit").clicked() {
-                                banner_duplicate_clicked = true;
-                            }
+                        ui.add_space(ui.available_width() - 170.0);
+                        if ui.button("Duplicate to edit").clicked() {
+                            banner_duplicate_clicked = true;
                         }
                     });
                 });
@@ -978,54 +976,65 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             return;
         };
         let document = host.document();
+        let Some(ast) = document.strict_ast() else {
+            return;
+        };
         let display = document.origin().display_name();
         let from_path = display.strip_prefix("msl://").map(|s| s.to_string());
-        let short = document
-            .strict_ast()
-            .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
-            .unwrap_or_default();
+        let short = crate::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
+        let Some(class) = crate::ast_extract::find_class_by_short_name(&ast, &short) else {
+            return;
+        };
         let qualified = from_path.unwrap_or_else(|| short.clone());
 
         let mut qpath = qualified.clone();
         if !qpath.contains('.') {
-            if let Some(ast) = document.strict_ast() {
-                let pkg = ast
-                    .within
-                    .as_ref()
-                    .map(|w| {
-                        w.name
-                            .iter()
-                            .map(|t| t.text.as_ref())
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    })
-                    .unwrap_or_default();
-                if !pkg.is_empty() {
-                    qpath = format!("{pkg}.{qpath}");
-                }
+            let pkg = ast
+                .within
+                .as_ref()
+                .map(|w| {
+                    w.name
+                        .iter()
+                        .map(|t| t.text.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
+                .unwrap_or_default();
+            if !pkg.is_empty() {
+                qpath = format!("{pkg}.{qpath}");
             }
         }
 
-        let (icon, params) = match ctx.resource::<crate::engine_resource::ModelicaEngineHandle>() {
-            Some(handle) => {
-                let mut engine = handle.lock();
-                let icon = crate::annotations::extract_icon_via_engine(&qpath, &mut engine);
-                let params: Vec<(String, String)> = engine
-                    .inherited_members_typed(&qpath)
-                    .into_iter()
-                    .filter(|m| {
-                        matches!(
-                            m.variability,
-                            crate::engine::InheritedVariability::Parameter
-                        )
-                    })
-                    .map(|m| (m.name, m.default_value.unwrap_or_default()))
-                    .collect();
-                (icon, params)
-            }
-            _ => (None, Vec::new()),
-        };
-        (qualified, icon, params)
+        // Icon view is a paint path. It may use a completed background merge,
+        // but it must not synchronously walk Modelica inheritance or wait for
+        // the shared engine mutex. Direct parameters and a local Icon are
+        // available from the already-owned AST; the projection task will
+        // repaint the view when the merged standard icon is ready.
+        let icon = ctx
+            .resource::<crate::engine_resource::ModelicaEngineHandle>()
+            .and_then(|handle| handle.try_cached_icon_for(&qpath))
+            .or_else(|| crate::annotations::extract_icon(&class.annotation));
+        let parameters: Vec<(String, String)> = class
+            .components
+            .iter()
+            .filter(|(_, component)| {
+                matches!(
+                    component.variability,
+                    rumoca_compile::parsing::Variability::Parameter(_)
+                )
+            })
+            .map(|(name, component)| {
+                (
+                    name.clone(),
+                    component
+                        .binding
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        (qualified, icon, parameters)
     };
 
     let painter = ui.painter();
