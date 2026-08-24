@@ -126,7 +126,7 @@ def Xform "DrivetrainParity" (
         }
     )
     {
-        double3 xformOp:translate = (-25.0, 1.0, 120.0)
+        double3 xformOp:translate = (-25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
@@ -142,7 +142,7 @@ def Xform "DrivetrainParity" (
         }
     )
     {
-        double3 xformOp:translate = (25.0, 1.0, 120.0)
+        double3 xformOp:translate = (25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
