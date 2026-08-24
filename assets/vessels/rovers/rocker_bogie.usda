@@ -1315,6 +1315,14 @@ def Xform "RockerBogie" (
                 float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
                 float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
                 float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
+                # These are authored network-boundary observables for the
+                # front-left actuator. Consumers read the typed Electrical
+                # surface; they never depend on generated Modelica member
+                # identifiers, which are implementation details of the
+                # synthesized wrapper.
+                float outputs:motor_electrical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:electrical_power>
+                float outputs:motor_mechanical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:mechanical_power_w>
+                float outputs:motor_terminal_current.connect = </RockerBogie/RockerL/Motor_FL.outputs:terminal_current_a>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 # A member's `output` is only readable on its island scope under a

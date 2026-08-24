@@ -10,11 +10,11 @@
 const PORT_WAIT_S = 30.0;
 const DRIVE_S = 3.0;
 const ZERO_TOL = 1.0e-6;
-const MOTOR = "RockerL_x2f_Motor__FL";
-
-fn member_port(field) {
-    "__member_BatteryEmptyActuator_x2f_Rover_x2f_" + MOTOR + "_" + field
-}
+// These names are authored `Electrical.outputs:*` boundary ports in the USD
+// rover asset. Generated Modelica member identifiers are implementation
+// details and are not a scenario contract.
+const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
+const MOTOR_MECHANICAL_POWER = "motor_mechanical_power";
 
 fn on_start(me) {
     this.t = 0.0;
@@ -47,8 +47,8 @@ fn on_tick(me) {
     }
 
     this.drained = get(this.elec, "battery_drained");
-    let power = get(this.elec, member_port("electrical_power"));
-    let drive_power = get(this.elec, member_port("mechanical_power_w"));
+    let power = get(this.elec, MOTOR_ELECTRICAL_POWER);
+    let drive_power = get(this.elec, MOTOR_MECHANICAL_POWER);
 
     if this.phase == "wait" {
         if this.drained == () || power == () || drive_power == () {

@@ -4784,22 +4784,9 @@ pub(crate) fn install(app: &mut App) {
             .run_if(telemetry_projection_index_changed)
             .in_set(CosimUpdateSet::Projection),
     );
-    // Domain projection must publish the generated wrapper and its
-    // member-output layout before authored telemetry declarations are
-    // attached. Otherwise a member declaration is mistaken for a standalone
-    // port and produces the duplicate/silent channel pair. This system is
-    // gated on actual projection work, so the steady state has no full query.
-    app.add_systems(
-        Update,
-        project_usd_telemetry
-            .after(mark_usd_telemetry_projection_index_dirty)
-            .run_if(telemetry_projection_needed)
-            .in_set(CosimUpdateSet::Projection),
-    );
     app.add_systems(
         Update,
         crate::domain_projection::sync_generated_network_documents
-            .after(project_usd_telemetry)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
@@ -4846,6 +4833,15 @@ pub(crate) fn install(app: &mut App) {
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             seed_usd_input_defaults,
             dispatch_loaded_modelica_sources,
+            // The wrapper publishes the generic SimComponent surface and the
+            // authored output contract in this same lifecycle transaction.
+            // Project authored telemetry only after that publication, so the
+            // fixed-step sampler never observes a generated endpoint between
+            // its Modelica identity and its public port surface.
+            project_usd_telemetry
+                .after(wrap_modelica_into_simcomponent)
+                .after(mark_usd_telemetry_projection_index_dirty)
+                .run_if(telemetry_projection_needed),
         )
             // Rewire commands must land before the wrapper query, and the
             // wrapper's component insertion must land before defaults are

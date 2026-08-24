@@ -7,10 +7,9 @@
 //   /SolarDomainNestedRef/Direct       + solar, scene → base        (one arc)
 //   /SolarDomainNestedRef/Nested       + solar, scene → profile → base (two arcs)
 //
-// WHAT IS READ. The generated island's ports, off the `Electrical` scope.
-// Authored boundary outputs keep names such as `soc` and `solar_power`; a
-// member-owned causal output uses the explicit `__member_` alias. An island
-// that never steps publishes no port at all, so absence is the signal.
+// WHAT IS READ. The authored Electrical boundary ports, off the `Electrical`
+// scope. An island that never steps publishes no port at all, so absence is
+// the signal.
 //
 // WHAT THIS RIG ESTABLISHED, in the order the layers came off:
 //
@@ -42,42 +41,24 @@
 //
 // Verdict: emit("SOLAR_DOMAIN_NESTED_REF", "PASS"|"FAIL").
 
-/// A generated island output name.
-///
-/// Network boundary outputs retain their authored names. Causal outputs that
-/// remain member-owned use the synthesizer's explicit `__member_` alias over
-/// the full USD path; a raw `Member.field` spelling is not a runtime contract.
-fn port_name(rover, member, field) {
-    if member == "Battery" && field == "soc_out" { return "soc"; }
-    if member == "SolarPanel" && field == "power_out" { return "solar_power"; }
-    "__member_SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "_" + field
-}
+const BATTERY_SOC = "soc";
+const SOLAR_POWER = "solar_power";
+const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
 
-/// Whether an island is stepping — i.e. publishing the member port at all.
-fn island_live(elec, rover, member, field) {
+/// Whether an island is stepping — i.e. publishing the authored boundary port.
+fn island_live(elec, port) {
     if elec < 0 { return false; }
-    get(elec, port_name(rover, member, field)) != ()
+    get(elec, port) != ()
 }
 
-/// A member variable's value, or `0.0` when the port is absent. Only called
-/// after `island_live` has confirmed the island publishes, so a zero here is a
-/// real zero rather than a missing port.
-fn port_or_zero(elec, rover, member, field) {
-    let v = get(elec, port_name(rover, member, field));
+/// A boundary value, or `0.0` when the port is absent. Only called after
+/// `island_live` has confirmed the island publishes, so a zero here is a real
+/// zero rather than a missing port.
+fn port_or_zero(elec, port) {
+    let v = get(elec, port);
     if v == () { 0.0 } else { v }
 }
 
-/// The front-left motor of a rocker-bogie. One motor is enough to witness that
-/// demand reached the island: all six carry the same two demand inputs, so a
-/// wiring break that starved one starves the side.
-///
-/// ⚠ `Motor__FL`, with TWO underscores. The prim-path → Modelica-identifier
-/// escaping is total, not just a slash substitution: `/` becomes `_x2f_` and a
-/// literal `_` becomes `__`, so that no two distinct prim paths can collide on
-/// one identifier. `Battery` and `SolarPanel` carry no underscore and hide this;
-/// every motor has one. Spelling it `Motor_FL` names a port that does not exist,
-/// which reads back exactly like an island that failed to publish.
-const MOTOR = "RockerL_x2f_Motor__FL";
 const ENVIRONMENT_WARMUP_S = 1.0;
 
 fn on_start(me) {
@@ -143,9 +124,9 @@ fn on_tick(me) {
         return;
     }
 
-    let b_live = island_live(this.b_elec, "BatteryOnly", "Battery", "soc_out");
-    let d_live = island_live(this.d_elec, "Direct", "SolarPanel", "power_out");
-    let n_live = island_live(this.n_elec, "Nested", "SolarPanel", "power_out");
+    let b_live = island_live(this.b_elec, BATTERY_SOC);
+    let d_live = island_live(this.d_elec, SOLAR_POWER);
+    let n_live = island_live(this.n_elec, SOLAR_POWER);
 
     // ── Phase 1: wait for the three islands to publish ───────────────────────
     if this.phase == "wait" {
@@ -195,8 +176,8 @@ fn on_tick(me) {
         if this.t < ENVIRONMENT_WARMUP_S { return; }
 
         // Take the at-rest panel reading, then load the bus.
-        this.d_panel_rest = port_or_zero(this.d_elec, "Direct", "SolarPanel", "power_out");
-        this.n_panel_rest = port_or_zero(this.n_elec, "Nested", "SolarPanel", "power_out");
+        this.d_panel_rest = port_or_zero(this.d_elec, SOLAR_POWER);
+        this.n_panel_rest = port_or_zero(this.n_elec, SOLAR_POWER);
         let panel_line = "[solar-nested] t=" + r2(this.t);
         panel_line += "  battery=up direct=up nested=up";
         panel_line += "  panel@rest direct=" + r2(this.d_panel_rest);
@@ -226,27 +207,23 @@ fn on_tick(me) {
         // different messages: absent means the island never published the motor
         // at all, zero means it published and no current flowed. Collapsing them
         // would report a wiring fault as a solver fault.
-        if !island_live(this.b_elec, "BatteryOnly", MOTOR, "electrical_power") {
+        if !island_live(this.b_elec, MOTOR_ELECTRICAL_POWER) {
             this.done = true;
-            let missing = "the baseline island publishes no `";
-            missing += port_name("BatteryOnly", MOTOR, "electrical_power");
-            missing += "` port at all, so the motor is not a member of the ";
-            missing += "generated model and no draw could be read from any rover";
+            let missing = "the baseline island publishes no `" +
+                          MOTOR_ELECTRICAL_POWER +
+                          "` port at all, so no draw could be read from any rover";
             fail_fast(missing,
                       "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
             return;
         }
 
-        let b = port_or_zero(this.b_elec, "BatteryOnly", MOTOR, "electrical_power");
-        let d = port_or_zero(this.d_elec, "Direct", MOTOR, "electrical_power");
-        let n = port_or_zero(this.n_elec, "Nested", MOTOR, "electrical_power");
+        let b = port_or_zero(this.b_elec, MOTOR_ELECTRICAL_POWER);
+        let d = port_or_zero(this.d_elec, MOTOR_ELECTRICAL_POWER);
+        let n = port_or_zero(this.n_elec, MOTOR_ELECTRICAL_POWER);
 
         // One-shot trace of the whole demand chain, printed on the first loaded
-        // tick. When the draw comes back zero this is the line that says WHERE
-        // the demand stopped: at the vehicle, at the island boundary, or at the
-        // motor.
-        // The demand chain, once, on the first loaded tick. When a draw comes back
-        // zero this line says WHERE it stopped, which is three different bugs:
+        // tick. When the draw comes back zero this line says WHERE it stopped:
+        // at the vehicle, at the island boundary, or at the motor.
         // the vessel never took the command (`throttle` 0), the island never
         // received it (`island.drive_left` 0 under a live throttle — the actuator
         // -port read that this rig found broken), or the motor has it and the
@@ -258,8 +235,6 @@ fn on_tick(me) {
             let trace = "[solar-nested] demand chain  rover.throttle=";
             trace += get(this.b_rover, "throttle");
             trace += "  island.drive_left=" + get(this.b_elec, "drive_left");
-            trace += "  motor.demand=";
-            trace += get(this.b_elec, port_name("BatteryOnly", MOTOR, "demand"));
             trace += "  motor.electrical_power=" + b;
             print(trace);
         }
@@ -309,7 +284,7 @@ fn on_tick(me) {
 
     // 2. The panel generates. Read at rest, before attitude enters the picture.
     f.push(t_true(this.d_panel_rest > 0.0,
-        "direct panel power_out at rest = " + r2(this.d_panel_rest) +
+        "direct " + SOLAR_POWER + " at rest = " + r2(this.d_panel_rest) +
         "W, expected > 0"));
 
     // 3. Arc count is a SEPARATE claim from whether solar works at all, asserted
@@ -317,7 +292,7 @@ fn on_tick(me) {
     //    not hidden behind a failure both rovers share. Same component, same
     //    nameplate, same attitude at rest — the numbers must agree.
     f.push(t_rel(this.n_panel_rest, this.d_panel_rest, 1.0,
-        "nested panel power_out at rest (" + r2(this.n_panel_rest) +
+        "nested " + SOLAR_POWER + " at rest (" + r2(this.n_panel_rest) +
         "W) and direct (" + r2(this.d_panel_rest) + "W) disagree — same " +
         "component, same nameplate, so the reference-arc count has started to " +
         "matter, which it never has at any earlier stage of this rig"));

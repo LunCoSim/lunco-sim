@@ -2367,6 +2367,12 @@ pub fn project_domain_islands(
         // off disk or out of this emitter.
         let interface = parse_model_interface(&source, "usd-network-projection.mo");
         let compiled_name = interface.model_name.unwrap_or_else(|| model_name.clone());
+        // A generated wrapper exposes both authored network boundaries and the
+        // topology-derived member output aliases used by authored telemetry.
+        // Publish the complete generated interface before the first solver
+        // snapshot; otherwise a valid USD declaration is indistinguishable
+        // from a missing port during the compile-to-run interval.
+        let declared_output_ports = interface.outputs.clone();
         let session_id = installed_model.map_or(1, |model| model.session_id + 1);
         let doc_uri = format!("generated://{model_name}.mo");
         let mut model = ModelicaModel {
@@ -2475,16 +2481,13 @@ pub fn project_domain_islands(
             // wrapper's port surface instead of classifying the interval as a
             // missing authored port.
             lunco_core::PortSurfacePending,
-            // The same USD-declares / compiler-confirms contract the per-prim
-            // program path has carried all along: the network's boundary is an
-            // authored promise, and `validate_usd_modelica_port_contracts` is
-            // what turns a promise the DAE does not keep into one durable,
+            // The generated interface is the compiler-confirmed contract for
+            // this wrapper. It includes authored network boundaries and the
+            // topology-derived member aliases that USD telemetry may target;
+            // validation turns any DAE discrepancy into one durable,
             // actionable error instead of an island that steps and publishes
-            // nothing.
-            UsdModelicaPortContract::new(
-                synthesized.inputs.iter().cloned(),
-                synthesized.outputs.iter().cloned(),
-            ),
+            // an incomplete surface.
+            UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),
             crate::cosim::UsdModelicaSchedule {
                 communication_period_secs: synthesized.communication_period_secs,
             },

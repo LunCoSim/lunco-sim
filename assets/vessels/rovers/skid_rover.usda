@@ -600,6 +600,11 @@ def Xform "SkidRover" (
                 float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>
                 float outputs:battery_charge_power.connect = </SkidRover/Battery.outputs:charge_power_w>
                 float outputs:battery_discharge_power.connect = </SkidRover/Battery.outputs:discharge_power_w>
+                # Typed Electrical boundary observables for generic consumers.
+                # The generated member aliases remain an implementation
+                # surface; authored readers use these USD connections.
+                float outputs:motor_electrical_power.connect = </SkidRover/Motor_FL.outputs:electrical_power>
+                float outputs:motor_terminal_current.connect = </SkidRover/Motor_FL.outputs:terminal_current_a>
                 # Forward each motor's solved `heat` to the electrical boundary so
                 # the thermal island can source it as a cross-domain SimConnection.
                 float outputs:motor_heat_FL.connect = </SkidRover/Motor_FL.outputs:heat>

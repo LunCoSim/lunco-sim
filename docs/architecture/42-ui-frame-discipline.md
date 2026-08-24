@@ -103,7 +103,10 @@ The same ownership rule applies to the measured presentation paths:
 - **USD telemetry projection** keeps its generated-wrapper port map and
   domain-member index in a projection-owned resource. The projector is
   scheduled only while an unprojected prim or a changed generated wrapper
-  exists; steady frames do not rebuild maps or clone authored path keys.
+  exists, and runs after Wiring has published that wrapper's
+  `DeclaredOutputPorts`. Steady frames do not rebuild maps or clone authored
+  path keys, and compile-time wrapper publication cannot be mistaken for a
+  missing telemetry port.
 - **Graphs** retain the history-to-plot point buffer in the visualization
   owner, keyed by the history fingerprint. A plot host may clone points at the
   `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry

@@ -83,6 +83,13 @@ remaining constrained to the same composed members and public boundary. The gene
 source exists only at runtime; USD remains the authored source of assembly truth and
 Modelica remains the equation language.
 
+The generated wrapper publishes its complete parsed output interface through the shared
+`DeclaredOutputPorts` contract before the solver returns its first sample. That interface includes
+the topology-derived member aliases selected by the authored synthesizer, so a USD telemetry
+declaration on a member can bind during compilation without depending on a solver-name heuristic
+or a second channel path. Live values still come only from `SimComponent.outputs`; no zero is
+fabricated for an unsolved output.
+
 ```usd
 def Xform "Battery" (
     prepend references = @lunco://components/power/battery.usda@</Battery>
