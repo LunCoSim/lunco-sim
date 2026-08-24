@@ -36,6 +36,10 @@ pub struct IconNodeData {
     /// `extends` chain. `None` only when the class has literally no
     /// Icon in inheritance — then the visual falls back to a label box.
     pub icon_graphics: Option<crate::annotations::Icon>,
+    /// Shared resolver state. Missing/loading classes render a diagnostic
+    /// card rather than an indistinguishable generic component.
+    pub resolution: crate::index::ClassResolutionState,
+    pub resolution_message: Option<String>,
     /// Decoded `Diagram(graphics={...})` annotation, populated only
     /// for connector classes that author one. When set the renderer
     /// uses this instead of `icon_graphics` — MSL signal connectors
@@ -106,6 +110,8 @@ pub(super) struct IconNodeVisual {
     /// classes show their authored graphics instead of falling back
     /// to a generic placeholder.
     pub(super) icon_graphics: Option<crate::annotations::Icon>,
+    pub(super) resolution: crate::index::ClassResolutionState,
+    pub(super) resolution_message: Option<String>,
     /// Conditional component flag — render dimmed.
     pub(super) is_conditional: bool,
     /// Pre-formatted `(parameter_name, value)` pairs for `%paramName`
@@ -141,6 +147,38 @@ pub(super) struct IconNodeVisual {
     pub(super) port_connector_icons: Vec<Option<crate::annotations::Icon>>,
 }
 
+fn painter_rect_diagnostic(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    title: &str,
+    message: &str,
+    accent: egui::Color32,
+    fill: egui::Color32,
+    text: egui::Color32,
+) {
+    painter.rect_filled(rect, 6.0, fill);
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(1.5, accent),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.center().y - 8.0),
+        egui::Align2::CENTER_CENTER,
+        title,
+        egui::FontId::proportional(11.0),
+        accent,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.center().y + 10.0),
+        egui::Align2::CENTER_CENTER,
+        message,
+        egui::FontId::proportional(8.0),
+        text,
+    );
+}
+
 impl NodeVisual for IconNodeVisual {
     fn draw(&self, ctx: &mut DrawCtx, node: &CanvasNode, selected: bool) {
         let r = ctx
@@ -170,6 +208,32 @@ impl NodeVisual for IconNodeVisual {
         let canvas_clip = ctx.ui.clip_rect();
         let clipped_painter = ctx.ui.painter().clone().with_clip_rect(canvas_clip);
         let theme_snap = canvas_theme_from_ctx(ctx.ui.ctx());
+        if !matches!(
+            self.resolution,
+            crate::index::ClassResolutionState::Resolved
+        ) {
+            let (title, color) = match self.resolution {
+                crate::index::ClassResolutionState::Loading => {
+                    ("Loading class", theme_snap.warning_stroke)
+                }
+                crate::index::ClassResolutionState::Missing => {
+                    ("Missing class", theme_snap.error_stroke)
+                }
+                crate::index::ClassResolutionState::Resolved => unreachable!(),
+            };
+            painter_rect_diagnostic(
+                &clipped_painter,
+                rect,
+                title,
+                self.resolution_message
+                    .as_deref()
+                    .unwrap_or("resolver did not provide a diagnostic"),
+                color,
+                theme_snap.card_fill,
+                theme_snap.type_label,
+            );
+            return;
+        }
         // Conditional components (`Component X if cond`) — render at
         // reduced opacity so every primitive (icon shapes, text,
         // port markers) inherits the dimming. Matches OMEdit/Dymola

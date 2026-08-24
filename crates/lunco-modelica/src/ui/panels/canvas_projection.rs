@@ -20,6 +20,29 @@ use std::collections::HashMap;
 
 use crate::visual_diagram::{msl_class_library, VisualDiagram};
 
+fn resolved_engine_class_entry(qualified: &str) -> crate::index::ClassEntry {
+    crate::index::ClassEntry {
+        name: qualified.to_string(),
+        kind: crate::index::ClassKind::Model,
+        source_range: None,
+        extends: Vec::new(),
+        description: String::new(),
+        children: Vec::new(),
+        icon: None,
+        documentation: (None, None),
+        equation_count: 0,
+        partial: false,
+        experiment: None,
+        ports: Vec::new(),
+        parameters: Vec::new(),
+        diagram_graphics: None,
+        icon_text: None,
+        category: "User".to_string(),
+        resolution: crate::index::ClassResolutionState::Resolved,
+        resolution_message: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Design Tokens — all visual constants live here (Tunability Mandate).
 // ---------------------------------------------------------------------------
@@ -143,18 +166,54 @@ fn build_visual_diagram_from_scan(
     layout: &DiagramAutoLayoutSettings,
 ) -> VisualDiagram {
     let mut diagram = VisualDiagram::default();
-    let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
-        msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
+    let indexed_library = msl_class_library();
+    let indexed_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> = indexed_library
+        .iter()
+        .map(|c| (c.name.as_str(), c))
+        .collect();
 
     for (idx, comp) in scanned.iter().enumerate() {
-        // Only render components whose type resolves against the MSL
-        // index. Unresolved types stay in the source — the user sees
-        // them in the code editor and the parse-error badge — but
-        // aren't rendered here because we don't have port info for
-        // an unknown type.
-        let Some(def) = msl_lookup_by_path.get(comp.type_name.as_str()).cloned() else {
-            continue;
+        // The scan fallback uses the same indexed-library + shared-engine
+        // resolver as the AST path. A native bundled class is not required to
+        // appear in the MSL palette, and an unresolved type remains visible as
+        // a diagnostic node instead of disappearing from the canvas.
+        let mut def = indexed_lookup_by_path
+            .get(comp.type_name.as_str())
+            .cloned()
+            .cloned()
+            .or_else(|| {
+                let handle = crate::engine_resource::global_engine_handle()?;
+                let mut engine = handle.lock();
+                engine
+                    .has_class(&comp.type_name)
+                    .then(|| resolved_engine_class_entry(&comp.type_name))
+            })
+            .unwrap_or_else(|| {
+                let mut missing = resolved_engine_class_entry(&comp.type_name);
+                missing.resolution = match crate::class_cache::class_availability(&comp.type_name) {
+                    crate::class_cache::ClassAvailability::Loading => {
+                        crate::index::ClassResolutionState::Loading
+                    }
+                    crate::class_cache::ClassAvailability::Missing
+                    | crate::class_cache::ClassAvailability::Ready => {
+                        crate::index::ClassResolutionState::Missing
+                    }
+                };
+                missing.resolution_message =
+                    crate::class_cache::class_resolution_message(&comp.type_name).or_else(|| {
+                        Some(format!(
+                            "Modelica class `{}` is not available yet",
+                            comp.type_name
+                        ))
+                    });
+                missing
+            });
+        if def.icon.is_none() {
+            if let Some(handle) = crate::engine_resource::global_engine_handle() {
+                if let Some(icon) = handle.lock().icon_for(&comp.type_name) {
+                    def.icon = Some(icon);
+                }
+            }
         };
 
         // Placement from the typed annotation captured at scan-time
@@ -354,7 +413,7 @@ pub fn import_model_to_diagram_from_ast(
     // Convert ComponentGraph → VisualDiagram
     let mut diagram = VisualDiagram::default();
 
-    // MSL lookup table — keyed by the fully-qualified Modelica path
+    // Indexed library lookup table — keyed by the fully-qualified Modelica path
     // (e.g. `"Modelica.Blocks.Continuous.Integrator"`).
     //
     // Type resolution follows MLS §5.3: a component's `type_name` is
@@ -373,7 +432,7 @@ pub fn import_model_to_diagram_from_ast(
     // reference doesn't resolve via scope or path, we surface it as
     // unresolved (skipped) rather than guess.
     let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
+    let indexed_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
         msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     // Build the active class's import map so we can resolve
@@ -693,8 +752,24 @@ pub fn import_model_to_diagram_from_ast(
         };
         let mut component_def: Option<crate::index::ClassEntry> = resolved_path
             .as_deref()
-            .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
+            .and_then(|p| indexed_lookup_by_path.get(p).map(|d| (*d).clone()))
             .or_else(|| local_classes_by_short.get(type_name).cloned());
+        // Bundled/native classes are indexed in the shared source-aware engine,
+        // not in the MSL palette. A fully qualified reference must therefore
+        // consult that same engine before it becomes a diagnostic node; the
+        // async root loader will cause this projection to run again once the
+        // definition arrives.
+        if component_def.is_none() {
+            if let (Some(path), Some(handle)) = (
+                resolved_path.as_deref(),
+                crate::engine_resource::global_engine_handle(),
+            ) {
+                let mut engine = handle.lock();
+                if engine.has_class(path) {
+                    component_def = Some(resolved_engine_class_entry(path));
+                }
+            }
+        }
         // Scope-chain fallback (MLS §5.3): when the type couldn't be
         // resolved as-given, try prepending each enclosing package
         // of the file's `within` clause + each segment of the
@@ -703,8 +778,8 @@ pub fn import_model_to_diagram_from_ast(
         // references (e.g. inside `Modelica/Blocks/Continuous.mo`,
         // PID's components reference `Blocks.Math.Gain` rather than
         // `Modelica.Blocks.Math.Gain`).
+        let mut resolution_candidates: Vec<String> = Vec::new();
         if component_def.is_none() && !type_name.is_empty() {
-            let mut candidates: Vec<String> = Vec::new();
             // MLS §5.3: walk the enclosing class scopes of the target
             // outward. For target `Modelica.Blocks.Examples.PID_Controller`
             // and a short ref `Sources.Sinc`, candidates include
@@ -719,7 +794,7 @@ pub fn import_model_to_diagram_from_ast(
                 // start at its enclosing package.
                 parts.pop();
                 while !parts.is_empty() {
-                    candidates.push(format!("{}.{}", parts.join("."), type_name));
+                    resolution_candidates.push(format!("{}.{}", parts.join("."), type_name));
                     parts.pop();
                 }
             }
@@ -727,12 +802,12 @@ pub fn import_model_to_diagram_from_ast(
                 let mut parts: Vec<String> =
                     within.name.iter().map(|t| t.text.to_string()).collect();
                 while !parts.is_empty() {
-                    candidates.push(format!("{}.{}", parts.join("."), type_name));
+                    resolution_candidates.push(format!("{}.{}", parts.join("."), type_name));
                     parts.pop();
                 }
             }
-            for cand in &candidates {
-                if let Some(def) = msl_lookup_by_path.get(cand.as_str()) {
+            for cand in &resolution_candidates {
+                if let Some(def) = indexed_lookup_by_path.get(cand.as_str()) {
                     component_def = Some((*def).clone());
                     break;
                 }
@@ -740,26 +815,9 @@ pub fn import_model_to_diagram_from_ast(
             if component_def.is_none() {
                 if let Some(handle) = crate::engine_resource::global_engine_handle() {
                     let mut engine = handle.lock();
-                    for cand in &candidates {
+                    for cand in &resolution_candidates {
                         if engine.has_class(cand.as_str()) {
-                            component_def = Some(crate::index::ClassEntry {
-                                name: cand.to_string(),
-                                kind: crate::index::ClassKind::Model,
-                                source_range: None,
-                                extends: Vec::new(),
-                                description: String::new(),
-                                children: Vec::new(),
-                                icon: None,
-                                documentation: (None, None),
-                                equation_count: 0,
-                                partial: false,
-                                experiment: None,
-                                ports: Vec::new(),
-                                parameters: Vec::new(),
-                                diagram_graphics: None,
-                                icon_text: None,
-                                category: "User".to_string(),
-                            });
+                            component_def = Some(resolved_engine_class_entry(cand));
                             break;
                         }
                     }
@@ -767,13 +825,10 @@ pub fn import_model_to_diagram_from_ast(
             }
         }
 
-        // Last-resort placeholder: if every lookup missed, still
-        // render the component as a labelled rectangle. Without this,
-        // user-defined types that don't resolve (e.g. authored in
-        // the same file but with an unusual scope) silently drop out
-        // of the diagram and the user sees a blank canvas. A bare
-        // placeholder is far better — they can see the wiring and
-        // edit the source to fix the type.
+        // An unresolved type remains visible as an explicit diagnostic node.
+        // It is never represented as a fake resolved class: the source
+        // resolver owns the Loading/Missing distinction and the painter makes
+        // that state actionable in the normal diagram.
         //
         // EXCEPT: scalar variables (per MLS §4.5.4) don't belong on
         // the diagram — OMEdit / Dymola hide them. The graph builder
@@ -802,8 +857,35 @@ pub fn import_model_to_diagram_from_ast(
             continue;
         }
         if component_def.is_none() && !type_name.is_empty() {
-            let leaf = type_name.rsplit('.').next().unwrap_or(type_name);
-            let _ = leaf;
+            let availability = resolution_candidates
+                .iter()
+                .map(|candidate| crate::class_cache::class_availability(candidate))
+                .find(|state| matches!(state, crate::class_cache::ClassAvailability::Loading))
+                .unwrap_or_else(|| {
+                    crate::class_cache::class_availability(
+                        resolved_path.as_deref().unwrap_or(type_name),
+                    )
+                });
+            let (resolution, resolution_message) = match availability {
+                crate::class_cache::ClassAvailability::Loading => (
+                    crate::index::ClassResolutionState::Loading,
+                    Some(format!("resolving Modelica class `{type_name}`")),
+                ),
+                crate::class_cache::ClassAvailability::Missing => (
+                    crate::index::ClassResolutionState::Missing,
+                    Some(
+                        crate::class_cache::class_resolution_message(type_name).unwrap_or_else(
+                            || format!("Modelica class `{type_name}` was not found"),
+                        ),
+                    ),
+                ),
+                crate::class_cache::ClassAvailability::Ready => (
+                    crate::index::ClassResolutionState::Missing,
+                    Some(format!(
+                        "Modelica class `{type_name}` is indexed but its definition is unavailable"
+                    )),
+                ),
+            };
             component_def = Some(crate::index::ClassEntry {
                 name: type_name.to_string(),
                 kind: crate::index::ClassKind::Model,
@@ -821,6 +903,8 @@ pub fn import_model_to_diagram_from_ast(
                 diagram_graphics: None,
                 icon_text: None,
                 category: "User".to_string(),
+                resolution,
+                resolution_message,
             });
         }
 
@@ -1226,6 +1310,8 @@ fn register_local_class(
             diagram_graphics: crate::annotations::extract_diagram(&class_def.annotation),
             icon_text: None,
             category: "Local".to_string(),
+            resolution: crate::index::ClassResolutionState::Resolved,
+            resolution_message: None,
         },
     );
 }
@@ -1262,7 +1348,7 @@ fn extract_local_class_ports(
                 // stall the AsyncCompute pool for tens of seconds.
                 // Misses fall back to defaults; an async warmer
                 // upgrades visuals on the next projection.
-                crate::class_cache::MslLookupMode::Cached,
+                crate::class_cache::ClassLookupMode::Cached,
             );
         if !causality_is_port && !type_is_connector {
             continue;
@@ -1285,18 +1371,19 @@ fn extract_local_class_ports(
         // Off-thread projection: cache-only. Misses → default icon /
         // default port glyph. Pre-warmer (separate background task)
         // populates the cache; subsequent projection upgrades visuals.
-        let msl_mode = crate::class_cache::MslLookupMode::Cached;
+        let lookup_mode = crate::class_cache::ClassLookupMode::Cached;
         let class = crate::diagram::resolve_class_by_scope_pub(
             &sub_type,
             class_qualified_path,
             ast,
-            msl_mode,
+            lookup_mode,
         );
         let (color, kind, flow_vars) = class
             .as_ref()
             .map(|c| {
                 let color = connector_icon_color(c);
-                let (kind, flow_vars) = classify_connector(c, class_qualified_path, ast, msl_mode);
+                let (kind, flow_vars) =
+                    classify_connector(c, class_qualified_path, ast, lookup_mode);
                 (color, kind, flow_vars)
             })
             .unwrap_or_default();
@@ -1333,7 +1420,7 @@ fn classify_connector(
     class: &rumoca_compile::parsing::ast::ClassDef,
     owner_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> (
     crate::visual_diagram::PortKind,
     Vec<crate::visual_diagram::FlowVarMeta>,
@@ -1386,12 +1473,12 @@ fn classify_connector(
             &base_name,
             owner_qualified_path,
             ast,
-            msl_mode,
+            lookup_mode,
         ) else {
             continue;
         };
         let (base_kind, base_flows) =
-            classify_connector(&base_class, owner_qualified_path, ast, msl_mode);
+            classify_connector(&base_class, owner_qualified_path, ast, lookup_mode);
         for fv in base_flows {
             if !flow_vars.iter().any(|f| f.name == fv.name) {
                 flow_vars.push(fv);

@@ -145,6 +145,13 @@ pub(crate) fn render_diagram_canvas(
     // `request_reproject_all` (the MSL-ready handler), so it stays
     // MSL-specific.
     {
+        let generated_document = active_doc
+            .and_then(|doc| {
+                ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+                    .and_then(|registry| registry.host(doc))
+                    .map(|host| crate::state::is_generated_document(host.document()))
+            })
+            .unwrap_or(false);
         let msl_state = ctx.resource::<lunco_assets::msl::MslLoadState>();
         let msl_pending = msl_state.map(|s| s.is_pending()).unwrap_or(true);
         // Live load detail (phase + %) while the bundle is still arriving,
@@ -165,7 +172,7 @@ pub(crate) fn render_diagram_canvas(
                 docstate.force_reproject,
             )
         };
-        if (msl_pending || reproject_pending) && has_content {
+        if !generated_document && (msl_pending || reproject_pending) && has_content {
             // A compile or run dispatched while MSL is still loading can't
             // finish until the standard library installs (the worker parse
             // path needs MSL resident — but the worker queues it and runs it

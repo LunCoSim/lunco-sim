@@ -1,11 +1,10 @@
-//! Engine-backed MSL class loader.
+//! Engine-backed source-aware Modelica class loader.
 //!
-//! Routes all MSL class lookups through the workbench's single
+//! Routes all class lookups through the workbench's single
 //! [`crate::engine_resource::ModelicaEngineHandle`] (workspace +
-//! libraries unified). Misses on `peek_or_load_msl_class_blocking` resolve a
-//! qualified name to a file via [`crate::library_fs`], read source
-//! bytes from `lunco_assets::msl::global_msl_source`, and feed the
-//! result into the workspace engine's session via `add_document`.
+//! libraries unified). Misses on `peek_or_load_class_blocking` resolve a
+//! qualified name to either a bundled package or a library file and
+//! feeds the result into the workspace engine's session.
 //!
 //! ## Why one engine
 //!
@@ -34,7 +33,7 @@ use std::sync::Arc;
 
 use crate::library_fs::{locate_library_file, resolve_class_path_indexed};
 
-/// MSL class-lookup behaviour for resolver helpers in `diagram` and
+/// Class-lookup behaviour for resolver helpers in `diagram` and
 /// `canvas_projection`. Replaces the `&dyn Fn(&str) -> Option<...>`
 /// parameter that used to thread one of two static fn pointers
 /// through every helper.
@@ -42,12 +41,9 @@ use crate::library_fs::{locate_library_file, resolve_class_path_indexed};
 /// Both modes route through the workspace [`crate::engine::ModelicaEngine`]
 /// (engine consolidation) — they differ only in what to do on a miss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MslLookupMode {
-    /// Cache-only: a miss returns `None`. Use from off-thread tasks
-    /// that must not block on rumoca parses (notably the canvas
-    /// projection task on `AsyncComputeTaskPool`). The icon
-    /// resolver falls back to defaults until a later edit / drill-in
-    /// warms the engine session.
+pub enum ClassLookupMode {
+    /// Cache-only: a miss returns `None`. Use from off-thread tasks that must
+    /// not block on rumoca parses.
     Cached,
     /// Load on miss: the call blocks the thread to read + parse the
     /// missing file into the engine session. Safe from the main
@@ -56,36 +52,98 @@ pub enum MslLookupMode {
     Loading,
 }
 
-impl MslLookupMode {
+/// Availability reported by the shared source-root resolver. Rendering uses
+/// this to distinguish a class that is still loading from one that is truly
+/// absent; neither state is allowed to masquerade as a resolved class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassAvailability {
+    Ready,
+    Loading,
+    Missing,
+}
+
+pub fn class_availability(qualified: &str) -> ClassAvailability {
+    let Some(handle) = crate::engine_resource::global_engine_handle() else {
+        return ClassAvailability::Loading;
+    };
+    let (has_class, has_root, root_failed) = {
+        let mut engine = handle.lock();
+        let has_class = engine.has_class(qualified);
+        let root = qualified.split('.').next().unwrap_or(qualified);
+        let has_root = engine.has_class(root);
+        let root_failed = engine.library_root_failure(root).is_some();
+        (has_class, has_root, root_failed)
+    };
+    if has_class {
+        return ClassAvailability::Ready;
+    }
+    let root = qualified.split('.').next().unwrap_or(qualified);
+    if lunco_assets::models::package_roots_live()
+        .iter()
+        .any(|candidate| candidate == root)
+    {
+        // A qualified reference is itself a normal Modelica search-path
+        // request. If the bundled root is not resident yet, start the shared
+        // asynchronous load here; callers do not need generated-document
+        // metadata or a library-specific prewarm branch to make a class
+        // visible in the editor.
+        if !root_failed && !has_root {
+            let _ = handle.ensure_library_root_async(root);
+        }
+        return if root_failed || has_root {
+            ClassAvailability::Missing
+        } else {
+            ClassAvailability::Loading
+        };
+    }
+    if resolve_class_path_indexed(qualified).is_some() || locate_library_file(qualified).is_some() {
+        ClassAvailability::Loading
+    } else {
+        ClassAvailability::Missing
+    }
+}
+
+/// Explain a terminal source-root failure to the diagram resolver without
+/// making UI code reach into the engine's private loading state.
+pub fn class_resolution_message(qualified: &str) -> Option<String> {
+    let handle = crate::engine_resource::global_engine_handle()?;
+    let root = qualified.split('.').next().unwrap_or(qualified);
+    let engine = handle.lock();
+    engine
+        .library_root_failure(root)
+        .map(|error| format!("source root `{root}` failed: {error}"))
+}
+
+impl ClassLookupMode {
     /// Resolve `qualified` using this mode's policy.
     pub fn lookup(self, qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
         match self {
-            Self::Cached => peek_msl_class_cached(qualified),
-            Self::Loading => peek_or_load_msl_class_blocking(qualified),
+            Self::Cached => peek_class_cached(qualified),
+            Self::Loading => peek_or_load_class_blocking(qualified),
         }
     }
 }
 
-/// Read MSL source bytes for a relative path, going through the
+/// Read library source bytes for a relative path, going through the
 /// process-wide [`lunco_assets::msl::MslAssetSource`]. Returns
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
-fn read_msl_source_bytes(path: &std::path::Path) -> Option<String> {
+fn read_source_bytes(path: &std::path::Path) -> Option<String> {
     let bytes = lunco_assets::msl::msl_read(path)?;
     String::from_utf8(bytes).ok()
 }
 
-/// Resolve a fully-qualified MSL class name to its `Arc<ClassDef>`
-/// against the workbench's workspace engine. Loads the containing
-/// file into the session on first miss; cheap (HashMap hit) on
+/// Resolve a fully-qualified class name to its `Arc<ClassDef>` against
+/// the workbench's workspace engine. Loads the containing bundled
+/// package or library file on first miss; cheap (HashMap hit) on
 /// every subsequent call once warm.
 ///
-/// Returns `None` if the engine handle isn't installed yet (early
-/// boot) or the file can't be located. Behaviour at the call sites
-/// matches the previous static-MSL-engine implementation: a None
-/// during boot lets icon/connector resolvers fall back to defaults
-/// until MSL lands.
-pub fn peek_or_load_msl_class_blocking(
+/// Bundled package roots are resolved before the MSL filesystem index.
+/// This is the important no-MSL path for generated `LunCo.*` documents:
+/// the normal Modelica source/diagram pipeline can load the native package
+/// and then use the same icon, connector, and inheritance queries as MSL.
+///
+pub fn peek_or_load_class_blocking(
     qualified: &str,
 ) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;
@@ -96,6 +154,22 @@ pub fn peek_or_load_msl_class_blocking(
         let mut engine = handle.lock();
         if engine.has_class(qualified) {
             return engine.class_def(qualified).map(Arc::new);
+        }
+    }
+
+    // Bundled libraries are small source roots and use the engine's
+    // source-aware package loader. They are installed as one root so
+    // cross-file `within` and `extends` resolution remains canonical.
+    if let Some(root) = qualified.split('.').next() {
+        if lunco_assets::models::package_roots_live()
+            .iter()
+            .any(|candidate| candidate == root)
+        {
+            let mut engine = handle.lock();
+            if engine.ensure_library_root(root) {
+                return engine.class_def(qualified).map(Arc::new);
+            }
+            return None;
         }
     }
 
@@ -133,7 +207,7 @@ pub fn peek_or_load_msl_class_blocking(
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let source = read_msl_source_bytes(&path)?;
+                let source = read_source_bytes(&path)?;
                 // Parse standalone without holding the engine lock.
                 // `add_document` would do this internally but inside
                 // the lock; the standalone `parse_to_ast` lets us
@@ -169,7 +243,7 @@ pub fn peek_or_load_msl_class_blocking(
     engine.class_def(qualified).map(Arc::new)
 }
 
-/// Non-blocking variant of [`peek_or_load_msl_class_blocking`] — returns the
+/// Non-blocking variant of [`peek_or_load_class_blocking`] — returns the
 /// `Arc<ClassDef>` if the engine session already holds it, and
 /// `None` *without triggering a load* on a miss.
 ///
@@ -177,9 +251,7 @@ pub fn peek_or_load_msl_class_blocking(
 /// notably the projection task running on Bevy's AsyncComputeTaskPool,
 /// where a sync MSL parse from inside a worker that's already serving
 /// a parent rumoca parse stalls for the projection deadline.
-pub fn peek_msl_class_cached(
-    qualified: &str,
-) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
+pub fn peek_class_cached(qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;
     let mut engine = handle.lock();
     if !engine.has_class(qualified) {

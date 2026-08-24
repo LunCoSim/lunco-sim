@@ -158,7 +158,7 @@ impl ModelicaComponentBuilder {
                     // that stall the AsyncCompute pool. Misses fall
                     // back to default port glyphs; the async warmer
                     // upgrades on the next projection.
-                    crate::class_cache::MslLookupMode::Cached,
+                    crate::class_cache::ClassLookupMode::Cached,
                 );
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id =
@@ -626,7 +626,8 @@ pub fn find_class_by_qualified_name<'a>(
 ///
 /// Resolution order for each `extends` target:
 ///   1. Local lookup inside the same `StoredDefinition`.
-///   2. MSL filesystem index via [`crate::class_cache::peek_or_load_msl_class_blocking`].
+///   2. The shared source-aware library engine via
+///      [`crate::class_cache::peek_or_load_class_blocking`].
 ///   3. Both retried with each enclosing-scope prefix of
 ///      `class_qualified_path`.
 ///
@@ -643,22 +644,22 @@ pub(crate) fn collect_inherited_components(
         class_qualified_path,
         ast,
         depth,
-        crate::class_cache::MslLookupMode::Cached,
+        crate::class_cache::ClassLookupMode::Cached,
     )
 }
 
 /// Same as [`collect_inherited_components`] but takes an explicit
-/// [`crate::class_cache::MslLookupMode`]. Tests pass
-/// [`crate::class_cache::MslLookupMode::Loading`] to load synchronously
+/// [`crate::class_cache::ClassLookupMode`]. Tests pass
+/// [`crate::class_cache::ClassLookupMode::Loading`] to load synchronously
 /// from a non-worker thread; the projection task uses
-/// [`crate::class_cache::MslLookupMode::Cached`] to avoid blocking on
+/// [`crate::class_cache::ClassLookupMode::Cached`] to avoid blocking on
 /// MSL parses inside its task pool.
 pub(crate) fn collect_inherited_components_with(
     class: &ClassDef,
     class_qualified_path: Option<&str>,
     ast: &StoredDefinition,
     depth: u32,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> Vec<(String, Component)> {
     const MAX_DEPTH: u32 = 8;
     let mut out: Vec<(String, Component)> = Vec::new();
@@ -683,7 +684,7 @@ pub(crate) fn collect_inherited_components_with(
 
         // Resolution attempts:
         //   1. Local AST lookup (same file / same package).
-        //   2. *Already-cached* MSL class from `peek_msl_class_cached` —
+        //   2. An *already-cached* library class from `peek_class_cached` —
         //      MUST be cache-only, never trigger a fresh parse here.
         //
         // Why no fresh MSL parse: this function is called inside the
@@ -701,7 +702,7 @@ pub(crate) fn collect_inherited_components_with(
                 found_local = Some((base, cand.clone()));
                 break;
             }
-            if let Some(base_arc) = msl_mode.lookup(cand) {
+            if let Some(base_arc) = lookup_mode.lookup(cand) {
                 found_msl = Some((base_arc, cand.clone()));
                 break;
             }
@@ -729,7 +730,7 @@ pub(crate) fn collect_inherited_components_with(
             // the palette lookup succeeds.
             let mut comp = comp.clone();
             let resolved =
-                resolve_type_in_scope(&comp.type_name.to_string(), &base_qpath, msl_mode);
+                resolve_type_in_scope(&comp.type_name.to_string(), &base_qpath, lookup_mode);
             if let Some(q) = resolved {
                 comp.type_name = rumoca_compile::parsing::ast::Name::from_string(&q);
             }
@@ -740,7 +741,7 @@ pub(crate) fn collect_inherited_components_with(
             Some(&base_qpath),
             &empty_definition,
             depth + 1,
-            msl_mode,
+            lookup_mode,
         ) {
             if breaks.contains(name.as_str()) || seen.contains(&name) {
                 continue;
@@ -759,14 +760,14 @@ pub(crate) fn collect_inherited_components_with(
 /// returned list.
 ///
 /// Falls back to [`extract_component_ports`]'s causality heuristic
-/// when the type can't be resolved (cache cold or non-MSL local
-/// class) — keeps the projection robust on first drill-in before
-/// the pre-warm has populated the cache.
+/// when the type can't be resolved (cache cold or a source-aware
+/// class is still loading) — keeps the projection robust on first
+/// drill-in before the pre-warm has populated the cache.
 fn ports_for_component(
     comp: &Component,
     owner_qualified_path: &str,
     ast: &StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> Vec<ComponentPort> {
     let type_ref = comp.type_name.to_string();
     if type_ref.is_empty() {
@@ -783,7 +784,7 @@ fn ports_for_component(
             hit_qpath = Some(cand.clone());
             break;
         }
-        if let Some(arc) = msl_mode.lookup(cand) {
+        if let Some(arc) = lookup_mode.lookup(cand) {
             found_msl = Some(arc);
             hit_qpath = Some(cand.clone());
             break;
@@ -812,7 +813,7 @@ fn ports_for_component(
     // the type class's whole component list on every port query was a CQ-203
     // hot-path cost (this runs once per component node, per projection).
     let inherited =
-        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, msl_mode);
+        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, lookup_mode);
     let direct_names: std::collections::HashSet<&str> = type_class
         .components
         .iter()
@@ -838,7 +839,7 @@ fn ports_for_component(
         use rumoca_compile::parsing::Causality;
         let is_port = match sub.causality {
             Causality::Input(_) | Causality::Output(_) => true,
-            Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, msl_mode),
+            Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, lookup_mode),
         };
         if !is_port {
             continue;
@@ -861,7 +862,7 @@ fn ports_for_component(
 
 /// Resolve a type reference to a `ClassDef` via the scope chain
 /// rooted at `owner_qualified_path`. Searches the local AST first,
-/// then falls back to the supplied MSL resolver. Returns `None` if
+/// then falls back to the supplied source-aware resolver. Returns `None` if
 /// no candidate path resolves.
 ///
 /// Public so the projector can read connector classes' `Icon`
@@ -871,14 +872,14 @@ pub fn resolve_class_by_scope_pub(
     type_ref: &str,
     owner_qualified_path: &str,
     ast: &StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> Option<std::sync::Arc<ClassDef>> {
     let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
     for cand in &candidates {
         if let Some(c) = find_class_by_qualified_name(ast, cand) {
             return Some(std::sync::Arc::new(c.clone()));
         }
-        if let Some(arc) = msl_mode.lookup(cand) {
+        if let Some(arc) = lookup_mode.lookup(cand) {
             return Some(arc);
         }
     }
@@ -891,9 +892,9 @@ pub fn is_connector_type_pub(
     type_ref: &str,
     owner_qualified_path: &str,
     ast: &StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> bool {
-    is_connector_type(type_ref, owner_qualified_path, ast, msl_mode)
+    is_connector_type(type_ref, owner_qualified_path, ast, lookup_mode)
 }
 
 /// True when `type_ref` resolves to a `connector` class via the
@@ -902,7 +903,7 @@ fn is_connector_type(
     type_ref: &str,
     owner_qualified_path: &str,
     ast: &StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> bool {
     use rumoca_compile::parsing::ClassType;
     if type_ref.is_empty() {
@@ -913,7 +914,7 @@ fn is_connector_type(
         if let Some(c) = find_class_by_qualified_name(ast, cand) {
             return matches!(c.class_type, ClassType::Connector);
         }
-        if let Some(arc) = msl_mode.lookup(cand) {
+        if let Some(arc) = lookup_mode.lookup(cand) {
             return matches!(arc.class_type, ClassType::Connector);
         }
     }
@@ -922,19 +923,19 @@ fn is_connector_type(
 
 /// Resolve a short-form type reference to a fully-qualified path
 /// using a class's scope chain. Returns `None` if no candidate
-/// resolves via the supplied MSL resolver. Already-qualified names
+/// resolves via the supplied source-aware resolver. Already-qualified names
 /// (containing a `.`) are returned unchanged.
 fn resolve_type_in_scope(
     type_ref: &str,
     class_qualified_path: &str,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> Option<String> {
     if type_ref.contains('.') {
         return Some(type_ref.to_string());
     }
     let candidates = scope_chain_candidates(type_ref, Some(class_qualified_path));
     for cand in &candidates {
-        if msl_mode.lookup(cand).is_some() {
+        if lookup_mode.lookup(cand).is_some() {
             return Some(cand.clone());
         }
     }
@@ -1356,7 +1357,7 @@ end Gain;
     #[test]
     fn test_real_msl_pid_has_inherited_u_y() {
         let Some(pid) =
-            crate::class_cache::peek_or_load_msl_class_blocking("Modelica.Blocks.Continuous.PID")
+            crate::class_cache::peek_or_load_class_blocking("Modelica.Blocks.Continuous.PID")
         else {
             eprintln!("MSL cache not materialised — skipping");
             return;
@@ -1367,7 +1368,7 @@ end Gain;
             Some("Modelica.Blocks.Continuous.PID"),
             &ast,
             0,
-            crate::class_cache::MslLookupMode::Loading,
+            crate::class_cache::ClassLookupMode::Loading,
         );
         let names: Vec<&str> = inherited.iter().map(|(n, _)| n.as_str()).collect();
         assert!(

@@ -4,7 +4,7 @@
 //! doc's AST collecting every cross-package type referenced (component
 //! types, extends bases, connector port types). A single
 //! [`bevy::tasks::AsyncComputeTaskPool`] task fans out
-//! [`crate::class_cache::peek_or_load_msl_class_blocking`] for each unique
+//! [`crate::class_cache::peek_or_load_class_blocking`] for each unique
 //! qualified name, then primes the engine's icon resolution by calling
 //! [`crate::engine::ModelicaEngine::icon_for`] for each one.
 //!
@@ -17,7 +17,7 @@
 //! Idempotent and best-effort: re-firing for the same doc is fine
 //! (rumoca's content-hash short-circuits repeated work). Failures
 //! anywhere in the warm task are silent — the projection task's
-//! [`crate::class_cache::MslLookupMode::Cached`] miss path falls back
+//! [`crate::class_cache::ClassLookupMode::Cached`] miss path falls back
 //! to default icons, and the next refresh sees the warmed cache.
 //!
 //! AST-as-source-of-truth: the warmer reads the doc's AST directly
@@ -134,7 +134,7 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
     AsyncComputeTaskPool::get()
         .spawn(async move {
             // **Cache-only warm.** We deliberately do NOT call
-            // `peek_or_load_msl_class_blocking` here — it would parse large
+            // `peek_or_load_class_blocking` here — it would parse large
             // MSL files (200KB+) under the engine mutex, blocking
             // both the projection task and any main-thread query
             // for tens of seconds in dev builds. That regresses the

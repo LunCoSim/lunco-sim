@@ -86,6 +86,52 @@ explicit projection error, never a compiled-schema fallback.
 units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth.
 
+Each policy unit carries both its Modelica class name and its root instance
+name. The shipped facts include a deterministic instance default, but a Rhai
+policy may replace it; Rust validates identifier/collision/uniqueness rules and
+uses the returned name for telemetry mapping. This keeps naming policy out of
+the Rust projector without allowing an invalid runtime address.
+
+The generated visual contract is deliberately ordinary Modelica. The root
+`Icon` is a compact identity mark; its `Diagram` contains placed generated
+unit instances. Each unit has its own compact `Icon` and a `Diagram` containing
+the native LunCo member instances that its equations execute. Member classes
+bring their authored icons and connector placements through the normal class
+resolver. Rust supplies only generic source-aware package loading and the
+metadata needed by the browser (boundary interface versus promoted member
+telemetry); Rhai owns the hierarchy, annotation graphics, and policy-side
+layout so visual changes do not require a Rust rebuild.
+
+The policy boundary is validated as a contract, not merely parsed. Rust strictly
+parses the returned source, requires the requested root class and its authored
+boundary inputs/outputs, requires every policy unit boundary declaration and
+every native member in the unit that owns it, and rejects native members
+declared directly on the root.
+The optional `member_output_aliases` result is also policy-owned: omitted means
+the documented default promotion table, while an explicit array may omit or
+rename known member outputs. Unknown members, outputs, duplicate aliases, and
+missing root declarations are projection errors. This is a generic AST check,
+so changing synthesis policy does not require a Rust emitter branch.
+
+Generated documents are ephemeral runtime views. Their registry origin is
+`Bundled { filename: "generated/<model>.mo" }`, which is the canonical
+generated classifier used by the API and UI. The document is linked to the
+network entity while that projection exists; when the source component is
+removed, the network stops being owned by the synthesizer, or the entity is
+despawned, the generated document and browser metadata are retired. Authored
+Modelica documents keep the ordinary entity-removal behavior and are never
+deleted by this path.
+
+The browser opens generated roots through the normal Modelica document/diagram
+route and exposes the boundary interface, units, member source assets, and
+promoted telemetry in an expandable topology inspector. Bundled class roots
+declared by the synthesis policy load asynchronously through the shared engine;
+the policy result exposes `source_roots` so non-member generated components
+such as the force allocator use the same path. Until completion, the diagram
+renders a visible `Loading class` diagnostic; a genuinely absent class renders
+`Missing class` with the resolver message. A generic placeholder is not a
+successful resolution state.
+
 ## 3. Runtime architecture — background worker
 
 `SimulationSession` (rumoca's solver; it replaced `SimStepper` in rumoca 0.9.20)

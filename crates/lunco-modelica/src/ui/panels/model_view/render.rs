@@ -8,7 +8,7 @@ use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollPolicy
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
-use crate::state::ModelicaDocumentRegistry;
+use crate::state::{is_generated_document, ModelicaDocumentRegistry};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::MODEL_VIEW_KIND;
@@ -223,16 +223,44 @@ impl InstancePanel for ModelViewPanel {
 
         let tab_read_only = crate::state::read_only_for_ctx(ctx, doc);
         if tab_read_only {
+            let generated_document = ctx
+                .resource::<ModelicaDocumentRegistry>()
+                .and_then(|registry| registry.host(doc))
+                .is_some_and(|host| is_generated_document(host.document()));
+            let theme = ctx
+                .resource::<lunco_theme::Theme>()
+                .cloned()
+                .unwrap_or_else(lunco_theme::Theme::dark);
             let mut banner_duplicate_clicked = false;
             egui::Frame::NONE
-                .fill(egui::Color32::from_rgb(60, 48, 20))
+                .fill(theme.tokens.alert_backdrop)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Read-only").color(egui::Color32::from_rgb(220, 200, 120)).size(14.0));
-                        ui.label(egui::RichText::new("Read-only library model — edits won't stick. Duplicate it to your workspace to make changes.").color(egui::Color32::from_rgb(220, 200, 120)).size(12.0));
-                        ui.add_space(ui.available_width() - 170.0);
-                        if ui.button("Duplicate to edit").clicked() { banner_duplicate_clicked = true; }
+                        ui.label(
+                            egui::RichText::new(if generated_document {
+                                "Generated"
+                            } else {
+                                "Read-only"
+                            })
+                            .color(theme.tokens.warning)
+                            .size(14.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(if generated_document {
+                                "Generated from the composed USD network — changes come from the Rhai synthesis policy."
+                            } else {
+                                "Read-only library model — edits won't stick. Duplicate it to your workspace to make changes."
+                            })
+                            .color(theme.tokens.warning)
+                            .size(12.0),
+                        );
+                        if !generated_document {
+                            ui.add_space(ui.available_width() - 170.0);
+                            if ui.button("Duplicate to edit").clicked() {
+                                banner_duplicate_clicked = true;
+                            }
+                        }
                     });
                 });
             if banner_duplicate_clicked {

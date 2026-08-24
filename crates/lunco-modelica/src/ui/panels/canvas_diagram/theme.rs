@@ -26,6 +26,8 @@ pub struct CanvasThemeSnapshot {
     pub select_stroke: egui::Color32,
     pub inactive_stroke: egui::Color32,
     pub icon_only_stroke: egui::Color32,
+    pub warning_stroke: egui::Color32,
+    pub error_stroke: egui::Color32,
     /// When false (default), authored MSL icons render without a
     /// workbench-drawn hairline frame around them. The icon's own
     /// primitives are the bounds. Selection / icon-only / expandable
@@ -51,6 +53,8 @@ impl CanvasThemeSnapshot {
             select_stroke: t.accent,
             inactive_stroke: c.overlay0,
             icon_only_stroke: t.warning,
+            warning_stroke: t.warning,
+            error_stroke: t.error,
             show_authored_icon_border: false,
         }
     }

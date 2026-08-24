@@ -90,14 +90,36 @@ string workaround:
 
 - USD owns the component graph, instances, port names, parameters, and
   connections.
-- The registered generator emits a normal, inspectable, hand-editable Modelica
-  model with stable component names and explicit boundary inputs/outputs.
+- The registered generator emits a normal, inspectable Modelica model with
+  stable component names, policy-owned unit instance names, and explicit boundary inputs/outputs; runtime-generated
+  documents are read-only projections of the authored USD + Rhai policy.
 - The generator is selected by an open domain descriptor/registry, not by a
   Rust `if` for “electrical”, “hydraulics”, or one vehicle.
 - Acausal equations and physical conservation stay inside Modelica. Causal
   cross-domain signals cross the USD boundary as typed ports.
 - Render the generated Modelica icons and connection graph from the same model
   source; do not create a second visual-only network.
+- Keep generated visual synthesis in the selected Rhai policy: standard root /
+  unit `Icon` and `Diagram` annotations, policy-owned placements, and any
+  domain-specific presentation belong there. Rust may provide generic source
+  loading, class resolution, and typed projection metadata, but must not encode
+  a domain poster or duplicate the policy's graph.
+- Keep generated browser metadata explicit: distinguish root boundary inputs and
+  outputs from promoted member telemetry, and expose the generated document as
+  read-only runtime state with a normal Modelica drill-in path.
+- Validate the returned generated source as a generic strict AST contract:
+  exact root name and boundary, complete policy units, native members nested in
+  their owning units, and no direct native members on the root. Treat missing
+  or loading class definitions as explicit resolver states in the canvas, never
+  as a fabricated resolved node.
+- Keep generated document lifetime tied to the projection entity. Classify it by
+  the `generated/` document origin, retire it on removal/despawn, and keep
+authored document cleanup separate. Load bundled source roots asynchronously
+through the policy-declared `source_roots` and shared Modelica engine, then
+reproject from its generic completion signal.
+- Let Rhai own the optional `member_output_aliases` promotion table. Rust may
+  validate known member/output pairs and identifier uniqueness, but must not
+  choose aliases or emit visual source for a policy.
 - A cyclic set of separately co-simulated components is explicit: the runtime
   may report its one-step delay. Do not silence that warning or add a Rhai
   workaround. If zero-delay continuous feedback is required, synthesize one

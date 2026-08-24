@@ -21,9 +21,8 @@
 //!   would block API observers, the sync system, and other panels.
 //! - Async tasks that need to query the engine can clone the
 //!   [`ModelicaEngineHandle`] (it's `Arc`-internal) into the task and
-//!   lock there. The MSL static engine in `class_cache::msl_engine` is
-//!   independent — process-wide and library-only; this handle covers
-//!   the user docs.
+//!   lock there. Bundled and user documents share this source-aware session
+//!   and lifecycle.
 //!
 //! ## Sync semantics
 //!
@@ -80,6 +79,42 @@ impl ModelicaEngineHandle {
     /// the engine state is then suspect anyway).
     pub fn lock(&self) -> MutexGuard<'_, ModelicaEngine> {
         self.0.lock().expect("modelica engine mutex poisoned")
+    }
+
+    /// Make a bundled source root available to the shared engine. This is a
+    /// generic source-loading seam used by generated documents before the
+    /// canvas asks the resolver for class icons, ports, or inherited members.
+    pub fn ensure_library_root(&self, root: &str) -> bool {
+        self.lock().ensure_library_root(root)
+    }
+
+    /// Begin loading a bundled source root without blocking the Bevy update
+    /// thread. Returns `false` when the root is resident, pending, or absent.
+    pub fn ensure_library_root_async(&self, root: &str) -> bool {
+        let root = root.to_string();
+        {
+            let mut engine = self.lock();
+            if !engine.begin_library_root_load(&root) {
+                return false;
+            }
+        }
+        let handle = self.clone();
+        bevy::tasks::AsyncComputeTaskPool::get()
+            .spawn(async move {
+                let files = lunco_assets::models::package_files_live(&root);
+                let parsed = files
+                    .into_iter()
+                    .filter_map(|(uri, source)| {
+                        rumoca_phase_parse::parse_to_ast(&source, &uri)
+                            .ok()
+                            .map(|ast| (uri, ast))
+                    })
+                    .collect();
+                let mut engine = handle.lock();
+                engine.finish_library_root_load(&root, parsed);
+            })
+            .detach();
+        true
     }
 
     /// Spawn an off-thread strict parse for `doc_id`'s `source` and
@@ -262,11 +297,16 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
 }
 
 pub fn drive_engine_sync(
+    mut commands: Commands,
     handle: Res<ModelicaEngineHandle>,
     mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
 ) {
+    let completed_roots = handle.lock().drain_completed_library_roots();
+    for root in completed_roots {
+        commands.trigger(ModelicaLibraryBecameReady { root });
+    }
     // Active tab's doc id (if any). Used below to prioritise its
     // reparse over any background tabs queued behind it. `None` until
     // the UI feeds the hint (headless: always `None` → no reordering).
@@ -766,6 +806,13 @@ pub enum MslBootstrapState {
 #[derive(Event, Clone, Debug)]
 pub struct MslBecameReady;
 
+/// Generic source-root completion. The UI uses the same re-projection seam
+/// for MSL, LunCo, and future bundled libraries.
+#[derive(Event, Clone, Debug)]
+pub struct ModelicaLibraryBecameReady {
+    pub root: String,
+}
+
 /// Bevy system: once the pre-parsed MSL bundle is **resident in memory**,
 /// bulk-install it into the workspace engine as a `DurableExternal` source root
 /// so main-thread hover/diagnostics/resolution see all of MSL at once. Runs at
@@ -782,7 +829,7 @@ pub struct MslBecameReady;
 ///   so this runs the bulk install → instant full-MSL resolution.
 /// - **Native:** the slot is filled **lazily** (first `parsed_msl_bundle()` disk
 ///   read), so at boot it's empty and we deliberately fall through to the lazy
-///   path — `class_cache::peek_or_load_msl_class_blocking` installs classes into
+///   path — `class_cache::peek_or_load_class_blocking` installs classes into
 ///   the session on demand (`add_parsed_batch`). This is intentional, not an
 ///   oversight: native sets `MslLoadState::Ready` at boot whenever the MSL tree
 ///   is on disk (even for users who never open a model), so eager-installing

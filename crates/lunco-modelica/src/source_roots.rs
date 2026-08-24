@@ -84,6 +84,11 @@ pub enum SourceRootKind {
         /// (e.g. `"AnnotatedRocketStage.mo"`).
         filename: String,
     },
+    /// Structured Modelica package embedded below `assets/models/<root>`.
+    /// The complete package tree is loaded from the asset owner, so package
+    /// members resolve by their authored `within` names like any package on
+    /// a normal Modelica search path.
+    BundledPackage { root: String },
     /// User `.mo` file in the active workspace. Loaded by reading
     /// the file from disk and installing the resulting document.
     /// Populated by the PR-C workspace scanner.
@@ -199,13 +204,45 @@ impl SourceRootRegistry {
             );
         }
 
+        // Structured packages — keyed by their Modelica root segment. On
+        // native, prefer the live package directory so editor changes are
+        // visible without rebuilding; on wasm, use the embedded package tree.
+        // This is the standard root-segment search-path inventory, not a
+        // library-specific registration.
+        for root_name in lunco_assets::models::package_roots_live() {
+            if roots.contains_key(&root_name) {
+                continue;
+            }
+            let kind = lunco_assets::models_package_root_path(&root_name)
+                .map(|root_dir| SourceRootKind::SystemLibrary {
+                    cache_subdir: format!("models/{root_name}"),
+                    root_dir,
+                })
+                .unwrap_or_else(|| SourceRootKind::BundledPackage {
+                    root: root_name.clone(),
+                });
+            roots.insert(
+                root_name.clone(),
+                SourceRoot {
+                    id: root_name,
+                    kind,
+                    state: LoadState::NotLoaded,
+                },
+            );
+        }
+
         let lib_count = roots
             .values()
             .filter(|r| matches!(r.kind, SourceRootKind::SystemLibrary { .. }))
             .count();
         let bundled_count = roots
             .values()
-            .filter(|r| matches!(r.kind, SourceRootKind::Bundled { .. }))
+            .filter(|r| {
+                matches!(
+                    r.kind,
+                    SourceRootKind::Bundled { .. } | SourceRootKind::BundledPackage { .. }
+                )
+            })
             .count();
         bevy::log::info!(
             "[source-roots] registry built: {} system libraries, {} bundled examples \
@@ -302,6 +339,15 @@ pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
         .collect()
 }
 
+/// Scan a source document for the Modelica search-path roots it references.
+/// This is the source-side equivalent of `scan_source_root_deps` for compile
+/// entry points that have source text but do not yet own an AST.
+pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<String> {
+    rumoca_phase_parse::parse_to_ast(source, uri)
+        .map(|ast| scan_source_root_deps(&ast))
+        .unwrap_or_default()
+}
+
 /// Collect type-name references from `class`, keeping only qualified
 /// (dotted) names — bare names always resolve within the current
 /// doc's own classes, so they never imply an external source-root
@@ -314,6 +360,17 @@ fn walk_class_qualified_types(class: &ClassDef, out: &mut HashSet<String>) {
             out.insert(name.to_string());
         }
     });
+    for import in &class.imports {
+        use rumoca_compile::parsing::ast::Import;
+        let path = match import {
+            Import::Qualified { path, .. } | Import::Renamed { path, .. } => path.to_string(),
+            Import::Unqualified { path, .. } => path.to_string(),
+            Import::Selective { path, .. } => path.to_string(),
+        };
+        if path.contains('.') {
+            out.insert(path);
+        }
+    }
 }
 
 /// Modelica built-in root segments that never need a source root
@@ -366,8 +423,8 @@ pub const STATUS_BUS_SOURCE: &str = "source-roots";
 /// `package.mo`/`package.order` the Modelica-standard way).
 ///
 /// Session roots persist across compiles, so once loaded a twin's classes resolve on
-/// both the editor and the cosim compile paths — the same reason the shipped `LunCo`
-/// library is seated once. `Local` tracks what has been sent (`TwinRoots` mutates
+/// both the editor and the cosim compile paths. `Local` tracks what has been sent
+/// (`TwinRoots` mutates
 /// through interior handles and so never triggers `Changed`); a twin with no `models/`
 /// dir is recorded too, so it is not re-probed every frame.
 pub fn load_twin_source_roots(
@@ -456,6 +513,27 @@ pub fn ensure_loaded(
                 crate::worker::LoadSourceRootPayload::InMemory {
                     label: format!("bundled:{filename}"),
                     files: vec![(filename.clone(), source.to_string())],
+                },
+                summary,
+            )
+        }
+        SourceRootKind::BundledPackage { root } => {
+            let files = lunco_assets::models::package_files_live(root);
+            if files.is_empty() {
+                bevy::log::warn!(
+                    "[source-roots] bundled package `{}`: no Modelica files found",
+                    root
+                );
+                entry.state = LoadState::Failed(format!(
+                    "bundled Modelica package `{root}` has no source files"
+                ));
+                return false;
+            }
+            let summary = format!("bundled package {root}, {} files", files.len());
+            (
+                crate::worker::LoadSourceRootPayload::InMemory {
+                    label: format!("bundled:{root}"),
+                    files,
                 },
                 summary,
             )

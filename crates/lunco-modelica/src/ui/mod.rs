@@ -637,11 +637,6 @@ impl Plugin for ModelicaUiPlugin {
         use lunco_workbench::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
-        // MSL class cache lives inside `class_cache::msl_engine` —
-        // no Bevy plugin / resource needed. `peek_or_load_msl_class_blocking`
-        // routes through the static engine; drill-in spawns its own
-        // task that ultimately consults the same session.
-
         // Long-lived workspace `ModelicaEngine` mirrored from
         // `ModelicaDocumentRegistry`. Panel render code, API
         // observers, and async tasks query the same warm session
@@ -801,6 +796,7 @@ impl Plugin for ModelicaUiPlugin {
             // MSL loaded": restored/auto-opened tabs projected empty pre-MSL
             // and never recovered).
             .add_observer(panels::package_browser::on_msl_became_ready)
+            .add_observer(panels::package_browser::on_modelica_library_became_ready)
             .add_systems(Update, cleanup_removed_simulators)
             .add_systems(Update, link_added_simulators)
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved

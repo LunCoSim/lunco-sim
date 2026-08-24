@@ -139,6 +139,30 @@ the `connect()` equations from the same generated AST, so opening the root shows
 runtime unit topology and drilling into a unit shows its real member topology. This is
 inspection of the executable projection, not a second visual-only network.
 
+The generated document has normal workbench provenance but no authored lifetime:
+its `generated/` origin is classified from the document registry, not from a
+copied UI list. The browser shows the root boundary separately from promoted
+member telemetry and can expand each unit to the composed member path, source
+asset, and Modelica class. Source-root loading is asynchronous, so a cold LunCo
+library displays an explicit loading diagnostic and reprojects when the shared
+engine announces completion; an unknown class is an explicit error card. When
+the USD network disappears, its generated document and metadata are retired,
+while authored `.mo` documents remain open.
+
+The Rhai result may include `member_output_aliases` to choose which declared
+member outputs become root telemetry and what aliases they use. Omitting the
+field selects the deterministic default. Rust validates the table and the
+returned AST against the composed facts, but does not emit or infer the visual
+schema. A policy may also return `source_roots` for generated classes that are
+not USD members; the shared engine loads those roots asynchronously before the
+canvas resolves their icons and ports.
+
+Each returned unit may set its `instance` independently of its generated class
+`name`. The facts provide the deterministic default, while the policy owns any
+custom naming; Rust only validates that instances are valid, unique, and do not
+collide with the generated root interface before using those exact names for
+runtime signal provenance.
+
 ## 2a. Authoring a device model: the four rules that are not obvious
 
 Every rule below was learned by breaking it, and each break was silent — a compiled,
@@ -227,6 +251,14 @@ So `/Rover/RockerL/Motor_FL` is emitted as `Rover_x2f_RockerL_x2f_Motor__FL` —
 underscores in `Motor__FL`. This spelling is useful when inspecting generated source,
 but it is intentionally not a public runtime port name.
 
+The workbench exposes this generated source as a read-only Modelica document,
+not as a poster. Its root diagram shows generated units, and drilling into a
+unit shows the native LunCo members and their authored icons. The class cache
+loads a bundled package root through `lunco_assets::models::package_files` and
+the shared `ModelicaEngine`; this keeps LunCo visual resolution on the same
+source/AST path as every other Modelica class without making the generated
+policy or UI depend on MSL.
+
 The network's own authored `outputs:soc` is the runtime contract — `get(elec, "soc")`
 reads the value forwarded from the child unit.
 
@@ -267,23 +299,24 @@ future OpenModelica/SystemModeler can read it unchanged. Leaning on the language
 is cheaper and more durable than inventing a loader.
 
 The trap that made this a real bug: a USD program compiles through `cosim.rs` →
-`Compile { extra_sources: [] }`, a path that seats **no** library. So `import
-LunCo.Electrical` resolves via the CLI but not, without help, at sim time. Two mechanisms
-close that, **both using rumoca built-ins** — the choice to reuse them rather than
-hand-gather files is deliberate: the built-ins already do standard package parsing
-(`package.mo`/`package.order`, `within` resolution), and reimplementing that is how bugs
-like a non-recursive file scan creep in.
+`Compile { extra_sources: [] }`, a path that seats **no** library search path. So
+`import LunCo.Electrical` resolves via the CLI but not, without help, at sim time.
+The application now builds one generic inventory of structured package roots under
+`assets/models/` and uses the root segment of the unresolved qualified name as the
+Modelica search-path key. `LunCo` is therefore ordinary package data; there is no
+library-specific installer or root-name branch.
 
-- **The shipped library loads demand-driven in the compiler.**
-  `ModelicaCompiler::ensure_lunco_installed()` seats the embedded package (via
-  `load_source_root_in_memory`) inside `compile_loaded`'s unresolved-reference retry.
-  **Why in the compiler, not at startup?** Because that one location is on *both* the
-  editor and cosim compile paths, so neither needs its own copy of the logic — and because
-  it mirrors the existing demand-driven MSL gate exactly, so there is one install pattern,
-  not two. **Why demand-driven and cheapest-first?** MSL is 316 MB; `LunCo` is a handful of
-  embedded docs. Any unresolved reference earns the cheap `LunCo` install, but MSL is
-  reached for only if refs are *still* unresolved afterward — otherwise every EPS model
-  (which references `LunCo`, never MSL) would drag MSL in for nothing.
+- **Bundled packages load demand-driven in the compiler.** On an unresolved
+  `ER002`/`ER003`, the compiler seats the discovered structured package roots through
+  the same source-root path used by other libraries, then retries. MSL remains a
+  separate, larger demand-driven root and is installed only if the reference remains
+  unresolved. This preserves lazy startup without making a particular library a Rust
+  special case.
+- **The editor uses the same root-segment rule.** A cold qualified class requests its
+  package root from the shared engine asynchronously; the canvas shows Loading and
+  reprojects when that root is ready. Generated `source_roots` are dependency metadata
+  and can prewarm roots, but class discovery does not depend on a generated document
+  or on the string `LunCo`.
 - **A twin's own `.mo`** (`<twin>/models`) loads via `source_roots::load_twin_source_roots`,
   a `lunco-modelica` system watching `TwinRoots`; on mount it sends `LoadSourceRoot { Disk }`
   (rumoca's `load_source_root_tolerant`). **Why in `lunco-modelica`, not at the USD twin-mount

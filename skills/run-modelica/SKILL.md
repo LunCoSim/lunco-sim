@@ -329,8 +329,9 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   until `ast_parsed:true` before compiling/running a just-opened doc.
 - **`GetExperimentResult` errors** unless the run is `Done` (or `Failed` with a
   partial). Check `ListRuns` state first; a big sweep runs async.
-- **`Open` vs old verbs**: prefer `Open{uri}`. `OpenClass` is MSL-only;
-  `OpenFile` is filesystem-only.
+- **`Open` vs old verbs**: prefer `Open{uri}`. `OpenClass` resolves a
+  Modelica class through the source-aware document/library path; `OpenFile`
+  is filesystem-only.
 - **Live ≠ batch**: `SnapshotVariables` reads the *live* stepping model;
   `GetExperimentResult` reads a *stored batch run*. They are different objects.
 - **Blank plot/diagram in `luncosim`** → the Modelica perspective

@@ -20,12 +20,19 @@ fn emit(net) {
     for name in net.inputs {
         src += "  input Real " + name + ";\n";
     }
-    for c in net.components {
-        src += "  " + c.class + " " + c.instance + ";\n";
-    }
-    src += "equation\n";
-    src += "end " + net.model_name + ";\n";
-    #{ source: src }
+    for output in net.boundary_outputs { src += "  output Real " + output.name + ";\n"; }
+    let unit = net.units[0];
+    let first = net.components[0];
+    let second = net.components[1];
+    src += "  " + unit.name + " " + unit.instance + ";\n";
+    src += "equation\nend " + net.model_name + ";\n\n";
+    src += "model " + unit.name + "\n";
+    for input in unit.inputs { src += "  input Real " + input + ";\n"; }
+    for output in unit.outputs { src += "  output Real " + output + ";\n"; }
+    src += "  " + first.class + " " + first.instance + ";\n";
+    src += "  " + second.class + " " + second.instance + ";\n";
+    src += "equation\nend " + unit.name + ";\n";
+    #{ source: src, member_output_aliases: [] }
 }
 "#;
 
@@ -38,10 +45,35 @@ fn emit(net) {
     for member in net.layout.members {
         layout.members.push(#{ path: member.path, x: member.x + 40, y: member.y });
     }
+    let src = "model " + net.model_name + "\n";
+    for input in net.inputs { src += "  input Real " + input + ";\n"; }
+    for output in net.boundary_outputs { src += "  output Real " + output.name + ";\n"; }
+    for member_output in net.member_outputs {
+        src += "  output Real " + member_output.alias + ";\n";
+    }
+    let unit = net.units[0];
+    let first = net.components[0];
+    let second = net.components[1];
+    let policy_instance = "policy_unit";
+    src += "  " + unit.name + " " + policy_instance + ";\n";
+    src += "equation\nend " + net.model_name + ";\n\n";
+    src += "model " + unit.name + "\n";
+    for input in unit.inputs { src += "  input Real " + input + ";\n"; }
+    for output in unit.outputs { src += "  output Real " + output + ";\n"; }
+    src += "  " + first.class + " " + first.instance + ";\n";
+    src += "  " + second.class + " " + second.instance + ";\n";
+    src += "equation\nend " + unit.name + ";\n\n";
     #{
-        source: "model " + net.model_name + "\nequation\nend " + net.model_name + ";\n",
-        units: net.units,
+        source: src,
+        units: [#{
+            name: unit.name,
+            instance: policy_instance,
+            components: unit.components,
+            inputs: unit.inputs,
+            outputs: unit.outputs,
+        }],
         layout: layout,
+        member_output_aliases: [],
     }
 }
 "#;
@@ -131,6 +163,7 @@ fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
     };
 
     assert_eq!(synthesized.units.len(), 1);
+    assert_eq!(synthesized.units[0].instance, "policy_unit");
     assert_eq!(
         synthesized.units[0].component_paths,
         vec!["/Rig/Battery", "/Rig/Motor"]
@@ -165,6 +198,37 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
             .message
             .contains("must return a map with a Modelica `source` key"),
         "the report has to name what the policy did wrong, not blame the scene: {errors:?}"
+    );
+}
+
+#[test]
+fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
+    lunco_hooks_rhai::register_rhai_hook(
+        "synth.invalid-source",
+        "emit",
+        r#"fn emit(net) { #{ source: "model " + net.model_name + "\nequation\nend " + net.model_name + ";\n" } }"#,
+        true,
+    )
+    .expect("policy compiles");
+
+    let mut registry = SynthesizerRegistry::default();
+    register_hook_synthesizer(&mut registry, "invalid-source");
+    let synthesizer = registry.get("invalid-source").expect("registered").clone();
+    let stage = stage("electrical_network.usda");
+    let root = SdfPath::new("/Rig/Electrical").unwrap();
+    let errors = synthesizer
+        .synthesize(
+            &stage.view(),
+            &root,
+            "Rig_Electrical_System",
+            &SynthContext {
+                classes: &fixture_classes(),
+            },
+        )
+        .expect_err("an empty wrapper must not be admitted as a generated network");
+    assert!(
+        errors[0].message.contains("root boundary input")
+            || errors[0].message.contains("generated unit")
     );
 }
 
@@ -235,13 +299,13 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         plan.source.contains("connect("),
         "the generated source has no topology"
     );
-    assert!(plan.source.contains("COMPOSED TOPOLOGY"));
     assert!(
-        plan.source.contains("Ellipse("),
-        "ports are part of the visual schema"
+        !plan.source.contains("COMPOSED TOPOLOGY") && !plan.source.contains("\\n"),
+        "generated visuals must be standard annotations, not a poster or literal escape text"
     );
     assert!(plan.source.contains("LunCo.Electrical.Battery"));
     assert!(plan.source.contains("LunCo.Electrical.DCMotor"));
+    assert!(plan.source_roots.contains("LunCo"));
     assert!(
         plan.source.contains("Rig_x2f_Motor.demand = drive_left;"),
         "an authored external boundary source must become a Modelica equation:\n{}",
@@ -259,8 +323,72 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(
         lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Rig_Electrical_System")
-            .and_then(|class| lunco_modelica::annotations::extract_icon(&class.annotation))
+            .and_then(|class| {
+                assert!(
+                    lunco_modelica::annotations::extract_icon(&class.annotation).is_some(),
+                    "the generated root needs a compact standard Icon"
+                );
+                assert!(
+                    lunco_modelica::annotations::extract_diagram(&class.annotation).is_some(),
+                    "the generated root needs a standard Diagram"
+                );
+                let unit_name = &plan
+                    .units
+                    .first()
+                    .expect("at least one generated unit")
+                    .name;
+                assert!(
+                    class
+                        .components
+                        .values()
+                        .any(|component| component.type_name.to_string() == *unit_name),
+                    "the root Diagram must contain generated unit instances"
+                );
+                assert!(
+                    class
+                        .components
+                        .values()
+                        .filter(|component| component.type_name.to_string() == *unit_name)
+                        .all(|component| {
+                            lunco_modelica::annotations::extract_placement(&component.annotation)
+                                .is_some()
+                        }),
+                    "root members must be placed generated units"
+                );
+                Some(())
+            })
             .is_some(),
-        "the policy must emit a discoverable root icon"
+        "the policy must emit a discoverable root visual hierarchy"
+    );
+    let unit_name = &plan
+        .units
+        .first()
+        .expect("at least one generated unit")
+        .name;
+    let unit = lunco_modelica::diagram::find_class_by_qualified_name(&ast, unit_name)
+        .expect("the generated unit class is emitted");
+    assert!(
+        lunco_modelica::annotations::extract_icon(&unit.annotation).is_some()
+            && lunco_modelica::annotations::extract_diagram(&unit.annotation).is_some(),
+        "each generated unit needs standard Icon and Diagram annotations"
+    );
+    assert!(
+        unit.components
+            .values()
+            .any(|component| { component.type_name.to_string() == "LunCo.Electrical.Battery" })
+            && unit
+                .components
+                .values()
+                .any(|component| { component.type_name.to_string() == "LunCo.Electrical.DCMotor" }),
+        "the unit Diagram must contain the native LunCo member classes"
+    );
+    assert!(
+        unit.components
+            .values()
+            .filter(|component| component.type_name.to_string().starts_with("LunCo."))
+            .all(|component| {
+                lunco_modelica::annotations::extract_placement(&component.annotation).is_some()
+            }),
+        "native members need placements so their authored icons can render"
     );
 }

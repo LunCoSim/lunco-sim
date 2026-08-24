@@ -114,6 +114,8 @@ fn build_registry() -> VisualRegistry {
             icon_only: d.icon_only,
             expandable_connector: d.expandable_connector,
             icon_graphics: d.icon_graphics.clone(),
+            resolution: d.resolution,
+            resolution_message: d.resolution_message.clone(),
             parameters: d.parameters.clone(),
             rotation_deg: d.rotation_deg,
             mirror_x: d.mirror_x,

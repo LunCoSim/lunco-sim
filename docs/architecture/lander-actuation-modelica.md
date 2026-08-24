@@ -74,6 +74,12 @@ receives a class-level assembly icon and diagram banner. The Modelica canvas:
 Thus a diagram communicates both topology and current state. It does not infer
 connections from filenames or draw a decorative copy of the network in Rust.
 
+The geometry-derived `synth.actuator-wrench` policy follows the same source
+contract for its single generated root: the `WrenchAllocator` is a real placed
+Modelica component and the root uses standard `Icon`/`Diagram` annotations.
+The physical USD actuators remain Avian members, so the UI does not invent a
+fake Modelica unit or drill-down class for them.
+
 ## Parameter rule
 
 Physical and controller constants are Modelica parameters or public Modelica

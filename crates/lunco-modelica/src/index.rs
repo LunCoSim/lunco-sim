@@ -206,6 +206,22 @@ pub struct ClassEntry {
     /// for non-MSL classes.
     #[serde(default)]
     pub category: String,
+    /// Whether the class definition was resolved by the shared source engine.
+    /// Missing and loading are first-class render states; they must not be
+    /// represented as a fake resolved rectangle.
+    #[serde(default)]
+    pub resolution: ClassResolutionState,
+    /// Short resolver diagnostic shown by the diagram renderer.
+    #[serde(default)]
+    pub resolution_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ClassResolutionState {
+    #[default]
+    Resolved,
+    Loading,
+    Missing,
 }
 
 impl ClassEntry {
@@ -610,6 +626,8 @@ impl ModelicaIndex {
                 diagram_graphics: None,
                 icon_text: None,
                 category: String::new(),
+                resolution: ClassResolutionState::Resolved,
+                resolution_message: None,
             },
         );
     }
@@ -864,6 +882,8 @@ fn insert_class_recursive(
         diagram_graphics: None,
         icon_text: None,
         category: String::new(),
+        resolution: ClassResolutionState::Resolved,
+        resolution_message: None,
     };
     idx.classes.insert(qualified.clone(), entry);
 

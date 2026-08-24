@@ -8,13 +8,28 @@ fn string_literal(value) {
     "\"" + value + "\""
 }
 
-fn join_strings(values, separator) {
-    let result = "";
-    for index in 0..values.len {
-        if index > 0 { result += separator; }
-        result += values[index];
-    }
-    result
+fn rect(x1, y1, x2, y2) {
+    "{{" + x1.to_string() + "," + y1.to_string() + "},{"
+        + x2.to_string() + "," + y2.to_string() + "}}"
+}
+
+fn compact_icon(title) {
+    let rectangle = "Rectangle(extent=" + rect(-92, -58, 92, 58)
+        + ", lineColor={150,95,35}, fillColor={225,165,75}"
+        + ", fillPattern=FillPattern.Solid, radius=10)";
+    let name = "Text(extent=" + rect(-82, -16, 82, 16)
+        + ", textString=" + string_literal(title)
+        + ", textColor={255,255,255}, fontSize=14)";
+    "Icon(coordinateSystem(extent=" + rect(-100, -70, 100, 70)
+        + "), graphics={" + rectangle + "," + name + "})"
+}
+
+fn diagram_annotation(title) {
+    let heading = "Text(extent=" + rect(-180, 115, 180, 140)
+        + ", textString=" + string_literal(title)
+        + ", textColor={120,80,35}, fontSize=12)";
+    "Diagram(coordinateSystem(extent=" + rect(-200, -140, 200, 150)
+        + "), graphics={" + heading + "})"
 }
 
 fn vector_zeros(count) {
@@ -50,7 +65,8 @@ fn synthesize(net) {
     mutable += "    allocation_step = " + net.allocation_step.to_string() + ",\n";
     mutable += "    wrench_matrix = " + matrix_literal(net.wrench_matrix) + ",\n";
     mutable += "    lower_command = {" + vector_zeros(net.actuator_count) + "},\n";
-    mutable += "    upper_command = {" + vector_ones(net.actuator_count) + "});\n\n";
+    mutable += "    upper_command = {" + vector_ones(net.actuator_count)
+        + "}) annotation(Placement(transformation(origin = {0, 0}, extent = {{-110, -70}, {110, 70}})));\n\n";
     mutable += "equation\n";
 
     let demanded = [
@@ -69,16 +85,11 @@ fn synthesize(net) {
         mutable += (index + 1).to_string() + "];\n";
     }
 
-    let title = "USD FORCE-ACTUATOR ALLOCATION\\n" + net.actuator_count.to_string()
-        + " actuator(s) | " + join_strings(net.actuator_paths, " | ");
-    mutable += "annotation(Icon(coordinateSystem(extent={{-220,-160},{220,160}}), graphics={";
-    mutable += "Rectangle(extent={{-85,-52},{85,52}}, lineColor={165,105,45}, fillColor={230,175,85}, fillPattern=FillPattern.Solid, radius=8),";
-    mutable += "Text(extent={{-78,-16},{78,16}}, textString=";
-    mutable += string_literal(net.model_name) + ", textColor={40,30,15}, fontSize=14)";
-    mutable += "}), Diagram(coordinateSystem(extent={{-220,-160},{220,160}}), graphics={Text(extent={{-205,125},{205,150}}, textString=";
-    mutable += string_literal(title) + ", textColor={125,85,35}, fontSize=12)}));\n";
+    let title = "Force allocation | " + net.actuator_count.to_string() + " actuator(s)";
+    mutable += "annotation(" + compact_icon(net.model_name) + ","
+        + diagram_annotation(title) + ");\n";
     mutable += "end " + net.model_name + ";\n";
-    #{ source: mutable }
+    #{ source: mutable, source_roots: ["LunCo"] }
 }
 
 fn vector_ones(count) {

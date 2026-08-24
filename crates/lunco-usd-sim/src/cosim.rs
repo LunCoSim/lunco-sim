@@ -4617,6 +4617,7 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
         .add_observer(request_binding_epoch::<ModelicaModel>)
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+        .add_observer(crate::domain_projection::on_remove_generated_source)
         .add_observer(request_binding_epoch::<SimComponent>)
         .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
@@ -4786,6 +4787,7 @@ pub(crate) fn install(app: &mut App) {
         Update,
         crate::domain_projection::publish_generated_sources
             .after(crate::domain_projection::sync_generated_network_documents)
+            .run_if(crate::domain_projection::generated_sources_need_publish)
             .in_set(CosimUpdateSet::Projection),
     );
 

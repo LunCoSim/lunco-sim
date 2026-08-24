@@ -288,6 +288,8 @@ pub(super) fn project_scene(
                 icon_only: crate::ui::class_display::is_icon_only_class(&node.component_def.name),
                 expandable_connector: node.component_def.is_expandable_connector(),
                 icon_graphics: node.component_def.icon.clone(),
+                resolution: node.component_def.resolution,
+                resolution_message: node.component_def.resolution_message.clone(),
                 diagram_graphics: if matches!(
                     node.component_def.kind,
                     crate::index::ClassKind::Connector

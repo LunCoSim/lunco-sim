@@ -173,37 +173,205 @@ impl BrowserSection for ModelicaSection {
             .map(|sources| sources.entries.clone())
             .unwrap_or_default();
         if !generated.is_empty() {
+            let theme = ctx
+                .resource::<lunco_theme::Theme>()
+                .cloned()
+                .unwrap_or_else(lunco_theme::Theme::dark);
             ui.separator();
-            let header = egui::CollapsingHeader::new("⚡ Scene networks")
+            let header = egui::CollapsingHeader::new("⚡ Generated scene networks")
                 .id_salt("twin.modelica.generated")
                 .default_open(false);
             header.show(ui, |ui| {
                 for entry in generated {
-                    ui.horizontal(|ui| {
-                        let label = entry.uri.strip_prefix("generated://").unwrap_or(&entry.uri);
-                        let response = ui.selectable_label(false, label);
-                        if response.clicked() {
-                            let qualified = entry
-                                .uri
-                                .strip_prefix("generated://")
-                                .and_then(|uri| uri.strip_suffix(".mo"))
-                                .unwrap_or(&entry.uri)
-                                .to_string();
-                            ctx.actions.push(BrowserAction::OpenLoadedClass {
-                                doc_id: entry.document.raw(),
-                                qualified_path: qualified,
-                            });
-                        }
-                        if let Some(error) = &entry.error {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(220, 140, 70),
-                                format!("Error: {error}"),
-                            );
-                        }
-                    });
+                    render_generated_network_row(ui, ctx, &theme, &entry);
                 }
             });
         }
+    }
+}
+
+/// Render one generated document as a useful model entry instead of exposing
+/// its compiler URI as the primary label. The row keeps the source URI in a
+/// tooltip for diagnostics while the visible metadata explains the topology
+/// the user will find after opening it.
+fn render_generated_network_row(
+    ui: &mut egui::Ui,
+    ctx: &mut BrowserCtx<'_, '_>,
+    theme: &lunco_theme::Theme,
+    entry: &crate::state::GeneratedModelicaSourceEntry,
+) {
+    let display_name = generated_network_display_name(&entry.network_root);
+    let member_count = entry
+        .units
+        .iter()
+        .map(|unit| unit.members.len())
+        .sum::<usize>();
+    let topology_count = if entry.units.is_empty() && !entry.component_paths.is_empty() {
+        format!(
+            "{} composed USD component{}",
+            entry.component_paths.len(),
+            plural_suffix(entry.component_paths.len())
+        )
+    } else {
+        format!("{} member{}", member_count, plural_suffix(member_count))
+    };
+    let open_hint = format!(
+        "Open generated Modelica\nClass: {}\nDocument: {}\nSource is read-only and rebuilt from the composed USD network.",
+        entry.model_name, entry.uri
+    );
+
+    ui.push_id(&entry.uri, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let can_open = !entry.document.is_unassigned() && !entry.source.is_empty();
+            let response = ui
+                .selectable_label(
+                    false,
+                    egui::RichText::new(display_name)
+                        .strong()
+                        .color(if can_open {
+                            theme.schematic.text_heading
+                        } else {
+                            theme.schematic.text_muted
+                        }),
+                )
+                .on_hover_text(if can_open {
+                    open_hint
+                } else if entry.error.is_some() {
+                    "Generated source is unavailable because synthesis failed.".to_string()
+                } else {
+                    "Generated source is still being projected.".to_string()
+                });
+            if can_open && response.clicked() {
+                let qualified = entry
+                    .uri
+                    .strip_prefix("generated://")
+                    .and_then(|uri| uri.strip_suffix(".mo"))
+                    .unwrap_or(&entry.uri)
+                    .to_string();
+                ctx.actions.push(BrowserAction::OpenLoadedClass {
+                    doc_id: entry.document.raw(),
+                    qualified_path: qualified,
+                });
+            }
+            ui.colored_label(theme.schematic.class_model_badge, "GENERATED");
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(&entry.network_root)
+                    .small()
+                    .color(theme.schematic.text_muted),
+            );
+            ui.label(
+                egui::RichText::new(format!("class {}", entry.model_name))
+                    .small()
+                    .color(theme.schematic.text_muted),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} unit{} · {}",
+                    entry.units.len(),
+                    plural_suffix(entry.units.len()),
+                    topology_count,
+                ))
+                .small()
+                .color(theme.schematic.text_muted),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "interface {} in / {} out",
+                    entry.boundary_inputs.len(),
+                    entry.boundary_outputs.len(),
+                ))
+                .small()
+                .color(theme.schematic.text_muted),
+            );
+            if !entry.member_output_aliases.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("telemetry {}", entry.member_output_aliases.len()))
+                        .small()
+                        .color(theme.schematic.text_muted),
+                );
+            }
+        });
+
+        if let Some(error) = &entry.error {
+            ui.colored_label(theme.tokens.error, format!("Projection error: {error}"));
+        } else if entry.source.is_empty() {
+            ui.colored_label(theme.tokens.warning, "Projection unavailable");
+        }
+
+        egui::CollapsingHeader::new("Inspect topology and interface")
+            .id_salt(("generated-details", &entry.uri))
+            .default_open(false)
+            .show(ui, |ui| {
+                let inputs = if entry.boundary_inputs.is_empty() {
+                    "none".to_string()
+                } else {
+                    entry.boundary_inputs.join(", ")
+                };
+                let outputs = if entry.boundary_outputs.is_empty() {
+                    "none".to_string()
+                } else {
+                    entry.boundary_outputs.join(", ")
+                };
+                ui.label(format!("Inputs: {inputs}"));
+                ui.label(format!("Outputs: {outputs}"));
+                if !entry.source_roots.is_empty() {
+                    ui.label(format!("Source roots: {}", entry.source_roots.join(", ")));
+                }
+                if entry.units.is_empty() && !entry.component_paths.is_empty() {
+                    ui.label("Composed USD components:");
+                    for path in &entry.component_paths {
+                        ui.label(path);
+                    }
+                }
+                for unit in &entry.units {
+                    ui.collapsing(
+                        format!(
+                            "{} as {} ({} member(s))",
+                            unit.name,
+                            unit.instance,
+                            unit.members.len()
+                        ),
+                        |ui| {
+                            for member in &unit.members {
+                                if let Some((_, asset, class)) =
+                                    entry.members.iter().find(|(path, _, _)| path == member)
+                                {
+                                    ui.label(format!("{member} · {class}"))
+                                        .on_hover_text(format!("source asset: {asset}"));
+                                } else {
+                                    ui.label(member);
+                                }
+                            }
+                        },
+                    );
+                }
+                if !entry.member_output_aliases.is_empty() {
+                    ui.label("Promoted telemetry:");
+                    for (member, output, alias) in &entry.member_output_aliases {
+                        ui.label(format!("{alias} ← {member}.{output}"));
+                    }
+                }
+            });
+    });
+}
+
+fn generated_network_display_name(network_root: &str) -> String {
+    network_root
+        .trim_matches('/')
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .map(|segment| format!("{segment} network"))
+        .unwrap_or_else(|| "Generated network".to_string())
+}
+
+fn plural_suffix(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
     }
 }
 
@@ -991,5 +1159,25 @@ function F end F;
             .children
             .iter()
             .any(|c| c.qualified_path == "AnnotatedRocketStage.Engine"));
+    }
+
+    #[test]
+    fn generated_network_name_uses_the_composed_scope_leaf() {
+        assert_eq!(
+            generated_network_display_name("/Rover/Electrical"),
+            "Electrical network"
+        );
+        assert_eq!(
+            generated_network_display_name("/Rover/Electrical/"),
+            "Electrical network"
+        );
+        assert_eq!(generated_network_display_name("/"), "Generated network");
+    }
+
+    #[test]
+    fn generated_metadata_pluralization_stays_readable() {
+        assert_eq!(plural_suffix(1), "");
+        assert_eq!(plural_suffix(0), "s");
+        assert_eq!(plural_suffix(2), "s");
     }
 }

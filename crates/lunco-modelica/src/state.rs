@@ -33,6 +33,44 @@ use crate::document::{ModelicaDocument, ModelicaOp};
 pub struct GeneratedModelicaSources {
     /// Current generated network documents.
     pub entries: Vec<GeneratedModelicaSourceEntry>,
+    /// Change-driven publication gate. Producers set this when a generated
+    /// entity is removed; normal source/model changes are detected by the
+    /// publisher's ECS query.
+    pub dirty: bool,
+}
+
+/// The single provenance classifier for ephemeral generated Modelica docs.
+/// UI, API, and lifecycle code must use this origin contract rather than a
+/// copied metadata list that can lag entity/document teardown.
+pub fn is_generated_origin(origin: &DocumentOrigin) -> bool {
+    matches!(
+        origin,
+        DocumentOrigin::Bundled { filename } if filename.starts_with("generated/")
+    )
+}
+
+/// Classify a loaded document by its authoritative origin.
+pub fn is_generated_document(document: &ModelicaDocument) -> bool {
+    is_generated_origin(document.origin())
+}
+
+/// A synthesized composite unit exposed in a generated Modelica document.
+///
+/// This is presentation metadata copied from the authoritative generated
+/// source projection. The browser uses it to explain the model without
+/// reparsing source or rebuilding the USD graph.
+#[derive(Clone, Debug, Default)]
+pub struct GeneratedModelicaUnit {
+    /// Generated Modelica class name.
+    pub name: String,
+    /// Generated Modelica instance name used by the root and telemetry map.
+    pub instance: String,
+    /// Composed USD member paths absorbed by the unit.
+    pub members: Vec<String>,
+    /// Root boundary inputs consumed by this unit.
+    pub inputs: Vec<String>,
+    /// Root boundary outputs produced by this unit.
+    pub outputs: Vec<String>,
 }
 
 /// One ephemeral Modelica source document available to the workbench.
@@ -45,8 +83,27 @@ pub struct GeneratedModelicaSourceEntry {
     pub uri: String,
     /// Composed USD network that produced the document.
     pub network_root: String,
+    /// Generated root class name shown when the document is selected.
+    pub model_name: String,
     /// Exact source sent to the compiler.
     pub source: String,
+    /// All composed USD components absorbed by the generated projection. For
+    /// physical-only policies this can be non-empty even when there are no
+    /// Modelica member classes to drill into.
+    pub component_paths: Vec<String>,
+    /// Composite units emitted by the synthesis policy.
+    pub units: Vec<GeneratedModelicaUnit>,
+    /// `(member USD path, source asset, Modelica class)` attribution copied
+    /// from the generated source contract for the topology inspector.
+    pub members: Vec<(String, String, String)>,
+    /// Bundled Modelica roots requested by the synthesis policy.
+    pub source_roots: Vec<String>,
+    /// Inputs exposed by the generated root class.
+    pub boundary_inputs: Vec<String>,
+    /// Outputs exposed by the generated root class.
+    pub boundary_outputs: Vec<String>,
+    /// Promoted member telemetry as `(member path, member output, alias)`.
+    pub member_output_aliases: Vec<(String, String, String)>,
     /// Last compiler/projection error, if any.
     pub error: Option<String>,
 }
