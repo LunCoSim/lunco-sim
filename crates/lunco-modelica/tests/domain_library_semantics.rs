@@ -32,6 +32,10 @@ fn battery_discharge_current_reduces_soc() {
         source.contains("p.v = max(0.0, voltage_nom *"),
         "an empty battery must not expose a negative physical bus voltage"
     );
+    assert!(
+        source.contains("soc(unit=\"1\", start = soc_init, fixed = true, min = 0.0, max = 1.0)"),
+        "the authored initial state must be fixed at the requested storage boundary"
+    );
 }
 
 #[test]

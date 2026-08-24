@@ -5,7 +5,10 @@
 //
 //   battery terminal voltage -> motor winding -> solved shaft torque
 //
-// The test never writes a motor command or asks Rust to stop an actuator.
+// The test never writes a motor command or asks Rust to stop an actuator. A
+// wheel may still exchange mechanical energy with a motor; the assertion is
+// therefore on battery-supplied power and positive shaft work, not on a
+// per-motor electrical sample that can be balanced by another physical path.
 
 const PORT_WAIT_S = 30.0;
 const DRIVE_S = 3.0;
@@ -13,7 +16,7 @@ const ZERO_TOL = 1.0e-6;
 // These names are authored `Electrical.outputs:*` boundary ports in the USD
 // rover asset. Generated Modelica member identifiers are implementation
 // details and are not a scenario contract.
-const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
+const BATTERY_DISCHARGE_POWER = "battery_discharge_power";
 const MOTOR_MECHANICAL_POWER = "motor_mechanical_power";
 
 fn on_start(me) {
@@ -24,7 +27,7 @@ fn on_start(me) {
     this.elec = find("/BatteryEmptyActuator/Rover/Electrical");
     this.event_seen = false;
     this.drained = ();
-    this.max_consumed_power = 0.0;
+    this.max_battery_discharge_power = 0.0;
     this.max_drive_power = 0.0;
     print("[battery-empty] ── empty battery actuator boundary ─────────────");
 }
@@ -47,11 +50,11 @@ fn on_tick(me) {
     }
 
     this.drained = get(this.elec, "battery_drained");
-    let power = get(this.elec, MOTOR_ELECTRICAL_POWER);
     let drive_power = get(this.elec, MOTOR_MECHANICAL_POWER);
 
     if this.phase == "wait" {
-        if this.drained == () || power == () || drive_power == () {
+        let battery_discharge = get(this.elec, BATTERY_DISCHARGE_POWER);
+        if this.drained == () || battery_discharge == () || drive_power == () {
             if this.t >= PORT_WAIT_S {
                 this.done = true;
                 fail_fast("empty-battery electrical outputs did not publish within " +
@@ -65,7 +68,10 @@ fn on_tick(me) {
     }
 
     drive(this.rover, 1.0, 0.0);
-    if power > this.max_consumed_power { this.max_consumed_power = power; }
+    let battery_discharge = get(this.elec, BATTERY_DISCHARGE_POWER);
+    if battery_discharge > this.max_battery_discharge_power {
+        this.max_battery_discharge_power = battery_discharge;
+    }
     if drive_power > this.max_drive_power { this.max_drive_power = drive_power; }
 
     if this.t - this.phase_started < DRIVE_S { return; }
@@ -81,15 +87,15 @@ fn verdict(s) {
         "battery_drained boundary output was " + s.drained + ", expected 1"));
     f.push(t_true(s.event_seen,
         "authored battery_drained event was not published"));
-    f.push(t_true(s.max_consumed_power <= ZERO_TOL,
-        "motor consumed " + s.max_consumed_power +
-        " W with no electrical source"));
+    f.push(t_true(s.max_battery_discharge_power <= ZERO_TOL,
+        "battery supplied " + s.max_battery_discharge_power +
+        " W at the empty boundary"));
     f.push(t_true(s.max_drive_power <= ZERO_TOL,
         "motor delivered " + s.max_drive_power +
         " W to the shaft with no electrical source"));
 
     print("[battery-empty] drained=" + s.drained + " event=" + s.event_seen +
-          " max_consumed_power=" + s.max_consumed_power +
+          " max_battery_discharge_power=" + s.max_battery_discharge_power +
           " W max_drive_power=" + s.max_drive_power + " W");
     report_verdict(f, "BATTERY EMPTY ACTUATOR", "BATTERY_EMPTY_ACTUATOR");
 }

@@ -10,7 +10,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 
 ### 1.1 Electrical Power Subsystem (`LunCo.Electrical`)
 - **[Pin.mo](../assets/models/LunCo/Electrical/Pin.mo)**: Acausal electrical pin connector (`Real v; flow Real i;`, enforcing Kirchhoff's Current Law $\sum i = 0$).
-- **[Battery.mo](../assets/models/LunCo/Electrical/Battery.mo)**: Pack capacity, internal resistance voltage sag ($V = V_{\text{nom}} - I R$), and State-of-Charge integration ($\frac{d(soc)}{dt}$).
+- **[Battery.mo](../assets/models/LunCo/Electrical/Battery.mo)**: Pack capacity, fixed authored initial state, bounded State-of-Charge integration, and internal-resistance voltage sag ($V = V_{\text{nom}} + I R$ with the signed pin-current convention).
 - **[SolarPanel.mo](../assets/models/LunCo/Electrical/SolarPanel.mo)**: Triple-junction solar cell array power generation ($P_{\text{solar}} = \text{area} \cdot \eta \cdot \Phi_{\text{sun}}$).
 - **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Hub drive motor ($P_{\text{mech}} = \tau \cdot \omega$, electrical current draw $I = \frac{P_{\text{mech}}}{\eta \cdot V_{\text{bus}}}$).
 - **[PDU.mo](../assets/models/LunCo/Electrical/PDU.mo)**: EPS Power Distribution Unit, 28V regulated main bus, and under-voltage load shedding.

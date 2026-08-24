@@ -111,10 +111,10 @@ integrates its own charge from whatever current flows through its pin:
 within LunCo.Electrical;
 model Battery
   Pin p;
-  Real soc(start = soc_init) "State of charge, 0..1";
+  Real soc(start = soc_init, fixed = true, min = 0.0, max = 1.0) "State of charge, 0..1";
   output Real soc_out;
 equation
-  p.v = voltage_nom * (0.8 + 0.2 * soc) + p.i * R_internal;   // droops with SoC and ESR
+  p.v = max(0.0, voltage_nom * max(0.0, min(1.0, soc)) + p.i * R_internal); // empty storage has no potential
   der(soc) = p.i / (capacity * 3600.0);                       // charge balance
   soc_out = soc;
 end Battery;

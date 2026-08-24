@@ -166,3 +166,45 @@ fn battery_driveline_boundary_is_structurally_solvable() {
         stepper.err()
     );
 }
+
+#[test]
+fn empty_battery_initialization_preserves_authored_boundary() {
+    let mut compiler = ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str(
+            "BatteryEmptyInitialization",
+            r#"
+model BatteryEmptyInitialization
+  LunCo.Electrical.Battery battery(soc_init = 0.0, voltage_nom = 28.0);
+  LunCo.Electrical.DCMotor motor;
+  input Real demand;
+  input Real speed;
+equation
+  motor.demand = demand;
+  motor.speed = speed;
+  connect(battery.p, motor.p);
+end BatteryEmptyInitialization;
+"#,
+            "lunco://models/BatteryEmptyInitialization.mo",
+        )
+        .expect("empty battery composition compiles");
+    let session = rumoca_sim::SimulationSession::new(
+        &dae.dae,
+        rumoca_sim::SimOptions {
+            t_start: 0.0,
+            t_end: 1.0,
+            ..rumoca_sim::SimOptions::default()
+        },
+    )
+    .expect("empty battery composition lowers into a solver");
+    let state = session.state().expect("initial state is readable");
+    let soc = state
+        .values
+        .get("battery.soc")
+        .copied()
+        .expect("battery SOC is visible at the co-simulation boundary");
+    assert_eq!(
+        soc, 0.0,
+        "the solver must preserve an authored zero storage state during initialization"
+    );
+}
