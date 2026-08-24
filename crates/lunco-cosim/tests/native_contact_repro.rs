@@ -8,6 +8,11 @@ use bevy::prelude::*;
 
 const STATIC_FRICTION_MAX_SLIP_SPEED_MPS: Scalar = 0.02;
 
+/// This fixture intentionally preserves the high-resolution numerical
+/// reproduction budget. It is not the production solver contract; the
+/// luncosim path gets its eight substeps from `lunco_physics`.
+const NUMERICAL_REPRODUCTION_SUBSTEPS: u32 = 32;
+
 fn native_prismatic_drive(stiffness: Scalar, damping: Scalar, max_force: Scalar) -> LinearMotor {
     LinearMotor::new(MotorModel::ForceBased { stiffness, damping })
         .with_target_position(0.0)
@@ -82,7 +87,7 @@ fn a_static_flat_friction_contact_does_not_self_accelerate() {
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
     ));
-    app.insert_resource(SubstepCount(32));
+    app.insert_resource(SubstepCount(NUMERICAL_REPRODUCTION_SUBSTEPS));
 
     app.world_mut().spawn((
         RigidBody::Static,
@@ -136,7 +141,7 @@ fn four_raked_legs_do_not_create_unbounded_energy() {
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
     ));
-    app.insert_resource(SubstepCount(32));
+    app.insert_resource(SubstepCount(NUMERICAL_REPRODUCTION_SUBSTEPS));
 
     let ground_friction = Friction {
         dynamic_coefficient: 1.0,
@@ -270,7 +275,7 @@ fn four_ball_jointed_pads_do_not_create_unbounded_energy() {
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
     ));
-    app.insert_resource(SubstepCount(32));
+    app.insert_resource(SubstepCount(NUMERICAL_REPRODUCTION_SUBSTEPS));
 
     app.world_mut().spawn((
         RigidBody::Static,
@@ -431,7 +436,7 @@ fn four_raked_legs_with_usd_contact_hook_do_not_create_unbounded_energy() {
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / 60.0),
     ));
-    app.insert_resource(SubstepCount(32));
+    app.insert_resource(SubstepCount(NUMERICAL_REPRODUCTION_SUBSTEPS));
 
     let ground_friction = Friction {
         dynamic_coefficient: 1.0,

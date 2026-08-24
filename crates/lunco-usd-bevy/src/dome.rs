@@ -198,7 +198,7 @@ fn apply_graphics_dome_quality(
         }
         if dome.face_size != profile.dome_cubemap_face_size {
             dome.face_size = profile.dome_cubemap_face_size;
-            commands.entity(entity).insert(DomeDirty);
+            commands.entity(entity).try_insert(DomeDirty);
         }
     }
 

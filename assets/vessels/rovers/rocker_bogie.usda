@@ -1120,9 +1120,10 @@ def Xform "RockerBogie" (
     # θ_left + θ_right → restSum (the drive's targetPosition), so the chassis pitch
     # tracks the rocker average instead of flopping on a free pitch DOF.
     #
-    # `solve_differential_gear` projects this relation as a zero-compliance
-    # constraint in Avian's substep solver. The positive stiffness value is the
-    # authored engagement state; zero disables the gear in the control scene.
+    # `solve_differential_gear` projects this relation with an implicit
+    # spring-damper solve in Avian's substep solver. The positive stiffness value
+    # is the authored engagement state; zero disables the gear in the control
+    # scene.
     def PhysxPhysicsGearJoint "Differential" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )

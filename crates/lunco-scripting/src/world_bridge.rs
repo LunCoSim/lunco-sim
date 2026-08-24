@@ -2006,9 +2006,7 @@ fn tick_native_task(
     }
 
     let program = st.program.clone();
-    let Some(ct) = st.task.as_mut() else {
-        return None;
-    };
+    let ct = st.task.as_mut()?;
     if ct.done {
         return None;
     }

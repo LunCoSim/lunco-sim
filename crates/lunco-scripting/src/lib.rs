@@ -210,9 +210,10 @@ pub struct LunCoScriptingPlugin;
 /// Register the built-in `policy→rhai` hooks from `assets/scripting/policy/*.rhai`.
 /// Each is a small authored decision function consulted by a Rust seam by hook id;
 /// authoring the rule in rhai keeps policy out of compiled code (tunable, no
-/// rebuild). Currently: the spec-034 control-authority takeover rule.
+/// rebuild). Returns every missing or failed built-in so a pre-flight caller can
+/// refuse to report a clean result without its policy layer.
 #[cfg(feature = "rhai")]
-fn register_builtin_policies() {
+pub fn register_builtin_policies() -> Result<(), String> {
     // (policy file stem, hook id, entry fn)
     const BUILTINS: &[(&str, &str, &str)] = &[
         (
@@ -267,15 +268,25 @@ fn register_builtin_policies() {
         // an authored `link.connected` hook overrides the verdict, and routing is
         // rhai over `query("Links")` — see doc 49 / prelude/links.rhai.)
     ];
+    let mut failures = Vec::new();
     for (stem, hook_id, entry) in BUILTINS {
         let Some(src) = lunco_assets::scripting::policy(stem) else {
             warn!("[policy] built-in policy '{stem}' missing from embedded assets");
+            failures.push(format!("{stem}: embedded source is missing"));
             continue;
         };
         match lunco_hooks_rhai::register_rhai_hook(*hook_id, *entry, src, false) {
             Ok(_) => info!("[policy] registered built-in '{stem}' → {hook_id}"),
-            Err(e) => error!("[policy] built-in policy '{stem}' failed to compile: {e}"),
+            Err(e) => {
+                error!("[policy] built-in policy '{stem}' failed to compile: {e}");
+                failures.push(format!("{stem}: {e}"));
+            }
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -394,7 +405,9 @@ impl Plugin for LunCoScriptingPlugin {
             // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
             // authority takeover). These are the weakest-scope defaults; a
             // `LunCoPolicy` USD prim projected at the same seam hot-replaces them.
-            register_builtin_policies();
+            if let Err(error) = register_builtin_policies() {
+                error!("[policy] built-in policy registration incomplete: {error}");
+            }
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
             // here and surface via the ScriptStatus query.

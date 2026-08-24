@@ -45,19 +45,6 @@ impl Plugin for TwinRootsPlugin {
     }
 }
 
-fn twin_authority(twin: &lunco_twin::Twin) -> String {
-    twin.manifest
-        .as_ref()
-        .map(|manifest| manifest.name.clone())
-        .filter(|name| !name.is_empty())
-        .or_else(|| {
-            twin.root
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "twin".to_string())
-}
-
 fn register_twin_root(
     trigger: On<lunco_workspace::TwinAdded>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -71,7 +58,7 @@ fn register_twin_root(
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
-    let assigned = match roots.register(twin_authority(twin), &twin.root) {
+    let assigned = match roots.register_twin(twin) {
         Ok(assigned) => assigned,
         Err(error) => {
             lunco_core::trigger_error(

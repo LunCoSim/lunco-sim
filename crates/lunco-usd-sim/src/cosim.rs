@@ -769,7 +769,7 @@ fn project_usd_telemetry(
         let authored = match read_authored_bool_strict(&view, &path, "lunco:telemetry") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "[usd-cosim] {} has malformed `lunco:telemetry`; declaration ignored",
                     path.as_str()
@@ -846,7 +846,7 @@ fn project_usd_telemetry(
                     match read_authored_bool_strict(&view, &path, "lunco:telemetry:enabled") {
                         Ok(Some(value)) => value,
                         Ok(None) => true,
-                        Err(()) => return Err(()),
+                        Err(_) => return Err(()),
                     };
                 let deadband =
                     match read_authored_telemetry_real(&view, &path, "lunco:telemetry:deadband")? {
@@ -928,7 +928,7 @@ fn project_usd_telemetry(
                     parameter,
                 ));
                 if let Some(display_name) = display_name {
-                    channel.insert(lunco_core::markers::Callsign(display_name));
+                    channel.try_insert(lunco_core::markers::Callsign(display_name));
                 }
             } else {
                 warn!(
@@ -1004,7 +1004,7 @@ fn process_usd_cosim_prim_read(
         let latched = match read_authored_bool_strict(reader, sdf_path, "lunco:event:latched") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "[usd-cosim] {}: LunCoEvent has malformed lunco:event:latched",
                     sdf_path
@@ -1311,7 +1311,7 @@ fn process_usd_cosim_prim_read(
                 .try_insert(lunco_cosim::RealtimeSafe);
         }
         Ok(Some(false)) | Ok(None) => {}
-        Err(()) => warn!(
+        Err(_) => warn!(
             "[usd-cosim] program {} has malformed `lunco:program:realtimeSafe`; promise ignored",
             prim_path.path
         ),

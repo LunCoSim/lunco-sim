@@ -25,6 +25,13 @@
 #                DELIBERATE. Every other rig in this folder has been converted to
 #                an Xform frame + shape child; this one keeps the old shape because
 #                it is the fixture that proves the rule fires. Do not "fix" it.
+#   Leg/Strut_Spring  a force drive with no authored driven mass → conditionally-stable-joint-drive
+#                The same coefficients on the production massed path are converted to
+#                Avian's implicit SpringDamper and must stay silent.
+#   Leg/Strut_NegativeStiffness  a negative spring coefficient → joint-drive-negative-stiffness
+#                Driven mass cannot make a negative stiffness physically valid.
+#   BadGear      malformed PhysxPhysicsGearJoint drive values → invalid-gear-drive
+#                The USD-sim reader refuses the coupling; policy must surface it.
 #
 # and one CORRECT construction that must stay silent:
 #
@@ -137,6 +144,15 @@ def Xform "LintSelftest" (
         double size = 0.5
         double3 xformOp:translate = (5.0, 0.25, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def PhysxPhysicsGearJoint "BadGear" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        float physxGearJoint:gearRatio = 0.0
+        token drive:angular:physics:type = "unsupported"
+        float drive:angular:physics:stiffness = -1.0
     }
 
     def Cube "Anchor" (
@@ -290,6 +306,17 @@ def Xform "LintSelftest" (
             uniform token physics:axis = "Y"
             uniform token drive:linear:physics:type = "force"
             float drive:linear:physics:stiffness = 4000.0
+        }
+
+        def PhysicsPrismaticJoint "Strut_NegativeStiffness" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
+        {
+            rel physics:body0 = </LintSelftest/Leg>
+            rel physics:body1 = </LintSelftest/Leg/Strut>
+            uniform token physics:axis = "Y"
+            uniform token drive:linear:physics:type = "force"
+            float drive:linear:physics:stiffness = -1.0
         }
 
         def PhysicsSphericalJoint "Foot_Gimbal"

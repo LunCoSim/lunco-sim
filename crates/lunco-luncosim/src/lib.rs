@@ -2617,19 +2617,10 @@ impl Plugin for SandboxCorePlugin {
             // writer actually moved it. Must be added AFTER PhysicsPlugins
             // (it overrides PhysicsTransformConfig).
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
-            // 64 solver substeps (avian default 6): the raked prismatic landing
-            // joints and joint-based rovers need the higher fixed-step resolution
-            // to converge their hard angular constraints under contact load.
-            // Quantified in the headless
-            // `rover_jitter` probe. See `project_physical_rover_suspension`.
-            //
-            // WEB: 16 substeps — the single wasm thread runs the whole solver inline,
-            // so the browser uses a smaller, measured budget while retaining the
-            // hard-joint convergence needed by the authored mechanisms. Native and
-            // server builds use 64 for full contact convergence and peer determinism.
-            .insert_resource(avian3d::prelude::SubstepCount(
-                if cfg!(target_arch = "wasm32") { 16 } else { 64 },
-            ))
+            // `lunco_physics::PhysicsGatePlugin` owns the single solver-resolution
+            // contract and installs eight Avian substeps for every host. Keeping
+            // this choice at the physics owner prevents the GUI, server, and web
+            // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_systems(
@@ -4429,6 +4420,30 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
                 .map(lunco_assets::asset_path::slashed)
                 .unwrap_or_else(|_| scene_file.clone());
             twin.set_default_scene(rel_scene_path);
+
+            // The asset authority owns `twin://` registration. Establish it
+            // before dispatching `TwinAdded`: this startup path admits the Twin
+            // and requests its default scene in one observer transaction, so a
+            // USD observer must never race the asset observer and see an
+            // unmounted root. The event handler repeats the same idempotent
+            // registration for ordinary workspace opens.
+            let authority = match world
+                .resource::<lunco_assets::twin_source::TwinRoots>()
+                .register_twin(&twin)
+            {
+                Ok(authority) => authority,
+                Err(error) => {
+                    error!(
+                        "[luncosim] could not register Twin asset authority for `{}`: {error}",
+                        twin.root.display()
+                    );
+                    return;
+                }
+            };
+            info!(
+                "[luncosim] registered startup Twin asset authority `{authority}` at {}",
+                twin.root.display()
+            );
 
             let twin_id = world
                 .resource_mut::<lunco_workspace::WorkspaceResource>()

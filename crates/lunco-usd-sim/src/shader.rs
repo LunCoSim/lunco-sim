@@ -239,7 +239,7 @@ fn apply_usd_shader_material_read(
         "primvars:doNotCastShadows",
     ) {
         Ok(value) => value.unwrap_or(false),
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[shader] prim {} has malformed authored material attribute `primvars:doNotCastShadows`; keeping its PbrLook",
                 prim_path.path
@@ -254,7 +254,7 @@ fn apply_usd_shader_material_read(
     // dome shows nothing (or, from outside, its far hemisphere: a disc of sky).
     let double_sided = match read_authored_bool_strict(reader, sdf_path, "doubleSided") {
         Ok(value) => value.unwrap_or(false),
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[shader] prim {} has malformed authored material attribute `doubleSided`; keeping its PbrLook",
                 prim_path.path
@@ -291,7 +291,7 @@ fn apply_usd_shader_material_read(
     // 10^8 m and beyond; an opaque dome swallows the whole sky.
     let additive = match read_authored_bool_strict(reader, sdf_path, "lunco:surface:additive") {
         Ok(value) => value.unwrap_or(false),
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[shader] prim {} has malformed authored material attribute `lunco:surface:additive`; keeping its PbrLook",
                 prim_path.path
@@ -303,7 +303,7 @@ fn apply_usd_shader_material_read(
     {
         Ok(Some(value)) if (0.0..=1.0).contains(&value) => Some(value),
         Ok(None) => None,
-        Ok(Some(_)) | Err(()) => {
+        Ok(Some(_)) | Err(_) => {
             error!(
                 "[shader] prim {} has malformed authored material attribute `primvars:displayOpacity`; keeping its PbrLook",
                 prim_path.path

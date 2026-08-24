@@ -2961,6 +2961,21 @@ fn sanitize_dock_fractions(dock: &mut DockState<TabId>) {
     }
 }
 
+#[derive(Resource)]
+struct WorkbenchVisualsCache {
+    revision: u64,
+    visuals: egui::Visuals,
+}
+
+impl Default for WorkbenchVisualsCache {
+    fn default() -> Self {
+        Self {
+            revision: u64::MAX,
+            visuals: egui::Visuals::dark(),
+        }
+    }
+}
+
 fn render_workbench(world: &mut World) {
     let ctx = {
         let mut state: bevy::ecs::system::SystemState<EguiContexts> =
@@ -3001,7 +3016,26 @@ fn render_workbench(world: &mut World) {
         gate.mark_rendered();
     }
 
-    let theme = world.resource::<lunco_theme::Theme>().clone();
+    let (theme, theme_revision, theme_changed) = {
+        let theme_ref = world
+            .get_resource_ref::<lunco_theme::Theme>()
+            .expect("WorkbenchPlugin requires ThemePlugin");
+        let snapshot = (*theme_ref).clone();
+        (snapshot, theme_ref.revision(), theme_ref.is_changed())
+    };
+    let visuals = {
+        let mut cache =
+            world.get_resource_or_insert_with::<WorkbenchVisualsCache>(Default::default);
+        // The revision is the normal invalidation contract. Bevy change
+        // detection also covers the existing public Theme fields when a
+        // host mutates one directly; that keeps the derived snapshot correct
+        // while those fields remain part of the public resource API.
+        if cache.revision != theme_revision || theme_changed {
+            cache.visuals = theme.to_visuals();
+            cache.revision = theme_revision;
+        }
+        cache.visuals.clone()
+    };
 
     // Apply theme to the egui ctx itself (not just per-ui) — the
     // menu bar, status bar, and any other `TopBottomPanel`/`SidePanel`
@@ -3010,9 +3044,9 @@ fn render_workbench(world: &mut World) {
     // `style_mut().visuals = …` assignment lands too late and leaves
     // chrome panels unstyled (dark in Light mode, etc.). Setting
     // visuals on the ctx fixes every chrome panel in one shot.
-    ctx.set_visuals(theme.to_visuals());
+    ctx.set_visuals(visuals.clone());
 
-    render_layout(&ctx, &mut layout, world, &theme);
+    render_layout(&ctx, &mut layout, world, &theme, &visuals);
 
     world.insert_resource(layout);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
@@ -3426,6 +3460,7 @@ fn render_layout(
     layout: &mut WorkbenchLayout,
     world: &mut World,
     theme: &lunco_theme::Theme,
+    visuals: &egui::Visuals,
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -3589,7 +3624,7 @@ fn render_layout(
         // our font scale.
         .exact_size(30.0)
         .show(&mut viewport_ui, |ui| {
-        ui.style_mut().visuals = theme.to_visuals();
+        ui.style_mut().visuals.clone_from(visuals);
 
         // Drag region must be registered BEFORE the menu buttons so
         // egui's last-wins hit-testing lets buttons capture clicks
@@ -4537,7 +4572,7 @@ fn render_layout(
     // Drives off the cross-cutting `StatusBus` resource. Latest event
     // shows in the strip; click opens a popup with recent history.
     egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
-        ui.style_mut().visuals = theme.to_visuals();
+        ui.style_mut().visuals.clone_from(visuals);
         render_status_bar_inner(ui, world, theme);
     });
 
@@ -4547,7 +4582,7 @@ fn render_layout(
             .resizable(false)
             .exact_size(40.0)
             .show(&mut viewport_ui, |ui| {
-                ui.style_mut().visuals = theme.to_visuals();
+                ui.style_mut().visuals.clone_from(visuals);
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     for label in ["Files", "Parts", "Assets", "Find", "Settings"] {
@@ -4763,7 +4798,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals = theme.to_visuals();
+                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -4780,7 +4815,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals = theme.to_visuals();
+                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -4796,7 +4831,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    ui.style_mut().visuals = theme.to_visuals();
+                    ui.style_mut().visuals.clone_from(visuals);
                     render_panel_solo(ui, &id, layout, world);
                 });
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {

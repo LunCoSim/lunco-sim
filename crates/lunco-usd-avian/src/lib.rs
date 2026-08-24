@@ -86,7 +86,7 @@ pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 pub struct ScenePhysicsOwned;
 
 pub mod lint;
-pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
+pub use lint::{physics_facts, USD_LINT_DOMAIN};
 
 pub mod filtered_pairs;
 pub use filtered_pairs::{
@@ -812,7 +812,7 @@ fn collect_child_colliders_from_usd(
         // unlike a standalone collider, a compound child has no ECS entity on
         // which Avian could propagate intermediate Xform scales.
         if let Some(collider) =
-            build_collider_from_usd_at_scale(reader, &child_path, child_tf.scale)?
+            build_collider_from_usd_at_scale(reader, &child_path, child_tf.scale)
         {
             let pos = Position(DVec3::new(
                 child_tf.translation.x as f64,
@@ -907,7 +907,7 @@ fn build_collider_from_usd(
 ) -> Result<Option<Collider>, TransformReadError> {
     let scale =
         local_transform_at(reader, sdf_path, 0.0)?.map_or(Vec3::ONE, |transform| transform.scale);
-    build_collider_from_usd_at_scale(reader, sdf_path, scale)
+    Ok(build_collider_from_usd_at_scale(reader, sdf_path, scale))
 }
 
 /// Build a collider with a scale already composed from the owning body frame to
@@ -918,10 +918,8 @@ fn build_collider_from_usd_at_scale(
     reader: &StageView<'_>,
     sdf_path: &SdfPath,
     scale: Vec3,
-) -> Result<Option<Collider>, TransformReadError> {
-    let Some(ty) = reader.type_name(sdf_path) else {
-        return Ok(None);
-    };
+) -> Option<Collider> {
+    let ty = reader.type_name(sdf_path)?;
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
     // SAME `points`/`faceVertexIndices` `lunco-usd-bevy` renders (one geometry
@@ -929,9 +927,7 @@ fn build_collider_from_usd_at_scale(
     // scales its vertices exactly (no convex-hull tessellation), so the shared
     // scale tail applies unchanged.
     if ty == "Mesh" {
-        let Some((verts, tris)) = read_usd_mesh_indexed(reader, sdf_path) else {
-            return Ok(None);
-        };
+        let (verts, tris) = read_usd_mesh_indexed(reader, sdf_path)?;
         let verts: Vec<DVec3> = verts
             .into_iter()
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
@@ -950,30 +946,23 @@ fn build_collider_from_usd_at_scale(
             .then(|| reader.text(sdf_path, ptok::A_APPROXIMATION))
             .flatten();
         let collider = match approximation.as_deref() {
-            Some("convexHull") => {
-                let Some(collider) = Collider::convex_hull(verts) else {
-                    return Ok(None);
-                };
-                collider
-            }
+            Some("convexHull") => Collider::convex_hull(verts)?,
             Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
             None | Some("none") => Collider::trimesh(verts, tris),
             // The authored approximation is a physical contract. Do not
             // silently replace an unsupported approximation with a different
             // shape, and do not turn a failed convex hull into a dynamic
             // triangle mesh that Avian cannot use as a moving body.
-            Some(_) => return Ok(None),
+            Some(_) => return None,
         };
-        return Ok(Some(apply_collider_scale(collider, scale)));
+        return Some(apply_collider_scale(collider, scale));
     }
 
     // Dimensions (+ their magic defaults) come from the canonical
     // `read_shape_dims` shared with usd-bevy's mesh builder, so the
     // collider can't desync from the visual mesh. Build the INTRINSIC
     // (unscaled) shape; the scale tail below owns scaling.
-    let Some(shape_dims) = read_shape_dims(reader, sdf_path, ty.as_str()) else {
-        return Ok(None);
-    };
+    let shape_dims = read_shape_dims(reader, sdf_path, ty.as_str())?;
     let collider = match shape_dims {
         ShapeDims::Cube { size } => Collider::cuboid(size, size, size),
         ShapeDims::Sphere { radius } => Collider::sphere(radius),
@@ -985,7 +974,7 @@ fn build_collider_from_usd_at_scale(
         ShapeDims::Plane { width, length } => Collider::cuboid(width, 0.001, length),
     };
 
-    Ok(Some(apply_collider_scale(collider, scale)))
+    Some(apply_collider_scale(collider, scale))
 }
 
 /// Pre-applies a prim's composed USD scale to a freshly-built intrinsic collider so
@@ -3527,7 +3516,8 @@ fn apply_rigid_body_mass_props(
         }
         None => None,
     };
-    let material_density = read_physics_material(reader, sdf_path)?
+    let material_density = read_physics_material(reader, sdf_path)
+        .map_err(|_| ())?
         .and_then(|pm| pm.density)
         .filter(|d| *d > 0.0)
         .map(f64::from);
@@ -3640,7 +3630,7 @@ fn apply_physics_material(
     //
     // The pairwise combination remains Avian's responsibility. USD describes
     // each surface; it does not average the two surfaces at load time.
-    if let Some(pm) = read_physics_material(reader, sdf_path)? {
+    if let Some(pm) = read_physics_material(reader, sdf_path).map_err(|_| ())? {
         if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
             let d = Friction::default();
             let friction = Friction {
@@ -3767,10 +3757,32 @@ pub struct PhysicsMaterial {
 /// with the renderer ([`lunco_usd_bevy::resolve_bound_material`]). A physical and
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicsMaterialReadError {
+    /// Authored material attribute that failed strict decoding.
+    pub attribute: String,
+}
+
+impl PhysicsMaterialReadError {
+    fn new(attribute: &str) -> Self {
+        Self {
+            attribute: attribute.to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Display for PhysicsMaterialReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid authored physics material `{}`", self.attribute)
+    }
+}
+
+impl std::error::Error for PhysicsMaterialReadError {}
+
 pub fn read_physics_material(
     reader: &StageView<'_>,
     prim: &SdfPath,
-) -> Result<Option<PhysicsMaterial>, ()> {
+) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
     use openusd::schemas::physics::tokens as ptok;
 
     let mat = lunco_usd_bevy::resolve_bound_material(
@@ -3784,34 +3796,40 @@ pub fn read_physics_material(
     if !reader.has_api_schema(&mat, "PhysicsMaterialAPI") {
         return Ok(None);
     }
-    let read_coefficient = |attr: &str, upper: Option<f64>| -> Result<Option<f32>, ()> {
-        match read_authored_real(reader, &mat, attr)? {
-            None => Ok(None),
-            Some(value)
-                if value.is_finite()
-                    && value >= 0.0
-                    && upper.is_none_or(|maximum| value <= maximum)
-                    && value <= f32::MAX as f64 =>
+    let read_coefficient =
+        |attr: &str, upper: Option<f64>| -> Result<Option<f32>, PhysicsMaterialReadError> {
+            match read_authored_real(reader, &mat, attr)
+                .map_err(|_| PhysicsMaterialReadError::new(attr))?
             {
-                Ok(Some(value as f32))
+                None => Ok(None),
+                Some(value)
+                    if value.is_finite()
+                        && value >= 0.0
+                        && upper.is_none_or(|maximum| value <= maximum)
+                        && value <= f32::MAX as f64 =>
+                {
+                    Ok(Some(value as f32))
+                }
+                Some(_) => Err(PhysicsMaterialReadError::new(attr)),
             }
-            Some(_) => Err(()),
-        }
-    };
+        };
     let dynamic_friction = read_coefficient(ptok::A_DYNAMIC_FRICTION, None)?;
     let static_friction = read_coefficient(ptok::A_STATIC_FRICTION, None)?;
     let restitution = read_coefficient(ptok::A_RESTITUTION, Some(1.0))?;
     let density = read_coefficient(ptok::A_DENSITY, None)?;
-    let read_combine = |attr: &str| -> Result<Option<CoefficientCombine>, ()> {
-        if !reader.has_authored_attribute(&mat, attr) {
-            return Ok(None);
-        }
-        let token = match reader.attr_value(&mat, attr) {
-            Some(openusd::sdf::Value::Token(token)) => token.to_string(),
-            _ => return Err(()),
+    let read_combine =
+        |attr: &str| -> Result<Option<CoefficientCombine>, PhysicsMaterialReadError> {
+            if !reader.has_authored_attribute(&mat, attr) {
+                return Ok(None);
+            }
+            let token = match reader.attr_value(&mat, attr) {
+                Some(openusd::sdf::Value::Token(token)) => token.to_string(),
+                _ => return Err(PhysicsMaterialReadError::new(attr)),
+            };
+            Ok(Some(
+                combine_mode(&token).ok_or_else(|| PhysicsMaterialReadError::new(attr))?,
+            ))
         };
-        Ok(Some(combine_mode(&token).ok_or(())?))
-    };
     let friction_combine = read_combine(PHYSX_FRICTION_COMBINE_MODE)?;
     let restitution_combine = read_combine(PHYSX_RESTITUTION_COMBINE_MODE)?;
 

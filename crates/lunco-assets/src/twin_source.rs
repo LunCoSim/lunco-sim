@@ -84,7 +84,7 @@ pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
 /// Twin name and the Twin-relative path. [`parse_twin_uri`] for callers that
 /// hold the full URI.
 pub fn split_twin_rel(rest: &str) -> Option<(&str, &str)> {
-    rest.split_once(|separator| separator == '/' || separator == '\\')
+    rest.split_once(['/', '\\'])
 }
 
 /// The key an overlay is stored under — the reader-facing relative path
@@ -227,6 +227,32 @@ impl TwinRoots {
                 .and_then(|component| component.as_os_str().to_str())
                 .is_none_or(|name| !names.iter().any(|removed| removed == name))
         });
+    }
+
+    /// Register the asset authority for an opened workspace Twin.
+    ///
+    /// The workspace event remains the normal lifecycle trigger, but startup
+    /// composition can admit a Twin and immediately request its default scene
+    /// in the same observer dispatch. Exposing this operation on the asset
+    /// owner lets that composition root establish the `twin://` authority
+    /// before any domain observer resolves the scene; repeated registration is
+    /// idempotent for the same root.
+    pub fn register_twin(
+        &self,
+        twin: &lunco_twin::Twin,
+    ) -> Result<String, TwinRootsError> {
+        let name = twin
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.name.clone())
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                twin.root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "twin".to_string());
+        self.register(name, twin.root.clone())
     }
 
     /// Map a Twin `name` to its absolute root folder, returning the name

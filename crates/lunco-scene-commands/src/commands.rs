@@ -3338,9 +3338,9 @@ impl Plugin for SpawnCommandPlugin {
         // Parse-only asset pre-flight ("does this file compile?") — pure file
         // checks, so it answers even while no scene is loaded.
         crate::validate::register(app);
-        // `RunLint` + the `LintReport` read-back. Nothing lints on load: the
-        // linter is a verb you call (from rhai, HTTP or MCP), and a scenario that
-        // wants it live simply calls it on a cadence.
+        // `RunLint` + the `LintReport` read-back. Nothing lints on load or on a
+        // physics cadence: the linter is an explicit verb called from rhai, HTTP
+        // or MCP after an authoring/preflight change.
         crate::lint_command::register(app);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
