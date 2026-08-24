@@ -66,12 +66,24 @@ fn electrical_observables_follow_the_physical_power_chain() {
         "motor electrical draw must be solved from its terminal current and voltage"
     );
     assert!(
-        motor.contains("heat = max(0.0, electrical_power) * (1.0 - efficiency);"),
-        "motor heat must be the electrical loss, not a second synthetic load"
+        motor.contains("heat = resistance * winding_current * winding_current;"),
+        "motor heat must be winding loss from the solved current"
     );
     assert!(
-        motor.contains("available_demand = demand * max(0.0, min(1.0, p.v / v_rated));"),
-        "motor authority must follow the solved terminal voltage rather than a battery-specific branch"
+        motor.contains("winding_current = (winding_voltage - back_emf) / resistance;"),
+        "motor current must include back-EMF from the solved shaft speed"
+    );
+    assert!(
+        motor.contains("shaft.tau = -shaft_torque;"),
+        "the solved motor torque must enter the authored rotational flange"
+    );
+    assert!(
+        motor.contains("shaft_speed = der(shaft.phi);"),
+        "the motor must receive shaft speed through the rotational boundary"
+    );
+    assert!(
+        !motor.contains("available_demand") && !motor.contains("efficiency"),
+        "the old voltage-authority proxy and independent efficiency scale must be removed"
     );
 }
 
