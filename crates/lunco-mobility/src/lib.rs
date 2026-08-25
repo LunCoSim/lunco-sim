@@ -587,6 +587,27 @@ pub fn strut_offset(rest_length: f64, wheel_radius: f64) -> f64 {
     rest_length - wheel_radius
 }
 
+/// Resolve the authored ray's ground contact in the same physics frame as the
+/// wheel hub.
+///
+/// The ray starts at the strut top and points along the wheel's local -Y axis.
+/// The returned point is the point at which the ground reaction acts. Both the
+/// analytical suspension force and the analytical tire force must use this
+/// point so the reduced realization preserves the contact lever arm and load
+/// transfer of the physical wheel realization.
+#[inline]
+fn ray_contact_point(
+    hub_position: DVec3,
+    hub_rotation: DQuat,
+    rest_length: f64,
+    wheel_radius: f64,
+    hit_distance: f64,
+) -> DVec3 {
+    let ray_origin =
+        hub_position + hub_rotation * DVec3::Y * strut_offset(rest_length, wheel_radius);
+    ray_origin + hub_rotation * DVec3::NEG_Y * hit_distance
+}
+
 /// Upper clamp on the suspension force magnitude (N) applied per spring.
 /// Bounds the spring+damping sum so a deeply-compressed strut or a numerical
 /// velocity spike can't inject an explosive impulse that launches the rover.
@@ -1127,7 +1148,7 @@ fn apply_wheel_suspension(
             // to the spin model instead of floating at their authored rest offset.
             let apply_force = !matches!(body, RigidBody::Kinematic)
                 && !fixed_dynamic_bodies.contains(&parent_entity);
-            let (world_pos, _) = wheel_hub_pose(
+            let (world_pos, world_rot) = wheel_hub_pose(
                 GridPos(forces.position().0),
                 GridRot(forces.rotation().0),
                 mount.local.translation.as_dvec3(),
@@ -1181,7 +1202,16 @@ fn apply_wheel_suspension(
 
                     let force_vec = hit.normal * total_force_mag;
                     if apply_force {
-                        forces.apply_force_at_point(force_vec, world_pos.0);
+                        forces.apply_force_at_point(
+                            force_vec,
+                            ray_contact_point(
+                                world_pos.0,
+                                world_rot.0,
+                                susp.rest_length,
+                                wheel.wheel_radius,
+                                distance,
+                            ),
+                        );
                     }
                     wheel.last_normal_force = total_force_mag;
                 } else {
@@ -1371,12 +1401,13 @@ fn apply_wheel_drive(
                     // forward/back contact limit cycle. The ray starts at the
                     // authored strut top, so reconstruct its hit point in the
                     // same grid-absolute frame as the chassis and ray query.
-                    let ray_origin = hub_pos_world.0
-                        + hub_rot_world.0
-                            * DVec3::Y
-                            * strut_offset(susp.rest_length, wheel.wheel_radius);
-                    let ray_direction = hub_rot_world.0 * DVec3::NEG_Y;
-                    let contact_point = ray_origin + ray_direction * hit.distance;
+                    let contact_point = ray_contact_point(
+                        hub_pos_world.0,
+                        hub_rot_world.0,
+                        susp.rest_length,
+                        wheel.wheel_radius,
+                        hit.distance,
+                    );
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
                     // see `update_wheel_spin`. Applying it is all that is left.
@@ -2171,6 +2202,18 @@ mod force_law_tests {
     use super::*;
     use bevy::math::{DQuat, DVec3};
     use lunco_core::coords::VehicleFrame;
+
+    #[test]
+    fn ray_contact_point_follows_authored_strut_geometry() {
+        let hub = DVec3::new(2.0, 3.0, 4.0);
+        let rotation = DQuat::from_rotation_z(core::f64::consts::FRAC_PI_2);
+
+        // The authored ray starts 0.8 m along local +Y and travels 0.25 m
+        // along local -Y. Under this rotation those directions are -X and +X.
+        let contact = ray_contact_point(hub, rotation, 1.2, 0.4, 0.25);
+
+        assert!((contact - DVec3::new(1.45, 3.0, 4.0)).length() < 1.0e-12);
+    }
 
     #[test]
     fn authored_allocator_vehicle_keeps_the_shared_brake_without_drive_mix() {

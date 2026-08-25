@@ -239,7 +239,7 @@ gravity axis. Missing support is consumed as an unsupported physical state; it i
 never converted into a permanent activation hold or a guessed world-up placement.
 
 ### 3.3. Physics & Visual Updates (`lunco-mobility`)
-* **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values.
+* **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values. The resulting ground reaction is applied at the authored ray contact point, not at the axle mount, so the reduced realization retains the contact lever arm and load-transfer moment of the physical wheel.
 * **`update_suspension_visuals`:** Queries `(&WheelRaycast, &Suspension, ...)` to scale the spring mesh and translate the piston along the suspension travel axis.
 
 ### 3.4. Live Tuning & Property Updates (`lunco-scene-commands`)
