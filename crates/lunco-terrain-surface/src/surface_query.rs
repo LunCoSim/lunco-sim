@@ -159,6 +159,19 @@ impl GridSurfaceQuery<'_, '_> {
         !self.all_terrains.is_empty()
     }
 
+    /// Identity of the composed analytic surface in the active physics frame.
+    ///
+    /// Consumers that cache derived geometry must key on this value rather than
+    /// merely on `has_terrain()`: a DEM restamp or a live terrain-layer edit can
+    /// replace the oracle while terrain remains present in the scene.
+    pub fn surface_key(&self) -> Option<(Entity, u64)> {
+        let (frame, _) = self.frame()?;
+        self.terrains
+            .iter()
+            .find(|(_, _, pose)| pose.frame == frame)
+            .map(|(entity, height_field, _)| (entity, height_field.0.surface_key()))
+    }
+
     /// Convert a render-space point into the grid frame — the boundary crossing
     /// every screen-space tool makes exactly once, at the top.
     pub fn to_grid(&self, render_point: RenderPos) -> Option<GridPos> {
@@ -553,6 +566,21 @@ mod tests {
         let (has, height) = app.world_mut().run_system(sys).unwrap();
         assert!(!has);
         assert_eq!(height, None);
+    }
+
+    #[test]
+    fn surface_key_identifies_the_active_analytic_surface() {
+        let (mut app, terrain) = world_with_terrain(SITE_ELEVATION);
+        let sys = app
+            .world_mut()
+            .register_system(|q: GridSurfaceQuery| q.surface_key());
+        let key = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .expect("active terrain must expose a cache identity");
+
+        assert_eq!(key.0, terrain);
     }
 
     #[test]
