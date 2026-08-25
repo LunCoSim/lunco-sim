@@ -17,6 +17,16 @@ representation:
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Event-driven orchestration only; no production `on_tick` control loop |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+For derived 3D annotations such as a waypoint route, keep one change-gated
+projection snapshot between authored/runtime facts and presentation consumers.
+Resolve authored identities through the authoritative binding map, express all
+positions in the active physics frame, and sample the authoritative terrain at
+intermediate points before creating geometry. Keep marker-root placement,
+annotation mesh reconciliation, labels, and look tinting as separate owners that
+consume that snapshot. Stable frames must do no route parsing, binding lookup,
+terrain sampling, mesh generation, or marker writes; camera-dependent label
+projection is the only remaining per-frame presentation work.
+
 ## Start with the standard-schema audit
 
 Before creating `LunCo*API` or a `lunco:*` property:

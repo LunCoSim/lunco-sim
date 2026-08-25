@@ -34,13 +34,15 @@ by the annotation system. The two ownership models must not be mixed.
 The waypoint prims and the BT.CPP mission are the authored facts. The route ribbon is a
 view of those facts plus live execution state, so it is generated as transient Bevy
 geometry. It is not a second USD route, a per-frame USD edit, or a screen-space gizmo.
-The renderer resolves every target through the exact composed USD path binding, projects
-the points onto the authoritative terrain surface, and places the ribbon in its own
-surface-clearance layer. The clearance is owned by the annotation renderer; it never
-reuses a waypoint sphere's radius or local transform. Reached legs are removed from the
-annotation at the same state transition that changes their marker appearance, so an old
-route overlay cannot compete with a gray transparent marker while preserving USD as the
-sole owner of scene facts.
+`RouteVisualProjection` is the one derived view: its change-gated producer resolves
+every authored target through the exact composed USD path binding, samples every route
+leg on the authoritative terrain surface, and publishes the active-frame geometry.
+The marker-root surface projection is a separate change-gated owner; mesh and marker
+look systems only consume the snapshot. The clearance is owned by the annotation
+renderer; it never reuses a waypoint sphere's radius or local transform. Reached legs
+are removed from the annotation at the same state transition that changes their marker
+appearance, so an old route overlay cannot compete with a gray transparent marker while
+preserving USD as the sole owner of scene facts.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 

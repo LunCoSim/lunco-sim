@@ -512,6 +512,7 @@ impl Plugin for SandboxEditUiPlugin {
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
             .init_resource::<checkpoint_click::WaypointPlacement>()
+            .init_resource::<checkpoint_click::RouteVisualProjection>()
             // An armed placement names the vessel whose route it edits, and a
             // context menu names the waypoint it opened on. Both are entities of
             // the scene being unloaded — carried across a reload they leave the
@@ -534,6 +535,7 @@ impl Plugin for SandboxEditUiPlugin {
                             commands.entity(entity).remove::<lunco_autopilot::usd_tree::ReachedWaypoints>();
                         }
                     },
+                    checkpoint_click::clear_route_visual_projection,
                 ),
             )
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
@@ -572,9 +574,19 @@ impl Plugin for SandboxEditUiPlugin {
                     // USD-authored marker policies are translated once into
                     // native mesh-picking behavior.
                     scene_context::apply_pointer_policies,
-                    // The route line is real 3D geometry, not an egui overlay stroke.
-                    checkpoint_click::sync_waypoint_path_mesh,
-                    checkpoint_click::sync_waypoint_marker_visuals,
+                    // Route interpretation and terrain projection are a
+                    // change-driven producer. The mesh and marker consumers
+                    // run only when this snapshot changes.
+                    checkpoint_click::project_waypoint_markers_to_surface
+                        .run_if(checkpoint_click::route_projection_needs_rebuild),
+                    checkpoint_click::rebuild_waypoint_route_projection
+                        .run_if(checkpoint_click::route_projection_needs_rebuild),
+                    checkpoint_click::sync_route_visual_meshes
+                        .after(checkpoint_click::rebuild_waypoint_route_projection)
+                        .run_if(resource_changed::<checkpoint_click::RouteVisualProjection>),
+                    checkpoint_click::sync_waypoint_marker_visuals
+                        .after(checkpoint_click::rebuild_waypoint_route_projection)
+                        .run_if(resource_changed::<checkpoint_click::RouteVisualProjection>),
                     checkpoint_click::handle_autopilot_toggle_intent,
                     inspector::delete_selected_on_intent,
                     // Grabbing the controls takes the vessel back from its autopilot.
