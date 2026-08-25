@@ -1782,6 +1782,21 @@ fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Opti
     ))
 }
 
+/// Whether the standard wheel simulation owns the wheel endpoint of this joint.
+///
+/// Wheel revolute joints are built together with their wheel body by
+/// `lunco-usd-sim`; the generic USD joint projector must not claim them. This
+/// is resolved from the authored body relationship and applied wheel schema,
+/// never from a prim name or a joint-name convention.
+fn joint_targets_simulated_wheel(reader: &StageView<'_>, path: &SdfPath) -> bool {
+    let targets = reader.rel_targets(path, "physics:body1");
+    if targets.len() != 1 {
+        return false;
+    }
+    nearest_body_path(reader, &targets[0])
+        .is_some_and(|body| reader.has_api_schema(&body, "PhysxVehicleWheelAPI"))
+}
+
 /// Read the STANDARD UsdPhysics joint at `path` off the LIVE composed stage via
 /// openusd's typed schema (`openusd::schemas::physics`) into the deferred
 /// [`PendingUsdJoint`]. The typed schema wraps a live `Prim`, so it reads the
@@ -2200,20 +2215,10 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         return None;
     };
 
-    // A passive suspension and a USD drive are two different owners of the
     // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
     // wheel body); skip them here to avoid double-up/race.
-    if let Ok(b1_path) = SdfPath::new(&spec.body1_path) {
-        if stage
-            .prim(b1_path)
-            .attribute("physxVehicleWheel:radius")
-            .get::<f32>()
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            return None;
-        }
+    if joint_targets_simulated_wheel(&view, path) {
+        return None;
     }
     Some(spec)
 }
@@ -2363,6 +2368,10 @@ fn on_add_usd_prim(
         .flatten()
         .is_some()
     {
+        return;
+    }
+    let wheel_owned = joint_targets_simulated_wheel(&view, &sdf_path);
+    if wheel_owned {
         return;
     }
     if let Some(joint) = read_joint_spec_typed(cs.stage(), &sdf_path) {
@@ -4276,7 +4285,7 @@ mod joint_typed_tests {
     //! *dynamics* need a rover boot.
     use super::read_joint_spec_typed;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::compose_file_to_stage;
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -4776,6 +4785,26 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         assert!(
             read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap()).is_none(),
             "physics:jointEnabled = false must suppress the joint"
+        );
+    }
+
+    #[test]
+    fn wheel_revolute_joints_are_owned_by_the_wheel_projector() {
+        let stage = compose_file_to_stage(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/scenes/tests/drivetrain_parity.usda"),
+        )
+        .expect("compose drivetrain parity");
+        let view = StageView::new(&stage);
+        let path = SdfPath::new("/DrivetrainParity/RoverPhysical/Wheel_FL_Hinge")
+            .expect("wheel hinge path");
+        assert!(
+            super::joint_targets_simulated_wheel(&view, &path),
+            "the standard body1 relationship and wheel schema must assign this joint to the wheel projector"
+        );
+        assert!(
+            read_joint_spec_typed(&stage, &path).is_none(),
+            "generic Avian projection must not duplicate a wheel joint owned by lunco-usd-sim"
         );
     }
 
