@@ -261,17 +261,14 @@ impl Plugin for SandboxUiPlugin {
                 app.add_observer(models_palette::on_scene_click_attach);
                 app.add_systems(Update, models_palette::attach_escape_system);
             })
-            // Build is the default simulation workbench. It opens only the
-            // structure browser, viewport, and Inspector; task-specific tools
-            // remain discoverable in View without consuming an empty dock.
+            // View is the default simulation presentation. A loaded Twin must
+            // show its authored 3D camera immediately; the Modelica workbench
+            // remains an explicit operator choice instead of covering the scene
+            // during startup.
             .add_systems(
                 Startup,
                 |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-                    layout.activate_perspective(lunco_workbench::PerspectiveId("rover_build"));
-                    layout.open_instance(
-                        lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-                        lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-                    );
+                    layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
                 },
             )
             .add_systems(

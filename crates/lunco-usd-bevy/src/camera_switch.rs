@@ -697,12 +697,15 @@ pub fn validate_authored_camera_contract(
         (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
         With<crate::camera_track::CameraTrack>,
     >,
-    cameras: Query<(Entity, &Name, &UsdPrimPath), With<SceneCamera>>,
+    cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalAvatar>), With<SceneCamera>>,
+    selection: Res<ViewportCameraSelection>,
+    mut commands: Commands,
     mut contract: ResMut<CameraContractStatus>,
     mut status: ResMut<CameraSelectionStatus>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if !contract.required {
+        request_authored_local_avatar_view(&cameras, &tracks, &selection, &mut commands);
         publish_camera_contract_diagnostics(&mut diagnostics, &[]);
         if !contract.errors.is_empty() || !contract.ready {
             *contract = CameraContractStatus {
@@ -766,11 +769,17 @@ pub fn validate_authored_camera_contract(
         return;
     }
 
+    request_authored_local_avatar_view(&cameras, &tracks, &selection, &mut commands);
+
     let mut stage_ids = std::collections::BTreeSet::new();
     let mut camera_names = Vec::new();
-    for (entity, name, prim) in &cameras {
+    let mut local_avatar_names = Vec::new();
+    for (entity, name, prim, local_avatar) in &cameras {
         stage_ids.insert(prim.stage_handle.id());
         camera_names.push((entity, name.as_str().to_string()));
+        if local_avatar {
+            local_avatar_names.push(name.as_str().to_string());
+        }
     }
     for (prim, _) in &tracks {
         stage_ids.insert(prim.stage_handle.id());
@@ -790,9 +799,17 @@ pub fn validate_authored_camera_contract(
         );
     }
     if tracks.is_empty() {
-        errors.push(
-            "[camera-contract] scene has no authored CameraTrack initial presentation".to_string(),
-        );
+        match local_avatar_names.as_slice() {
+            [_] => {}
+            [] => errors.push(
+                "[camera-contract] scene has no authored CameraTrack or LocalAvatar initial presentation"
+                    .to_string(),
+            ),
+            names => errors.push(format!(
+                "[camera-contract] scene has multiple LocalAvatar initial presentations: {}",
+                names.join(", ")
+            )),
+        }
     } else if tracks.iter().count() > 1 {
         errors.push(
             "[camera-contract] scene has multiple CameraTrack providers without an explicit viewport scope"
@@ -840,6 +857,32 @@ pub fn validate_authored_camera_contract(
         {
             status.last_error = None;
         }
+    }
+}
+
+/// A scene with no cinematic track may still have an authored LocalAvatar camera.
+/// That camera is the initial presentation owner for both the windowed viewport and
+/// offscreen recording. Bind it once it is projected; never choose by ECS order.
+fn request_authored_local_avatar_view(
+    cameras: &Query<(Entity, &Name, &UsdPrimPath, Has<LocalAvatar>), With<SceneCamera>>,
+    tracks: &Query<
+        (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
+        With<crate::camera_track::CameraTrack>,
+    >,
+    selection: &Res<ViewportCameraSelection>,
+    commands: &mut Commands,
+) {
+    if !tracks.is_empty() || selection.requested.is_some() {
+        return;
+    }
+    let mut local_avatars = cameras
+        .iter()
+        .filter_map(|(entity, _, _, local)| local.then_some(entity));
+    let Some(target) = local_avatars.next() else {
+        return;
+    };
+    if local_avatars.next().is_none() {
+        commands.trigger(ActivateCamera::user(target));
     }
 }
 

@@ -3997,13 +3997,111 @@ impl Plugin for SandboxOffscreenPlugin {
         app.add_systems(Startup, setup_offscreen_target);
         app.add_systems(
             Update,
-            (retarget_cameras_to_offscreen, activate_offscreen_camera).chain(),
+            (
+                retarget_cameras_to_offscreen,
+                activate_offscreen_camera,
+                maintain_offscreen_render_camera,
+            )
+                .chain(),
         );
+
+        // Keep the windowless render contract observable at the render boundary: a main-world
+        // camera can have a valid image target while extraction or ViewTarget preparation still
+        // drops it. This is a one-shot diagnostic for an offscreen session, not a per-frame poll.
+        if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            render_app.add_systems(
+                bevy::render::Render,
+                report_offscreen_render_view.in_set(bevy::render::RenderSystems::Prepare),
+            );
+        }
 
         info!(
             "[offscreen] GPU-full windowless recording mode: no window, scene renders to an offscreen target"
         );
     }
+}
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn report_offscreen_render_view(
+    cameras: Query<(
+        Entity,
+        &bevy::render::camera::ExtractedCamera,
+        Option<&bevy::render::view::ExtractedView>,
+        Option<&bevy::render::view::visibility::RenderVisibleEntities>,
+        Option<&bevy::render::view::ViewTarget>,
+    )>,
+    opaque_phases: Option<
+        Res<
+            bevy::render::render_phase::ViewBinnedRenderPhases<
+                bevy::core_pipeline::core_3d::Opaque3d,
+            >,
+        >,
+    >,
+    transparent_phases: Option<
+        Res<
+            bevy::render::render_phase::ViewSortedRenderPhases<
+                bevy::core_pipeline::core_3d::Transparent3d,
+            >,
+        >,
+    >,
+    mut reported: Local<bool>,
+) {
+    if *reported {
+        return;
+    }
+    let mut count = 0;
+    for (entity, camera, view, visible, target) in &cameras {
+        count += 1;
+        let visible_entities = visible.map_or(0, |visible| {
+            visible
+                .classes
+                .values()
+                .map(|class| class.entities_cpu_culling.len() + class.entities_gpu_culling.len())
+                .sum()
+        });
+        let opaque_bins = view
+            .and_then(|view| {
+                opaque_phases
+                    .as_deref()
+                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
+            })
+            .map(|phase| {
+                phase.multidrawable_meshes.len()
+                    + phase.batchable_meshes.len()
+                    + phase.unbatchable_meshes.len()
+                    + phase.non_mesh_items.len()
+            })
+            .unwrap_or(0);
+        let transparent_items = view
+            .and_then(|view| {
+                transparent_phases
+                    .as_deref()
+                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
+            })
+            .map_or(0, |phase| phase.items.len());
+        info!(
+            "[offscreen] render view entity={entity} main={:?} target={:?} physical_target={:?} physical_viewport={:?} world_translation={:?} order={} hdr={} output_mode={:?} visible_entities={visible_entities} opaque_bins={opaque_bins} transparent_items={transparent_items} view_target={} output_target={} main_format={:?} output_format={:?}",
+            view.map(|view| view.retained_view_entity.main_entity),
+            camera.target,
+            camera.physical_target_size,
+            camera.physical_viewport_size,
+            view.map(|view| view.world_from_view.translation()),
+            camera.order,
+            camera.hdr,
+            camera.output_mode,
+            target.is_some(),
+            target.is_some_and(|target| target.out_texture().is_some()),
+            target.map(|target| target.main_texture_format()),
+            target.and_then(|target| target.out_texture_view_format()),
+        );
+    }
+    if count == 0 {
+        // Camera extraction runs before USD projection has spawned the authored
+        // camera. Wait for the first real render view; reporting the startup
+        // empty query would hide the useful result for the whole session.
+        return;
+    }
+    *reported = true;
 }
 
 /// Create the offscreen render-target image and expose it to the recorder as
@@ -4056,6 +4154,100 @@ fn retarget_cameras_to_offscreen(
     }
 }
 
+/// Bevy's camera target is an immutable render-graph choice in practice: changing
+/// a live window camera to an image updates its projection metadata, but leaves
+/// the original camera's output path bound to the windowless swapchain setup.
+/// Keep the authored camera as the pose owner and render that pose through a
+/// camera created with the image target from birth.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+#[derive(Component)]
+struct OffscreenRenderCamera(Entity);
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn maintain_offscreen_render_camera(
+    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
+    sources: Query<
+        (
+            Entity,
+            &Transform,
+            &Projection,
+            Option<&ChildOf>,
+            Option<&CellCoord>,
+        ),
+        (
+            With<lunco_render::SceneCamera>,
+            With<lunco_core::LocalAvatar>,
+            Without<OffscreenRenderCamera>,
+        ),
+    >,
+    mut source_cameras: Query<
+        &mut Camera,
+        (
+            With<lunco_render::SceneCamera>,
+            Without<OffscreenRenderCamera>,
+        ),
+    >,
+    mut mirrors: Query<(
+        &OffscreenRenderCamera,
+        &mut Transform,
+        &mut Projection,
+        &mut Camera,
+        Option<&mut CellCoord>,
+    )>,
+    mut commands: Commands,
+) {
+    let Some(target) = target else { return };
+    let mut source_iter = sources.iter();
+    let Some((source, source_transform, projection, parent, cell)) = source_iter.next() else {
+        return;
+    };
+    if source_iter.next().is_some() {
+        warn!("[offscreen] LocalAvatar camera is ambiguous; no image render camera was created");
+        return;
+    }
+
+    if let Ok(mut camera) = source_cameras.get_mut(source) {
+        camera.output_mode = bevy::camera::CameraOutputMode::Skip;
+        // Keep the authored camera active for the scene's camera-driven LOD and
+        // pose systems, but give the non-writing source a distinct priority so
+        // Bevy does not report two active cameras for the image target.
+        camera.order = -1;
+    }
+
+    let mut found = false;
+    for (mirror, mut mirror_transform, mut mirror_projection, mut camera, mut mirror_cell) in
+        &mut mirrors
+    {
+        if mirror.0 != source {
+            camera.is_active = false;
+            continue;
+        }
+        found = true;
+        *mirror_transform = source_transform.clone();
+        *mirror_projection = projection.clone();
+        if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
+            *mirror_cell = *source_cell;
+        }
+        camera.is_active = true;
+    }
+    if !found {
+        let mut entity = commands.spawn((
+            Camera3d::default(),
+            OffscreenRenderCamera(source),
+            bevy::camera::RenderTarget::Image(target.0.clone().into()),
+            source_transform.clone(),
+            projection.clone(),
+        ));
+        if let Some(parent) = parent {
+            entity.insert(parent.clone());
+        }
+        if let Some(cell) = cell {
+            entity.insert(*cell);
+        }
+        info!("[offscreen] created image render camera from authored LocalAvatar {source}");
+    }
+}
+
 /// Windowed mode always has an active camera — the workbench VIEWPORT camera,
 /// which this mode skips along with the rest of the workbench. Every camera a
 /// scene brings spawns `is_active: false` by design (see the camera-ambiguity
@@ -4091,15 +4283,20 @@ fn unique_offscreen_camera(
 
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn activate_offscreen_camera(
-    mut cameras: Query<(
-        Entity,
-        &mut Camera,
-        &bevy::camera::RenderTarget,
-        bevy::ecs::query::Has<Camera3d>,
-        bevy::ecs::query::Has<lunco_render::SceneCamera>,
-        bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
-        bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
-    )>,
+    mut cameras: Query<
+        (
+            Entity,
+            &mut Camera,
+            &bevy::camera::RenderTarget,
+            bevy::ecs::query::Has<Camera3d>,
+            bevy::ecs::query::Has<lunco_render::SceneCamera>,
+            bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
+            bevy::ecs::query::Has<lunco_core::LocalAvatar>,
+            bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
+        ),
+        Without<OffscreenRenderCamera>,
+    >,
+    mirror_sources: Query<&OffscreenRenderCamera>,
     mut commands: Commands,
     mut warned: Local<bool>,
 ) {
@@ -4118,7 +4315,7 @@ fn activate_offscreen_camera(
     let active_path = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _, _)| {
                 c.is_active
                     && *has_pipeline
                     && *has_scene
@@ -4134,7 +4331,7 @@ fn activate_offscreen_camera(
     let path_driven = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, _, target, has_pipeline, has_scene, has_path, _)| {
+            .filter(|(_, _, target, has_pipeline, has_scene, has_path, _, _)| {
                 *has_pipeline
                     && *has_scene
                     && *has_path
@@ -4151,7 +4348,7 @@ fn activate_offscreen_camera(
     let active_authored = unique_offscreen_camera(
         cameras
             .iter()
-            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _)| {
+            .filter(|(_, c, target, has_pipeline, has_scene, has_path, _, _)| {
                 c.is_active
                     && *has_pipeline
                     && *has_scene
@@ -4164,13 +4361,47 @@ fn activate_offscreen_camera(
         &mut warned,
         &mut ambiguous,
     );
+    // A scene without a cinematic track can still author one LocalAvatar camera
+    // as its initial presentation. It is an explicit identity marker, not an
+    // entity-order fallback, and is shared with the windowed camera contract.
+    let local_avatar = unique_offscreen_camera(
+        cameras
+            .iter()
+            .filter(
+                |(entity, _, target, has_pipeline, has_scene, _, has_avatar, _)| {
+                    *has_pipeline
+                        && *has_scene
+                        && *has_avatar
+                        && !mirror_sources.iter().any(|mirror| mirror.0 == *entity)
+                        && matches!(target, bevy::camera::RenderTarget::Image(_))
+                },
+            )
+            .map(|(entity, ..)| entity)
+            .collect(),
+        "authored LocalAvatar camera",
+        &mut warned,
+        &mut ambiguous,
+    );
     let selected = (!ambiguous)
-        .then(|| active_path.or(path_driven).or(active_authored))
+        .then(|| {
+            active_path
+                .or(path_driven)
+                .or(active_authored)
+                .or(local_avatar)
+        })
         .flatten();
 
     let mut has_image_camera = false;
-    for (entity, mut camera, target, has_pipeline, has_scene, _has_path, has_lod_origin) in
-        &mut cameras
+    for (
+        entity,
+        mut camera,
+        target,
+        has_pipeline,
+        has_scene,
+        _has_path,
+        _has_avatar,
+        has_lod_origin,
+    ) in &mut cameras
     {
         let is_image_camera =
             has_pipeline && matches!(target, bevy::camera::RenderTarget::Image(_));
@@ -4181,7 +4412,8 @@ fn activate_offscreen_camera(
 
         // A non-SceneCamera image target is never a capture owner. It is
         // explicitly deactivated even when no authored camera exists yet, so
-        // an unrelated render camera cannot take over on the next frame.
+        // an unrelated render camera cannot take over on the next frame. The
+        // target-born OffscreenRenderCamera is maintained separately above.
         let keep = has_scene && Some(entity) == selected;
         if camera.is_active != keep {
             camera.is_active = keep;
@@ -4192,6 +4424,14 @@ fn activate_offscreen_camera(
             }
         }
         if keep {
+            // The recorder's PNG/readback target is SDR.  An authored HDR camera
+            // otherwise keeps a floating-point intermediate while the offscreen
+            // target remains Rgba8UnormSrgb; the window compositor performs that
+            // conversion, but the image target path does not.
+            commands.entity(entity).try_remove::<bevy::camera::Hdr>();
+            commands
+                .entity(entity)
+                .try_remove::<bevy::post_process::bloom::Bloom>();
             if !has_lod_origin {
                 commands
                     .entity(entity)

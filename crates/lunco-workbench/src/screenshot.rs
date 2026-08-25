@@ -26,9 +26,9 @@
 //!
 //! # The seam
 //!
-//! `CaptureScreenshot` is an ORDINARY command with an ordinary `#[on_command]` handler. The
-//! only unusual thing about it is that its answer arrives late — the PNG does not exist until
-//! the GPU hands a frame back — so it registers as a **deferred command**
+//! `CaptureScreenshot` and `CaptureFromCamera` are ordinary commands with ordinary
+//! `#[on_command]` handlers. Their answers arrive late — the PNG does not exist until the GPU
+//! hands a frame back — so both register as **deferred commands**
 //! (`lunco_api::executor::register_deferred_command`) and answers on the request's
 //! correlation id when the capture lands.
 //!
@@ -42,7 +42,12 @@
 
 use std::io::Cursor;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::image::TextureFormatPixelInfo;
 use bevy::prelude::*;
+use bevy::render::gpu_readback::{Readback, ReadbackComplete};
+use bevy::render::render_resource::{Extent3d, TextureDimension};
+use bevy::render::renderer::RenderDevice;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use lunco_api::executor::{ApiResponseEvent, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api::schema::ApiResponse;
@@ -83,6 +88,8 @@ impl Plugin for ScreenshotPlugin {
         // holds the HTTP response open for the PNG instead of answering with a
         // provisional acknowledgement.
         app.register_deferred_command::<CaptureScreenshot>()
+            .register_deferred_command::<CaptureFromCamera>()
+            .add_observer(forward_texture_readback)
             .add_observer(deliver_screenshot);
 
         // Offline Frame-by-Frame Recording Mode
@@ -124,9 +131,9 @@ impl Plugin for ScreenshotPlugin {
         // The `science::take_photo` tool fires `CaptureFromCamera`, so it is advertised only
         // where that command actually exists.
         register_science_tools();
-        // Registers the observers AND the reflected types for both commands — including
-        // `CaptureFromCamera`, which is NOT deferred: it is fire-and-forget (a behaviour-tree
-        // leaf or a rhai `photo()`, neither holding an HTTP response open).
+        // Registers the observers AND the reflected types for both commands. Internal Rhai and
+        // behaviour-tree triggers use correlation id 0 and remain fire-and-forget; HTTP calls
+        // receive the actual file path or a correlated failure.
         register_all_commands(app);
     }
 }
@@ -153,6 +160,8 @@ struct PendingCapture {
     /// Answer the HTTP request on this id (raw-PNG mode). `None` ⇒ `save_to_file`, whose
     /// response was already sent.
     correlation_id: Option<u64>,
+    /// Answer a deferred save-to-file command after the GPU has written the PNG.
+    completion_correlation_id: Option<u64>,
     save_path: Option<String>,
     region: Option<(u32, u32, u32, u32)>,
 }
@@ -163,6 +172,7 @@ struct PendingCapture {
 fn on_capture_screenshot(
     trigger: On<CaptureScreenshot>,
     pending_request: Res<PendingApiRequest>,
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -208,12 +218,14 @@ fn on_capture_screenshot(
 
         PendingCapture {
             correlation_id: None,
+            completion_correlation_id: None,
             save_path: Some(path),
             region,
         }
     } else {
         PendingCapture {
             correlation_id: Some(pending_request.correlation_id),
+            completion_correlation_id: None,
             save_path: None,
             region,
         }
@@ -222,7 +234,82 @@ fn on_capture_screenshot(
     // Spawned HERE, not by a domain-side observer. It used to be the latter, and that
     // observer only shipped in `lunco-avatar` — so binaries that didn't pull it in (lunica,
     // hello_workbench) never produced a screenshot at all: curl simply hung.
-    commands.spawn((Screenshot::primary_window(), request));
+    if let Some(target) = capture_target {
+        commands.spawn((Readback::texture(target.0.clone()), request));
+    } else {
+        commands.spawn((Screenshot::primary_window(), request));
+    }
+}
+
+/// Forward a native texture readback through the same delivery event used by
+/// window screenshots. Bevy's `Screenshot::image` temporarily replaces the
+/// output attachment for an image target; the offscreen recorder must read the
+/// camera's already-rendered target instead.
+fn forward_texture_readback(
+    trigger: On<ReadbackComplete>,
+    readbacks: Query<&Readback>,
+    images: Res<Assets<Image>>,
+    mut commands: Commands,
+) {
+    let event = trigger.event();
+    let Ok(Readback::Texture(handle)) = readbacks.get(event.entity) else {
+        return;
+    };
+    let Some(source) = images.get(handle) else {
+        warn!("[screenshot] texture readback source disappeared before completion");
+        return;
+    };
+    let format = source.texture_descriptor.format;
+    let Ok(pixel_size) = format.pixel_size() else {
+        warn!("[screenshot] texture readback format {format:?} has no pixel size");
+        return;
+    };
+    let width = source.width();
+    let height = source.height();
+    let row_bytes = width as usize * pixel_size;
+    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
+    let expected_bytes = aligned_row_bytes.saturating_mul(height as usize);
+    if event.data.len() < expected_bytes {
+        warn!(
+            "[screenshot] texture readback returned {} bytes, expected at least {}",
+            event.data.len(),
+            expected_bytes
+        );
+        return;
+    }
+
+    let data = if aligned_row_bytes == row_bytes {
+        event.data[..row_bytes * height as usize].to_vec()
+    } else {
+        event
+            .data
+            .chunks_exact(aligned_row_bytes)
+            .take(height as usize)
+            .flat_map(|row| &row[..row_bytes])
+            .copied()
+            .collect()
+    };
+    let image = Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        format,
+        RenderAssetUsages::MAIN_WORLD,
+    );
+
+    // Match the Screenshot plugin lifecycle: the next First schedule removes
+    // captured entities, preventing another readback after this completion.
+    commands
+        .entity(event.entity)
+        .insert(bevy::render::view::screenshot::Captured);
+    commands.trigger(ScreenshotCaptured {
+        entity: event.entity,
+        image,
+    });
 }
 
 register_commands!(
@@ -245,11 +332,21 @@ fn deliver_screenshot(
         return;
     };
     let correlation_id = pending.correlation_id;
+    let completion_correlation_id = pending.completion_correlation_id;
     let save_path = pending.save_path.clone();
     let region = pending.region;
 
     let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
         error!("[screenshot] failed to convert the captured image");
+        if let Some(cid) = completion_correlation_id {
+            commands.trigger(ApiResponseEvent {
+                correlation_id: cid,
+                response: ApiResponse::error(
+                    lunco_api::schema::ApiErrorCode::InternalError,
+                    "captured image could not be converted",
+                ),
+            });
+        }
         return;
     };
 
@@ -272,6 +369,20 @@ fn deliver_screenshot(
         // save_to_file mode — the response was already sent; just write the file.
         if let Err(e) = dyn_img.save(&path) {
             error!("[screenshot] failed to save to '{path}': {e}");
+            if let Some(cid) = completion_correlation_id {
+                commands.trigger(ApiResponseEvent {
+                    correlation_id: cid,
+                    response: ApiResponse::error(
+                        lunco_api::schema::ApiErrorCode::InternalError,
+                        format!("failed to save screenshot to '{path}': {e}"),
+                    ),
+                });
+            }
+        } else if let Some(cid) = completion_correlation_id {
+            commands.trigger(ApiResponseEvent {
+                correlation_id: cid,
+                response: ApiResponse::ok(serde_json::json!({ "path": path })),
+            });
         }
     } else if let Some(cid) = correlation_id {
         // raw-PNG mode — encode and answer the deferred HTTP request.
@@ -313,42 +424,106 @@ pub struct CaptureFromCamera {
 fn on_capture_from_camera(
     trigger: On<CaptureFromCamera>,
     viewport: Option<Res<SceneViewport>>,
+    pending_request: Option<Res<PendingApiRequest>>,
     // `RenderTarget` is a separate component (see `camera_switch.rs`), not a field on
     // `Camera` — query it alongside so we know which window to capture.
-    cameras: Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget), With<SceneCamera>>,
+    cameras: Query<
+        (
+            Entity,
+            &Camera,
+            &Camera3d,
+            &bevy::camera::RenderTarget,
+            Option<&Name>,
+        ),
+        With<SceneCamera>,
+    >,
     children: Query<&Children>,
     mut commands: Commands,
 ) {
     let target = trigger.event().target;
+    let completion_correlation_id = pending_request
+        .as_ref()
+        .and_then(|request| (request.correlation_id != 0).then_some(request.correlation_id));
+    let path = match safe_screenshot_path(std::path::Path::new(&timestamped_name("photo"))) {
+        Ok(path) => path,
+        Err(message) => {
+            report_capture_failure(&mut commands, message, completion_correlation_id);
+            return;
+        }
+    };
     // The delivery, armed on whichever `Screenshot` entity is spawned below. Without it the
     // frame lands in `deliver_screenshot` with nothing pending and is silently dropped —
     // the instrument believes it photographed and recorded nothing.
     let request = PendingCapture {
         correlation_id: None,
-        save_path: Some(timestamped_name("photo")),
+        completion_correlation_id,
+        save_path: Some(path),
         region: None,
     };
-    let Some(camera_entity) = (match target {
-        // A specific vessel → find a `Camera3d` among its descendants (its USD `def Camera`
-        // mount).
-        Some(vessel) => find_descendant_camera(vessel, &cameras, &children),
-        // No target → the camera selected by the viewport authority.
-        None => viewport.as_deref().and_then(|v| v.active_camera),
-    }) else {
-        let message = if target.is_some() {
-            "target vessel has no unique mounted Camera3d"
-        } else {
-            "no active viewport camera is resolved"
+    let viewport_camera = viewport.as_deref().and_then(|v| v.active_camera);
+    let active_camera = || {
+        let mut active = cameras
+            .iter()
+            .filter(|(_, camera, _, _, _)| camera.is_active)
+            .map(|(entity, ..)| entity);
+        let Some(entity) = active.next() else {
+            return None;
         };
-        report_capture_failure(&mut commands, message);
-        return;
+        active.next().is_none().then_some(entity)
+    };
+    let camera_entity = match target {
+        // A specific vessel → find a `Camera3d` among its descendants (its USD `def Camera`
+        // mount), and name every candidate when the authored contract is ambiguous.
+        Some(vessel) => {
+            let candidates = find_descendant_cameras(vessel, &cameras, &children);
+            match candidates.as_slice() {
+                [only] => *only,
+                [] => {
+                    report_capture_failure(
+                        &mut commands,
+                        "target vessel has no mounted Camera3d descendants",
+                        completion_correlation_id,
+                    );
+                    return;
+                }
+                many => {
+                    let identities = many
+                        .iter()
+                        .filter_map(|entity| camera_identity(*entity, &cameras))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    report_capture_failure(
+                        &mut commands,
+                        format!(
+                            "target vessel has ambiguous mounted Camera3d descendants: {identities}"
+                        ),
+                        completion_correlation_id,
+                    );
+                    return;
+                }
+            }
+        }
+        // No target → the camera selected by the viewport authority. Offscreen has no
+        // window viewport, so its unique active SceneCamera is the explicit fallback.
+        None => match viewport_camera.or_else(active_camera) {
+            Some(entity) => entity,
+            None => {
+                report_capture_failure(
+                    &mut commands,
+                    "no active viewport camera is resolved",
+                    completion_correlation_id,
+                );
+                return;
+            }
+        },
     };
 
     // Bevy's `Screenshot` captures a render TARGET (window/image), not a camera directly.
-    let Ok((cam, _, rt)) = cameras.get(camera_entity) else {
+    let Ok((_, cam, _, rt, _)) = cameras.get(camera_entity) else {
         report_capture_failure(
             &mut commands,
             format!("resolved camera {camera_entity:?} is no longer realized"),
+            completion_correlation_id,
         );
         return;
     };
@@ -358,14 +533,14 @@ fn on_capture_from_camera(
     // flying the free camera), so capturing the window here would photograph the operator's
     // viewport and pass it off as the vessel's instrument data. Refuse instead.
     //
-    // Making this capture an inactive mounted camera needs a render-to-image target
-    // (`RenderTarget::Image` + `Screenshot::image`) so the camera renders its own view
-    // off-screen regardless of what the window shows. Until then, an explicit vessel capture
-    // only succeeds when its camera is live.
+    // An inactive mounted camera is rejected because the command would otherwise need to
+    // retarget that authored camera and steal a target from the operator. The offscreen
+    // presentation camera is already active and uses the native texture-readback path below.
     if !cam.is_active {
         report_capture_failure(
             &mut commands,
             "resolved camera is not active; capture would photograph a different viewport",
+            completion_correlation_id,
         );
         return;
     }
@@ -375,12 +550,23 @@ fn on_capture_from_camera(
             bevy::window::WindowRef::Primary => Screenshot::primary_window(),
             bevy::window::WindowRef::Entity(entity) => Screenshot::window(*entity),
         },
-        // Image/texture-view targets need an explicit image capture path. A primary-window
-        // substitute would silently return a different camera's pixels.
-        _ => {
+        // Capture the exact target selected by the camera. A primary-window substitute would
+        // silently return a different camera's pixels, and would make offscreen captures fail
+        // even though the selected camera is valid. Read the already-rendered image directly;
+        // replacing the image's output attachment with Screenshot's intermediate target loses
+        // HDR camera output on the windowless path.
+        bevy::camera::RenderTarget::Image(image) => {
+            commands.spawn((Readback::texture(image.handle.clone()), request));
+            return;
+        }
+        bevy::camera::RenderTarget::TextureView(texture_view) => {
+            Screenshot::texture_view(*texture_view)
+        }
+        bevy::camera::RenderTarget::None { .. } => {
             report_capture_failure(
                 &mut commands,
-                "resolved camera does not target a capturable window",
+                "resolved camera has no capturable render target",
+                completion_correlation_id,
             );
             return;
         }
@@ -388,32 +574,68 @@ fn on_capture_from_camera(
     commands.spawn((screenshot, request));
 }
 
-fn report_capture_failure(commands: &mut Commands, message: impl Into<String>) {
+fn report_capture_failure(
+    commands: &mut Commands,
+    message: impl Into<String>,
+    correlation_id: Option<u64>,
+) {
     let message = message.into();
     warn!("[CaptureFromCamera] {message}");
-    lunco_core::trigger_error(commands, "camera-capture-failed", message);
+    lunco_core::trigger_error(commands, "camera-capture-failed", message.clone());
+    if let Some(correlation_id) = correlation_id {
+        commands.trigger(ApiResponseEvent {
+            correlation_id,
+            response: ApiResponse::error(lunco_api::schema::ApiErrorCode::InternalError, message),
+        });
+    }
 }
 
 /// Walk `root`'s descendants and return a camera only when the mounted-camera contract is
 /// unique. Descendant/entity order is not camera ownership.
-fn find_descendant_camera(
+fn find_descendant_cameras(
     root: Entity,
-    cameras: &Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget), With<SceneCamera>>,
+    cameras: &Query<
+        (
+            Entity,
+            &Camera,
+            &Camera3d,
+            &bevy::camera::RenderTarget,
+            Option<&Name>,
+        ),
+        With<SceneCamera>,
+    >,
     children: &Query<&Children>,
-) -> Option<Entity> {
+) -> Vec<Entity> {
     let mut stack = vec![root];
-    let mut found = None;
+    let mut found = Vec::new();
     while let Some(entity) = stack.pop() {
         if cameras.get(entity).is_ok() {
-            if found.replace(entity).is_some() {
-                return None;
-            }
+            found.push(entity);
         }
         if let Ok(kids) = children.get(entity) {
             stack.extend(kids.iter());
         }
     }
     found
+}
+
+fn camera_identity(
+    entity: Entity,
+    cameras: &Query<
+        (
+            Entity,
+            &Camera,
+            &Camera3d,
+            &bevy::camera::RenderTarget,
+            Option<&Name>,
+        ),
+        With<SceneCamera>,
+    >,
+) -> Option<String> {
+    let Ok((_, _, _, _, name)) = cameras.get(entity) else {
+        return None;
+    };
+    Some(name.map_or_else(|| format!("{entity:?}"), |name| name.as_str().to_string()))
 }
 
 /// Register the science instrument tools into the global `lunco_tools` registry, so a
@@ -1074,11 +1296,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 /// 2. **Every mesh handle is loaded *with its dependencies*.** This is the direct
 ///    read for "meshes and the materials/textures hanging off them have resolved",
 ///    and it is what catches the untextured-placeholder opening frame.
-/// 3. **No dynamic physics participant is still admitting its authored state.**
-///    This is the generic USD/Avian lifecycle boundary; it prevents a capture
-///    from observing the loader's kinematic zero state while GNC has already
-///    received the authored release condition.
-/// 4. **No visual subsystem reports in-flight work on the [`StatusBus`]** (see
+/// 3. **No visual subsystem reports in-flight work on the [`StatusBus`]** (see
 ///    [`VISUAL_BUSY_SOURCES`]). This carries the weight of the condition, and is how
 ///    the gate shares — rather than re-implements — the existing definitions of
 ///    ready. `"scene"` is `SceneLoadInFlight`: prims are still spawning, the state
@@ -1096,8 +1314,9 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,
     asset_server: &AssetServer,
-    physics_pending: &Query<(), With<lunco_core::PhysicsStatePending>>,
     bus: Option<&crate::status_bus::StatusBus>,
+    cameras: &Query<(&Camera, &bevy::camera::RenderTarget)>,
+    offscreen: bool,
 ) -> Option<String> {
     // (1) Nothing spawned yet — not "ready", just "empty".
     let total = meshes.iter().len();
@@ -1128,17 +1347,35 @@ fn scene_visuals_ready(
         return Some(format!("{unloaded}/{total} mesh assets still loading"));
     }
 
-    // (3) The USD→Avian projection has not yet published authored initial
-    // state to the live solver. Do not let the recorder capture the transient
-    // kinematic placeholder while sensors/controllers are already live.
-    let pending_physics = physics_pending.iter().len();
-    if pending_physics > 0 {
-        return Some(format!(
-            "{pending_physics} physics participant(s) still admitting authored state"
-        ));
+    // The offscreen target must have one active render camera before the first
+    // readback. Physics admission is intentionally not part of this visual
+    // gate: the armed recorder freezes virtual time, while USD/Avian admission
+    // may need a live frame boundary to finish. `/api/ready` remains the
+    // authoritative simulation-readiness contract.
+    if offscreen {
+        let active_image_cameras = cameras
+            .iter()
+            .filter(|(camera, target)| {
+                camera.is_active
+                    && matches!(
+                        camera.output_mode,
+                        bevy::camera::CameraOutputMode::Write { .. }
+                    )
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            })
+            .count();
+        match active_image_cameras {
+            0 => return Some("offscreen render target has no active render camera yet".into()),
+            1 => {}
+            count => {
+                return Some(format!(
+                    "offscreen render target has {count} active render cameras"
+                ));
+            }
+        }
     }
 
-    // (4) Visual subsystems that report their own progress.
+    // (3) Visual subsystems that report their own progress.
     if let Some(bus) = bus {
         let mut busy: Vec<String> = bus
             .entries_in(crate::status_bus::BusyScope::Global)
@@ -1170,7 +1407,8 @@ fn start_recording_when_scene_ready(
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
-    physics_pending: Query<(), With<lunco_core::PhysicsStatePending>>,
+    cameras: Query<(&Camera, &bevy::camera::RenderTarget)>,
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
     // binary does not add. Absent simply means clause (3) has nothing to say.
     bus: Option<Res<crate::status_bus::StatusBus>>,
@@ -1178,7 +1416,13 @@ fn start_recording_when_scene_ready(
 ) {
     let Some(mut pending) = pending else { return };
 
-    let blocker = scene_visuals_ready(&meshes, &asset_server, &physics_pending, bus.as_deref());
+    let blocker = scene_visuals_ready(
+        &meshes,
+        &asset_server,
+        bus.as_deref(),
+        &cameras,
+        capture_target.is_some(),
+    );
     let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
     if let Some(reason) = blocker {
         if !timed_out {
@@ -1309,10 +1553,11 @@ fn drive_offline_clock(
     } else {
         // Time advanced this frame and the scene is rendered — capture it, then
         // hold the clock until the readback delivers.
-        commands.spawn(match &capture_target {
-            Some(target) => Screenshot::image(target.0.clone()),
-            None => Screenshot::primary_window(),
-        });
+        if let Some(target) = &capture_target {
+            commands.spawn(Readback::texture(target.0.clone()));
+        } else {
+            commands.spawn(Screenshot::primary_window());
+        }
         state.is_waiting_for_frame = true;
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,

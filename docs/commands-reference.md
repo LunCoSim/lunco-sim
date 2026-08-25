@@ -1557,7 +1557,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Option < Entity >` |  Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved active scene camera; an absent, ambiguous, inactive, or non-window camera is an error. |
+| `target` | `Option < Entity >` |  Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved active scene camera; an absent, ambiguous, or inactive camera is an error. Window and offscreen image targets are captured directly; an unsupported target is an error. HTTP calls wait for the PNG and return `{path}`; internal Rhai/behavior-tree triggers remain fire-and-forget. |
 
 #### `CaptureScreenshot`
 

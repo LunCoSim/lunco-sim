@@ -3880,6 +3880,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             Option<&Name>,
             Option<&UsdPrimPath>,
             Option<&bevy::camera::Camera>,
+            Option<&bevy::camera::RenderTarget>,
             Has<SceneCamera>,
             Has<lunco_usd_bevy::camera_mount::MountedCamera>,
             Has<Avatar>,
@@ -3888,7 +3889,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
         let mut candidates: Vec<_> = query
             .iter(world)
             .map(
-                |(entity, name, prim, camera, scene_camera, mounted, avatar, local)| {
+                |(entity, name, prim, camera, target, scene_camera, mounted, avatar, local)| {
                     serde_json::json!({
                         "entity": entity.to_bits(),
                         "name": name.map(|n| n.as_str()).unwrap_or_default(),
@@ -3906,6 +3907,22 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                         // an empty candidate set.
                         "render_camera": camera.is_some(),
                         "camera_active": camera.is_some_and(|camera| camera.is_active),
+                        "camera_output_mode": camera.map(|camera| match camera.output_mode {
+                            bevy::camera::CameraOutputMode::Write { .. } => "write",
+                            bevy::camera::CameraOutputMode::Skip => "skip",
+                        }),
+                        "render_target": target.map(|target| match target {
+                            bevy::camera::RenderTarget::Window(_) => "window",
+                            bevy::camera::RenderTarget::Image(_) => "image",
+                            bevy::camera::RenderTarget::TextureView(_) => "texture_view",
+                            bevy::camera::RenderTarget::None { .. } => "none",
+                        }),
+                        "physical_target_size": camera
+                            .and_then(|camera| camera.physical_target_size())
+                            .map(|size| [size.x, size.y]),
+                        "physical_viewport_size": camera
+                            .and_then(|camera| camera.physical_viewport_size())
+                            .map(|size| [size.x, size.y]),
                     })
                 },
             )
