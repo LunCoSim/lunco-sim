@@ -106,14 +106,15 @@ fn read_gravity(q: Query<&LocalGravity>) {
 }
 ```
 
-### `LocalSolar` + the solar→cosim bridge (`render` feature)
+### `LocalSolar` + the solar→cosim bridge
 
-`compute_local_solar` caches the scene sun's direction (azimuth/elevation) per
-entity as `LocalSolar`; `inject_local_solar_into_cosim` publishes it into the
-co-sim graph as `SimComponent` **outputs** (`SOLAR_AZIMUTH_CONNECTOR` /
-`SOLAR_ELEVATION_CONNECTOR`), so a sun-tracking model receives it through a
-normal output→input wire. The scene `DirectionalLight` *is* the provider — a
-richer `SolarProvider` (irradiance, eclipse) can attach later.
+`SunState` is the semantic provider. Ephemeris publishes the direction and
+irradiance into it; the render `DirectionalLight` is only a projection. Then
+`compute_local_solar` converts that semantic sample into per-entity `LocalSolar`
+values, and `inject_local_solar_into_cosim` publishes them through authored
+`EnvironmentProbe` outputs. A sun-tracking model consumes those outputs through
+an ordinary USD output→input wire. No render transform is read back as an
+environment input, and no Modelica model drives the physical scene sun.
 
 ### Lighting parameters: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX` (`render` feature)
 

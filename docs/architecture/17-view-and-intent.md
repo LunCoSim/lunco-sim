@@ -33,7 +33,8 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > and there is no `lunco-camera` crate / `LunCoCameraPlugin`. Today the camera
 > lives in **`lunco-avatar`** (`LunCoAvatarPlugin`) as concrete camera-rig
 > components — `SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`,
-> `SurfaceCamera` — driving Bevy `Camera3d` + `big_space::FloatingOrigin`
+> `SurfaceCamera` — driving Bevy `Camera3d` while the persistent
+> `OriginAnchor` owns `big_space::FloatingOrigin`
 > directly. Sun / shadow rendering lives in `lunco-render`.
 
 ### **ViewPoint (Logical)** — *planned*
@@ -50,7 +51,10 @@ Representing a sensing hardware unit.
 ### **Renderer / Blender (Visual)** — *today: `lunco-avatar`*
 The rendering bridge.
 - **Crate**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs). Sun/shadow in `lunco-render`.
-- **Purpose**: Drives a Bevy `Camera3d` and its `FloatingOrigin`. Camera rigs (spring-arm, orbit, free-flight, surface-relative) handle smoothing between simulation truth and the rendered frame.
+- **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
+  the selected camera's f64 cell while camera rigs (spring-arm, orbit,
+  free-flight, surface-relative) handle motion between simulation truth and
+  the rendered frame.
 
 ---
 
@@ -120,16 +124,15 @@ Omniverse Viewport, which owns an active `camera`):
 | `rect: Option<(UVec2, UVec2)>` | window sub-rect, or full-window | the workbench |
 
 An authored selection is retained as `(stage, USD prim path)` and re-resolved
-after re-projection; the ECS entity is only the current realization. A command,
-camera track, or the authored local-avatar marker for an otherwise unclaimed
-scene changes the selection intent, while exactly **one** system writes
+after re-projection; the ECS entity is only the current realization. A command
+or camera track changes the selection intent, while exactly **one** system writes
 `SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
 `lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
 (`is_active = bound-camera && visible`) and relocates the big_space
-`FloatingOrigin` onto the active camera. A missing, stale, or projectionless
-explicit request produces no active camera and a visible status diagnostic; it
-never selects the first authored camera as a repair or silently substitutes a
-different authored camera.
+the persistent `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
+missing, stale, or projectionless explicit request produces no active camera
+and a visible status diagnostic; it never selects the first authored camera as
+a repair or silently substitutes a different authored camera.
 
 ### 6.3 Switching
 
@@ -139,20 +142,16 @@ The viewport has explicit presentation ownership:
   `CameraTrack` cuts select authored cameras. Director requests are held while
   the operator owns the viewport.
 - **Operator:** `SetUserCamera { name }`, `ObserveAvatar`, or `KeyC` explicitly
-  selects a camera and takes ownership. A newly projected authored local avatar
-  publishes the same avatar-view intent only when the scene has no existing
-  director/operator selection, providing the normal initial view after reload.
-  `ResumeCameraDirector` returns control to the authored track.
+  selects a camera and takes ownership. `ObserveAvatar` is an operator intent;
+  the presence of an avatar never emits it implicitly. `ResumeCameraDirector`
+  returns control to the authored track.
 
-Names match a full USD prim path or its leaf. A scene with no authored window
-camera receives one explicit windowed presentation policy after scene
-projection settles: `luncosim` creates a
-`PresentationFallbackCameraSettings`-framed camera, routes it through
-`ActivateCamera::fallback`, and records `CameraSelectionOwner::Fallback`.
-This is an engine-owned presentation default for an omitted camera, not a USD
-scene fact. The Camera menu and status bus identify it, and the camera-selection
-owner retires it and selects the authored camera when one appears. Headless
-hosts do not create this window-only presentation entity.
+Names match a full USD prim path or its leaf. A windowed scene must author its
+initial presentation through `CameraTrack` (including a single key for a static
+initial view). If no authored window camera or track resolves, the viewport
+stays inactive and the owning diagnostic is shown. The engine does not invent a
+camera, select the first camera, or turn avatar presence into presentation
+policy.
 
 ### 6.4 Rover-mounted cameras
 
@@ -160,7 +159,8 @@ An onboard camera explicitly applies `LunCoCameraAPI` with
 `lunco:cameraPose = "mounted"`. `resolve_camera_mounts` realises that declared
 contract as a **grid-direct follower** (`MountedCamera { mount, offset }`), and
 `follow_mounted_cameras` writes `mount · offset` in double precision. This lets
-the camera host the active-view origin. A nested camera with `cameraPose =
+the persistent origin tracker follow the camera without changing its
+hierarchy. A nested camera with `cameraPose =
 "authored"` remains in ordinary USD composition; hierarchy never infers a mount.
 
 ### 6.5 Camera rigs still live in `lunco-avatar`
@@ -170,6 +170,28 @@ The *behavior* of the free/possession cameras — `SpringArmCamera`,
 (§2). The viewport reconciler decides *which* camera is shown; the rigs decide
 *how* a given camera moves. They compose: possession changes the avatar camera's
 rig without changing which camera the viewport shows.
+
+### 6.6 Avatar identity and ownership
+
+`Avatar` is an embodiment component, not a user, session, or control authority.
+It identifies an entity that can carry a presentation rig and a controller link.
+The local/remote distinction is an ownership qualifier on that same embodiment:
+
+- `LocalAvatar` is the authoritative marker for the one embodiment that may
+  consume this process's input and drive its local interactive camera.
+- `RemoteAvatar` identifies another session's replicated embodiment. It may be
+  rendered, but it is not eligible for local input or camera commands.
+- `TheLocalAvatar` is a derived entity index maintained by the `LocalAvatar`
+  lifecycle hooks. It is a read-only lookup cache, not a second ownership
+  contract and not a user object; callers never write it.
+
+Session/control authority is separate from presentation. A headless API,
+autopilot, or mission script can control a vessel without creating an avatar.
+Commands that need a local camera accept an explicit complete `LocalAvatar`, or
+the derived `TheLocalAvatar` selection when the avatar is omitted. An invalid
+explicit entity or a missing local camera is rejected at the avatar-camera
+boundary and remains visible through runtime diagnostics; no entity-order
+selection is permitted.
 
 ---
 

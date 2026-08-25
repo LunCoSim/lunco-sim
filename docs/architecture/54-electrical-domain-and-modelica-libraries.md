@@ -188,19 +188,18 @@ Written as current sources, the same island is linear in its unknowns and steps:
 
 ```modelica
 p.i = -(area * efficiency * irradiance * max(0.0, cos_incidence)) / v_mp;   // panel
-p.i = (rated_power / v_rated) * abs(demand) / max(0.01, efficiency);        // motor
+p.i = (rated_power / v_rated) * abs(demand);                                // motor
 ```
 
 This is also the physically honest direction: a PV module is a **photocurrent** source, and
-a motor drive regulates **current** (torque ∝ current) while the bus voltage sets how fast
-that current can be pushed. Divide by a **parameter** (`v_mp`, `v_rated` — the nameplate),
-never by the solved node voltage.
+a motor drive regulates **current** (torque ∝ current) from its nameplate current while the
+bus voltage determines the instantaneous electrical power. Divide by a **parameter**
+(`v_mp`, `v_rated` — the nameplate), never by the solved node voltage.
 
-⚠ **A constant-power device hides while the vehicle is parked.** At `demand = 0` the motor's
-`p.i` is zero, the division collapses, and the bus solves. The fault appears the moment
-current flows. A test that only asserts an island *steps* will not see it — which is why
-`scenarios/tests/solar_domain_nested_ref.rhai` drives its rovers and asserts a non-zero
-motor draw, rather than reading ports at rest.
+⚠ **A motor-load regression hides while the vehicle is parked.** At `demand = 0` the motor's
+`p.i` is correctly zero, so a test that only asserts an island *steps* can miss a broken
+load path. `scenarios/tests/solar_domain_nested_ref.rhai` therefore drives its rovers and
+asserts a non-zero motor draw, rather than reading ports at rest.
 
 ### `output Real`, or nothing can leave a synthesized unit
 

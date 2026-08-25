@@ -25,6 +25,8 @@
 #                DELIBERATE. Every other rig in this folder has been converted to
 #                an Xform frame + shape child; this one keeps the old shape because
 #                it is the fixture that proves the rule fires. Do not "fix" it.
+#   BrokenTelemetry  a metadata Scope with no measured target or runtime port
+#                    → telemetry-target-required
 #
 # and one CORRECT construction that must stay silent:
 #
@@ -476,6 +478,16 @@ def Xform "LintSelftest" (
             </LintSelftest/HealthyBattery>,
             </LintSelftest/HealthyMotor>,
         ]
+    }
+
+    # THE TELEMETRY FAULT. A declaration Scope is metadata only; without an
+    # explicit target it cannot self-bind because it publishes no runtime port.
+    def Scope "BrokenTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        token lunco:telemetry:port = "ghost"
     }
 
     def Scope "Scenario"

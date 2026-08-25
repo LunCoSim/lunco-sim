@@ -54,7 +54,7 @@ fn build() -> App {
     let frame = app
         .world_mut()
         .spawn((
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
         ))
@@ -124,7 +124,7 @@ fn behavior_navigation_uses_physics_position_not_render_hierarchy() {
     let frame = app
         .world_mut()
         .spawn((
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
         ))

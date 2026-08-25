@@ -75,6 +75,7 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
     // The PRODUCTION world root (BigSpace + WorldGrid + FloatingOrigin), built by
     // the same call the app uses — not a hand-rolled stand-in.
     let grid = lunco_core::ensure_world_root(app.world_mut());
+    app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
     // Production anchoring shape: the scene-root is the ONE grid-direct anchor
     // (its own cell); everything under it is a plain child that inherits the frame.

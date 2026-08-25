@@ -61,12 +61,14 @@ pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
 /// bridge). The lighting-direction analog of the gravity bridge.
 ///
-/// **Render-free.** It reads the scene `DirectionalLight` (`bevy_light`) and
-/// filters on `RenderLayers` (`bevy_camera`) — neither depends on `bevy_render`,
-/// so the sun→cosim feed works on a headless server exactly as it does in the
-/// GUI. See `docs/architecture/render-decoupling.md`.
+/// **Render-free.** It reads semantic [`SunState`], not a render light. The
+/// render light is a projection of that state, so a headless provider and a
+/// GUI cannot silently disagree about the direction.
 pub mod solar;
-pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
+pub use solar::{
+    compute_local_solar, inject_local_solar_into_cosim, project_sun_state_to_light, LocalSolar,
+    SunRenderState, SunState,
+};
 
 /// Explicit USD-authored source of mount-local environmental signals.
 ///
@@ -111,11 +113,6 @@ pub use horizon::{
     install_horizon_map_from_field, pick_sun, HeightField, HorizonMap, HorizonShadowCache,
     HorizonShadowCacheConfig, HorizonShadowPlugin, SunQuery,
 };
-
-/// The sun's angles as ports (`sun_azimuth` / `sun_elevation`) — a `PortBackend`
-/// registered from the crate that owns the light, not from the cosim engine. See
-/// the module docs for why it moved.
-mod sun_ports;
 
 /// System sets for environment computation and consumption.
 ///
@@ -477,10 +474,11 @@ fn validated_shadow_ranges(
         .then_some((first, maximum))
 }
 
-/// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
-/// its `CascadeShadowConfig`, `GlobalAmbientLight` and camera `Exposure` — all
-/// render-FREE types, so the command works headless. Resources/queries are
-/// tolerant of absence so it is a no-op in contexts that have no lights.
+/// Applies a [`SetEnvironmentLight`] command to semantic [`SunState`] first,
+/// then to the render projection and the other environment projections. The
+/// render light is never the source of direction or irradiance: commands and
+/// ephemeris both publish the semantic state, and one projection system writes
+/// the light from it.
 ///
 /// The one render-bound field, `bloom_intensity`, is applied by a SECOND
 /// observer on this same command in `lunco-render-bevy` (`env_light.rs`) — a
@@ -495,6 +493,7 @@ fn validated_shadow_ranges(
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
     trigger: On<SetEnvironmentLight>,
+    mut sun_state: ResMut<SunState>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
     // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<
@@ -514,23 +513,48 @@ fn on_set_environment_light(
     mut q_exposure: Query<&mut Exposure>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
+    let cmd = trigger.event();
+
     // The command has one authoritative scene-sun target. Refuse ambiguity
     // rather than applying a user command to an arbitrary set of lights.
     if q_sun.iter().count() == 1 {
-        let Ok((mut tf, mut light, cascades, suppressed)) = q_sun.single_mut() else {
+        let Ok((mut _tf, mut light, cascades, suppressed)) = q_sun.single_mut() else {
             unreachable!("a counted scene sun must remain queryable");
         };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
-            // Preserve the unspecified axis by reading it back off the current
-            // rotation (same YXZ order the Inspector writes with).
-            let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            let Some(direction) = sun_state.direction_to_sun else {
+                warn!(
+                    "SetEnvironmentLight direction request rejected: semantic SunState has no provider sample"
+                );
+                return;
+            };
+            // Preserve the unspecified axis from semantic state. Reading the
+            // render transform here would create a second direction authority.
+            let Some(direction) = SunState::normalized_direction(direction) else {
+                warn!(
+                    "SetEnvironmentLight direction request rejected: semantic SunState direction is invalid"
+                );
+                return;
+            };
+            let rotation = Quat::from_rotation_arc(Vec3::Z, direction);
+            let (cur_yaw, cur_pitch, _) = rotation.to_euler(EulerRot::YXZ);
             let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
             let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
-            tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            let next = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
+                .mul_vec3(Vec3::Z)
+                .normalize();
+            let irradiance = sun_state.irradiance_lux;
+            sun_state.publish(next, irradiance);
         }
 
         if let Some(lux) = cmd.illuminance {
-            light.illuminance = lux;
+            if !lux.is_finite() || lux < 0.0 {
+                warn!(
+                    "SetEnvironmentLight illuminance request rejected: expected a finite non-negative value"
+                );
+                return;
+            }
+            sun_state.set_irradiance(Some(lux));
         }
         if let Some([r, g, b]) = cmd.sun_color {
             light.color = Color::linear_rgb(r, g, b);
@@ -637,6 +661,11 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
 
+fn clear_environment_sun_state(mut sun: ResMut<SunState>, mut render_sun: ResMut<SunRenderState>) {
+    sun.clear();
+    render_sun.clear();
+}
+
 // NOTE: earthshine is not spawned here. It is authored USD, nested under the
 // body it comes from (`lunco://lighting/earthshine.usda`, referenced by the
 // Earth prim in `lunco://celestial/solar_system.usda`), so a scene gets the fill
@@ -657,12 +686,6 @@ impl Plugin for EnvironmentPlugin {
         // lunar default unless a scene `insert_resource`d its own studio
         // values first (`init_resource` is a no-op when already present).
         app.init_resource::<LunarSun>();
-
-        // The sun's angles as ports. Registered from here — the crate that owns the
-        // light and declares `bevy_light` — rather than from the cosim engine's
-        // avian table, where a `DirectionalLight` gate compiled only by feature
-        // unification. See `sun_ports`.
-        sun_ports::build(app);
 
         app.configure_sets(
             FixedUpdate,
@@ -753,6 +776,17 @@ impl Plugin for EnvironmentPlugin {
         // left at ZERO — the "not known" state — so a scene with no celestial
         // hierarchy reads as no-data rather than as a missing resource.
         app.init_resource::<EarthDirectionWorld>();
+        app.init_resource::<SunState>();
+        app.init_resource::<SunRenderState>();
+
+        // SunState is scene-owned semantic state. Clear it at the same
+        // lifecycle edge as the authored light entities so a replacement
+        // scene cannot inherit the outgoing scene's direction.
+        app.add_systems(lunco_core::SceneTeardown, clear_environment_sun_state);
+
+        // Semantic sun state is the provider boundary. The render light is a
+        // projection and is never read back by solar consumers.
+        app.add_systems(Update, project_sun_state_to_light);
 
         // Earthshine follows Earth's phase — the ONE writer of the fill's
         // illuminance. In `Update` rather than `FixedUpdate`: it is a render
@@ -799,7 +833,6 @@ impl Plugin for EnvironmentPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use big_space::prelude::Grid;
 
     #[test]
     fn shadow_range_validation_rejects_invalid_explicit_values_without_clamping() {
@@ -839,7 +872,7 @@ mod tests {
         let frame = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 Transform::from_rotation(Quat::from_rotation_z(0.8)),
                 GlobalTransform::default(),
             ))

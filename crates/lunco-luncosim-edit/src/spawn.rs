@@ -2,8 +2,9 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use lunco_core::coords::GridPos;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
@@ -14,6 +15,23 @@ use lunco_scene_commands::catalog::{prim_path_from_entry_id, SpawnCatalog, Spawn
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
 pub struct SpawnGhost;
+
+/// The sole camera-input bundle for spawn preview and commit. The viewport
+/// chooses the camera; the query only realizes and validates that choice.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct SpawnCameraFrame<'w, 's> {
+    pub cameras: Query<
+        'w,
+        's,
+        (
+            &'static Camera,
+            &'static GlobalTransform,
+            &'static bevy::camera::RenderTarget,
+        ),
+        (With<Camera3d>, With<SceneCamera>),
+    >,
+    pub viewport: Res<'w, SceneViewport>,
+}
 
 /// Opt-in cursor-to-spawn trace. Enable with the typed command
 /// `cmd("SetSpawnDiagnostics", #{enabled: true})` in the LunCo REPL (or the
@@ -356,18 +374,15 @@ pub fn update_spawn_ghost(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
-    cameras: Query<
-        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
-        (With<Camera3d>, With<SceneCamera>),
-    >,
-    windows: Query<&Window>,
+    camera_frame: SpawnCameraFrame,
+    windows: Query<&Window, With<PrimaryWindow>>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     // Diagnostics only: names the collider a placement ray actually landed on.
     q_names: Query<&Name>,
     mut diagnostics: ResMut<SpawnDiagnostics>,
-    // The cursor ray is born in the render frame (the camera is the FloatingOrigin)
-    // and is converted ONCE, here, into the grid frame; everything downstream —
+    // The cursor ray is born in the camera-relative render frame and is
+    // converted ONCE, here, into the grid frame; everything downstream —
     // analytic surface, colliders, footprint fit, the placed ghost — is
     // grid-absolute. Mixing the two is what put the ghost a cell underground.
     raycaster: lunco_physics::GridSpatialQuery,
@@ -407,23 +422,26 @@ pub fn update_spawn_ghost(
         return;
     };
 
-    // Ray through the ACTIVE window camera (the one you're looking through) —
-    // not merely the first Camera3d, which may now be an inactive scene camera.
-    let (camera, cam_tf) = match cameras
-        .iter()
-        .find(|(cam, _, target)| {
-            cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
-        })
-        .map(|(cam, tf, _)| (cam, tf))
-    {
-        Some(c) => c,
-        None => {
-            if diagnostics.enabled {
-                info!("[spawn-trace] ghost rejected: no active window Camera3d");
-            }
-            return;
+    // Ray through the viewport's explicitly resolved window camera. Query order
+    // is not presentation ownership, and sensor/RTT cameras may also be active.
+    let Some(camera_entity) = camera_frame.viewport.active_camera else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] ghost rejected: no active window Camera3d");
         }
+        return;
     };
+    let Ok((camera, cam_tf, target)) = camera_frame.cameras.get(camera_entity) else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] ghost rejected: viewport camera is not realized");
+        }
+        return;
+    };
+    if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        if diagnostics.enabled {
+            info!("[spawn-trace] ghost rejected: viewport camera is not an active window camera");
+        }
+        return;
+    }
     let window = match windows.iter().next() {
         Some(w) => w,
         None => {
@@ -606,10 +624,7 @@ pub fn on_scene_click_spawn(
     keys: Res<ButtonInput<KeyCode>>,
     diagnostics: Res<SpawnDiagnostics>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
-    cameras: Query<
-        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
-        (With<Camera3d>, With<SceneCamera>),
-    >,
+    camera_frame: SpawnCameraFrame,
     egui_focus: Res<lunco_core::EguiFocus>,
     // `GridSpatialQuery`, not raw `SpatialQuery` — same choke point the ghost preview
     // (and wheels / altimeter) use: the click ray + corner probes originate in the
@@ -636,14 +651,24 @@ pub fn on_scene_click_spawn(
     // cast the ray against colliders so placement works on streamed terrain even
     // when no pickable tile is under the cursor (the old `hit.position` guard
     // silently rejected those clicks — the "can't place on the ground" bug).
-    let Some((camera, cam_gtf, _)) = cameras.iter().find(|(camera, _, target)| {
-        camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
-    }) else {
+    let Some(camera_entity) = camera_frame.viewport.active_camera else {
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: no active window Camera3d");
         }
         return;
     };
+    let Ok((camera, cam_gtf, target)) = camera_frame.cameras.get(camera_entity) else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] click rejected: viewport camera is not realized");
+        }
+        return;
+    };
+    if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        if diagnostics.enabled {
+            info!("[spawn-trace] click rejected: viewport camera is not an active window camera");
+        }
+        return;
+    }
     let Some(ray) = lunco_core::scene_click_ray(
         &egui_focus,
         camera,

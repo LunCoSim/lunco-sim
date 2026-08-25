@@ -9,7 +9,7 @@ use lunco_workbench::{
 use crate::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
+use lunco_core::{Avatar, GlobalEntityId, LocalAvatar, SessionProfiles, SessionRegistry};
 
 use crate::{FrameBlend, FreeFlightCamera, OrbitCamera, SpringArmCamera};
 
@@ -220,7 +220,7 @@ pub fn populate_avatar_status_view(
     mut view: ResMut<AvatarStatusView>,
     palette: Option<Res<lunco_theme::Theme>>,
     gravity: Option<Res<LocalGravityField>>,
-    avatars: Query<Entity, With<Avatar>>,
+    avatars: Query<Entity, (With<Avatar>, With<LocalAvatar>)>,
     surface_pose: lunco_celestial::SurfacePoseQuery,
     bodies: Query<&CelestialBody>,
     blends: Query<&FrameBlend>,
@@ -232,7 +232,7 @@ pub fn populate_avatar_status_view(
     q_gid: Query<&GlobalEntityId>,
 ) {
     let _ = &palette; // colours resolved at paint; producer only records slots.
-    let avatar_ent = avatars.iter().next();
+    let avatar_ent = avatars.single().ok();
     view.avatar = avatar_ent;
 
     // ── Possession readout ──
@@ -330,7 +330,7 @@ pub fn draw_rover_name_tags(
     scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     panel_rects: Option<Res<PanelRects>>,
     net_role: Option<Res<lunco_core::NetworkRole>>,
-    q_camera: Query<(&Camera, &GlobalTransform), With<Avatar>>,
+    q_camera: Query<(&Camera, &GlobalTransform), (With<Avatar>, With<LocalAvatar>)>,
     q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
 ) {
     // Solo suppression: name tags label OTHER players, who only exist on a wire.
@@ -348,7 +348,7 @@ pub fn draw_rover_name_tags(
 
     // The avatar camera is the one rendering this client's viewport. Without it
     // (e.g. headless / pre-spawn) there is nothing to project against.
-    let Some((camera, cam_gtf)) = q_camera.iter().next() else {
+    let Some((camera, cam_gtf)) = q_camera.single().ok() else {
         return;
     };
 

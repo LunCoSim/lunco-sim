@@ -54,18 +54,20 @@ not covered by the USD prim sweep. They are retired by the dependency-light
 despawned and before replacement projection starts.
 
 Celestial state follows the same boundary. Its derived tree is retired and
-`ActivePhysicsFrame` is restored to the persistent world root unconditionally;
+`ActivePhysicsFrame` is restored to the persistent `WorldGrid` unconditionally;
 this is not inferred from a later frame with no body declarations, because a
 restart can replace old declarations with new declarations in one transaction.
+Scene-scoped `RuntimeDiagnostics` is cleared at the same boundary. Each producer
+then repopulates only its own findings, so a camera, environment, or physics
+error from the outgoing scene cannot be displayed as a fact about the replacement.
 
-Windowed presentation state follows the same ownership rule. A camera-less
-scene may receive the explicit engine-owned `PresentationFallbackCamera` after
-USD projection settles so a successful load is visible rather than an empty
-viewport. It is parented under the admitted scene root, selected only through
-the shared camera-selection event, and retired when an authored window camera
-appears. Scene teardown resets the selection intent and structural scene
-despawn removes the fallback with its root; it is never carried into the next
-Twin.
+Windowed presentation state follows the same ownership rule. A scene must
+author its initial camera selection through `CameraTrack`; avatar or scene-root
+projection never creates an implicit view. If the authored camera contract is
+missing or unresolved, the viewport remains inactive and the scene-scoped
+diagnostic identifies the missing producer/consumer contract. Scene teardown
+resets the selection intent, and no engine-created camera can survive into the
+next Twin.
 
 The retained runtime UI uses the same invariant. When an exposure, perspective,
 gate, or placement makes a surface invisible, the bridge removes the whole

@@ -238,6 +238,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
+        token lunco:terrain:surfaceRole = "flat-site"
         double size = 1.0
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
@@ -297,6 +298,17 @@ def Xform "SandboxScene" (
         double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-30.0, 15.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The initial presentation is authored explicitly. Avatar presence alone
+    # must never choose the window camera.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
     }
 
     # --- Scene cameras (standard UsdGeomCamera) ---

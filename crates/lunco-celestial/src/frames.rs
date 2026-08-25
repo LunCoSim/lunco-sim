@@ -12,7 +12,7 @@
 //!    `ecliptic_to_bevy` had itself been rotating by the obliquity to compensate, so the fix
 //!    had to land in two files at once.
 //! 2. **The sun published in the wrong frame.** An ecliptic (solar) direction was written into
-//!    `SunDirectionWorld`, which consumers read as **site-ENU**. Terrain lit from nowhere.
+//!    a solar direction resource, which consumers read as **site-ENU**. Terrain lit from nowhere.
 //!
 //! Both were **silent** — no panic, no NaN, just a world lit from the wrong place. That is
 //! exactly the failure a type system is for.

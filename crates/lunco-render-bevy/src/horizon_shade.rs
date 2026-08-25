@@ -30,6 +30,7 @@ use lunco_environment::horizon::{
     finish_shadow_cache_bake, pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig,
     SunQuery,
 };
+use lunco_environment::SunRenderState;
 use lunco_materials::ParamValue;
 
 /// The semantic default for a DEM terrain surface. This is the shader whose
@@ -168,10 +169,43 @@ fn ensure_terrain_materials(
     }
 }
 
+/// Clear engine-owned sun uniforms when the semantic/render sun is unavailable.
+/// A previously valid material must not keep lighting from an old scene or
+/// provider sample after the owning state has become invalid.
+fn clear_sun_material(
+    materials: &mut Assets<ShaderMaterial>,
+    handle: &MeshMaterial3d<ShaderMaterial>,
+) {
+    let Some(mut material) = materials.get_mut(&handle.0) else {
+        return;
+    };
+    let needs_clear = material
+        .get_vec3("sun_dir")
+        .is_some_and(|value| value.length_squared() > 1.0e-12)
+        || material
+            .get_vec3("sun_dir_world")
+            .is_some_and(|value| value.length_squared() > 1.0e-12)
+        || material
+            .get_scalar("sun_tan_radius")
+            .is_some_and(|value| value.abs() > 1.0e-6)
+        || material
+            .get_scalar("shadow_cache_on")
+            .is_some_and(|value| value.abs() > 1.0e-6);
+    if needs_clear {
+        material.set_many([
+            ("sun_dir", ParamValue::Vec3([0.0, 0.0, 0.0])),
+            ("sun_dir_world", ParamValue::Vec3([0.0, 0.0, 0.0])),
+            ("sun_tan_radius", ParamValue::F32(0.0)),
+            ("shadow_cache_on", ParamValue::F32(0.0)),
+        ]);
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn wire_terrain_materials(
     cfg: Res<HorizonShadowCacheConfig>,
     sun: SunQuery,
+    render_sun: Option<Res<SunRenderState>>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     terrains: Query<
         (
@@ -204,7 +238,12 @@ pub fn wire_terrain_materials(
     let Some(mut shader_mats) = shader_mats else {
         return;
     };
-    let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else {
+    let Some((_, tan_r, csm_far)) = pick_sun(&sun) else {
+        for (_, _, _, _, _, shader_mat) in &terrains {
+            if let Some(shader_mat) = shader_mat {
+                clear_sun_material(&mut shader_mats, shader_mat);
+            }
+        }
         return;
     };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
@@ -219,7 +258,17 @@ pub fn wire_terrain_materials(
     // altitude. We deliberately do not compensate with a terrain-only fill:
     // it would make the terrain obey a different illumination model from every
     // dynamic PBR object and would incorrectly look like bounced light.
-    let to_sun_world: Vec3 = sun_gt.back().into();
+    let Some(to_sun_world) = render_sun
+        .as_deref()
+        .and_then(|state| state.direction_to_sun_world)
+    else {
+        for (_, _, _, _, _, shader_mat) in &terrains {
+            if let Some(shader_mat) = shader_mat {
+                clear_sun_material(&mut shader_mats, shader_mat);
+            }
+        }
+        return;
+    };
     let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, map, shadow_cache, mesh, shader_mat) in &terrains {
@@ -367,14 +416,12 @@ pub fn wire_terrain_materials(
 ///
 /// [`wire_terrain_materials`] only sees genuine heightfield terrain, but
 /// `regolith.wgsl` is bound to ordinary meshes too (the landing pad disc, the
-/// marketing scenes' ground plate). On those the uniform kept its zero default,
-/// and the shader covered for it by picking the brightest directional light —
-/// a GUESS that is exact only while the brightest light happens to be the sun,
-/// and silent when it is not. A scene with a bright artificial fill keyed the
-/// whole lunar BRDF off the wrong vector with nothing in the log to say so.
+/// marketing scenes' ground plate). The semantic sun projection writes the
+/// uniform for those materials as well; this system never chooses a light or
+/// derives a direction from render entities.
 ///
-/// The sun is a scene-global fact, so the fix is to write it everywhere rather
-/// than let each shader re-derive it. Running across every non-terrain
+/// The sun is a scene-global fact, so it is written everywhere rather than
+/// re-derived independently by each shader. Running across every non-terrain
 /// `ShaderMaterial` is safe: a name the shader does not declare is kept in the
 /// material's `values` map but has no schema offset, so `repack()` never packs it
 /// into the uniform block — it costs a map entry and reaches no GPU binding.
@@ -383,16 +430,28 @@ pub fn wire_terrain_materials(
 /// with the local-space `sun_dir` this system has no business computing.
 pub fn wire_sun_for_non_terrain_materials(
     sun: SunQuery,
+    render_sun: Option<Res<SunRenderState>>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, (Without<HorizonMap>, Without<RenderLayers>)>,
 ) {
     let Some(mut shader_mats) = shader_mats else {
         return;
     };
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
+    let Some((_, tan_r, _csm_far)) = pick_sun(&sun) else {
+        for handle in &meshes {
+            clear_sun_material(&mut shader_mats, handle);
+        }
         return;
     };
-    let to_sun_world: Vec3 = sun_gt.back().into();
+    let Some(to_sun_world) = render_sun
+        .as_deref()
+        .and_then(|state| state.direction_to_sun_world)
+    else {
+        for handle in &meshes {
+            clear_sun_material(&mut shader_mats, handle);
+        }
+        return;
+    };
     let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
 
     // Shared materials already handled this run. Batching means MANY meshes share
@@ -448,6 +507,10 @@ mod tests {
         // Fresh app, so this cannot clobber an existing store (`init_asset` is
         // destructive, not idempotent).
         app.init_asset::<ShaderMaterial>();
+        app.insert_resource(lunco_environment::SunRenderState {
+            direction_to_sun_world: Some(Vec3::Z),
+            revision: 0,
+        });
         app.add_systems(Update, wire_sun_for_non_terrain_materials);
         app
     }
@@ -465,12 +528,9 @@ mod tests {
 
     /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.
     ///
-    /// This is the contract that replaced `regolith.wgsl`'s `sun_to_light()` guess.
-    /// `wire_terrain_materials` only sees heightfield terrain, so the landing pad
-    /// disc and the marketing ground plate used to keep a zero `sun_dir_world` and
-    /// the shader silently substituted the brightest directional light. If this
-    /// test fails, those surfaces lose the lunar BRDF entirely — there is no
-    /// fallback behind it any more, by design.
+    /// This keeps ordinary meshes on the same semantic sun projection as
+    /// heightfield terrain. If the projection is unavailable, the material is
+    /// left unbound and the owning environment diagnostic remains visible.
     #[test]
     fn a_non_terrain_shader_material_gets_the_sun() {
         let mut app = test_app();
@@ -501,21 +561,69 @@ mod tests {
         );
     }
 
-    /// The single unscoped sun is picked structurally by `pick_sun`.
     #[test]
-    fn the_brightest_light_is_the_sun() {
+    fn a_non_terrain_material_clears_after_the_sun_becomes_invalid() {
+        let mut app = test_app();
+        let sun = app
+            .world_mut()
+            .spawn((
+                GlobalTransform::IDENTITY,
+                DirectionalLight {
+                    illuminance: 10_000.0,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&handle)
+                .and_then(|material| material.get("sun_dir_world")),
+            Some(ParamValue::Vec3([0.0, 0.0, 1.0]))
+        );
+
+        app.world_mut().entity_mut(sun).despawn();
+        app.world_mut()
+            .resource_mut::<lunco_environment::SunRenderState>()
+            .direction_to_sun_world = None;
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&handle)
+                .and_then(|material| material.get("sun_dir_world")),
+            Some(ParamValue::Vec3([0.0, 0.0, 0.0])),
+            "invalid semantic lighting must clear the last valid shader direction"
+        );
+    }
+
+    /// The single unscoped sun is selected structurally by `pick_sun`.
+    #[test]
+    fn the_single_structural_sun_sets_the_direction() {
         let mut app = test_app();
 
-        // Single sun pointing +X.
+        // The render light's pose is deliberately unrelated: semantic state is
+        // the direction authority consumed by the material binder.
         app.world_mut().spawn((
-            GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_y(
-                std::f32::consts::FRAC_PI_2,
-            ))),
+            GlobalTransform::IDENTITY,
             DirectionalLight {
                 illuminance: 100_000.0,
                 ..Default::default()
             },
         ));
+        app.world_mut()
+            .insert_resource(lunco_environment::SunRenderState {
+                direction_to_sun_world: Some(Vec3::X),
+                revision: 1,
+            });
 
         let handle = app
             .world_mut()
@@ -613,16 +721,13 @@ mod tests {
     #[test]
     fn a_slowly_moving_sun_does_not_repack_every_frame() {
         let mut app = test_app();
-        let sun = app
-            .world_mut()
-            .spawn((
-                GlobalTransform::IDENTITY,
-                DirectionalLight {
-                    illuminance: 10_000.0,
-                    ..Default::default()
-                },
-            ))
-            .id();
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight {
+                illuminance: 10_000.0,
+                ..Default::default()
+            },
+        ));
         let handle = app
             .world_mut()
             .resource_mut::<Assets<ShaderMaterial>>()
@@ -647,10 +752,11 @@ mod tests {
         const STEP_RAD: f32 = 3e-6; // ~0.0002° per frame, well under the epsilon
         for i in 0..FRAMES {
             let rot = Quat::from_rotation_x(STEP_RAD * i as f32);
-            *app.world_mut()
-                .entity_mut(sun)
-                .get_mut::<GlobalTransform>()
-                .unwrap() = GlobalTransform::from(Transform::from_rotation(rot));
+            app.world_mut()
+                .insert_resource(lunco_environment::SunRenderState {
+                    direction_to_sun_world: Some(rot * Vec3::Z),
+                    revision: i as u64,
+                });
             app.update();
         }
 

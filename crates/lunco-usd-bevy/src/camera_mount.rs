@@ -1,9 +1,8 @@
 //! Rover/vehicle-mounted cameras as **grid-direct followers**.
 //!
-//! big_space requires the `FloatingOrigin` to sit on a GRID-DIRECT entity
-//! ("FloatingOrigin must be on a Grid"), so a camera literally parented under a
-//! moving prim could never host the active-view origin at full precision. A
-//! `def Camera` authored nested under a rover is therefore **realised as a
+//! A camera literally parented under a moving prim could never host the active
+//! view origin without coupling presentation to BigSpace hierarchy ownership.
+//! A `def Camera` authored nested under a rover is therefore **realised as a
 //! grid-direct camera that FOLLOWS the mount** each frame — exactly the pattern
 //! `SpringArmCamera` uses. The nested USD authoring only supplies the mount
 //! offset (its local `xformOp:translate` + `lunco:cameraLookAt` rotation).
@@ -17,7 +16,8 @@
 //!   `CellCoord`+`Transform` in that same Grid.
 //!
 //! Result: a rover cam at planet-scale distance from the origin renders with
-//! the same precision as the free camera — no nested-camera caveat.
+//! the same precision as the free camera; the persistent world origin tracker
+//! follows the selected camera without changing camera archetypes.
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};

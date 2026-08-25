@@ -2577,8 +2577,8 @@ impl Plugin for SandboxCorePlugin {
             // exposure read it, so lux and EV stay matched. Tunable live via
             // `SetEnvironmentLight`.
             .insert_resource(lunco_environment::LunarSun::default())
-            // Persistent world shell: one BigSpace root + `WorldGrid` + one
-            // `FloatingOrigin`. The validation plugin (debug builds only, logs
+            // Persistent world shell: one BigSpace root + `WorldGrid` + the
+            // persistent `OriginAnchor`/`FloatingOrigin`. The validation plugin (debug builds only, logs
             // errors, never panics) is ENABLED: WorldRoot is Transform-free —
             // big_space-canonical — now that the Phase 5 bridge owns BOTH
             // things the root `Transform` was load-bearing for (avian's GT
@@ -2671,7 +2671,8 @@ impl Plugin for SandboxCorePlugin {
             // are authored in USD (`LunCoCelestialBodyAPI` — reference
             // `assets/celestial/solar_system.usda`), and every celestial subsystem
             // gates on that authored fact, so the flat luncosim arena gets no sky at
-            // all. The luncosim avatar keeps the FloatingOrigin either way. The
+            // all. The luncosim avatar remains independent of BigSpace origin
+            // ownership. The
             // generic link kernel (doc 49) is always on — it needs no hierarchy —
             // and publishes `LinkState` + `link.aos`/`link.los`, NOT `comms:*`
             // ports (there is no comms subsystem to own them).
@@ -2680,7 +2681,7 @@ impl Plugin for SandboxCorePlugin {
             })
             .add_plugins(lunco_celestial::CelestialPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
-            // replaces the NoOp provider CelestialPlugin seeds.
+            // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
             // Connectivity rides on the generic link kernel the CelestialPlugin
             // registers (doc 49): geometry in Rust, verdict via the `link.connected`
@@ -4240,10 +4241,15 @@ fn setup_sandbox(world: &mut World) {
     // authored in the scene itself (`sandbox_scene.usda`), instantiated by the
     // same USD loader as every other light — so a scene clear despawns it and a
     // scene load recreates it as ordinary scene content. There is no
-    // Rust-spawned fallback sun and no restore-on-switch machinery; see
+    // Rust-spawned sun and no restore-on-switch machinery; see
     // `lunco_usd_bevy::light` for the single light path and the
     // post-load light-existence check that errors if a scene ships without one.
-    let _grid = lunco_core::ensure_world_root(world);
+    let grid = lunco_core::ensure_world_root(world);
+    // The shell owns topology; the application owns which grid Avian uses.
+    // Bind the canonical WorldGrid explicitly for the empty/sandbox state.
+    // Scene mounts replace this binding with their authored site frame when
+    // celestial placement completes.
+    world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
     // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
     // Before loading a startup scene, consult the shared boot policy

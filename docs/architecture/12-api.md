@@ -281,8 +281,9 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 
 `LoadScene` despawns every entity carrying `UsdPrimPath` plus every
 `SimConnection`, force-reads the asset from disk, and spawns a fresh
-root parented to the first `Grid`. Use after editing a `.usda` file to
-pick up changes without restarting.
+root parented directly under the canonical `WorldGrid`. Use after editing a `.usda` file to
+pick up changes without restarting; malformed world-shell state fails visibly instead of
+selecting an arbitrary grid.
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \

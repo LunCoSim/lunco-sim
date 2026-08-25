@@ -14,7 +14,7 @@
 //! `DistantLight` loader, which sits *below* environment and therefore cannot
 //! read these — but it never needs to: it builds its light from *authored* USD
 //! attributes (`intensity`/`exposure`/`inputs:angle`), with its own local
-//! fallbacks. The render-side `lunco_render::LunarSunShadow` (cascade/bias/atlas)
+//! authored values. The render-side `lunco_render::LunarSunShadow` (cascade/bias/atlas)
 //! is the separate shadow-config home.
 //!
 //! ## Two real light sources
@@ -28,12 +28,12 @@
 //! geometry each frame, so [`FULL_EARTH_EARTHSHINE_LUX`] is a calibration
 //! (the value at full Earth) rather than the value in use.
 //!
-//! [`LunarSun`] is still **static almanac values** for the Shackleton-region
-//! surface. The intended end state is the same one earthshine reached: Sun
-//! direction + distance (hence illuminance and angular size) from sim time and
-//! orbital position, at which point the constants here become the fallback.
-//! `lunco-celestial`'s `update_sun_light_system` already does the 1/r² part for
-//! an anchored scene.
+//! [`LunarSun`] contains the documented semantic calibration for scenes that
+//! author no live solar-distance model. An ephemeris-driven scene may replace
+//! the live irradiance through [`SunState`]; the calibration is not consulted
+//! as a second runtime writer. `lunco-celestial`'s
+//! `update_sun_light_system` supplies the 1/r² projection for an anchored
+//! scene.
 
 use bevy::prelude::*;
 
@@ -132,7 +132,7 @@ pub const FULL_EARTH_EARTHSHINE_LUX: f32 = 12.0;
 /// authored — 0 — rather than at a guess.
 pub fn drive_earthshine_from_phase(
     earth_dir: Option<Res<crate::EarthDirectionWorld>>,
-    sun: crate::horizon::SunQuery,
+    sun: Option<Res<crate::SunState>>,
     mut q_fill: Query<&mut DirectionalLight, With<crate::Earthshine>>,
 ) {
     if q_fill.is_empty() {
@@ -143,12 +143,14 @@ pub fn drive_earthshine_from_phase(
     if !e.is_finite() || e.length_squared() < 1e-12 {
         return;
     }
-    let Some((sun_gt, _, _)) = crate::horizon::pick_sun(&sun) else {
+    let Some(sun) = sun else { return };
+    let Some(direction_to_sun) = sun.direction_to_sun else {
         return;
     };
-    // `back()` is the direction the light points *from* → toward the sun, the
-    // same convention `compute_local_solar` reads.
-    let s: Vec3 = *sun_gt.back();
+    // SunState is the semantic direction toward the Sun in the site frame;
+    // EarthDirectionWorld uses the same frame. The render fill is a projection
+    // and is never read back as the provider.
+    let s = direction_to_sun;
     if !s.is_finite() || s.length_squared() < 1e-12 {
         return;
     }

@@ -132,7 +132,7 @@ pub fn update_local_gravity_field(
             &ChildOf,
             Option<&GravityBody>,
         ),
-        With<lunco_core::Avatar>,
+        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -149,7 +149,7 @@ pub fn update_local_gravity_field(
     if orbital_pin.active {
         return;
     }
-    let Some((avatar_ent, _tf, _cell, _, gravity_body)) = q_avatar.iter().next() else {
+    let Ok((avatar_ent, _tf, _cell, _, gravity_body)) = q_avatar.single() else {
         *field = LocalGravityField::default();
         return;
     };
@@ -308,6 +308,7 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_core::Avatar,
+                lunco_core::LocalAvatar,
                 CellCoord::default(),
                 Transform::from_xyz(10.0, 0.0, 0.0),
                 GlobalTransform::default(),

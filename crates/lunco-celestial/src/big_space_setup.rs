@@ -234,13 +234,11 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
     quality: Res<lunco_render::RenderingQualitySettings>,
-    grid_config: Option<Res<lunco_core::WorldGridConfig>>,
+    grid_config: Res<lunco_core::WorldGridConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
-    // The single world-shell grid (WorldShellPlugin) to nest under, and any prior
-    // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
+    // The single world-shell grid (WorldShellPlugin) to nest under.
     q_world_grid: Query<Entity, (With<lunco_core::WorldGrid>, With<Grid>)>,
-    q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
     bindings: Res<lunco_controller::InputBindingsSettings>,
 ) {
@@ -263,13 +261,8 @@ pub fn setup_big_space_hierarchy(
     // parent when BigSpace propagates the floating origin.  Keep the contract
     // in WorldGridConfig; this system must not grow a second set of grid
     // constants.
-    let grid_config = grid_config.as_deref().copied().unwrap_or_default();
-    let make_grid = || {
-        Grid::new(
-            grid_config.cell_edge_length,
-            grid_config.switching_threshold,
-        )
-    };
+    let grid_config = *grid_config;
+    let make_grid = || grid_config.grid();
     // A site-anchored DEM twin authors its own rocks and bakes rock features
     // into the far-field maps — the generated obstacle field on top is
     // redundant decoration that costs over a second per frame in views that
@@ -359,9 +352,11 @@ pub fn setup_big_space_hierarchy(
     // is pixel-identical — which is why a paused-clock test showed 0 px and hid
     // this for so long.
     //
-    // Cells are `i64`, so small edges are free: 1 AU / 2 km ≈ 7.5e7 cells. Keep
-    // every celestial grid at the same 2 km / 100 m as the root `WorldGrid` —
-    // `max_distance` 1100 m, f32 ULP there ≈ 0.12 mm.
+    // Cells are `i64`, so small edges are free. Keep every celestial grid on
+    // the same `WorldGridConfig` values as the root `WorldGrid`; otherwise a
+    // coarser ancestor becomes the precision floor for its whole subtree.
+    // With the default configuration, `max_distance` is 1100 m and the f32 ULP
+    // at the split boundary is approximately 0.12 mm.
     // The solar hierarchy stays in its inertial frame. A site is mounted under
     // the matching body-fixed surface grid by `attach_site_scene_to_surface_grid`;
     // no celestial ancestor is re-posed to make that site the world origin.
@@ -476,7 +471,7 @@ pub fn setup_big_space_hierarchy(
             ReferenceFrame::EclipticJ2000 {
                 center: crate::ephemeris_id::EARTH_MOON_BARYCENTER,
             },
-            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
             CellCoord::default(),
             Transform::default(),
@@ -495,7 +490,7 @@ pub fn setup_big_space_hierarchy(
             ReferenceFrame::BodyFixed {
                 body: crate::ephemeris_id::EARTH,
             },
-            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
             CellCoord::default(),
             Transform::default(),
@@ -518,8 +513,7 @@ pub fn setup_big_space_hierarchy(
             ReferenceFrame::EclipticJ2000 {
                 center: crate::ephemeris_id::EARTH,
             },
-            // Same 2 km / 100 m as every other celestial grid — cell edge is a
-            // PRECISION knob (see the Solar Grid note).
+            // Same configured precision contract as every other celestial grid.
             make_grid(),
             CellCoord::default(),
             Transform::default(),
@@ -532,10 +526,10 @@ pub fn setup_big_space_hierarchy(
         .id();
 
     // ── Earth Body (visual/physical centre in the rotating body-fixed Grid) ─
-    // Note: Body does NOT have CellCoord. It's a low-precision entity whose
-    // GlobalTransform = Grid × local Transform. This allows rotation from
-    // body_rotation_system to propagate to tile children via propagate_low_precision.
-    // Position is handled by the parent Grid's ephemeris updates.
+    // The body is a direct high-precision child of its body grid and therefore
+    // carries CellCoord, just like every other grid-local spatial entity. Its
+    // local Transform stays at identity; the parent body-fixed grid owns the
+    // frame rotation and the cell owns the high-magnitude translation.
     let earth_body = commands
         .spawn((
             earth.body_component(),
@@ -604,7 +598,7 @@ pub fn setup_big_space_hierarchy(
             ReferenceFrame::BodyFixed {
                 body: crate::ephemeris_id::MOON,
             },
-            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
             CellCoord::default(),
             Transform::default(),
@@ -701,17 +695,10 @@ pub fn setup_big_space_hierarchy(
     let (cam_cell, cam_translation) = make_grid().translation_to_grid(cam_pos);
     let cam_direction = (-cam_pos).normalize().as_vec3();
 
-    // Hosts that own their camera (sandbox avatar) keep their FloatingOrigin;
-    // only the full-client Observer Camera claims it (doc 43).
+    // The persistent OriginAnchor owns FloatingOrigin for both the observer
+    // and sandbox cameras. Camera presentation and BigSpace origin ownership
+    // are separate contracts.
     if config.spawn_observer_camera {
-        // The Observer Camera is the intended view, so it holds the single
-        // FloatingOrigin. Claim it from any prior holder (the shell's OriginAnchor)
-        // so big_space never sees two origins (the "multiple floating origins →
-        // resetting this big space" error — a known multi-crate hazard).
-        for prior in q_prior_origins.iter() {
-            commands.entity(prior).remove::<FloatingOrigin>();
-        }
-
         commands.spawn((
             // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
             // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
@@ -733,7 +720,6 @@ pub fn setup_big_space_hierarchy(
                 far: 1.0e15,
                 ..default()
             }),
-            FloatingOrigin,
             cam_cell,
             Transform::from_translation(cam_translation).looking_to(cam_direction, Vec3::Y),
             GlobalTransform::default(),

@@ -183,7 +183,7 @@ fn build_app() -> App {
     let frame = app
         .world_mut()
         .spawn((
-            big_space::prelude::Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             Transform::default(),
             GlobalTransform::default(),
         ))

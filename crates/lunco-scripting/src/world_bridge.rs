@@ -2761,7 +2761,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<ApiEntityRegistry>();
         let frame = world
-            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .spawn(lunco_core::WorldGridConfig::default().grid())
             .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let real = world

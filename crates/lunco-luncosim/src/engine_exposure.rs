@@ -20,7 +20,7 @@ use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
-use lunco_core::{Avatar, CelestialBody, GlobalEntityId};
+use lunco_core::{Avatar, CelestialBody, GlobalEntityId, LocalAvatar, TheLocalAvatar};
 use lunco_cosim::SimComponent;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
@@ -417,7 +417,8 @@ fn resolve_authored_telemetry(
 
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
 fn resolve_driven(
-    q_avatar: &Query<&ControllerLink, With<Avatar>>,
+    local_avatar: &TheLocalAvatar,
+    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_gid: &Query<&GlobalEntityId>,
@@ -431,7 +432,7 @@ fn resolve_driven(
     q_com: &Query<&ComputedCenterOfMass>,
     surface_pose: &lunco_celestial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
-    let vessel = q_avatar.iter().next()?.vessel_entity;
+    let vessel = q_avatar.get(local_avatar.0?).ok()?.vessel_entity;
     let pose = match surface_pose.site_count() {
         0 => {
             let (position, rotation) =
@@ -663,7 +664,17 @@ mod exposure_tests {
 /// cadence. Static scenes, paused simulations, and idle frames do not rebuild the
 /// view model.
 pub(crate) fn mark_exposure_dirty(
-    q_avatar: Query<(), Or<(Changed<ControllerLink>, Changed<Avatar>)>>,
+    q_avatar: Query<
+        (),
+        (
+            With<LocalAvatar>,
+            Or<(
+                Changed<ControllerLink>,
+                Changed<Avatar>,
+                Changed<LocalAvatar>,
+            )>,
+        ),
+    >,
     q_velocity: Query<(), Changed<LinearVelocity>>,
     q_spatial: Query<(), Or<(Changed<CellCoord>, Changed<Transform>, Changed<ChildOf>)>>,
     q_links: Query<(), Changed<LinkState>>,
@@ -721,6 +732,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     exposures: ResMut<'w, EngineExposures>,
     signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
+    local_avatar: Res<'w, TheLocalAvatar>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
@@ -736,7 +748,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
 /// function when seminar tracing adds another input.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ExposureQueries<'w, 's> {
-    avatar: Query<'w, 's, &'static ControllerLink, With<Avatar>>,
+    avatar: Query<'w, 's, &'static ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     name: Query<'w, 's, &'static Name>,
     callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
     gid: Query<'w, 's, &'static GlobalEntityId>,
@@ -791,6 +803,7 @@ pub(crate) fn publish_exposure(
     runtime.refresh.first_update = false;
 
     let Some(vessel) = resolve_driven(
+        &runtime.local_avatar,
         &queries.avatar,
         &queries.name,
         &queries.callsign,

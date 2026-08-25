@@ -136,12 +136,53 @@ impl ApiQueryProvider for LintReportQuery {
     }
 }
 
+/// Read structural runtime diagnostics from owning subsystems. These findings
+/// complement `LintReport`: lint is an explicit authoring pass, while these
+/// are live admission/ownership errors that must remain highlighted as the
+/// loaded scene changes.
+pub struct RuntimeDiagnosticsQuery;
+
+impl ApiQueryProvider for RuntimeDiagnosticsQuery {
+    fn name(&self) -> &'static str {
+        "RuntimeDiagnostics"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        let findings = world
+            .get_resource::<lunco_core::RuntimeDiagnostics>()
+            .map(|diagnostics| {
+                diagnostics
+                    .findings
+                    .iter()
+                    .map(|finding| {
+                        json!({
+                            "code": finding.code,
+                            "severity": finding.severity.as_str(),
+                            "producer": finding.producer,
+                            "subject": finding.subject,
+                            "message": finding.message,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ApiResponse::ok(json!({
+            "errors": findings.iter().filter(|f| f["severity"] == "error").count(),
+            "warnings": findings.iter().filter(|f| f["severity"] == "warning").count(),
+            "findings": findings,
+        }))
+    }
+}
+
 /// Register the query alongside the command (the command registers itself with
 /// the rest of this crate's verbs).
 pub fn register(app: &mut App) {
     app.init_resource::<lunco_lint::LintReport>();
+    // Findings belong to the loaded scene. A replacement must not leave the
+    // previous scene's errors highlighted as if they were current.
+    app.add_systems(lunco_core::SceneTeardown, lunco_lint::clear_report);
     app.init_resource::<ApiQueryRegistry>();
-    app.world_mut()
-        .resource_mut::<ApiQueryRegistry>()
-        .register(LintReportQuery);
+    let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
+    registry.register(LintReportQuery);
+    registry.register(RuntimeDiagnosticsQuery);
 }

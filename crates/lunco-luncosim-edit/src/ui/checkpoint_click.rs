@@ -36,8 +36,8 @@ use lunco_controller::{ControllerLink, SimulatedIntents};
 use lunco_core::commands::SessionId;
 use lunco_core::session::SessionRegistry;
 use lunco_core::{
-    paths::prim_path_matches, Avatar, EguiFocus, GlobalEntityId, InputPorts, IntentState,
-    SpawnToolActive, TerrainToolActive, UserIntent,
+    Avatar, EguiFocus, GlobalEntityId, InputPorts, IntentState, LocalAvatar, SceneViewport,
+    SpawnToolActive, TerrainToolActive, TheLocalAvatar, UserIntent,
 };
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::{PbrLook, SceneCamera, SurfaceAlpha};
@@ -212,6 +212,7 @@ impl<'w> WaypointDocContext<'w> {
 /// Bevy's 16-argument limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointClickFrame<'w, 's> {
+    pub viewport: Res<'w, SceneViewport>,
     pub cameras: Query<
         'w,
         's,
@@ -249,7 +250,6 @@ pub struct WaypointVesselQueries<'w, 's> {
     // mission vessel, so never choose it as the implicit waypoint target when
     // no vessel is possessed/selected.
     pub q_inputs: Query<'w, 's, Entity, (With<InputPorts>, Without<Avatar>)>,
-    pub q_autopilots: Query<'w, 's, &'static lunco_autopilot::Autopilot>,
 }
 
 /// Resolve the pointer to a point on the ground in **WORLD** (grid-absolute) space —
@@ -268,9 +268,11 @@ fn pick_ground_world(
     egui_focus: &EguiFocus,
     pointer: Vec2,
 ) -> Option<DVec3> {
-    let (camera, cam_gtf, _) = frame.cameras.iter().find(|(camera, _, target)| {
-        camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
-    })?;
+    let camera_entity = frame.viewport.active_camera?;
+    let (camera, cam_gtf, target) = frame.cameras.get(camera_entity).ok()?;
+    if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        return None;
+    }
     let ray = lunco_core::scene_click_ray(egui_focus, camera, cam_gtf, pointer)?;
     // ONE frame crossing, at the ray. Everything after this is grid-absolute —
     // the frame a waypoint prim is authored in. Converting the HIT instead of the
@@ -337,7 +339,8 @@ pub fn on_scene_click_checkpoint(
     spawn_tool: Res<SpawnToolActive>,
     terrain_tool: Res<TerrainToolActive>,
     selected: Res<SelectedEntities>,
-    avatars: Query<(Entity, &IntentState), With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
+    avatars: Query<(Entity, &IntentState), (With<Avatar>, With<LocalAvatar>)>,
     simulated_intents: Option<Res<SimulatedIntents>>,
     q_link: Query<&ControllerLink>,
     frame: WaypointClickFrame,
@@ -361,14 +364,17 @@ pub fn on_scene_click_checkpoint(
     // A plain primary click possesses/selects; the semantic PlaceWaypoint intent
     // paired with it drops a waypoint. The input map supplies that intent, so
     // rebinding the gesture changes this path without editor-only key handling.
-    let place_waypoint_held = avatars.iter().any(|(avatar, intents)| {
-        intents.pressed(&UserIntent::PlaceWaypoint)
-            || simulated_intents.as_ref().is_some_and(|sim| {
-                sim.0
-                    .get(&avatar)
-                    .is_some_and(|set| set.contains(&UserIntent::PlaceWaypoint))
-            })
-    });
+    let place_waypoint_held = local_avatar
+        .0
+        .and_then(|entity| avatars.get(entity).ok())
+        .is_some_and(|(avatar, intents)| {
+            intents.pressed(&UserIntent::PlaceWaypoint)
+                || simulated_intents.as_ref().is_some_and(|sim| {
+                    sim.0
+                        .get(&avatar)
+                        .is_some_and(|set| set.contains(&UserIntent::PlaceWaypoint))
+                })
+        });
     if !place_waypoint_held {
         return;
     }
@@ -376,18 +382,18 @@ pub fn on_scene_click_checkpoint(
     // Now that this is a waypoint-intent click, stop propagation.
     click.propagate(false);
 
-    // Default to the possessed vessel first, then fall back to the selected one, then fall back to the first vessel with a mission tree in the scene
-    let possessed_vessel = avatars
-        .iter()
-        .next()
-        .and_then(|(av, _)| q_link.get(av).ok().map(|link| link.vessel_entity));
-    let raw_vessel = possessed_vessel
-        .or_else(|| selected.primary())
-        .or_else(|| vessels.q_autopilots.iter().map(|ap| ap.vessel).next())
-        .or_else(|| vessels.q_inputs.iter().next())
-        .or_else(|| vessels.q_xml.iter().next().map(|(e, _)| e));
+    // The local control link is authoritative when it exists; otherwise the
+    // explicit scene selection is the only valid authoring target. There is no
+    // entity-order choice for a waypoint operation.
+    let possessed_vessel = local_avatar
+        .0
+        .and_then(|avatar| q_link.get(avatar).ok().map(|link| link.vessel_entity));
+    let raw_vessel = possessed_vessel.or_else(|| selected.primary());
     let Some(mut vessel) = raw_vessel else {
-        info!("[waypoint] click ignored: no vessel found in scene");
+        report_waypoint_failure(
+            &mut commands,
+            "PlaceWaypoint requires a possessed or explicitly selected vessel",
+        );
         return;
     };
 
@@ -640,7 +646,10 @@ pub fn on_scene_click_place_waypoint(
     let Some((_vessel, xml, vessel_prim)) = vessel_for_target(&q_vessel, &pending.coord_key) else {
         report_waypoint_failure(
             &mut commands,
-            format!("No vessel mission refers to '{}'", pending.coord_key),
+            format!(
+                "No unique vessel mission refers to '{}'; waypoint insertion was refused",
+                pending.coord_key
+            ),
         );
         return;
     };
@@ -1019,6 +1028,26 @@ fn runtime_marker_is_visited(
     reached.is_some_and(|reached| reached.contains(&runtime_waypoint_key(index)))
 }
 
+/// Assign authored route progress through the resolver's exact target binding.
+///
+/// `TargetBindings` is the only valid association between a vessel's authored
+/// route and a live waypoint entity. A stage/path scan here would be ambiguous
+/// for instanced scenes and would make the visible state depend on query order.
+fn assign_authored_marker_visits(
+    targets: &[String],
+    state: &RouteVisualState,
+    bindings: &TargetBindings,
+    marker_visits: &mut std::collections::HashMap<Entity, bool>,
+) {
+    for (index, target) in targets.iter().enumerate() {
+        let Some(&marker) = bindings.0.get(target) else {
+            continue;
+        };
+        let visited = state.visited.get(index).copied().unwrap_or(false);
+        marker_visits.insert(marker, visited);
+    }
+}
+
 /// Runtime visual progress for one route. Only the collision-backed set is
 /// evidence that a waypoint was visited. The behavior cursor identifies the
 /// active leg, but never changes visited state.
@@ -1037,10 +1066,7 @@ fn route_visual_state(
 ) -> RouteVisualState {
     let visited = targets
         .iter()
-        .map(|target| {
-            reached
-                .is_some_and(|reached| reached.0.iter().any(|done| prim_path_matches(done, target)))
-        })
+        .map(|target| reached.is_some_and(|reached| reached.0.iter().any(|done| done == target)))
         .collect::<Vec<_>>();
 
     let cursor_index = cursor.and_then(|index| {
@@ -1138,7 +1164,7 @@ pub fn draw_waypoint_overlay(
     >,
     selected: Res<SelectedEntities>,
     q_camera: Query<(Entity, &Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
-    q_avatar_cam: Query<Entity, With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
     q_autopilots: Query<(
         &lunco_autopilot::Autopilot,
         Option<&lunco_autopilot::AutopilotBehavior>,
@@ -1158,13 +1184,9 @@ pub fn draw_waypoint_overlay(
     let theme = theme
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-    // Prefer the avatar camera (the one the player looks through); fall back
-    // to the first active Camera3d if no avatar is spawned yet.
-    let cam_result = q_avatar_cam
-        .iter()
-        .next()
-        .and_then(|av| q_camera.get(av).ok())
-        .or_else(|| q_camera.iter().find(|(_, cam, _)| cam.is_active));
+    // The local avatar camera is the only camera with presentation ownership
+    // for this overlay. If it is absent, the overlay is intentionally absent.
+    let cam_result = local_avatar.0.and_then(|avatar| q_camera.get(avatar).ok());
     let Some((cam_entity, camera, cam_gtf)) = cam_result else {
         return;
     };
@@ -1190,10 +1212,9 @@ pub fn draw_waypoint_overlay(
         q_vessels.iter().map(|(entity, ..)| entity).collect();
     let primary_selected = route_owner(selected.primary(), &q_parents, &vessel_entities);
     let possessed_vessel = route_owner(
-        q_avatar_cam
-            .iter()
-            .next()
-            .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity)),
+        local_avatar
+            .0
+            .and_then(|avatar| q_link.get(avatar).ok().map(|link| link.vessel_entity)),
         &q_parents,
         &vessel_entities,
     );
@@ -1259,12 +1280,7 @@ pub fn draw_waypoint_overlay(
             };
             let screen = egui::pos2(viewport.x, viewport.y) + origin;
             let visited = progress.visited.get(i).copied().unwrap_or_else(|| {
-                reached.is_some_and(|reached| {
-                    reached
-                        .0
-                        .iter()
-                        .any(|done| prim_path_matches(done, &target))
-                })
+                reached.is_some_and(|reached| reached.0.iter().any(|done| done == &target))
             });
 
             wp_screens.push(WpScreen {
@@ -1377,14 +1393,16 @@ fn vessel_for_target<'a>(
     q_vessel: &'a Query<(Entity, &BehaviorXml, &UsdPrimPath)>,
     target: &str,
 ) -> Option<(Entity, &'a BehaviorXml, &'a UsdPrimPath)> {
-    q_vessel.iter().find(|(_, xml, _)| {
+    let mut matches = q_vessel.iter().filter(|(_, xml, _)| {
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             return false;
         };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         targets.iter().any(|t| t == target)
-    })
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
 }
 
 /// Author a waypoint MARKER: a prim referencing `vessels/markers/waypoint.usda`
@@ -1587,16 +1605,18 @@ pub fn manual_input_disengages_autopilot(
 /// reach this handler.
 pub fn handle_autopilot_toggle_intent(
     egui_focus: Res<EguiFocus>,
-    avatars: Query<(Entity, &IntentState), With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
+    avatars: Query<(Entity, &IntentState), (With<Avatar>, With<LocalAvatar>)>,
     q_link: Query<&ControllerLink>,
     mut commands: Commands,
 ) {
     if egui_focus.wants_keyboard {
         return;
     }
-    if let Some((avatar, _)) = avatars
-        .iter()
-        .find(|(_, intent)| intent.just_pressed(&UserIntent::Action))
+    if let Some((avatar, _)) = local_avatar
+        .0
+        .and_then(|entity| avatars.get(entity).ok())
+        .filter(|(_, intent)| intent.just_pressed(&UserIntent::Action))
     {
         if let Ok(link) = q_link.get(avatar) {
             commands.trigger(ToggleAutopilot {
@@ -1763,25 +1783,24 @@ register_commands!(
 
 // ── Route ribbon (real 3D geometry, not a screen-space overlay) ───────────────
 
-/// Half-width (world units) of the route ribbon — a thin drawn line, not a road.
-const PATH_HALF_WIDTH: f32 = 0.12;
-/// Centre height of the route ribbon above sampled terrain. This is the centre of the authored waypoint
-/// dome (`vessels/markers/waypoint.usda`): route connections meet a waypoint in
-/// its middle instead of visually entering through the buried lower hemisphere.
-/// The ribbon still samples every DEM height, so this is a constant clearance,
-/// not a straight chord that can cut through a ridge or crater.
-const WAYPOINT_CONNECTION_HEIGHT: f32 = 2.5;
+/// Half-width (metres) of the route ribbon — a thin drawn annotation, not a road.
+const ROUTE_RIBBON_HALF_WIDTH_M: f32 = 0.12;
+/// Separation (metres) between the derived route annotation and the composed
+/// terrain surface. This belongs to the annotation renderer, not to the USD
+/// waypoint asset: a waypoint's authored visual dimensions must never determine
+/// the position of an unrelated derived overlay.
+const ROUTE_SURFACE_CLEARANCE_M: f32 = 0.08;
 /// Resample spacing for a `smooth` route's ribbon. Matches the autopilot's own
 /// resampling, so the drawn curve IS the driven curve.
-const PATH_SPACING: f64 = 2.0;
+const ROUTE_SAMPLE_SPACING_M: f64 = 2.0;
 
 /// A vessel's route ribbon. `signature` is what the mesh was built from, so the
 /// (relatively expensive) rebuild only happens when the route or active leg changes —
 /// not every frame.
 ///
-/// A route draws as two roles: the complete green waypoint-to-waypoint path and a
-/// blue rover-to-next-waypoint cue. The latter changes when `ReachedWaypoints`
-/// advances.
+/// A route draws as two roles: the future green waypoint-to-waypoint path and a
+/// blue rover-to-next-waypoint cue. Both change when `ReachedWaypoints` advances;
+/// reached legs are removed from the green path at that same transition.
 #[derive(Component)]
 pub struct WaypointPathMesh {
     pub vessel: Entity,
@@ -1792,8 +1811,8 @@ pub struct WaypointPathMesh {
 /// Which half of a route a ribbon draws.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PathPart {
-    /// Complete waypoint-to-waypoint route, including visited and future legs.
-    Driven,
+    /// Future waypoint-to-waypoint route, starting at the current unresolved leg.
+    Future,
     /// Current rover-to-next-waypoint leg.
     Remaining,
 }
@@ -1843,36 +1862,43 @@ fn route_signature(
     h.finish()
 }
 
-/// Split route geometry into its two visual roles: the complete green
+/// Split route geometry into its two visual roles: the future green
 /// waypoint-to-waypoint route and the single active blue rover-to-next segment.
-/// Keeping this pure makes the visited-state transition testable without a
-/// renderer or a Bevy world.
+/// Visited legs are removed from both roles at the same transition that tints the
+/// corresponding marker gray. Keeping this pure makes that state transition
+/// testable without a renderer or a Bevy world.
 fn route_ribbon_points(
     points: &[(DVec3, bool)],
     rover_pos: Option<DVec3>,
     active_index: Option<usize>,
 ) -> (Vec<DVec3>, Vec<DVec3>) {
-    let green = points.iter().map(|(point, _)| *point).collect();
     let next = active_index
         .filter(|&index| index < points.len())
         .or_else(|| points.iter().position(|(_, visited)| !visited));
+    let green = next
+        .map(|index| points[index..].iter().map(|(point, _)| *point).collect())
+        .unwrap_or_default();
     let blue = next
         .and_then(|index| {
             // The first leg has no previous waypoint. Until the live physics
             // pose is available, there is no honest start point to render;
             // synthesising W0 → W0 creates an invisible line. Later legs may
             // use the preceding authored waypoint while the live pose is absent.
-            let start = rover_pos.or_else(|| (index > 0).then_some(points[index - 1].0))?;
+            let start = rover_pos.or_else(|| (index > 0).then(|| points[index - 1].0))?;
             Some(vec![start, points[index].0])
         })
         .unwrap_or_default();
     (green, blue)
 }
 
-/// Build a flat ground-hugging ribbon through `points`, with vertices expressed
+/// Build a surface-separated ribbon through `points`, with vertices expressed
 /// relative to `anchor` (the entity's own origin) so f32 vertex precision stays
 /// tight regardless of how far the route sits from the world origin.
-fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3, first_height_offset: f32) -> Option<Mesh> {
+///
+/// `points` are grid-absolute positions returned by the terrain/waypoint
+/// projection. The route renderer adds one fixed presentation clearance to every
+/// vertex; it never reuses a marker's authored radius or local visual offset.
+fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     let n = points.len();
@@ -1898,16 +1924,8 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3, first_height_offset: f32) 
         if right.length_squared() < 1e-9 {
             right = DVec3::X;
         }
-        let right = right.normalize() * PATH_HALF_WIDTH as f64;
-        // The live leg starts at the rover body's authored root (its centre),
-        // while waypoint pins meet at their visible dome centres. Applying the
-        // waypoint lift to point zero made the line appear to leave the mast.
-        let height_offset = if i == 0 {
-            first_height_offset
-        } else {
-            WAYPOINT_CONNECTION_HEIGHT
-        };
-        let base = (points[i] - anchor).as_vec3() + Vec3::Y * height_offset;
+        let right = right.normalize() * ROUTE_RIBBON_HALF_WIDTH_M as f64;
+        let base = (points[i] - anchor).as_vec3() + Vec3::Y * ROUTE_SURFACE_CLEARANCE_M;
         let r = right.as_vec3();
         pos.push((base - r).to_array());
         pos.push((base + r).to_array());
@@ -1965,7 +1983,8 @@ pub fn sync_waypoint_path_mesh(
         Option<&ReachedWaypoints>,
     )>,
     selected: Res<SelectedEntities>,
-    q_avatar: Query<&ControllerLink, With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
+    q_avatar: Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
     q_autopilots: Query<(
         &lunco_autopilot::Autopilot,
         Option<&lunco_autopilot::AutopilotBehavior>,
@@ -2056,7 +2075,10 @@ pub fn sync_waypoint_path_mesh(
         q_vessels.iter().map(|(entity, ..)| entity).collect();
     let selected_vessel = route_owner(selected.primary(), &q_parents, &vessel_entities);
     let possessed_vessel = route_owner(
-        q_avatar.iter().next().map(|link| link.vessel_entity),
+        local_avatar
+            .0
+            .and_then(|entity| q_avatar.get(entity).ok())
+            .map(|link| link.vessel_entity),
         &q_parents,
         &vessel_entities,
     );
@@ -2106,6 +2128,18 @@ pub fn sync_waypoint_path_mesh(
             &q_spatial,
         )
         .map(|(position, _)| position);
+        // The live physics pose is the rover body's origin, not a point on the
+        // navigation surface. Project the blue leg's start through the same
+        // terrain oracle as the authored waypoint pins. A route annotation has
+        // one surface frame; it must not connect a body-centre height to a
+        // ground-anchored waypoint and look like a coordinate-system tilt.
+        let rover_route_pos = rover_pos.and_then(|position| {
+            if !surface.has_terrain() {
+                return Some(position);
+            }
+            let ground = surface.height_at(lunco_core::coords::GridPos(position))?;
+            Some(DVec3::new(position.x, ground, position.z))
+        });
         // Focus is part of the signature: it changes the ribbon's colour, so a
         // selection change has to rebuild it (the mesh is only rebuilt when this
         // number moves).
@@ -2157,23 +2191,26 @@ pub fn sync_waypoint_path_mesh(
                 })
                 .collect()
         };
-        // The complete waypoint-to-waypoint route is green; a separate blue
-        // segment overlays only rover → next unresolved waypoint.
+        // The future waypoint-to-waypoint route is green; a separate blue
+        // segment overlays only rover → next unresolved waypoint. Visited legs
+        // are absent, so a gray marker cannot be recoloured by an old overlay.
         let (green_points, blue_points) =
-            route_ribbon_points(&pts, rover_pos, progress.active_index);
+            route_ribbon_points(&pts, rover_route_pos, progress.active_index);
         let closed = closed && pts.len() > 2;
 
-        for part in [PathPart::Driven, PathPart::Remaining] {
-            // The complete route is independent of rover motion. Only the live
+        for part in [PathPart::Future, PathPart::Remaining] {
+            // The future route is independent of rover motion. Only the live
             // blue leg includes the exact solved rover pose in its revision.
-            let live_start = (part == PathPart::Remaining).then_some(rover_pos).flatten();
+            let live_start = (part == PathPart::Remaining)
+                .then_some(rover_route_pos)
+                .flatten();
             let signature = route_signature(&targets, &pts, smooth, &progress, live_start)
                 ^ (focused as u64)
                 ^ ((surface.has_terrain() as u64) << 1);
             let slice: Vec<DVec3> = match part {
-                // Green is the complete authored/runtime route, including legs
-                // already visited and legs still ahead.
-                PathPart::Driven => green_points.clone(),
+                // Green is the unresolved authored/runtime route, beginning at
+                // the current waypoint. Reached legs are not rendered again.
+                PathPart::Future => green_points.clone(),
                 // Blue is only the currently active leg. It must not redraw a
                 // previous green connection, otherwise the blue pass wins in
                 // depth/order and makes visited legs look unvisited.
@@ -2196,11 +2233,11 @@ pub fn sync_waypoint_path_mesh(
                 continue;
             }
 
-            // A looping patrol's waypoint-to-waypoint route closes in green;
+            // A looping patrol's future waypoint-to-waypoint route closes in green;
             // the active blue leg remains a single rover→next segment.
-            let close_this = closed && part == PathPart::Driven;
+            let close_this = closed && part == PathPart::Future;
             let mut path = if smooth {
-                catmull_rom_path(&slice, close_this, PATH_SPACING)
+                catmull_rom_path(&slice, close_this, ROUTE_SAMPLE_SPACING_M)
             } else {
                 slice.clone()
             };
@@ -2217,19 +2254,14 @@ pub fn sync_waypoint_path_mesh(
             follow_surface(&mut path, &surface);
 
             let anchor = path[0];
-            let first_height_offset = if part == PathPart::Remaining {
-                0.0
-            } else {
-                WAYPOINT_CONNECTION_HEIGHT
-            };
-            let Some(mesh) = build_ribbon_mesh(&path, anchor, first_height_offset) else {
+            let Some(mesh) = build_ribbon_mesh(&path, anchor) else {
                 continue;
             };
-            // The complete route stays VISIBLE in green; the active blue leg is
-            // rendered separately so visited state cannot be hidden by overlap.
+            // The future route stays visible in green; the active blue leg is
+            // rendered separately so its live endpoint cannot hide state.
             let (base_color, emissive) = match part {
-                PathPart::Driven => (
-                    // Green = the waypoint-to-waypoint mission connections.
+                PathPart::Future => (
+                    // Green = the unresolved waypoint-to-waypoint mission path.
                     LinearRgba::new(0.18, 0.72, 0.38, 0.38),
                     LinearRgba::new(0.08, 0.55, 0.24, 1.0),
                 ),
@@ -2336,6 +2368,7 @@ pub(crate) fn sync_waypoint_marker_visuals(
         Entity,
         Option<&BehaviorXml>,
         Option<&lunco_autopilot::AutopilotBehaviorSpec>,
+        Option<&TargetBindings>,
         Option<&ReachedWaypoints>,
     )>,
     q_autopilots: Query<(
@@ -2344,7 +2377,7 @@ pub(crate) fn sync_waypoint_marker_visuals(
         Option<&lunco_autopilot::AutopilotExecutionState>,
     )>,
     q_markers: Query<
-        (Entity, &UsdPrimPath, Option<&RuntimeWaypointBinding>),
+        (Entity, Option<&RuntimeWaypointBinding>),
         With<lunco_usd_sim::marker::WaypointMarker>,
     >,
     mut q_looks: Query<(
@@ -2356,9 +2389,9 @@ pub(crate) fn sync_waypoint_marker_visuals(
     q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    let mut routes = std::collections::HashMap::new();
     let mut runtime_reached = std::collections::HashMap::new();
-    for (vessel, xml, spec, reached) in q_vessels.iter() {
+    let mut marker_visits = std::collections::HashMap::new();
+    for (vessel, xml, spec, bindings, reached) in q_vessels.iter() {
         if let Some(reached) = reached {
             runtime_reached.insert(vessel, reached);
         }
@@ -2367,46 +2400,30 @@ pub(crate) fn sync_waypoint_marker_visuals(
             continue;
         }
         let (cursor, completed) = route_execution(vessel, &q_autopilots);
-        routes.insert(
-            vessel,
-            (
-                targets.clone(),
-                route_visual_state(&targets, reached, cursor, completed, route_loops(xml, spec)),
-            ),
-        );
-    }
-
-    let mut marker_visits = std::collections::HashMap::new();
-    for (marker, path, binding) in q_markers.iter() {
-        let visited = binding
-            .and_then(|binding| {
-                runtime_reached
-                    .get(&binding.vessel)
-                    .map(|reached| runtime_marker_is_visited(Some(&reached.0), binding.index))
-            })
-            .or_else(|| {
-                // Prefer an exact authored target before the relative/full-path
-                // fallback. This keeps a marker attached to its own route when
-                // two vessels use similarly named waypoints.
-                if let Some(visited) = routes.iter().find_map(|(_, (targets, state))| {
-                    targets
-                        .iter()
-                        .position(|target| target == &path.path)
-                        .and_then(|index| state.visited.get(index).copied())
-                }) {
-                    return Some(visited);
-                }
-                routes.iter().find_map(|(_, (targets, state))| {
-                    targets
-                        .iter()
-                        .position(|target| prim_path_matches(target, &path.path))
-                        .and_then(|index| state.visited.get(index).copied())
-                })
-            });
-        if let Some(visited) = visited {
-            marker_visits.insert(marker, visited);
+        if let Some(bindings) = bindings {
+            let state =
+                route_visual_state(&targets, reached, cursor, completed, route_loops(xml, spec));
+            assign_authored_marker_visits(&targets, &state, bindings, &mut marker_visits);
         }
     }
+
+    // Runtime-only markers carry their owning vessel and ordinal directly. They
+    // do not participate in authored TargetBindings, so this is the separate
+    // runtime contract rather than a path-based inference.
+    let marker_entities: std::collections::HashSet<Entity> = q_markers
+        .iter()
+        .map(|(marker, binding)| {
+            if let Some(binding) = binding {
+                if let Some(reached) = runtime_reached.get(&binding.vessel) {
+                    marker_visits.insert(
+                        marker,
+                        runtime_marker_is_visited(Some(&reached.0), binding.index),
+                    );
+                }
+            }
+            marker
+        })
+        .collect();
 
     for (entity, path, mut look, base) in q_looks.iter_mut() {
         if !path.path.ends_with("/Dome") {
@@ -2419,14 +2436,22 @@ pub(crate) fn sync_waypoint_marker_visuals(
                 marker = Some(current);
                 break;
             }
+            if marker_entities.contains(&current) {
+                marker = Some(current);
+                break;
+            }
             let Ok(parent) = q_parents.get(current) else {
                 break;
             };
             current = parent.parent();
         }
-        let Some(visited) = marker.and_then(|marker| marker_visits.get(&marker).copied()) else {
+        let Some(marker) = marker else {
             continue;
         };
+        // An unresolved authored binding is not permission to retain the last
+        // session tint. The resolver owns readiness; until it supplies an exact
+        // marker entity, the marker renders from its authored base look.
+        let visited = marker_visits.get(&marker).copied().unwrap_or(false);
 
         let mut target = if let Some(base) = base {
             base.0.clone()
@@ -2447,16 +2472,39 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        has_authored_movement_route, route_loops, route_ribbon_points, route_signature,
-        route_visual_state, runtime_waypoint_key, select_ground_point, BehaviorXml,
-        ReachedWaypoints, WAYPOINT_MARKER_ASSET,
+        assign_authored_marker_visits, has_authored_movement_route, route_loops,
+        route_ribbon_points, route_signature, route_visual_state, runtime_waypoint_key,
+        select_ground_point, BehaviorXml, ReachedWaypoints, RouteVisualState,
+        WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
+    use lunco_autopilot::usd_tree::TargetBindings;
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
-    use lunco_core::paths::prim_path_matches;
+
+    #[test]
+    fn authored_marker_progress_is_owned_by_exact_target_binding() {
+        let first = Entity::from_raw_u32(1).unwrap();
+        let second = Entity::from_raw_u32(2).unwrap();
+        let unrelated = Entity::from_raw_u32(3).unwrap();
+        let targets = vec!["/Twin/Route/A".to_string(), "/Twin/Route/B".to_string()];
+        let mut bindings = TargetBindings::default();
+        bindings.0.insert(targets[0].clone(), first);
+        bindings.0.insert(targets[1].clone(), second);
+        let state = RouteVisualState {
+            visited: vec![true, false],
+            active_index: Some(1),
+        };
+        let mut marker_visits = std::collections::HashMap::new();
+
+        assign_authored_marker_visits(&targets, &state, &bindings, &mut marker_visits);
+
+        assert_eq!(marker_visits.get(&first), Some(&true));
+        assert_eq!(marker_visits.get(&second), Some(&false));
+        assert!(!marker_visits.contains_key(&unrelated));
+    }
 
     #[test]
     fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {
@@ -2569,7 +2617,7 @@ mod tests {
             Some(rover),
             Some(1),
         );
-        assert_eq!(green_after, vec![w0, w1, w2]);
+        assert_eq!(green_after, vec![w1, w2]);
         assert_eq!(blue_after, vec![rover, w1]);
     }
 
@@ -2757,9 +2805,13 @@ mod tests {
     }
 
     #[test]
-    fn waypoint_path_matching_requires_a_prim_boundary() {
-        assert!(prim_path_matches("/World/Route/W0", "/Route/W0"));
-        assert!(!prim_path_matches("/World/Route/W01", "/Route/W0"));
+    fn waypoint_progress_requires_exact_composed_prim_identity() {
+        let targets = vec!["/World/Route/W0".to_string()];
+        let reached = ReachedWaypoints(std::collections::HashSet::from(["/Route/W0".to_string()]));
+
+        let progress = route_visual_state(&targets, Some(&reached), Some(0), false, false);
+
+        assert_eq!(progress.visited, vec![false]);
     }
 
     #[test]

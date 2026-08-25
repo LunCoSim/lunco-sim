@@ -484,7 +484,16 @@ fn bind_dome_to_cameras(
     // One sky. A second textured dome is a scene-authoring error, not a feature
     // to blend. Bevy exposes one environment-map view per camera, so choosing
     // one by ECS iteration order would make the result depend on spawn order.
-    if domes.iter().count() > 1 {
+    let mut dome_iter = domes.iter();
+    let Some((dome, cube, xform)) = dome_iter.next() else {
+        for camera in &bound {
+            commands
+                .entity(camera)
+                .remove::<(Skybox, GeneratedEnvironmentMapLight, DomeBoundCamera)>();
+        }
+        return;
+    };
+    if dome_iter.next().is_some() {
         warn_once!(
             "[usd-bevy] scene authors more than one textured DomeLight; refusing ambiguous environment binding"
         );
@@ -495,14 +504,6 @@ fn bind_dome_to_cameras(
         }
         return;
     }
-    let Some((dome, cube, xform)) = domes.iter().next() else {
-        for camera in &bound {
-            commands
-                .entity(camera)
-                .remove::<(Skybox, GeneratedEnvironmentMapLight, DomeBoundCamera)>();
-        }
-        return;
-    };
     if cube.0 == Handle::default() {
         return;
     }

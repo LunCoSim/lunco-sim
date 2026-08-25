@@ -180,7 +180,9 @@ mod tests {
     #[test]
     fn physical_body_uses_exact_f64_pose_not_rounded_transform() {
         let mut world = World::new();
-        let frame = world.spawn(Grid::new(2_000.0, 100.0)).id();
+        let frame = world
+            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let exact = DVec3::new(0.123_456_789_012, -1_901.623_456_789, 4.987_654_321_098);
         let exact_rotation = DQuat::from_rotation_y(0.123_456_789);
@@ -204,7 +206,9 @@ mod tests {
     #[test]
     fn unseeded_physical_body_has_no_reportable_pose() {
         let mut world = World::new();
-        let frame = world.spawn(Grid::new(2_000.0, 100.0)).id();
+        let frame = world
+            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let body = world
             .spawn((
@@ -222,7 +226,9 @@ mod tests {
     #[test]
     fn non_physical_entity_uses_bigspace_hierarchy() {
         let mut world = World::new();
-        let frame = world.spawn(Grid::new(2_000.0, 100.0)).id();
+        let frame = world
+            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let marker = world
             .spawn((Transform::from_xyz(12.0, -34.0, 56.0), ChildOf(frame)))
@@ -235,7 +241,9 @@ mod tests {
     #[test]
     fn proximity_provider_uses_exact_physics_position() {
         let mut world = World::new();
-        let frame = world.spawn(Grid::new(2_000.0, 100.0)).id();
+        let frame = world
+            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .id();
         world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         world.init_resource::<ApiEntityRegistry>();
         let exact = DVec3::new(12.123_456_789, -1_900.987_654_321, -4.0);

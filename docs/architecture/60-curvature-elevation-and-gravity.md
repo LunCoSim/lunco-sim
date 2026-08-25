@@ -73,7 +73,13 @@ descent is spread over a 1600 m band and reads as a distant rim rather than a wa
 
 The authored DEM square is preserved through its boundary. Do not place
 scene-owned terrain content outside the measured raster unless a separate,
-authored globe/site composition provides the surface there.
+authored globe/site composition provides the surface there. A non-DEM site
+must explicitly mark its standard, ENU-aligned ground Cube with
+`lunco:terrain:surfaceRole = "flat-site"`; the same handoff then derives the
+finite footprint from `UsdGeomCube::size` and its authored xform. Ramps and
+other terrain-tagged solids are not implicitly treated as the site datum.
+Missing, ambiguous, rotated, or non-square flat-site geometry is a runtime
+contract error.
 
 ## 2. Gravity must follow the curved ground
 

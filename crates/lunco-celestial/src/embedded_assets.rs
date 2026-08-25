@@ -60,7 +60,7 @@ impl Plugin for EmbeddedAssetsPlugin {
             // wasm32 add that crate's `EphemerisPlugin` after
             // `EmbeddedAssetsPlugin` — the plugin reads
             // `EmbeddedMissionData::artemis_2_ephemeris_csv` (set above)
-            // and overwrites the default no-op `EphemerisResource`.
+            // and installs the explicit `EphemerisResource`.
         }
     }
 }

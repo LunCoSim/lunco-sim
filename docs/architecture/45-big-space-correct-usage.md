@@ -31,7 +31,7 @@ declares source and target semantics; it never handles `CellCoord` directly.
 ```text
 WorldRoot (BigSpace + Grid)
 └── WorldGrid (canonical scene mount)
-    └── OriginAnchor (the one FloatingOrigin when no camera owns it)
+    └── OriginAnchor (grid-direct precision frame + the one FloatingOrigin)
 ```
 
 Celestial projection adds named nested grids under that shell. A body-fixed
@@ -40,15 +40,28 @@ matching inertial grid is a sibling and does not spin. Surface terrain,
 rovers, and surface cameras are children of the body-fixed surface grid.
 Inertial cameras and inertial trajectories use the non-rotating grid.
 
-There is one `FloatingOrigin` per `BigSpace` root. Camera ownership changes by
-moving that component through the canonical camera-mount operation; the world
-root is not re-posed around the current camera or site.
+There is one `FloatingOrigin` per `BigSpace` root. It is permanently owned by
+the grid-direct `OriginAnchor`. The viewport reconciler composes the selected
+camera's authoritative f64 pose into `WorldGrid` and updates the anchor's
+`(CellCoord, Transform)` split, so rendering recenters on the view without
+moving the semantic world root, site frame, camera hierarchy, or avatar
+identity.
+
+The world shell validates this ownership and archetype contract every frame.
+It also requires exactly one valid `WorldRoot` and exactly one direct-child
+`WorldGrid`; an absent, duplicate, malformed, or misparented singleton is
+published as a structured `world-shell` runtime error. `ensure_world_root`
+fails fast if duplicate `WorldGrid` state already exists, so no consumer can
+bind the first matching entity. The shell does not repair invalid origin or
+world topology.
 
 The world-grid precision parameters are set before the shell is created:
 `WorldGridConfig::cell_edge_length` and `switching_threshold`. The latter is
 a precision/hysteresis value, not a world-extent setting. A configuration
 change does not mutate an existing `Grid`; restart the world shell to apply a
-different grid definition.
+different grid definition. Non-finite or non-positive edge length, or a
+negative threshold, is rejected at shell creation and published as a
+`world-config` owner diagnostic if a live resource is later corrupted.
 
 ## Precision boundary
 
@@ -74,12 +87,20 @@ not reparent first and repair the pose next frame.
 `ActivePhysicsFrame` identifies the single local frame used by Avian for the
 currently mounted physical scene. `BigSpacePhysicsBridgePlugin` owns the f64
 `Position`/`Rotation` ↔ BigSpace representation and collider propagation.
+The persistent `WorldRoot`/`WorldGrid` shell does not install this resource;
+the application binds `WorldGrid` explicitly for a flat scene, and scene
+mounting replaces it with the authored site grid when that contract resolves.
 Avian must not derive authority from camera-relative `GlobalTransform`.
 
 Celestial ancestors may translate or rotate while the rover remains stable:
 the bridge converts into the active body-fixed frame before physics and writes
 the solved pose back through the same frame. Every physical body and collider
-must belong to that active frame or be rejected by the bridge.
+must belong to that active frame or be rejected by the bridge. The bridge
+publishes an owning `usd-avian/physics-frame` diagnostic and raises the shared
+`PhysicsHolds::FRAME_CONTRACT` hold for a missing, invalid, or disconnected
+binding. The Avian `StepSimulation` set and bridge sync passes are directly
+gated on the same contract, so no solver tick or force accumulation occurs
+while the diagnostic is present.
 
 ## Placement and view rules
 
@@ -103,6 +124,12 @@ must belong to that active frame or be rejected by the bridge.
 6. No per-frame repair, fallback frame, or next-frame reparent correction.
 7. No physical entity outside `ActivePhysicsFrame`.
 8. Scene replacement invalidates old roots before deferred despawns.
+
+Celestial globe/site overlap is a surface-ownership problem, not a cell-size
+problem. A site scene designates its finite ground owner through the USD
+terrain contract; the globe LOD clips that authored footprint through
+`GlobeHandoff`. No cell-size increase, depth bias, or camera-relative offset can
+resolve two coincident render surfaces honestly.
 
 Focused regression coverage lives beside the owning crates, notably
 `lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and

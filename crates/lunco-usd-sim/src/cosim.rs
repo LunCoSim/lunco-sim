@@ -28,10 +28,10 @@ use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{
-    on_command, register_commands, Avatar, Command, LocalAvatar, OriginAnchor, SceneTransition,
-    SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
-    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
-    SceneTransitionRequest, WorldGrid,
+    on_command, register_commands, Avatar, Command, DiagnosticSeverity, LocalAvatar, OriginAnchor,
+    RuntimeDiagnostic, RuntimeDiagnostics, SceneTransition, SceneTransitionAdmission,
+    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
+    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest, WorldGrid,
 };
 use lunco_cosim::{ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
@@ -50,8 +50,9 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot, UsdStageAsset,
+    camera_switch::CameraContractStatus, read_authored_bool_strict, CanonicalStages,
+    UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdSceneRoot,
+    UsdStageAsset,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -71,6 +72,12 @@ enum CosimUpdateSet {
 /// reload despawns the prim and therefore naturally re-projects its channels.
 #[derive(Component)]
 struct UsdTelemetryProjected;
+
+/// Runtime channels are projection output, not scene identity. This marker
+/// lets a composed-stage revision remove stale sampling channels before the
+/// declarations are projected again.
+#[derive(Component)]
+struct UsdTelemetryChannel;
 
 /// Runtime index for the one-time USD telemetry projection.
 ///
@@ -94,6 +101,8 @@ struct UsdTelemetryProjectionIndex {
         HashMap<bevy::asset::AssetId<UsdStageAsset>, std::collections::HashSet<String>>,
     entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
+    diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
+    observed_stage_revision: u64,
     dirty: bool,
 }
 
@@ -109,9 +118,26 @@ fn mark_usd_telemetry_projection_index_dirty(
             Changed<ModelicaSignalLayout>,
         )>,
     >,
+    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    projected: Query<Entity, With<UsdTelemetryProjected>>,
+    channels: Query<Entity, With<UsdTelemetryChannel>>,
+    mut commands: Commands,
 ) {
-    if !added_prims.is_empty() || !changed_wrappers.is_empty() {
+    let revision_changed = stage_revision
+        .as_ref()
+        .is_some_and(|revision| revision.0 != index.observed_stage_revision);
+    if !added_prims.is_empty() || !changed_wrappers.is_empty() || revision_changed {
         index.dirty = true;
+        index.diagnostics.clear();
+        if let Some(revision) = stage_revision {
+            index.observed_stage_revision = revision.0;
+        }
+        for entity in &projected {
+            commands.entity(entity).remove::<UsdTelemetryProjected>();
+        }
+        for entity in &channels {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -126,8 +152,14 @@ fn telemetry_projection_index_changed(
             Changed<ModelicaSignalLayout>,
         )>,
     >,
+    index: Res<UsdTelemetryProjectionIndex>,
+    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
 ) -> bool {
-    !added_prims.is_empty() || !changed_wrappers.is_empty()
+    !added_prims.is_empty()
+        || !changed_wrappers.is_empty()
+        || stage_revision
+            .as_ref()
+            .is_some_and(|revision| revision.0 != index.observed_stage_revision)
 }
 
 fn telemetry_projection_needed(
@@ -142,6 +174,8 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
     index.network_members_by_stage.clear();
     index.entities_by_path.clear();
     index.generated_entities_by_path.clear();
+    index.diagnostics.clear();
+    index.observed_stage_revision = 0;
     index.dirty = true;
 }
 
@@ -426,6 +460,7 @@ fn record_scene_load_terminal_outcome(
     coordinator: Res<SceneTransitionCoordinator>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
+    camera_contract: Option<Res<CameraContractStatus>>,
     mut commands: Commands,
 ) {
     let Some(g) = in_flight else {
@@ -486,6 +521,22 @@ fn record_scene_load_terminal_outcome(
         commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
         commands.trigger(SceneTransitionFailed { transition, error });
         return;
+    }
+
+    if let Some(contract) = camera_contract.as_deref() {
+        if contract.required && !contract.ready {
+            let detail = if contract.errors.is_empty() {
+                "authored window presentation has not been validated".to_string()
+            } else {
+                contract.errors.join("; ")
+            };
+            let error = format!("scene `{}` failed camera contract: {detail}", g.path);
+            error!("[scene] {error}");
+            commands.remove_resource::<SceneLoadInFlight>();
+            commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+            commands.trigger(SceneTransitionFailed { transition, error });
+            return;
+        }
     }
 
     // A scene that is meant to be visible must provide its light through USD
@@ -678,6 +729,11 @@ fn project_usd_telemetry(
         Option<&lunco_core::GlobalEntityId>,
         Has<UsdInstanceRoot>,
     )>,
+    target_surface_query: Query<(
+        Has<SimComponent>,
+        Has<lunco_core::PortSurfaceReady>,
+        Has<lunco_core::PortSurfacePending>,
+    )>,
     pending_query: Query<
         (
             Entity,
@@ -691,6 +747,7 @@ fn project_usd_telemetry(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
+    diagnostics: Option<ResMut<RuntimeDiagnostics>>,
 ) {
     // The generated wrapper is the only runtime Modelica participant.  Build
     // the authored-member -> wrapper port map from its projection metadata
@@ -706,6 +763,7 @@ fn project_usd_telemetry(
         }
     };
     if index.dirty {
+        index.diagnostics.clear();
         index.generated_outputs.clear();
         index.network_members_by_stage.clear();
         index.entities_by_path.clear();
@@ -762,6 +820,16 @@ fn project_usd_telemetry(
             continue;
         };
         let Ok(path) = SdfPath::new(&prim_path.path) else {
+            index.diagnostics.insert(
+                (id, prim_path.path.clone()),
+                RuntimeDiagnostic {
+                    code: "telemetry-path".to_string(),
+                    severity: DiagnosticSeverity::Error,
+                    producer: "usd-telemetry".to_string(),
+                    subject: prim_path.path.clone(),
+                    message: "telemetry declaration has an invalid USD prim path".to_string(),
+                },
+            );
             commands.entity(entity).try_insert(UsdTelemetryProjected);
             continue;
         };
@@ -770,6 +838,18 @@ fn project_usd_telemetry(
             Ok(Some(value)) => value,
             Ok(None) => false,
             Err(()) => {
+                index.diagnostics.insert(
+                    (id, path.as_str().to_owned()),
+                    RuntimeDiagnostic {
+                        code: "telemetry-contract".to_string(),
+                        severity: DiagnosticSeverity::Error,
+                        producer: "usd-telemetry".to_string(),
+                        subject: path.as_str().to_owned(),
+                        message:
+                            "lunco:telemetry must be a boolean authored on the declaration prim"
+                                .to_string(),
+                    },
+                );
                 warn!(
                     "[usd-cosim] {} has malformed `lunco:telemetry`; declaration ignored",
                     path.as_str()
@@ -780,9 +860,44 @@ fn project_usd_telemetry(
         if authored {
             let target_paths = view.rel_targets(&path, "lunco:telemetry:target");
             let target_path = match target_paths.as_slice() {
-                [] => prim_path.path.clone(),
+                [] => {
+                    let direct_surface = target_surface_query
+                        .get(entity)
+                        .is_ok_and(|(sim, ready, pending)| !pending && (sim || ready));
+                    if direct_surface {
+                        // The declaration prim is its own target only when it
+                        // has published a runtime surface. A declaration
+                        // Scope without a surface must name the measured prim
+                        // explicitly; otherwise it would silently bind to the
+                        // metadata Scope instead of the physical signal owner.
+                        prim_path.path.clone()
+                    } else {
+                        index.diagnostics.insert(
+                            (id, path.as_str().to_owned()),
+                            RuntimeDiagnostic {
+                                code: "telemetry-target".to_string(),
+                                severity: DiagnosticSeverity::Error,
+                                producer: "usd-telemetry".to_string(),
+                                subject: path.as_str().to_owned(),
+                                message: "telemetry declaration has no target relationship and its prim has no runtime port surface; author exactly one lunco:telemetry:target or place the declaration on the measured prim".to_string(),
+                            },
+                        );
+                        commands.entity(entity).try_insert(UsdTelemetryProjected);
+                        continue;
+                    }
+                }
                 [target] => target.as_str().to_owned(),
                 _ => {
+                    index.diagnostics.insert(
+                        (id, path.as_str().to_owned()),
+                        RuntimeDiagnostic {
+                            code: "telemetry-target".to_string(),
+                            severity: DiagnosticSeverity::Error,
+                            producer: "usd-telemetry".to_string(),
+                            subject: path.as_str().to_owned(),
+                            message: "telemetry declaration has multiple target relationships; author exactly one lunco:telemetry:target".to_string(),
+                        },
+                    );
                     warn!(
                         "[usd-cosim] {} has multiple telemetry targets; exactly one is allowed",
                         path.as_str()
@@ -801,10 +916,19 @@ fn project_usd_telemetry(
                 .copied()
                 .or_else(|| index.entities_by_path.get(&target_key).copied())
             else {
-                // A target prim may be present in USD before its generated
-                // Modelica participant has published its ECS entity. Keep
-                // the declaration unprojected for the next pass; binding
-                // it to the declaration prim would read the wrong surface.
+                index.diagnostics.insert(
+                    (id, path.as_str().to_owned()),
+                    RuntimeDiagnostic {
+                        code: "telemetry-target".to_string(),
+                        severity: DiagnosticSeverity::Error,
+                        producer: "usd-telemetry".to_string(),
+                        subject: path.as_str().to_owned(),
+                        message: format!(
+                            "telemetry target `{target_path}` has no projected runtime entity"
+                        ),
+                    },
+                );
+                commands.entity(entity).try_insert(UsdTelemetryProjected);
                 continue;
             };
             let declaration = (|| {
@@ -903,15 +1027,22 @@ fn project_usd_telemetry(
                                 .or_insert_with(|| {
                                     lunco_usd_bevy::program::modelica_network_member_paths(&view)
                                 });
-                            if members.contains(&key.2) {
+                            let known_member = members.contains(&key.2);
+                            if known_member {
                                 continue;
                             }
-                            // The authored target is not a member of a
-                            // generated domain, so this is a standalone
-                            // Modelica port. Keep the direct USD target and
-                            // port identity; generated members take the
-                            // wrapper mapping above and unresolved members
-                            // remain pending until that mapping is published.
+                            // A direct binding is valid only when the target
+                            // has published its own port surface. A physical
+                            // prim that is still waiting for a generated
+                            // Modelica wrapper must remain pending; binding
+                            // the authored member name here would create a
+                            // channel that can never be read.
+                            let direct_surface = target_surface_query
+                                .get(target_entity)
+                                .is_ok_and(|(sim, ready, pending)| !pending && (sim || ready));
+                            if !direct_surface {
+                                continue;
+                            }
                             (parameter.target, parameter.source.clone())
                         }
                     }
@@ -924,6 +1055,7 @@ fn project_usd_telemetry(
                 };
                 let mut channel = commands.spawn((
                     Name::new(format!("telemetry:{}", parameter.name)),
+                    UsdTelemetryChannel,
                     ChildOf(entity),
                     parameter,
                 ));
@@ -931,6 +1063,16 @@ fn project_usd_telemetry(
                     channel.insert(lunco_core::markers::Callsign(display_name));
                 }
             } else {
+                index.diagnostics.insert(
+                    (id, path.as_str().to_owned()),
+                    RuntimeDiagnostic {
+                        code: "telemetry-contract".to_string(),
+                        severity: DiagnosticSeverity::Error,
+                        producer: "usd-telemetry".to_string(),
+                        subject: path.as_str().to_owned(),
+                        message: "telemetry declaration has invalid metadata; provide one non-empty lunco:telemetry:port or lunco:telemetry:reflect and valid numeric sampling settings".to_string(),
+                    },
+                );
                 warn!(
                     "[usd-cosim] {} has invalid telemetry attributes; declaration ignored",
                     path.as_str()
@@ -938,6 +1080,10 @@ fn project_usd_telemetry(
             }
         }
         commands.entity(entity).try_insert(UsdTelemetryProjected);
+    }
+
+    if let Some(mut diagnostics) = diagnostics {
+        diagnostics.replace_producer("usd-telemetry", index.diagnostics.values().cloned());
     }
 }
 
@@ -3810,9 +3956,10 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 /// `SimConnection` (cosim wires are scene-derived in current code), then
 /// reloads the asset from disk and spawns a fresh root entity. Existing
 /// pipelines (`sync_usd_visuals`, `process_usd_cosim_prims`, the
-/// avian/sim translators) take it from there. The first `Grid` entity
-/// in the world is used as the parent — i.e. the `BigSpace` host
-/// stays put across reloads.
+/// avian/sim translators) take it from there. The canonical `WorldGrid`
+/// is used as the parent — i.e. the `BigSpace` host stays put across
+/// reloads. Invalid world-shell topology is reported rather than repaired
+/// or resolved by entity order.
 ///
 /// Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
 /// for every entity carrying a `ModelicaModel` (the Modelica worker
@@ -4152,19 +4299,6 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         }
     }
 
-    // The despawn above takes the scene camera with it, and that camera is usually
-    // what holds `FloatingOrigin` (`process_usd_sim_prims` strips it off the anchor
-    // when a USD Avatar prim claims it). Hand it back to the anchor in THIS flush.
-    // Leaving the gap for `anchor_owns_origin_by_default` to close in PostUpdate is
-    // what logged "BigSpace … has no floating origins" on every scene change: the
-    // guard is a backstop, not the handover. `try_insert` is a no-op if the anchor
-    // already holds it (the origin never left home for this scene).
-    if let Ok(anchor) = q_origin.single() {
-        commands
-            .entity(anchor)
-            .try_insert(big_space::prelude::FloatingOrigin);
-    }
-
     // Despawn any root-level derived connection wires (which are spawned as root entities)
     for e in q_wires.iter() {
         commands.entity(e).try_despawn();
@@ -4403,12 +4537,12 @@ pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     }
 }
 
-/// Spawn a USD scene root under the first `Grid` entity.
+/// Spawn a USD scene root directly under the canonical `WorldGrid` entity.
 ///
 /// Shared by `LoadScene` (after its clear step) and `OpenFile` (additive
 /// import). Blender-style no-op when the same `(asset, root_prim)` is
 /// already mounted. Returns the spawned entity, or `None` on no-op /
-/// missing `Grid`.
+/// missing or invalid `WorldGrid`.
 pub fn spawn_scene_root_world(
     world: &mut World,
     path_in: &str,
@@ -4483,11 +4617,15 @@ pub fn spawn_scene_root_with_stage(
     }
 
     // Mount under the canonical world grid. `ensure_world_root` is create-or-get:
-    // it builds the persistent shell (root + WorldGrid + single FloatingOrigin) on
+    // it builds the persistent shell (root + WorldGrid + persistent OriginAnchor)
     // the first scene load and returns the same grid on every reload — so the root
     // is never duplicated and never absent. Replaces the old "first `Grid` found"
     // heuristic, which was ambiguous once celestial / preview grids also existed.
     let grid = lunco_core::ensure_world_root(world);
+    // Scene mounting owns the physics-frame binding. The canonical WorldGrid
+    // is the scene frame; WorldRoot is only the persistent BigSpace shell and
+    // must never become an implicit Avian frame.
+    world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
 
     // Scene-root entity is itself the Grid-direct `GridAnchor`. Its
     // children — top-level USD prims (rovers, balls, terrain) — stay
@@ -4989,6 +5127,25 @@ mod tests {
             .insert(UsdTelemetryProjected);
         app.update();
         assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+    }
+
+    #[test]
+    fn telemetry_stage_revision_removes_derived_channels_and_markers() {
+        let mut app = App::new();
+        app.init_resource::<UsdTelemetryProjectionIndex>()
+            .insert_resource(lunco_usd_bevy::UsdStageRevision(1))
+            .add_systems(Update, mark_usd_telemetry_projection_index_dirty);
+        let declaration = app.world_mut().spawn(UsdTelemetryProjected).id();
+        let channel = app.world_mut().spawn(UsdTelemetryChannel).id();
+
+        app.update();
+
+        assert!(app
+            .world()
+            .get::<UsdTelemetryProjected>(declaration)
+            .is_none());
+        assert!(app.world().get_entity(channel).is_err());
+        assert!(app.world().resource::<UsdTelemetryProjectionIndex>().dirty);
     }
 
     #[test]

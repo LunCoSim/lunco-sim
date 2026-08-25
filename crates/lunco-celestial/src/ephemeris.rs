@@ -7,10 +7,10 @@
 //! `CelestialEphemerisProvider` (VSOP2013 + ELP/MPP02 + JPL Horizons CSV)
 //! and an `EphemerisPlugin` that drops it into `EphemerisResource`.
 //!
-//! Apps that don't add `lunco-celestial-ephemeris` get the [`NoOpEphemerisProvider`]
-//! installed by [`crate::CelestialPlugin`]. It reports no orbital data, so
-//! ephemeris-driven placement is skipped; explicitly authored bodies remain
-//! available to non-orbital scenes. Orbital simulations add the heavy crate.
+//! Ephemeris is an explicit provider. Apps that need orbital placement add
+//! `lunco-celestial-ephemeris`; scenes without that provider remain valid only
+//! for authored, non-orbital celestial content. No synthetic provider is
+//! installed to hide a missing dependency.
 
 use crate::frames::EclipticAu;
 use bevy::prelude::*;
@@ -102,29 +102,6 @@ pub trait EphemerisProvider: Send + Sync + 'static {
 #[derive(Resource)]
 pub struct EphemerisResource {
     pub provider: Arc<dyn EphemerisProvider>,
-}
-
-/// Reports no data for every body at every epoch. Installed by default so
-/// downstream systems that depend on `Res<EphemerisResource>` don't panic.
-/// Apps that want real planetary positions add `lunco-celestial-ephemeris`
-/// and its `EphemerisPlugin`, which overwrites the resource.
-pub struct NoOpEphemerisProvider;
-
-impl EphemerisProvider for NoOpEphemerisProvider {
-    /// `None`, not zero. "I have no data" is not the same statement as "it is at the origin",
-    /// and conflating them is the whole of P8(d). Systems now SKIP a body they cannot place,
-    /// instead of drawing it inside the Sun.
-    fn position(&self, _body_id: i32, _epoch_jd: f64) -> Option<EclipticAu> {
-        None
-    }
-
-    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
-        0.0
-    }
-
-    fn motion_revision(&self) -> u64 {
-        0
-    }
 }
 
 #[cfg(test)]

@@ -242,12 +242,15 @@ mod tests {
         app.init_resource::<ApiEntityRegistry>();
         let root = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         let body = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(80_000, 0, -20_000),
                 Transform::from_rotation(Quat::from_rotation_y(0.4)),
                 ChildOf(root),
@@ -256,7 +259,7 @@ mod tests {
         let site = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(0, -1, 0),
                 Transform::from_rotation(Quat::from_rotation_x(-0.3)),
                 ChildOf(body),

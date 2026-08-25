@@ -4,7 +4,8 @@
 //! ## Why this exists
 //!
 //! The live 3D world is a `BigSpace` root + a canonical `Grid` (the `WorldGrid`)
-//! + exactly one `FloatingOrigin`. Per `docs/architecture/21-domain-usd.md` the
+//! + exactly one persistent origin-tracking `Grid`. Per
+//! `docs/architecture/21-domain-usd.md` the
 //! Grid is the *rendered projection of the active stage*: switching scenes
 //! **re-points** the Grid at new content, it does not rebuild the root. So the
 //! shell is a **persistent singleton** — created once, reused across every
@@ -18,14 +19,15 @@
 //!
 //! ## Coordinate concern, not a render concern
 //!
-//! The shell is **render-free and headless-complete**. The single `FloatingOrigin`
-//! lives on a neutral [`OriginAnchor`], *not* a camera — so a **server** (no
-//! camera at all) still gets correct big_space propagation. A **client** then has
-//! a camera (avatar, a rover-built-in camera, free-flight, …) *claim* the origin
-//! from the anchor; the camera is an optional consumer of the coordinate frame,
-//! owned outside core (e.g. `lunco-avatar`). There is always exactly one
-//! `FloatingOrigin`; only its holder changes.
+//! The shell is **render-free and headless-complete**. The single
+//! `FloatingOrigin` lives on a persistent [`OriginAnchor`] grid, never on a
+//! camera or avatar. A windowed client updates the anchor's `(CellCoord,
+//! Transform)` split from the selected camera's authoritative f64 pose; a
+//! headless server leaves it at the world origin. There is always exactly one
+//! valid origin owner, and camera projection never changes BigSpace hierarchy
+//! archetypes.
 
+use crate::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 use bevy::prelude::*;
 use big_space::prelude::{BigSpace, BigSpaceSystems, CellCoord, FloatingOrigin, Grid};
 
@@ -47,28 +49,36 @@ pub struct WorldRoot;
 ///
 /// Rendering may contain many nested BigSpace grids, but one Avian world must
 /// not put bodies from different local frames at the same numeric origin. The
-/// scene mount changes this resource atomically when it selects a surface
-/// physics frame; all bridge, gravity, and spatial-query consumers use it.
+/// application/scene-mount owner binds this resource explicitly when it selects
+/// a physics frame; the persistent world shell only creates topology and never
+/// installs a frame as a convenience default.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct ActivePhysicsFrame(pub Entity);
 
 /// The set [`setup_world`] runs in. Subsystems that need the shell to exist
 /// (e.g. celestial's hierarchy) order `.after(WorldShellSet)`. Ordering is a
 /// convenience — `ensure_world_root` is create-or-get, so it is never required
-/// for correctness, only to avoid a redundant standalone-fallback spawn.
+/// for correctness, only to avoid a redundant shell spawn.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorldShellSet;
 
-/// The neutral default holder of the single `FloatingOrigin`. Present even
-/// headless (a server has no camera), so big_space always has exactly one
-/// origin. A camera, when one exists, claims the `FloatingOrigin` from here.
+/// The persistent high-precision holder of the single `FloatingOrigin`.
+///
+/// This is itself a grid-direct origin-tracking frame. The viewport reconciler
+/// moves its `(CellCoord, Transform)` split to the selected camera's `WorldGrid`
+/// pose; the camera never
+/// receives or removes `FloatingOrigin`. Keeping the marker on this valid
+/// `Grid` avoids mixing render presentation ownership with BigSpace hierarchy
+/// ownership and also works without a camera.
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct OriginAnchor;
 
-/// Tunables for the canonical [`WorldGrid`]. A *resource* so the binary / scene
-/// sets the frame (cell size, switching threshold) — core carries no hardcoded
-/// opinion. Defaults match the historical sandbox grid (`2000 m` cells).
+/// Startup configuration for the canonical [`WorldGrid`]. A *resource* so the
+/// binary or scene host can choose the frame before the world shell is created;
+/// core has one authoritative contract rather than copied `Grid::new` values.
+/// Existing grids are not migrated when this resource changes, so it is a
+/// topology setting and must be set before [`WorldShellPlugin`] startup.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct WorldGridConfig {
@@ -101,35 +111,57 @@ impl Default for WorldGridConfig {
     }
 }
 
+impl WorldGridConfig {
+    /// Validate the topology values before BigSpace sees them.
+    pub fn validate(self) -> Result<(), String> {
+        if !self.cell_edge_length.is_finite() || self.cell_edge_length <= 0.0 {
+            return Err(format!(
+                "cell_edge_length must be finite and positive, got {}",
+                self.cell_edge_length
+            ));
+        }
+        if !self.switching_threshold.is_finite() || self.switching_threshold < 0.0 {
+            return Err(format!(
+                "switching_threshold must be finite and non-negative, got {}",
+                self.switching_threshold
+            ));
+        }
+        Ok(())
+    }
+
+    /// Construct the canonical BigSpace grid from this startup setting.
+    pub fn grid(self) -> Grid {
+        Grid::new(self.cell_edge_length, self.switching_threshold)
+    }
+}
+
 /// Idempotent **create-or-get** for the world shell. Returns the [`WorldGrid`]
 /// entity scenes mount under.
 ///
-/// First call spawns `BigSpace` root → `WorldGrid` → [`OriginAnchor`] (carrying
-/// the single `FloatingOrigin`). Subsequent calls return the existing
+/// First call spawns `BigSpace` root → `WorldGrid` → [`OriginAnchor`] (a
+/// grid-direct entity carrying the single `FloatingOrigin`). Subsequent calls return the existing
 /// `WorldGrid`. Safe to call from `Startup`, from `LoadScene`, from celestial
 /// setup — order-independent, which is the whole point.
 pub fn ensure_world_root(world: &mut World) -> Entity {
-    let existing = {
+    let existing: Vec<Entity> = {
         let mut q = world.query_filtered::<Entity, With<WorldGrid>>();
-        q.iter(world).next()
+        q.iter(world).collect()
     };
-    if let Some(grid) = existing {
-        if world.get_resource::<ActivePhysicsFrame>().is_none() {
-            let root = {
-                let mut q = world.query_filtered::<Entity, With<WorldRoot>>();
-                q.iter(world).next()
-            };
-            if let Some(root) = root {
-                world.insert_resource(ActivePhysicsFrame(root));
-            }
-        }
-        return grid;
+    match existing.as_slice() {
+        [grid] => return *grid,
+        [] => {}
+        _ => panic!(
+            "WorldShell contract violated: expected exactly one WorldGrid, found {}",
+            existing.len()
+        ),
     }
 
     let cfg = world
         .get_resource::<WorldGridConfig>()
         .copied()
         .unwrap_or_default();
+    cfg.validate()
+        .unwrap_or_else(|error| panic!("invalid WorldGridConfig: {error}"));
 
     // BigSpace root + the `WorldRoot` marker (so subsystems attach under it).
     //
@@ -174,7 +206,7 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
     let root = world
         .spawn((
             BigSpace::default(),
-            Grid::new(cfg.cell_edge_length, cfg.switching_threshold),
+            cfg.grid(),
             WorldRoot,
             GlobalTransform::default(),
             Visibility::default(),
@@ -183,12 +215,10 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
             Name::new("WorldRoot"),
         ))
         .id();
-    world.insert_resource(ActivePhysicsFrame(root));
-
     // The canonical grid scenes mount under.
     let grid = world
         .spawn((
-            Grid::new(cfg.cell_edge_length, cfg.switching_threshold),
+            cfg.grid(),
             WorldGrid,
             CellCoord::default(),
             Transform::default(),
@@ -200,11 +230,14 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         ))
         .id();
 
-    // The neutral, always-present origin holder (Grid-direct child → big_space
-    // propagates it). A camera takes the `FloatingOrigin` over from here when one
-    // exists; on a server it stays here forever.
+    // The persistent origin-tracking grid. Its `(CellCoord, Transform)` split
+    // is updated from the active viewport camera by lunco-usd-bevy; on a
+    // headless server it stays at the world origin. It is a Grid itself because
+    // BigSpace validation requires a FloatingOrigin holder to remain a valid
+    // grid-frame archetype.
     world.spawn((
         OriginAnchor,
+        cfg.grid(),
         FloatingOrigin,
         CellCoord::default(),
         Transform::default(),
@@ -231,15 +264,14 @@ impl Plugin for WorldShellPlugin {
             .register_type::<WorldGridConfig>()
             .init_resource::<WorldGridConfig>()
             .add_systems(Startup, setup_world.in_set(WorldShellSet))
-            // Enforce the `OriginAnchor`'s documented role — the *default* holder
-            // of the origin — every frame, not just at startup. Runs in
-            // `PostUpdate` immediately before big_space's own origin finder
-            // (`RecenterLargeTransforms`) so the anchor reclaims the origin in
-            // the same frame a claiming camera is despawned: big_space never sees
-            // zero origins, so there is no error and no propagation gap.
+            // Validate the `OriginAnchor`'s documented role — the sole holder of
+            // the origin — every frame, not just at startup. Runs in `PostUpdate`
+            // immediately before big_space's own origin finder
+            // (`RecenterLargeTransforms`) so an invalid ownership/archetype state
+            // is reported at its owner before BigSpace propagates the hierarchy.
             .add_systems(
                 PostUpdate,
-                anchor_owns_origin_by_default.before(BigSpaceSystems::RecenterLargeTransforms),
+                validate_origin_anchor_contract.before(BigSpaceSystems::RecenterLargeTransforms),
             );
 
         // Named companion to big_space's validator: that one dumps component
@@ -271,28 +303,171 @@ fn setup_world(world: &mut World) {
     ensure_world_root(world);
 }
 
-/// Enforces the invariant the [`OriginAnchor`] doc promises: it is the *default*
-/// holder of the single `FloatingOrigin`, present even with no camera.
+/// Validate the invariant the [`OriginAnchor`] doc promises: it is the sole
+/// holder of the single `FloatingOrigin` and is a valid grid-direct frame.
 ///
-/// big_space mandates exactly one `FloatingOrigin` per `BigSpace` but provides no
-/// recovery — its [`BigSpace::find_floating_origin`] only logs an error on zero
-/// (and, by design, the origin "doesn't need to be a camera"). A camera (avatar,
-/// celestial observer, …) *claims* the origin from the anchor for precision while
-/// it lives; when that camera is despawned — e.g. `ClearScene` empties the
-/// viewport, leaving an intentionally camera-less world — the origin would
-/// vanish. This hands it back to the persistent anchor (exactly where a headless
-/// server keeps it), so the cleared scene correctly stays camera-less while the
-/// coordinate frame survives. No-op on every frame a camera holds the origin.
-fn anchor_owns_origin_by_default(
-    mut commands: Commands,
-    q_origins: Query<(), With<FloatingOrigin>>,
-    q_anchor: Query<Entity, With<OriginAnchor>>,
+/// This deliberately reports invalid state instead of repairing it. Camera,
+/// avatar, and scene systems do not participate in origin ownership; any extra
+/// origin marker or malformed anchor must remain visible to both this owner
+/// diagnostic and BigSpace's own hierarchy validator.
+fn validate_origin_anchor_contract(
+    q_origins: Query<Entity, With<FloatingOrigin>>,
+    q_anchors: Query<Entity, With<OriginAnchor>>,
+    q_valid_anchors: Query<
+        Entity,
+        (
+            With<OriginAnchor>,
+            With<Grid>,
+            With<CellCoord>,
+            With<Transform>,
+            With<GlobalTransform>,
+            With<ChildOf>,
+        ),
+    >,
+    q_parents: Query<&ChildOf>,
+    q_world_roots: Query<Entity, With<WorldRoot>>,
+    q_world_grids: Query<Entity, With<WorldGrid>>,
+    q_valid_world_roots: Query<
+        Entity,
+        (
+            With<WorldRoot>,
+            With<BigSpace>,
+            With<Grid>,
+            With<GlobalTransform>,
+            Without<Transform>,
+            Without<CellCoord>,
+        ),
+    >,
+    q_valid_world_grids: Query<
+        Entity,
+        (
+            With<WorldGrid>,
+            With<Grid>,
+            With<CellCoord>,
+            With<Transform>,
+            With<GlobalTransform>,
+            With<ChildOf>,
+        ),
+    >,
+    config: Res<WorldGridConfig>,
+    diagnostics: Option<ResMut<RuntimeDiagnostics>>,
 ) {
-    if !q_origins.is_empty() {
-        return;
+    let anchors: Vec<Entity> = q_anchors.iter().collect();
+    let origins: Vec<Entity> = q_origins.iter().collect();
+    let world_roots: Vec<Entity> = q_world_roots.iter().collect();
+    let world_grids: Vec<Entity> = q_world_grids.iter().collect();
+    let mut errors: Vec<(&'static str, String)> = Vec::new();
+
+    if let Err(error) = config.validate() {
+        errors.push((
+            "world-config",
+            format!("[world-config] invalid canonical grid settings: {error}"),
+        ));
     }
-    if let Some(anchor) = q_anchor.iter().next() {
-        commands.entity(anchor).try_insert(FloatingOrigin);
+
+    if world_roots.len() != 1 {
+        errors.push((
+            "world-shell",
+            format!(
+                "[world-shell] expected exactly one WorldRoot, found {}",
+                world_roots.len()
+            ),
+        ));
+    }
+    if world_grids.len() != 1 {
+        errors.push((
+            "world-shell",
+            format!(
+                "[world-shell] expected exactly one WorldGrid, found {}",
+                world_grids.len()
+            ),
+        ));
+    }
+    if let Some(&root) = world_roots.first() {
+        if q_valid_world_roots.get(root).is_err() {
+            errors.push(("world-shell", format!(
+                "[world-shell] WorldRoot {root:?} must carry BigSpace and Grid with GlobalTransform, without Transform or CellCoord"
+            )));
+        }
+    }
+    if let Some(&grid) = world_grids.first() {
+        if q_valid_world_grids.get(grid).is_err() {
+            errors.push(("world-shell", format!(
+                "[world-shell] WorldGrid {grid:?} must be a Grid-direct frame with CellCoord, Transform, and GlobalTransform"
+            )));
+        } else if q_parents
+            .get(grid)
+            .ok()
+            .is_none_or(|parent| q_valid_world_roots.get(parent.parent()).is_err())
+        {
+            errors.push((
+                "world-shell",
+                format!("[world-shell] WorldGrid {grid:?} must be a direct child of WorldRoot"),
+            ));
+        }
+    }
+
+    if anchors.len() != 1 {
+        errors.push((
+            "world-origin",
+            format!(
+                "[world-origin] expected exactly one OriginAnchor, found {}",
+                anchors.len()
+            ),
+        ));
+    }
+    if origins.len() != 1 {
+        errors.push((
+            "world-origin",
+            format!(
+                "[world-origin] expected exactly one FloatingOrigin owner, found {}",
+                origins.len()
+            ),
+        ));
+    }
+
+    if let Some(&anchor) = anchors.first() {
+        if q_valid_anchors.get(anchor).is_err() {
+            errors.push(("world-origin", format!(
+                "[world-origin] OriginAnchor {anchor:?} must be a Grid-direct frame with Grid, CellCoord, Transform, GlobalTransform, and ChildOf"
+            )));
+        } else if q_parents
+            .get(anchor)
+            .ok()
+            .is_none_or(|parent| q_valid_world_grids.get(parent.parent()).is_err())
+        {
+            errors.push((
+                "world-origin",
+                format!(
+                    "[world-origin] OriginAnchor {anchor:?} must be a direct child of WorldGrid"
+                ),
+            ));
+        }
+
+        if origins.first().copied() != Some(anchor) {
+            errors.push((
+                "world-origin",
+                format!(
+                    "[world-origin] OriginAnchor {anchor:?} is not the sole FloatingOrigin owner"
+                ),
+            ));
+        }
+    }
+
+    if let Some(mut diagnostics) = diagnostics {
+        let findings = errors.iter().map(|(code, message)| RuntimeDiagnostic {
+            code: (*code).to_string(),
+            severity: DiagnosticSeverity::Error,
+            producer: "world-shell".to_string(),
+            subject: match *code {
+                "world-shell" => "WorldShell",
+                "world-config" => "WorldGridConfig",
+                _ => "OriginAnchor",
+            }
+            .to_string(),
+            message: message.clone(),
+        });
+        diagnostics.replace_producer("world-shell", findings);
     }
 }
 
@@ -337,7 +512,9 @@ fn audit_cells_under_non_grid_parents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeDiagnostics;
     use bevy::math::DVec3;
+    use big_space::plugin::BigSpaceMinimalPlugins;
 
     /// The canonical `WorldGrid` must actually BIN into cells.
     ///
@@ -379,5 +556,110 @@ mod tests {
             "cell+offset must reassemble to the input, off by {} m",
             (back - p).length()
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected exactly one WorldGrid")]
+    fn ensure_world_root_rejects_duplicate_world_grids() {
+        let mut world = World::new();
+        world.spawn(WorldGrid);
+        world.spawn(WorldGrid);
+
+        ensure_world_root(&mut world);
+    }
+
+    #[test]
+    fn invalid_extra_origin_is_reported_without_repairing_the_owner_contract() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_resource::<RuntimeDiagnostics>()
+            .add_plugins(WorldShellPlugin);
+        app.update();
+
+        let stray = app.world_mut().spawn(FloatingOrigin).id();
+        app.update();
+
+        let diagnostics = app.world().resource::<RuntimeDiagnostics>();
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.producer == "world-shell"
+                && finding.code == "world-origin"
+                && finding.message.contains("exactly one FloatingOrigin owner")
+        }));
+        assert!(
+            app.world().get::<FloatingOrigin>(stray).is_some(),
+            "the world-shell owner must report an invalid extra origin, not silently remove it"
+        );
+    }
+
+    #[test]
+    fn misparented_origin_anchor_is_reported_even_when_its_parent_is_a_grid() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_resource::<RuntimeDiagnostics>()
+            .add_plugins(WorldShellPlugin);
+        app.update();
+        let grid_config = *app.world().resource::<WorldGridConfig>();
+
+        let world_grid = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<WorldGrid>>();
+            query.single(world).expect("canonical WorldGrid")
+        };
+        let nested_grid = app
+            .world_mut()
+            .spawn((
+                grid_config.grid(),
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
+        let anchor = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<OriginAnchor>>();
+            query.single(world).expect("canonical OriginAnchor")
+        };
+        app.world_mut()
+            .entity_mut(anchor)
+            .insert(ChildOf(nested_grid));
+
+        app.update();
+
+        let diagnostics = app.world().resource::<RuntimeDiagnostics>();
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.producer == "world-shell"
+                && finding.code == "world-origin"
+                && finding.subject == "OriginAnchor"
+                && finding.message.contains("direct child of WorldGrid")
+        }));
+        assert!(
+            app.world().get::<ChildOf>(anchor).is_some(),
+            "invalid topology must remain visible to the owner instead of being repaired"
+        );
+    }
+
+    #[test]
+    fn changed_invalid_grid_settings_are_reported_by_the_world_owner() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins)
+            .init_resource::<RuntimeDiagnostics>()
+            .add_plugins(WorldShellPlugin);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<WorldGridConfig>()
+            .cell_edge_length = 0.0;
+        app.update();
+
+        let diagnostics = app.world().resource::<RuntimeDiagnostics>();
+        assert!(diagnostics.findings.iter().any(|finding| {
+            finding.code == "world-config"
+                && finding.subject == "WorldGridConfig"
+                && finding.message.contains("finite and positive")
+        }));
     }
 }

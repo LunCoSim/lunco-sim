@@ -261,12 +261,12 @@ def Xform "Rucheyok" (
     }
 
     # --- Hub motors + reductions ---------------------------------------------
-    # The four hub motors the `Electrical` circuit above already budgets for
-    # (`inputs:rated_power = 500` W each) are now REAL PARTS rather than a
-    # parameter on a Modelica model: a mass, a housing, a torque curve, an
-    # efficiency and a waste-heat port each. The circuit's `torque_fl..rr` /
-    # `omega_fl..rr` boundary inputs are exactly what these produce, so the
-    # electrical model and the mechanics finally name the same four machines.
+    # The four hub motors the `Electrical` circuit above budgets for
+    # (`inputs:rated_power = 500` W each) are real USD parts: a mass, a housing,
+    # a torque curve, and a native powertrain contract. Their generated
+    # electrical facets expose bus draw, heat, and `available_demand`; the
+    # shaft torque, wheel speed, reduction, and contact mechanics remain in the
+    # USD/Avian owner.
     #
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =

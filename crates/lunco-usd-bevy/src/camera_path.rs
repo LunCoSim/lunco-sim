@@ -378,14 +378,18 @@ pub fn camera_path_transport(
     mut q_domains: Query<(&mut TimeDomain, Option<&mut Playback>)>,
 ) {
     let want = cmd.path.trim();
-    let hit = q_paths.iter().find(|(p, _)| {
+    let mut matches = q_paths.iter().filter(|(p, _)| {
         let s = p.path.as_str();
         s == want || s.rsplit('/').next() == Some(want)
     });
-    let Some((_, path)) = hit else {
+    let Some((_, path)) = matches.next() else {
         warn!("[camera-path] CameraPathTransport: no camera path at '{want}'");
         return;
     };
+    if matches.next().is_some() {
+        warn!("[camera-path] CameraPathTransport: '{want}' resolves to multiple camera paths");
+        return;
+    }
 
     // Hop 1: the playback domain — the playhead and the user's play/pause bit.
     let Ok((playback_domain, playback)) = q_domains.get_mut(path.domain) else {
@@ -858,8 +862,9 @@ pub fn resolve_camera_paths(
         });
         // Rig the camera GRID-DIRECT — the same rig `camera_mount` builds, and for
         // the same reason: big_space wants a camera's position expressed as
-        // `(CellCoord, Transform)`, and `FloatingOrigin` may only sit on a
-        // grid-direct entity.
+        // `(CellCoord, Transform)`. The persistent OriginAnchor owns
+        // `FloatingOrigin`; camera pose representation stays independent of
+        // that marker.
         //
         // Do NOT instead leave it parented under the scene prim and write a big
         // parent-local translation. That does not converge: big_space re-bins the

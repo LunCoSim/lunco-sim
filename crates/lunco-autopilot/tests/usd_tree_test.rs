@@ -36,7 +36,7 @@ fn app() -> App {
     let frame = app
         .world_mut()
         .spawn((
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
             ChildOf(world),

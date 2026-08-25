@@ -636,15 +636,15 @@ pub struct JointReadout {
 pub struct InspectorView {
     /// The primary selection used to derive the joint readout.
     pub selected: Option<Entity>,
-    /// First scene sun (directional light), if any.
+    /// The unique authored scene sun, if the scene has one.
     pub sun: Option<SunReadout>,
     /// Global ambient brightness, if the resource exists.
     pub ambient_brightness: Option<f32>,
     /// Earthshine fill-light illuminance, if present.
     pub earthshine_lux: Option<f32>,
-    /// First camera's exposure EV100, if any.
+    /// Active presentation camera's exposure EV100, if any.
     pub exposure_ev100: Option<f32>,
-    /// First camera's bloom intensity, if any.
+    /// Active presentation camera's bloom intensity, if any.
     pub bloom_intensity: Option<f32>,
     /// Joint readout for the primary-selected entity, if it drives one.
     pub joint: Option<JointReadout>,
@@ -663,15 +663,15 @@ pub fn populate_inspector_view(world: &mut World) {
 
     // ── Scene sun (skip preview / earthshine lights, same rule as the
     // horizon system's pick_sun).
-    let suns: Vec<Entity> = world
+    let sun_entity = world
         .query_filtered::<Entity, (
             With<DirectionalLight>,
             Without<RenderLayers>,
             Without<lunco_environment::Earthshine>,
         )>()
-        .iter(world)
-        .collect();
-    let sun = suns.first().copied().map(|e| {
+        .single(world)
+        .ok();
+    let sun = sun_entity.map(|e| {
         let name = world
             .get::<Name>(e)
             .map(|n| n.as_str().to_string())
@@ -720,21 +720,20 @@ pub fn populate_inspector_view(world: &mut World) {
         .map(|a| a.brightness);
     let earthshine_lux = world
         .query_filtered::<&DirectionalLight, With<lunco_environment::Earthshine>>()
-        .iter(world)
-        .next()
+        .single(world)
+        .ok()
         .map(|l| l.illuminance);
 
     // ── Camera.
-    let exposure_ev100 = world
-        .query::<&Exposure>()
-        .iter(world)
-        .next()
-        .map(|e| e.ev100);
-    let bloom_intensity = world
-        .query::<&Bloom>()
-        .iter(world)
-        .next()
-        .map(|b| b.intensity);
+    let active_camera = world
+        .get_resource::<lunco_core::SceneViewport>()
+        .and_then(|viewport| viewport.active_camera);
+    let exposure_ev100 = active_camera
+        .and_then(|entity| world.get::<Exposure>(entity))
+        .map(|exposure| exposure.ev100);
+    let bloom_intensity = active_camera
+        .and_then(|entity| world.get::<Bloom>(entity))
+        .map(|bloom| bloom.intensity);
 
     // ── Joint for the primary-selected entity.
     let selected = world
@@ -811,6 +810,7 @@ pub(crate) fn inspector_inputs_changed(
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
     // The SAME sun the producer reads (non-preview, non-fill), so the comparison
     // is against the value that would land in the view.
+    viewport: Option<Res<lunco_core::SceneViewport>>,
     lights: Query<
         (
             &Transform,
@@ -822,8 +822,8 @@ pub(crate) fn inspector_inputs_changed(
             Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
-    exposures: Query<&bevy::camera::Exposure>,
-    blooms: Query<&bevy::post_process::bloom::Bloom>,
+    exposures: Query<(Entity, &bevy::camera::Exposure)>,
+    blooms: Query<(Entity, &bevy::post_process::bloom::Bloom)>,
     mut removed_lights: RemovedComponents<bevy::light::DirectionalLight>,
 ) -> bool {
     use bevy::math::EulerRot;
@@ -836,7 +836,7 @@ pub(crate) fn inspector_inputs_changed(
     // that resolution: a difference the panel cannot show is not a reason to
     // rebuild the view.
     let sun_moved = {
-        let live = lights.iter().next().map(|(tf, light, cascades)| {
+        let live = lights.single().ok().map(|(tf, light, cascades)| {
             let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
             let lin = light.color.to_linear();
             (
@@ -882,8 +882,15 @@ pub(crate) fn inspector_inputs_changed(
     };
 
     let camera_changed = {
-        let live_ev = exposures.iter().next().map(|e| e.ev100);
-        let live_bloom = blooms.iter().next().map(|b| b.intensity);
+        let active_camera = viewport.as_deref().and_then(|vp| vp.active_camera);
+        let live_ev = active_camera.and_then(|entity| {
+            exposures
+                .get(entity)
+                .ok()
+                .map(|(_, exposure)| exposure.ev100)
+        });
+        let live_bloom = active_camera
+            .and_then(|entity| blooms.get(entity).ok().map(|(_, bloom)| bloom.intensity));
         let ev_moved = match (view.exposure_ev100, live_ev) {
             (Some(a), Some(b)) => (a - b).abs() > 1.0e-3,
             (None, None) => false,
@@ -896,6 +903,7 @@ pub(crate) fn inspector_inputs_changed(
         };
         ev_moved || bloom_moved
     };
+    let viewport_changed = viewport.as_ref().is_some_and(|vp| vp.is_changed());
 
     // A joint's measured angle is a continuously changing Avian value, but the
     // Inspector is a human readout rather than a telemetry oscilloscope. Poll
@@ -923,6 +931,7 @@ pub(crate) fn inspector_inputs_changed(
         || ambient_changed
         || sun_moved
         || camera_changed
+        || viewport_changed
         || removed
         || joint_due;
     *first = true;

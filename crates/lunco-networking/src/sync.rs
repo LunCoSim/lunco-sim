@@ -2470,7 +2470,7 @@ pub fn send_student_status_updates(
 /// conventions themselves.
 #[derive(SystemParam)]
 pub struct AvatarPoseContext<'w, 's> {
-    avatars: Query<'w, 's, Entity, With<LocalAvatar>>,
+    local_avatar: Res<'w, lunco_core::TheLocalAvatar>,
     frames: Query<'w, 's, &'static ReferenceFrame>,
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
@@ -2480,7 +2480,7 @@ pub struct AvatarPoseContext<'w, 's> {
 
 impl AvatarPoseContext<'_, '_> {
     fn capture(&self) -> Option<FramedAvatarPose> {
-        let avatar = self.avatars.iter().next()?;
+        let avatar = self.local_avatar.0?;
         let Some(frame) =
             lunco_celestial::inherited_reference_frame(avatar, &self.parents, &self.frames)
         else {
@@ -2678,7 +2678,7 @@ mod framed_avatar_pose_tests {
         let canonical = world
             .spawn((
                 frame,
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::IDENTITY,
             ))
@@ -2688,7 +2688,7 @@ mod framed_avatar_pose_tests {
             canonical_grid.translation_to_grid(DVec3::new(384_000_000.0, 0.0, 0.0));
         let surface = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 cell,
                 Transform::from_translation(translation),
                 ChildOf(canonical),

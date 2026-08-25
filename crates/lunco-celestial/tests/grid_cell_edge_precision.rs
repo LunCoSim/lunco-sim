@@ -9,9 +9,9 @@
 //! the COARSEST grid in a chain sets the precision floor for its whole subtree.
 //!
 //! This reproduces the real Solar → EMB → Moon → Surface chain, with the
-//! floating origin nested in the surface grid as the production camera is, and
-//! measures where a point 10 m from the site actually renders. No ancestor is
-//! re-posed to follow that origin.
+//! persistent origin anchor as a grid-direct child of the canonical WorldGrid,
+//! and measures where a point 10 m from the site actually renders. No camera or
+//! ancestor is re-posed to follow that origin.
 //!
 //! With the old edges (Solar 1e9, EMB 1e8) the error is tens of metres — the
 //! "lunar surface jitters / Earth jitters / orbit lines jump" report. With 2 km
@@ -60,17 +60,17 @@ const NEW: Chain = Chain {
 };
 
 /// Build the chain and return the probe's rendered offset relative to the
-/// nested floating origin.
+/// persistent grid-direct origin anchor.
 fn probe_error_m(chain: &Chain) -> f64 {
     (probe_render_pos(chain, DVec3::ZERO) - PROBE_LOCAL.as_dvec3()).length()
 }
 
-/// Where the probe actually renders, in metres relative to the nested floating
-/// origin. `drift` advances the EMB along its orbit, simulating an epoch tick;
-/// the local surface pose must not be changed by that upstream motion.
+/// Where the probe actually renders, in metres relative to the persistent
+/// origin anchor. `drift` advances the EMB along its orbit, simulating an epoch
+/// tick; the local surface pose must not be changed by that upstream motion.
 fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let emb_in_solar = EMB_IN_SOLAR + drift;
-    let root = Grid::new(2_000.0, 100.0);
+    let root = lunco_core::WorldGridConfig::default().grid();
     let solar = Grid::new(chain.solar.0, chain.solar.1);
     let emb = Grid::new(chain.emb.0, chain.emb.1);
     let body = Grid::new(chain.body.0, chain.body.1);
@@ -84,11 +84,15 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let (surf_cell, surf_tf) = body.translation_to_grid(SITE_IN_MOON);
 
     let (solar_cell, solar_tf) = root.translation_to_grid(DVec3::ZERO);
+    let world_grid = lunco_core::WorldGridConfig::default().grid();
+    let site_in_world = EMB_IN_SOLAR + drift + MOON_IN_EMB + SITE_IN_MOON;
+    let (origin_cell, origin_translation) = world_grid.translation_to_grid(site_in_world);
 
     let mut app = App::new();
     app.add_plugins(BigSpaceMinimalPlugins);
 
     let probe;
+    let origin;
     {
         let world = app.world_mut();
 
@@ -99,35 +103,83 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
             ))
             .id();
         let surface_e = world
-            .spawn((surface, Transform::from_translation(surf_tf), surf_cell))
+            .spawn((
+                surface,
+                Transform::from_translation(surf_tf),
+                surf_cell,
+                Name::new("Surface"),
+            ))
             .add_children(&[probe])
             .id();
-        // Production surface cameras claim the floating origin in the site
-        // grid. Keeping it in this nested frame is what makes local f32
-        // transforms independent of AU-scale parent motion.
-        let origin = world
-            .spawn((Transform::default(), CellCoord::default(), FloatingOrigin))
+        // Production has one persistent grid-direct origin tracker under the
+        // canonical WorldGrid. The viewport projects the selected camera's
+        // complete f64 pose into this grid and updates its cell/local split.
+        origin = world
+            .spawn((
+                lunco_core::OriginAnchor,
+                world_grid.clone(),
+                Transform::default(),
+                GlobalTransform::default(),
+                CellCoord::default(),
+                FloatingOrigin,
+                Name::new("OriginAnchor"),
+            ))
             .id();
-        world.entity_mut(origin).insert(ChildOf(surface_e));
         let body_e = world
-            .spawn((body, Transform::from_translation(moon_tf), moon_cell))
+            .spawn((
+                body,
+                Transform::from_translation(moon_tf),
+                moon_cell,
+                Name::new("Body"),
+            ))
             .add_children(&[surface_e])
             .id();
         let emb_e = world
-            .spawn((emb, Transform::from_translation(emb_tf), emb_cell))
+            .spawn((
+                emb,
+                Transform::from_translation(emb_tf),
+                emb_cell,
+                Name::new("Emb"),
+            ))
             .add_children(&[body_e])
             .id();
         let solar_e = world
-            .spawn((solar, Transform::from_translation(solar_tf), solar_cell))
+            .spawn((
+                solar,
+                Transform::from_translation(solar_tf),
+                solar_cell,
+                Name::new("Solar"),
+            ))
             .add_children(&[emb_e])
             .id();
+
+        let world_grid_e = world
+            .spawn((
+                lunco_core::WorldGrid,
+                Transform::default(),
+                GlobalTransform::default(),
+                CellCoord::default(),
+                world_grid,
+                Name::new("WorldGrid"),
+            ))
+            .id();
+        world
+            .entity_mut(world_grid_e)
+            .add_children(&[origin, solar_e]);
 
         world
             .spawn(BigSpaceRootBundle::default())
             .insert(root)
-            .add_children(&[solar_e]);
+            .add_children(&[world_grid_e]);
     }
 
+    app.update();
+    // Let BigSpace establish the hierarchy first. The production viewport
+    // projection then changes only the persistent anchor's split, exactly as
+    // the second update below does.
+    *app.world_mut().get_mut::<CellCoord>(origin).unwrap() = origin_cell;
+    *app.world_mut().get_mut::<Transform>(origin).unwrap() =
+        Transform::from_translation(origin_translation);
     app.update();
 
     let probe_gt = app.world().get::<GlobalTransform>(probe).unwrap();
@@ -136,7 +188,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
         .iter_entities()
         .find(|e| e.contains::<FloatingOrigin>())
         .and_then(|e| e.get::<GlobalTransform>())
-        .expect("nested floating origin global transform");
+        .expect("grid-direct origin anchor global transform");
     probe_gt.translation().as_dvec3() - origin_gt.translation().as_dvec3()
 }
 
@@ -170,18 +222,18 @@ fn two_km_cells_keep_surface_precision_sub_millimetre() {
 }
 
 /// One frame at 1x is ~26 m of EMB orbital motion (30 km/s). Moving that parent
-/// must not alter a probe's local surface pose when the origin is nested in the
-/// surface frame.
+/// must not alter a probe's local surface pose when the origin anchor is
+/// projected in the canonical WorldGrid.
 const ONE_FRAME_OF_ORBIT: DVec3 = DVec3::new(19.4, 0.0, -17.6); // |.| ~26 m
 
 #[test]
-fn nested_surface_origin_is_invariant_when_parent_grid_moves() {
+fn grid_direct_origin_anchor_is_invariant_when_parent_grid_moves() {
     let a = probe_render_pos(&NEW, DVec3::ZERO);
     let b = probe_render_pos(&NEW, ONE_FRAME_OF_ORBIT);
     let jitter = (b - a).length();
-    println!("native nested-grid local pose change: {jitter:.9} m");
+    println!("native grid-direct origin local pose change: {jitter:.9} m");
     assert!(
         jitter < 1.0e-3,
-        "native nested-grid camera pose must remain stable to sub-mm, got {jitter:.9} m"
+        "native grid-direct origin pose must remain stable to sub-mm, got {jitter:.9} m"
     );
 }

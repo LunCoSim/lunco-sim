@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::{Autopilot, AutopilotBehaviorSpec, BehaviorSpec};
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, GlobalEntityId};
+use lunco_core::{GlobalEntityId, TheLocalAvatar};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
@@ -62,7 +62,7 @@ pub struct CommandDeckView {
 pub fn populate_command_deck_view(
     mut view: ResMut<CommandDeckView>,
     selected: Res<SelectedEntities>,
-    avatars: Query<Entity, With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
     q_link: Query<&ControllerLink>,
     q_autopilot: Query<&Autopilot>,
     q_spec: Query<&AutopilotBehaviorSpec>,
@@ -80,9 +80,9 @@ pub fn populate_command_deck_view(
         })
         .unwrap_or_default();
     // Possession: the avatar's ControllerLink points at the vessel it drives.
-    view.driving = match (sel, avatars.iter().next()) {
-        (Some(v), Some(av)) => q_link
-            .get(av)
+    view.driving = match (sel, local_avatar.0) {
+        (Some(v), Some(avatar)) => q_link
+            .get(avatar)
             .ok()
             .map(|l| l.vessel_entity == v)
             .unwrap_or(false),

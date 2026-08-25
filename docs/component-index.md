@@ -12,7 +12,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 - **[Pin.mo](../assets/models/LunCo/Electrical/Pin.mo)**: Acausal electrical pin connector (`Real v; flow Real i;`, enforcing Kirchhoff's Current Law $\sum i = 0$).
 - **[Battery.mo](../assets/models/LunCo/Electrical/Battery.mo)**: Pack capacity, internal resistance voltage sag ($V = V_{\text{nom}} - I R$), and State-of-Charge integration ($\frac{d(soc)}{dt}$).
 - **[SolarPanel.mo](../assets/models/LunCo/Electrical/SolarPanel.mo)**: Triple-junction solar cell array power generation ($P_{\text{solar}} = \text{area} \cdot \eta \cdot \Phi_{\text{sun}}$).
-- **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Hub drive motor ($P_{\text{mech}} = \tau \cdot \omega$, electrical current draw $I = \frac{P_{\text{mech}}}{\eta \cdot V_{\text{bus}}}$).
+- **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Electrical facet of a USD/Avian hub drive; demand-controlled bus current, electrical draw, and winding heat. The shaft torque, speed, reduction, and contact mechanics remain owned by the USD/Avian drivetrain.
 - **[PDU.mo](../assets/models/LunCo/Electrical/PDU.mo)**: EPS Power Distribution Unit, 28V regulated main bus, and under-voltage load shedding.
 - **[OnboardComputer.mo](../assets/models/LunCo/Electrical/OnboardComputer.mo)**: Flight computer baseline power draw ($P_{\text{base}} = 12\text{ W}$) + active GNC processing load ($P_{\text{gnc}} = 8\text{ W}$).
 - **[CameraPayload.mo](../assets/models/LunCo/Electrical/CameraPayload.mo)**: Active camera capture streaming power draw ($4.5\text{ W}$) and data output rate ($15\text{ Mbps}$).

@@ -1364,12 +1364,13 @@ mod tests {
     #[test]
     fn script_pose_reads_share_the_active_frame_below_rotating_ancestors() {
         let mut world = World::new();
-        lunco_core::ensure_world_root(&mut world);
+        let world_grid = lunco_core::ensure_world_root(&mut world);
+        world.insert_resource(lunco_core::ActivePhysicsFrame(world_grid));
         world.init_resource::<ApiEntityRegistry>();
         let root = world.resource::<lunco_core::ActivePhysicsFrame>().0;
         let body = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(100_000, -2_000, 40_000),
                 Transform::from_rotation(Quat::from_rotation_x(0.9)),
                 ChildOf(root),
@@ -1377,7 +1378,7 @@ mod tests {
             .id();
         let site = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(800, -950, 300),
                 Transform::from_rotation(Quat::from_rotation_z(-0.7)),
                 ChildOf(body),

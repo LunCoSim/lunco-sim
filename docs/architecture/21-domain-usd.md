@@ -415,9 +415,9 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
 
 - **Placement:** `lunco:cameraPose = "authored"` keeps the camera in its USD
   hierarchy. `lunco:cameraPose = "mounted"` explicitly creates an onboard,
-  grid-direct follower with a static local offset; it stays jitter-free and can
-  host the big_space `FloatingOrigin`. A nested prim alone never changes pose
-  authority. Aim either camera with `lunco:cameraLookAt`.
+  grid-direct follower with a static local offset; it stays jitter-free while
+  the persistent `OriginAnchor` tracks the selected camera. A nested prim alone
+  never changes pose authority. Aim either camera with `lunco:cameraLookAt`.
 - **Switching:** cameras spawn inactive; make one the active view with
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.
@@ -548,7 +548,11 @@ pose always agree. Precedence:
    matrices are built in glam's column form and right-multiplied, so the standard
    `["translate","rotateXYZ","scale"]` decodes to exactly `Transform{t,r,s}`.
 2. **`xformOp:transform`** — a full `matrix4d` decomposed via `read_matrix_transform_at`.
-3. **Piecewise fallback** — `xformOp:translate` + rotation + `xformOp:scale`.
+3. **No piecewise fallback.** An `xformOp:*` attribute contributes only when
+   `xformOpOrder` names it. A prim with no authored transform stack is the USD
+   identity; a malformed authored stack is rejected. This keeps the runtime
+   transform exactly aligned with `UsdGeomXformable` rather than accepting a
+   second, non-USD transform dialect.
 
 Rotation (`local_rotation_at`) covers every USD channel: the six Euler orders
 `rotateXYZ`…`rotateZYX`, the quaternion `xformOp:orient` (`quatf`/`quatd`/`quath`), and

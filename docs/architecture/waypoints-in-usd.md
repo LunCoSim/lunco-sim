@@ -31,6 +31,13 @@ The XML's spatial leaves **reference** the prims by path rather than baking
 coordinates — which is how BT.CPP is meant to be used anyway (leaves read ports, not
 constants):
 
+Mission target paths are absolute, composed USD prim paths. They are identity
+references, not names: resolution uses the exact composed `SdfPath` string together
+with the stage and instance scope. Relative paths, property paths, variant-selection
+paths, malformed paths, and paths that are not present on the composed stage are
+invalid mission data and keep the route in an explicit unresolved state. No suffix,
+relative-name, or query-order matching is permitted.
+
 ```xml
 <!-- behaviors/rover_patrol.btxml — canonical LunCoSim name; Groot2 opens this -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
@@ -112,6 +119,18 @@ transform, visibility, material, and collision are standard USD/UsdPhysics data.
 radius, while only `Trigger` is projected into the Avian overlap sensor. The
 visual dome remains present after arrival; the live route projection tints only
 entries in `ReachedWaypoints` gray.
+
+### Visual progress uses the authoritative live binding
+
+An authored target path is resolved once by the USD behavior projection into the
+vessel's `TargetBindings` map. The route visualizer associates that exact
+path-to-entity binding with the authored marker entity; it does not scan marker
+paths, reinterpret a path relative to another prim, or rely on ECS query order.
+Runtime-only targets use their explicit `RuntimeWaypointBinding` instead. If an authored binding is
+unavailable, the marker keeps its authored appearance and no visited state is
+inferred. This makes gray/green progress a projection of the same live target
+identity that drives the behavior tree, so a waypoint cannot oscillate because
+two unrelated path representations happen to match.
 
 ### Waypoints are not children of the vessel
 

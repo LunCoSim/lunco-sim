@@ -19,9 +19,10 @@ use openusd::sdf::Path as SdfPath;
 // The USD side of a Modelica program facet — the class an asset names, the
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
 // lint fact producer. See `lunco_usd_bevy::program`.
-pub use lunco_usd_bevy::program::is_domain_network_root;
+pub use lunco_usd_bevy::program::{derive_synthesizer_name, is_domain_network_root};
 use lunco_usd_bevy::program::{
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
+    ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
 
 use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
@@ -244,50 +245,9 @@ pub struct SynthContext<'a> {
 }
 
 /// The default for a collection of `LunCoProgramAPI` members.
-pub const DEFAULT_SYNTHESIZER: &str = "acausal-network";
+pub const DEFAULT_SYNTHESIZER: &str = DEFAULT_DOMAIN_SYNTHESIZER;
 /// The generic force-actuator allocator used by the shipped lander.
-pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = "actuator-wrench";
-
-/// Derive the domain owner from the composed USD role schemas.
-///
-/// A physical actuator collection is not a Modelica network: its members carry
-/// `LunCoForceActuatorAPI`, while a Modelica network's members carry
-/// `LunCoProgramAPI`. This is a structural classification, not a name or
-/// filename heuristic. A mixed collection is rejected because choosing either
-/// owner would hide an authoring error.
-pub fn derive_synthesizer_name(
-    view: &lunco_usd_bevy::StageView<'_>,
-    root: &SdfPath,
-) -> Result<String, String> {
-    let members = view
-        .collection_members(root, "components")
-        .map_err(|error| format!("could not read component collection: {error}"))?;
-    let mut force_actuators = 0usize;
-    let mut modelica_programs = 0usize;
-    let mut unclassified = Vec::new();
-    for member in members.iter().filter(|path| !path.is_property_path()) {
-        let is_force = view.has_api_schema(member, "LunCoForceActuatorAPI");
-        let is_program = view.has_api_schema(member, "LunCoProgramAPI");
-        match (is_force, is_program) {
-            (true, false) => force_actuators += 1,
-            (false, true) => modelica_programs += 1,
-            _ => unclassified.push(member.to_string()),
-        }
-    }
-    if force_actuators > 0 && modelica_programs == 0 && unclassified.is_empty() {
-        return Ok(ACTUATOR_WRENCH_SYNTHESIZER.to_string());
-    }
-    if modelica_programs > 0 && force_actuators == 0 && unclassified.is_empty() {
-        return Ok(DEFAULT_SYNTHESIZER.to_string());
-    }
-    if force_actuators > 0 || modelica_programs > 0 || !unclassified.is_empty() {
-        return Err(format!(
-            "component collection has incompatible member roles: force_actuators={force_actuators}, \
-             modelica_programs={modelica_programs}, unclassified={unclassified:?}"
-        ));
-    }
-    Ok(DEFAULT_SYNTHESIZER.to_string())
-}
+pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER;
 
 /// Open registry of synthesizers, by name. No enum: a new domain is a
 /// registration from any plugin.

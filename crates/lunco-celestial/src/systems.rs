@@ -111,7 +111,7 @@ pub fn body_rotation_system(
 /// `DirectionalLight` should EMIT along (its local `-Z` / forward) so sunlight
 /// travels from the Sun toward the scene, given heliocentric Sun and Moon
 /// positions (ecliptic J2000, AU). Returns `None` when degenerate (e.g. the
-/// `NoOpEphemerisProvider` returns ZERO for everything).
+/// no provider or coincident positions).
 /// The inputs are typed `EclipticAu` on purpose: this is the exact pipe that once carried
 /// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
 /// Shackleton. A raw `DVec3` can no longer be handed to it.
@@ -137,33 +137,21 @@ pub fn sun_emit_direction(
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
 /// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
 /// in [`crate::missions`]). A `DirectionalLight` emits along its local forward
-/// (`-Z`) and rays travel FROM the Sun INTO the scene, so the light's forward is
-/// set to `-to_sun`. The brightest light is taken as the sun (the Earthshine
-/// fill is ~12 lx vs ~128 000 lx), matching the canonical `pick_sun` rule and
-/// avoiding both a marker dependency and the `single_mut()`-fails-with-two-lights
-/// trap.
+/// (`-Z`) and rays travel FROM the Sun INTO the scene, so the semantic state
+/// stores the opposite look direction. The scene sun is identified structurally
+/// by excluding Earthshine and scoped preview lights; ambiguity is an authored
+/// contract error, never a brightness-based choice.
 ///
-/// With the default `NoOpEphemerisProvider` every position is ZERO, so `to_sun`
-/// degenerates and the system returns early — leaving the light under manual
-/// `SetEnvironmentLight` (yaw/pitch) control. The ephemeris is therefore
-/// authoritative ONLY when a real provider (`lunco-celestial-ephemeris`) is
-/// installed; sandbox / NoOp contexts keep dynamic manual control. That single
-/// authoritative writer per context resolves the earlier web-build conflict
-/// where two systems fought over the sun direction every frame.
-/// The sun's EMIT direction in world (site-ENU) axes, published each frame by
-/// [`update_sun_light_system`]. Consumers include future eclipse and local
-/// illumination logic. Camera exposure deliberately does not consume this:
-/// earthshine is a lighting contribution, not a reason to open the camera and
-/// wash out direct sunlight.
-#[derive(Resource, Debug, Default, Clone, Copy)]
-pub struct SunDirectionWorld(pub Vec3);
-
+/// Without an explicit ephemeris provider the system leaves authored lighting
+/// untouched. The ephemeris is authoritative only when the scene/application
+/// installs `lunco-celestial-ephemeris`; manual lighting remains a separate
+/// explicit operator command, never an implicit provider substitution.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
-    mut sun_dir_out: ResMut<SunDirectionWorld>,
+    mut sun_state: ResMut<lunco_environment::SunState>,
     // Declared by `lunco-environment` (which cannot depend on this crate) and
     // filled here — the same shape as `LunarSun` below. `Option` because a build
     // without `EnvironmentPlugin` has no such resource and must still get a sun.
@@ -172,9 +160,10 @@ pub fn update_sun_light_system(
     // (earthshine and its analogues) is authored under that body's prim and
     // carries `Earthshine`; the scene's key light is not. See
     // `lunco_environment::horizon::SunQuery` for the same filter render-side.
-    mut q_light: Query<
-        (Entity, &mut Transform, &mut DirectionalLight, Option<&Name>),
+    q_light: Query<
+        Entity,
         (
+            With<bevy::light::DirectionalLight>,
             Without<lunco_environment::Earthshine>,
             Without<bevy::camera::visibility::RenderLayers>,
         ),
@@ -182,6 +171,7 @@ pub fn update_sun_light_system(
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
     orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     // Last reported sun elevation, so the aim is logged on material change only.
     mut last_logged_elevation: Local<f32>,
 ) {
@@ -189,7 +179,43 @@ pub fn update_sun_light_system(
         return;
     };
 
-    let site_anchor = q_site.iter().next();
+    let mut contract_findings = Vec::new();
+    let site_count = q_site.iter().count();
+    if site_count > 1 {
+        contract_findings.push(lunco_core::RuntimeDiagnostic {
+            code: "site-anchor-cardinality".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "celestial-sun".to_string(),
+            subject: "SiteAnchor".to_string(),
+            message: format!(
+                "expected at most one active SiteAnchor, found {site_count}; celestial observation is ambiguous"
+            ),
+        });
+    }
+    let light_count = q_light.iter().count();
+    if light_count != 1 {
+        contract_findings.push(lunco_core::RuntimeDiagnostic {
+            code: "sun-light-cardinality".to_string(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            producer: "celestial-sun".to_string(),
+            subject: "DirectionalLight".to_string(),
+            message: format!(
+                "expected exactly one unscoped DirectionalLight for the ephemeris sun, found {light_count}"
+            ),
+        });
+    }
+    if !contract_findings.is_empty() {
+        sun_state.clear();
+        if let Some(mut diagnostics) = diagnostics {
+            diagnostics.replace_producer("celestial-sun", contract_findings);
+        }
+        return;
+    }
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer("celestial-sun", std::iter::empty());
+    }
+
+    let site_anchor = q_site.single().ok();
     let Some(observer_body) = site_anchor
         .map(|anchor| anchor.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
@@ -197,6 +223,7 @@ pub fn update_sun_light_system(
         return;
     };
     let Some(observer_desc) = registry.get(observer_body) else {
+        sun_state.clear();
         return;
     };
 
@@ -208,18 +235,20 @@ pub fn update_sun_light_system(
             .provider
             .global_position(observer_body, world.epoch_jd),
     ) else {
+        sun_state.clear();
         return;
     };
     let Some(ecliptic_dir) = sun_emit_direction(p_sun, p_observer) else {
         // Degenerate ephemeris — leave the authored light untouched.
+        sun_state.clear();
         return;
     };
 
     let Some(anchor) = site_anchor else {
         // Orbital views without a site do not own a local ENU light frame.
-        // Their authored lighting remains authoritative until a site scene is
-        // mounted; guessing a root-frame rotation would reintroduce the old
-        // implicit-frame bug.
+        // Their authored/manual lighting remains authoritative until a site
+        // scene is mounted; guessing a root-frame rotation would reintroduce
+        // the old implicit-frame bug. Preserve that authored semantic state.
         return;
     };
     let site_frame = solar_tangent_frame(
@@ -264,14 +293,11 @@ pub fn update_sun_light_system(
             world.epoch_jd,
         );
     }
-    let up = if dir.dot(Vec3::Y).abs() > 0.99 {
-        Vec3::X
-    } else {
-        Vec3::Y
-    };
-    if sun_dir_out.0 != dir {
-        sun_dir_out.0 = dir;
-    }
+    let irradiance = sun_cal.as_deref().and_then(|cal| {
+        let r2 = (p_sun - p_observer).length_squared();
+        (r2 > 1.0e-4).then_some((cal.illuminance_lux as f64 / r2) as f32)
+    });
+    sun_state.publish(-dir, irradiance);
 
     // …and Earth, the OTHER thing on this body points at. Same rotation, same
     // frame — an antenna bridge that recomputed the align rotation for itself
@@ -291,7 +317,7 @@ pub fn update_sun_light_system(
             .raw()
             .as_vec3()
             .normalize_or_zero();
-        // Degenerate (NoOp provider, or Earth and the observer body coincident)
+        // Degenerate (missing Earth data, or Earth and the observer body coincident)
         // stays ZERO — the resource's documented "not known", which the bridge
         // refuses to publish rather than reporting Earth due north on the horizon.
         let next = if to_earth.length_squared() > 0.5 {
@@ -307,59 +333,15 @@ pub fn update_sun_light_system(
         }
     }
 
-    // The sun is the scene's one non-fill `DirectionalLight` — see the query.
-    // It used to be "the brightest", which is a guess: it silently picked when a
-    // scene had two suns, and with equal illuminance it picked by archetype
-    // iteration order. That guess is exactly how an engine-spawned duplicate
-    // came to take the ephemeris aim while the scene's own sun stayed frozen.
-    // Exactly one unscoped scene sun owns this write. ECS/archetype order is
-    // not a lighting policy, so an ambiguous scene must not silently choose.
-    if q_light.iter().count() != 1 {
-        return;
-    }
-    if let Ok((light_entity, mut light_tf, mut light, light_name)) = q_light.single_mut() {
-        debug!("[celestial] selected scene sun entity={light_entity:?} name={light_name:?}");
-        // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
-        // from a direction that changes below a shadow-map texel — continuous
-        // light-direction churn defeats the cascade shadow maps' texel
-        // snapping, so every shadow edge crawls and waggles ("the shadow on
-        // the moon oscillates"), worst at the polar site's grazing sun.
-        // 2e-5 rad ≈ one update per ~1.4 s real at 5.7× time — real sun
-        // motion still tracks; between updates the direction is FROZEN and
-        // the shadow map is byte-stable.
-        let current_fwd: Vec3 = light_tf.forward().into();
-        if current_fwd.angle_between(dir) > 2.0e-5 {
-            light_tf.look_to(dir, up);
-        }
-
-        // 1/r² illuminance. `LunarSun`'s calibrated pair (~128 klx / EV 16)
-        // is the 1 AU value; ephemeris positions are AU, so the live scale is
-        // 1/r². At the Moon this breathes ±3% over the year (Earth-orbit
-        // eccentricity); a site on a body elsewhere gets its real solar
-        // constant. Exposure deliberately does NOT compensate — the
-        // brightness difference IS the realism. Dead-banded at 0.5%:
-        // sub-percent deltas are invisible and per-frame light mutation is
-        // needless render-world churn.
-        if let Some(cal) = &sun_cal {
-            let r2 = (p_sun - p_observer).length_squared();
-            if r2 > 1.0e-4 {
-                let target = (cal.illuminance_lux as f64 / r2) as f32;
-                if (light.illuminance - target).abs() > target * 5.0e-3 {
-                    debug!(
-                        "sun illuminance {:.0} lx (r = {:.4} AU, 1 AU cal {:.0} lx)",
-                        target,
-                        r2.sqrt(),
-                        cal.illuminance_lux
-                    );
-                    light.illuminance = target;
-                }
-            }
-        }
-    }
+    // The render projection is owned by `lunco-environment` and consumes the
+    // semantic state above. This system never reads back or mutates a light.
 }
 
 pub fn celestial_visuals_system(
-    q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
+    q_camera: Query<
+        (Entity, &CellCoord, &Transform),
+        (With<Camera>, With<lunco_core::LocalAvatar>),
+    >,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
     mut q_tiles: Query<
         (&mut ShaderLook, &lunco_terrain_globe::TileCoord),
@@ -392,7 +374,7 @@ pub fn celestial_visuals_system(
     mut last_per_body: Local<std::collections::HashMap<Entity, f32>>,
     mut force_frames: Local<u8>,
 ) {
-    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else {
+    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.single().ok() else {
         return;
     };
     let Ok(cam_abs) = world_position_seeded(
@@ -519,8 +501,8 @@ mod sun_dir_tests {
 
     #[test]
     fn degenerate_ephemeris_yields_no_direction() {
-        // NoOpEphemerisProvider returns ZERO for every body → no sun direction,
-        // so the system leaves the light under manual control.
+        // Coincident/no-data positions do not define a sun direction, so the
+        // system leaves the light under explicit manual control.
         assert!(sun_emit_direction(EclipticAu::ZERO, EclipticAu::ZERO).is_none());
     }
 

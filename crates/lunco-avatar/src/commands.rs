@@ -9,10 +9,9 @@ use lunco_core::Command;
 /// `ControllerLink` so that input events are forwarded to the vessel.
 #[Command]
 pub struct PossessVessel {
-    /// The avatar entity taking possession — a user's *local* representation in
-    /// the world, used only to bind the chase camera. `None` for headless or
-    /// direct API control with no avatar: the host-side authority claim keys on
-    /// `target`, so possession works fully without one.
+    /// The avatar entity taking possession — this process's *local* embodiment
+    /// in the world, used only to bind the chase camera. `None` for headless or
+    /// direct API control with no camera binding.
     #[sync_local]
     #[serde(default)]
     #[reflect(default)]
@@ -23,9 +22,9 @@ pub struct PossessVessel {
     /// the default, interactive behaviour. `false` claims control authority
     /// only: what a recording scenario wants, where the script drives the
     /// vessel through ports while an authored camera path owns the view.
-    /// (With no explicit avatar the camera bind falls back to "any local
-    /// avatar" — in a recording scene that IS the path-driven camera, and the
-    /// `SpringArmCamera` would silently steal the shot.)
+    /// A camera bind with no explicit avatar resolves only the authoritative
+    /// `TheLocalAvatar` slot. It fails visibly when that slot is empty; it never
+    /// selects an arbitrary `Avatar` entity.
     #[serde(default = "default_true")]
     #[reflect(default = "default_true")]
     pub bind_camera: bool,

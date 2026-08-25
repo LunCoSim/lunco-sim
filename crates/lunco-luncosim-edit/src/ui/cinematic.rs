@@ -26,10 +26,10 @@ use bevy::math::{DQuat, EulerRot};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
-use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
+use lunco_time::{ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
@@ -50,25 +50,23 @@ fn report_capture_failure(commands: &mut Commands, message: impl Into<String>) {
 
 /// The camera path the panel's transport drives.
 ///
-/// A path owns a per-object driven clock, so the shared `AnimationPreview`
-/// transport does not reach it — without this the panel's ⏮/▶ would silently do
-/// nothing to a path-driven shot. A `Panel` cannot run queries, so a system
-/// publishes the domain here for it to read.
+/// A path owns a per-object driven clock. A `Panel` cannot run queries, so a
+/// system publishes the authoritative domain here for it to read.
 #[derive(Resource, Default)]
 pub struct CinematicTarget {
-    /// The active path's driven domain; `None` ⇒ the panel falls back to the
-    /// shared animation preview.
+    /// The active path's driven domain, or `None` when no unique authored path
+    /// is available.
     pub domain: Option<Entity>,
 }
 
-/// Publish the first camera path's domain for the panel to drive.
+/// Publish the sole authored camera path's domain for the panel to drive.
 ///
-/// One path today. With several, this becomes "the selected path" — the panel is
-/// already written against whatever this resource points at.
+/// Multiple camera paths require an explicit selection; entity/archetype order
+/// is not a camera ownership contract.
 pub fn track_active_camera_path(q_paths: Query<&CameraPath>, mut target: ResMut<CinematicTarget>) {
-    let first = q_paths.iter().next().map(|p| p.domain);
-    if target.domain != first {
-        target.domain = first;
+    let domain = q_paths.single().ok().map(|p| p.domain);
+    if target.domain != domain {
+        target.domain = domain;
     }
 }
 
@@ -107,18 +105,20 @@ impl Default for CinematicViz {
 /// math, no render-vs-grid frame bug by construction.
 pub fn draw_camera_paths(
     viz: Res<CinematicViz>,
+    viewport: Res<SceneViewport>,
     resolved: Res<lunco_time::ResolvedDomains>,
     q_paths: Query<(&CameraPath, &GlobalTransform)>,
     q_playback: Query<&Playback>,
     q_targets: Query<(Entity, &UsdPrimPath, &GlobalTransform), (With<CellCoord>, With<Transform>)>,
-    q_active: Query<(Entity, &Camera), (With<Camera3d>, With<SceneCamera>)>,
     mut gizmos: Gizmos,
 ) {
     if !viz.show_paths {
         return;
     }
-    // The camera you are looking through, if any.
-    let looking_through = q_active.iter().find(|(_, c)| c.is_active).map(|(e, _)| e);
+    // The viewport owns presentation selection. Do not rediscover it by
+    // iterating active cameras: sensor and render-target cameras can also be
+    // active, and entity order is not a camera contract.
+    let looking_through = viewport.active_camera;
 
     for (path, gt) in q_paths.iter() {
         // Don't draw a path you are flying. Every marker would land on the eye:
@@ -228,6 +228,7 @@ pub struct AddCameraHere {
 #[on_command(AddCameraHere)]
 fn on_add_camera_here(
     trigger: On<AddCameraHere>,
+    viewport: Res<SceneViewport>,
     q_cam: Query<(Entity, &Camera, &RenderTarget), (With<Camera3d>, With<SceneCamera>)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -236,12 +237,17 @@ fn on_add_camera_here(
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
-    // The camera the user is actually looking through. `is_active` alone is not
-    // enough — a render-to-texture preview camera is active too, so require a
-    // window target (same rule the gizmo picks its camera by).
-    let Some((cam_entity, _, _)) = q_cam
-        .iter()
-        .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
+    // The viewport is the sole presentation owner. Resolve its entity and
+    // validate the realized camera instead of selecting an arbitrary active
+    // camera from the ECS query.
+    let Some(cam_entity) = viewport.active_camera else {
+        report_capture_failure(&mut commands, "No active window camera to capture");
+        return;
+    };
+    let Some((_, _, _)) = q_cam
+        .get(cam_entity)
+        .ok()
+        .filter(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
     else {
         report_capture_failure(&mut commands, "No active window camera to capture");
         return;
@@ -263,10 +269,7 @@ fn on_add_camera_here(
         return;
     };
 
-    let Some(doc) = workspace
-        .and_then(|w| w.0.active_document)
-        .or_else(|| usd_registry.ids().next())
-    else {
+    let Some(doc) = workspace.and_then(|w| w.0.active_document) else {
         report_capture_failure(&mut commands, "No active USD document to author into");
         return;
     };
@@ -278,9 +281,15 @@ fn on_add_camera_here(
         return;
     };
 
-    let root = lunco_usd_bevy::layer_default_prim(host.document().data())
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
+    let Some(root) =
+        lunco_usd_bevy::layer_default_prim(host.document().data()).map(|p| format!("/{p}"))
+    else {
+        report_capture_failure(
+            &mut commands,
+            format!("Active USD document {doc:?} has no authored default prim"),
+        );
+        return;
+    };
 
     // `AddPrim` on an existing prim is a rejection, not a merge — so find a free
     // name rather than letting the op fail silently on the second capture.
@@ -435,18 +444,16 @@ impl Panel for CinematicPanel {
 /// the inspector's transport, rhai and the HTTP/MCP API all drive a single code
 /// path.
 fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    // Drive the active camera path's OWN clock when there is one — it is a
-    // per-object driven domain, so the shared preview transport does not reach it.
+    // Drive the active camera path's own clock. A missing or ambiguous path is
+    // an explicit no-target state, not permission to control another domain.
     let path_domain = ctx.resource::<CinematicTarget>().and_then(|t| t.domain);
-    let Some(domain) = path_domain.or_else(|| ctx.resource::<AnimationPreview>().map(|p| p.domain))
-    else {
-        ui.small("No animation preview in this scene.");
+    let Some(domain) = path_domain else {
+        ui.small("No unique authored camera path is active.");
         return;
     };
-    // `None` targets the preview; an explicit path domain targets that path.
     let target = path_domain;
     let Some(pb) = ctx.get::<Playback>(domain) else {
-        ui.small("No playback on the preview domain.");
+        ui.small("The active camera path has no playback domain.");
         return;
     };
     let (start, end, head, rate, looping) = (pb.start, pb.end, pb.head, pb.rate, pb.looping);

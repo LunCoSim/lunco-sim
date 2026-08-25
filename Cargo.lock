@@ -7430,6 +7430,7 @@ dependencies = [
  "lunco-experiments",
  "lunco-hardware",
  "lunco-hooks",
+ "lunco-lint",
  "lunco-luncosim-edit",
  "lunco-materials",
  "lunco-mobility",

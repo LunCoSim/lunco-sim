@@ -8,12 +8,12 @@
 //! still holds a fully-formed camera and this crate links no wgpu. A
 //! "switchable scene camera" is a [`SceneCamera`] whose `RenderTarget` is a
 //! window. Which one renders is Bevy's own `Camera::is_active`; the switch
-//! mechanism (`camera_switch`) toggles it and relocates the big_space
-//! `FloatingOrigin`.
+//! mechanism (`camera_switch`) toggles it while the persistent world origin
+//! tracker follows the selected camera's authoritative f64 pose.
 //!
 //! Cameras therefore spawn **inactive** — exactly one window camera renders at
-//! a time, and the avatar/free camera stays the default view until the user
-//! (or a cutscene script) switches.
+//! a time, and an authored camera request or cutscene selection must explicitly
+//! activate the presentation camera.
 //!
 //! ## Attribute mapping (UsdGeomCamera)
 //! - `focalLength`, `verticalAperture` (mm) → perspective **vertical** FOV:
@@ -28,10 +28,10 @@
 //! - `clippingRange` (float2, in stage units) → near / far in canonical metres.
 //! - `projection` token (`perspective` | `orthographic`) → `Projection` variant.
 //!
-//! The prim's transform + visibility come from the shared path in
-//! `instantiate_usd_prim`, so a camera nested under a moving prim (e.g. a
-//! `def Camera "ChaseCam"` under a rover Xform) rides it via normal `ChildOf`
-//! transform propagation — that's "camera on a rover" for free.
+//! The prim's authored transform + visibility come from the shared path in
+//! `instantiate_usd_prim`. An explicitly authored `cameraPose = "mounted"`
+//! camera is then realised by `camera_mount` as a grid-direct presentation
+//! follower; ordinary cameras retain their authored USD hierarchy.
 
 use bevy::prelude::*;
 use openusd::sdf::{Path as SdfPath, Value};

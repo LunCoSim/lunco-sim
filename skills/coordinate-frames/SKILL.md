@@ -37,11 +37,19 @@ Missing and duplicate declarations must remain errors (`None`).
 They never cross a user/API/network/model boundary and never become the
 authoritative source of an astronomical or physics value.
 
-For a camera, use the camera-mount operation and transfer the one
-`FloatingOrigin`. For a physical entity, keep it under `ActivePhysicsFrame`
-and let `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a
-trajectory or connection line, convert both endpoints into one semantic frame
-before generating cell-local geometry.
+For a camera, compose the selected camera's authoritative f64 pose into the
+persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
+`(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
+`FloatingOrigin`; cameras never receive or transfer that marker. For a
+physical entity, keep it under `ActivePhysicsFrame` and let
+`BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
+or connection line, convert both endpoints into one semantic frame before
+generating cell-local geometry.
+
+For USD geometry, `xformOpOrder` is the authoritative ordered transform stack.
+Read the complete composed local transform through the shared USD transform
+decoder, including scale; do not inspect individual `xformOp:*` attributes in a
+second path.
 
 ## Do not patch symptoms
 
@@ -59,7 +67,9 @@ Add the smallest real regression at the owning boundary:
 - atomic migration preserves the pose across a cell boundary;
 - the Avian bridge is invariant to BigSpace re-splitting and celestial-parent
   rotation;
-- surface ↔ inertial camera transfer preserves target pose and up direction.
+- surface ↔ inertial camera transfer preserves target pose and up direction;
+- the selected camera projects through the persistent `WorldGrid` into the sole
+  `OriginAnchor`, while duplicate or missing world-shell entities fail closed.
 
 Run focused checks first:
 

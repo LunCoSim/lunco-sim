@@ -8,6 +8,75 @@
 
 use bevy::prelude::*;
 
+/// Severity of a scene/runtime diagnostic that is not itself a terminal
+/// simulation fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+impl DiagnosticSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One owning-boundary diagnostic. Unlike a log line, this remains available
+/// to API/UI/lint consumers until the scene teardown boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDiagnostic {
+    /// Stable producer-owned rule/code.
+    pub code: String,
+    pub severity: DiagnosticSeverity,
+    /// Subsystem that owns the failed contract.
+    pub producer: String,
+    /// Authored prim or runtime subject, when known.
+    pub subject: String,
+    pub message: String,
+}
+
+/// Scene-scoped non-terminal diagnostics. Producers replace their own code so
+/// a repaired scene clears its highlight without erasing another subsystem's
+/// finding. The resource is intentionally separate from [`RuntimeFaults`]: a
+/// missing camera contract should reject presentation, but it is not a NaN
+/// physics failure.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct RuntimeDiagnostics {
+    pub findings: Vec<RuntimeDiagnostic>,
+}
+
+impl RuntimeDiagnostics {
+    /// Replace all findings owned by `producer` and return the changed state.
+    pub fn replace_producer(
+        &mut self,
+        producer: impl Into<String>,
+        findings: impl IntoIterator<Item = RuntimeDiagnostic>,
+    ) {
+        let producer = producer.into();
+        self.findings.retain(|finding| finding.producer != producer);
+        self.findings.extend(
+            findings
+                .into_iter()
+                .filter(|finding| finding.producer == producer),
+        );
+    }
+
+    pub fn clear(&mut self) {
+        self.findings.clear();
+    }
+}
+
+/// Scene lifecycle owner for non-terminal diagnostics.
+pub fn clear_runtime_diagnostics(mut diagnostics: ResMut<RuntimeDiagnostics>) {
+    diagnostics.clear();
+}
+
 /// The first terminal runtime failure in the current scene.
 #[derive(Debug, Clone)]
 pub struct RuntimeFault {
@@ -77,5 +146,37 @@ mod tests {
 
         faults.clear();
         assert!(!faults.active());
+    }
+
+    #[test]
+    fn diagnostics_replace_only_their_own_producer() {
+        let mut diagnostics = RuntimeDiagnostics::default();
+        diagnostics.replace_producer(
+            "camera",
+            [RuntimeDiagnostic {
+                code: "camera-contract".to_string(),
+                severity: DiagnosticSeverity::Error,
+                producer: "camera".to_string(),
+                subject: "scene-camera".to_string(),
+                message: "camera missing".to_string(),
+            }],
+        );
+        diagnostics.replace_producer(
+            "physics",
+            [RuntimeDiagnostic {
+                code: "physics-frame".to_string(),
+                severity: DiagnosticSeverity::Error,
+                producer: "physics".to_string(),
+                subject: "world".to_string(),
+                message: "frame missing".to_string(),
+            }],
+        );
+
+        diagnostics.replace_producer("camera", std::iter::empty());
+        assert_eq!(diagnostics.findings.len(), 1);
+        assert_eq!(diagnostics.findings[0].producer, "physics");
+
+        diagnostics.clear();
+        assert!(diagnostics.findings.is_empty());
     }
 }

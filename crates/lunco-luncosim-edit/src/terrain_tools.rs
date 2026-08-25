@@ -23,6 +23,7 @@
 use bevy::input::mouse::MouseWheel;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use big_space::prelude::CellCoord;
 use lunco_render::SceneCamera;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
@@ -173,7 +174,8 @@ pub fn update_terrain_brush_ghost(
         (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
         (With<Camera3d>, With<SceneCamera>),
     >,
-    windows: Query<&Window>,
+    viewport: Res<lunco_core::SceneViewport>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     mut q_ghost: Query<
         (
@@ -202,16 +204,17 @@ pub fn update_terrain_brush_ghost(
         return;
     }
 
-    // Ray through the ACTIVE window camera (not merely the first Camera3d).
-    let Some((camera, cam_tf)) = cameras
-        .iter()
-        .find(|(cam, _, target)| {
-            cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
-        })
-        .map(|(cam, tf, _)| (cam, tf))
-    else {
+    // The viewport owns presentation selection. Query order is not a camera
+    // contract, and sensor/RTT cameras may also be active.
+    let Some(camera_entity) = viewport.active_camera else {
         return;
     };
+    let Ok((camera, cam_tf, target)) = cameras.get(camera_entity) else {
+        return;
+    };
+    if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        return;
+    }
     let Some(window) = windows.iter().next() else {
         return;
     };

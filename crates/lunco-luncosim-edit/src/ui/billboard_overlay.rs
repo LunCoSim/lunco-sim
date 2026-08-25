@@ -64,7 +64,7 @@ pub fn draw_billboard_overlay(
     )>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<SceneCamera>)>,
     surface_pose: lunco_celestial::SurfacePoseQuery,
-    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    scene_viewport: Res<lunco_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
@@ -74,12 +74,18 @@ pub fn draw_billboard_overlay(
     }
     // A hidden workbench scene must not leave one frame of screen-space labels
     // behind while the camera reconciler turns its window camera off.
-    if scene_viewport.is_some_and(|viewport| !viewport.visible) {
+    if !scene_viewport.visible {
         return;
     }
-    let Some((camera, cam_gtf)) = q_camera.iter().find(|(c, _)| c.is_active) else {
+    let Some(camera_entity) = scene_viewport.active_camera else {
         return;
     };
+    let Ok((camera, cam_gtf)) = q_camera.get(camera_entity) else {
+        return;
+    };
+    if !camera.is_active {
+        return;
+    }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
     let clip_rect = panel_rects

@@ -32,7 +32,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::link::LinkState;
 use lunco_core::coords::{world_pose, GridPos};
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
-use lunco_core::{GlobalEntityId, ScriptParams};
+use lunco_core::{GlobalEntityId, SceneViewport, ScriptParams};
 use lunco_render::{CommunicationLineSettings, SceneCamera};
 
 /// The `info:id` the beam part authors.
@@ -163,13 +163,15 @@ fn beam_len(
 fn camera_distances<F: bevy::ecs::query::QueryFilter>(
     source_pos: GridPos,
     peer_pos: GridPos,
-    q_cam: &Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
+    viewport: Option<&SceneViewport>,
+    q_cam: &Query<&Camera, (With<Camera3d>, With<SceneCamera>)>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(f64, f64)> {
-    let (_, cam) = q_cam.iter().find(|(c, _)| c.is_active)?;
-    let (camera_pos, _) = world_pose(cam, q_parents, q_grids, q_spatial).ok()?;
+    let camera = viewport?.active_camera?;
+    q_cam.get(camera).ok()?.is_active.then_some(())?;
+    let (camera_pos, _) = world_pose(camera, q_parents, q_grids, q_spatial).ok()?;
     Some((
         (camera_pos.0 - source_pos.0).length(),
         (camera_pos.0 - peer_pos.0).length(),
@@ -236,7 +238,8 @@ fn aim_link_beams(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<LinkBeamInstance>>,
-    q_cam: Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
+    q_cam: Query<&Camera, (With<Camera3d>, With<SceneCamera>)>,
+    viewport: Option<Res<SceneViewport>>,
 ) {
     for (co, inst, mut tf) in &mut q_beams {
         // A cached peer can outlive its entity between reconciles. Skip rather
@@ -255,7 +258,15 @@ fn aim_link_beams(
         let dir_local = (nrot.0.inverse() * (world_dir / dist)).as_vec3();
         // Measured per beam rather than cached on the instance: the camera moves
         // every frame, which is exactly the cadence this system already runs at.
-        let camera_dists = camera_distances(npos, ppos, &q_cam, &q_parents, &q_grids, &q_spatial);
+        let camera_dists = camera_distances(
+            npos,
+            ppos,
+            viewport.as_deref(),
+            &q_cam,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        );
         let len = beam_len(
             dist,
             inst.near_m,
@@ -329,7 +340,8 @@ fn reconcile_link_beams(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_cam: Query<(&Camera, Entity), (With<Camera3d>, With<SceneCamera>)>,
+    q_cam: Query<&Camera, (With<Camera3d>, With<SceneCamera>)>,
+    viewport: Option<Res<SceneViewport>>,
 ) {
     if !settings.show {
         for (beam, _, _) in &q_beams {
@@ -543,8 +555,15 @@ fn reconcile_link_beams(
                 continue;
             }
             let dir_local = (nrot_inv * (world_dir / dist)).as_vec3();
-            let camera_dists =
-                camera_distances(npos, ppos, &q_cam, &q_parents, &q_grids, &q_spatial);
+            let camera_dists = camera_distances(
+                npos,
+                ppos,
+                viewport.as_deref(),
+                &q_cam,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            );
             let len = beam_len(dist, nb.near_m, nb.stub, nb.stub_cam_frac, camera_dists);
             if !len.is_finite() || len <= 0.0 {
                 continue;

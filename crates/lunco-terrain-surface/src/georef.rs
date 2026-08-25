@@ -69,3 +69,35 @@ impl TerrainGeoref {
         (self.meters_per_unit - 1.0).abs() < 1e-6
     }
 }
+
+/// The standard-USD geometry that owns a site scene's flat local surface.
+///
+/// This is projected only when the terrain prim explicitly authors
+/// `lunco:terrain:surfaceRole = "flat-site"`. The dimensions come from the
+/// prim's `UsdGeomCube::size` and local xform, so the globe handoff never
+/// guesses a footprint or applies a render-only depth bias.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq)]
+#[reflect(Component)]
+pub struct FlatSiteSurface {
+    /// Half-width along the site ENU +X axis, in metres.
+    pub half_extent_x_m: f64,
+    /// Half-width along the site ENU -Z axis, in metres.
+    pub half_extent_z_m: f64,
+    /// Local site-frame centre of the authored cube, in metres.
+    pub center_x_m: f64,
+    pub center_z_m: f64,
+    /// Top face height in the site ENU frame, in metres.
+    pub top_y_m: f64,
+}
+
+impl FlatSiteSurface {
+    pub fn is_valid(&self) -> bool {
+        self.half_extent_x_m.is_finite()
+            && self.half_extent_x_m > 0.0
+            && self.half_extent_z_m.is_finite()
+            && self.half_extent_z_m > 0.0
+            && self.center_x_m.is_finite()
+            && self.center_z_m.is_finite()
+            && self.top_y_m.is_finite()
+    }
+}

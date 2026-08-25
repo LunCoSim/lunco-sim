@@ -66,6 +66,7 @@ def Xform "LanderTest" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
+        token lunco:terrain:surfaceRole = "flat-site"
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
@@ -104,6 +105,16 @@ def Xform "LanderTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # The initial presentation is authored explicitly. Avatar presence alone
+    # must never choose the window camera.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
+    }
 
     # ── The powered-descent lander ────────────────────────────────────────────
     # TWO arcs, and the second one is the mission. The airframe — engine, altimeter,

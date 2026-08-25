@@ -162,12 +162,15 @@ mod tests {
 
         let root = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         let inertial = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(75_000_000, -4_000, 11_000),
                 Transform::from_rotation(Quat::from_rotation_z(0.4)),
                 ChildOf(root),
@@ -179,7 +182,7 @@ mod tests {
                 ReferenceFrame::BodyFixed {
                     body: crate::ephemeris_id::MOON,
                 },
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::new(192_000, 2_000, -8_000),
                 Transform::from_rotation(Quat::from_rotation_y(0.7)),
                 ChildOf(inertial),
@@ -188,7 +191,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::IDENTITY,
                 ChildOf(body_grid),
@@ -275,13 +278,16 @@ mod tests {
             .add_systems(First, update_reference_frame_index);
         let root = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         app.world_mut().spawn((
             ReferenceFrame::BodyFixed {
                 body: crate::ephemeris_id::MOON,
             },
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::IDENTITY,
             ChildOf(root),

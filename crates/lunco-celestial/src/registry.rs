@@ -566,7 +566,7 @@ mod tests {
         };
         let root = app
             .world_mut()
-            .spawn((world_frame, Grid::new(2_000.0, 100.0)))
+            .spawn((world_frame, lunco_core::WorldGridConfig::default().grid()))
             .id();
         let root_grid = app.world().get::<Grid>(root).unwrap();
         let origin = DVec3::new(384_000_000.25, -5.0, 7.0);
@@ -574,7 +574,7 @@ mod tests {
         let axes = bevy::math::DQuat::from_rotation_y(0.5);
         app.world_mut().spawn((
             lunar_frame,
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             cell,
             Transform::from_translation(translation).with_rotation(axes.as_quat()),
             ChildOf(root),

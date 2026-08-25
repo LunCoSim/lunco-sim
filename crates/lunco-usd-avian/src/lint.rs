@@ -32,6 +32,8 @@
 //!   bodies: [ #{ path, type, kinematic, simulated, collider, subtree_collider,
 //!                host_body, jointed, collider_min, collider_max } ],
 //!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
+//!   telemetry_declarations: [ #{ path, targets[], target_exists,
+//!                                direct_surface, source_valid } ],
 //! }
 //! ```
 //!
@@ -256,6 +258,45 @@ fn vec3_h(v: Option<Vec3>) -> H {
     }
 }
 
+/// Generic USD facts for the authored telemetry contract. The runtime accepts
+/// an omitted target only when the declaration prim itself publishes the
+/// requested port; a metadata Scope must name its measured prim explicitly.
+fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec<H> {
+    let known: HashSet<String> = paths.iter().map(ToString::to_string).collect();
+    paths
+        .iter()
+        .filter(|path| reader.boolean(path, "lunco:telemetry") == Some(true))
+        .map(|path| {
+            let targets: Vec<String> = reader
+                .rel_targets(path, "lunco:telemetry:target")
+                .into_iter()
+                .map(|target| target.to_string())
+                .collect();
+            let port = reader.text(path, "lunco:telemetry:port");
+            let reflect = reader.text(path, "lunco:telemetry:reflect");
+            let direct_surface = port.as_deref().is_some_and(|port| {
+                !port.is_empty()
+                    && reader.attr_names(path).iter().any(|name| {
+                        name == &format!("outputs:{port}") || name == &format!("inputs:{port}")
+                    })
+            });
+            let source_valid = port.as_ref().is_some_and(|value| !value.is_empty())
+                || reflect.as_ref().is_some_and(|value| !value.is_empty());
+            let target_exists = targets.iter().all(|target| known.contains(target));
+            H::map([
+                ("path", H::str(path.to_string())),
+                (
+                    "targets",
+                    H::Array(targets.into_iter().map(H::str).collect()),
+                ),
+                ("target_exists", H::Bool(target_exists)),
+                ("direct_surface", H::Bool(direct_surface)),
+                ("source_valid", H::Bool(source_valid)),
+            ])
+        })
+        .collect()
+}
+
 /// Everything policy needs to judge a stage's physics authoring.
 ///
 /// Pure — no ECS, no side effects — so it can be built from a live scene, from
@@ -263,6 +304,7 @@ fn vec3_h(v: Option<Vec3>) -> H {
 /// then get identical findings from identical rules.
 pub fn physics_facts(reader: &StageView<'_>) -> H {
     let paths: Vec<SdfPath> = reader.prim_paths();
+    let telemetry_declarations = telemetry_declaration_facts(reader, &paths);
 
     let mut bodies: HashSet<String> = HashSet::new();
     let mut joint_paths: Vec<SdfPath> = Vec::new();
@@ -529,6 +571,21 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 Err(error) => (Vec::new(), error),
             };
             let member_names: HashSet<String> = members.iter().map(ToString::to_string).collect();
+            let (synthesizer, synthesizer_error) =
+                if reader.has_api_schema(p, "LunCoDomainSynthesisAPI") {
+                    (
+                        reader
+                            .text(p, "lunco:synthesizer")
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or_default(),
+                        String::new(),
+                    )
+                } else {
+                    match lunco_usd_bevy::program::derive_synthesizer_name(reader, p) {
+                        Ok(name) => (name, String::new()),
+                        Err(error) => (String::new(), error),
+                    }
+                };
             let mut modelica_members = HashSet::new();
             let mut graph_edges = Vec::<(String, String)>::new();
             let mut dangling_connectors = Vec::new();
@@ -672,10 +729,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 // value is the documented acausal-network synthesizer; an
                 // authored name is a different domain contract and must not
                 // be judged by the generic Modelica cardinality rules below.
-                (
-                    "synthesizer",
-                    H::str(reader.text(p, "lunco:synthesizer").unwrap_or_default()),
-                ),
+                ("synthesizer", H::str(synthesizer)),
+                ("synthesizer_error", H::str(synthesizer_error)),
                 (
                     "units",
                     H::Array(
@@ -839,6 +894,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             H::Array(unsupported_program_prims),
         ),
         ("connector_programs", H::Array(connector_programs)),
+        ("telemetry_declarations", H::Array(telemetry_declarations)),
     ])
 }
 
@@ -951,6 +1007,24 @@ mod tests {
             &H::Array(Vec::new()),
             "a bare `connectors:p` DECLARES an interface; nothing is wired yet"
         );
+    }
+
+    #[test]
+    fn targetless_metadata_telemetry_has_no_direct_surface() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Scope \"Telemetry\" ( prepend apiSchemas = [\"LunCoTelemetryAPI\"] )\n\
+             {\n\
+                 bool lunco:telemetry = true\n\
+                 token lunco:telemetry:port = \"ghost\"\n\
+             }\n",
+        );
+        let declarations = entries(&f, "telemetry_declarations");
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(field(&declarations[0], "targets"), &H::Array(Vec::new()));
+        assert_eq!(field(&declarations[0], "target_exists"), &H::Bool(true));
+        assert_eq!(field(&declarations[0], "direct_surface"), &H::Bool(false));
+        assert_eq!(field(&declarations[0], "source_valid"), &H::Bool(true));
     }
 
     /// DECLARED and WIRED must be separable, or the rule that reads them cannot
@@ -1213,5 +1287,45 @@ def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
             field(body(&bodies, "/Rig/Prop"), "simulated"),
             &H::Bool(false)
         );
+    }
+
+    #[test]
+    fn empty_collection_uses_the_default_synthesizer_without_an_error() {
+        let f = facts(
+            r#"#usda 1.0
+               def Xform "Empty" ( prepend apiSchemas = ["CollectionAPI:components"] )
+               {
+                   uniform token collection:components:expansionRule = "explicitOnly"
+               }
+            "#,
+        );
+        let scopes = entries(&f, "network_scopes");
+        let scope = scopes
+            .iter()
+            .find(|scope| field(scope, "path") == &H::str("/Empty"))
+            .expect("empty collection fact");
+        assert_eq!(field(scope, "synthesizer"), &H::str("acausal-network"));
+        assert_eq!(field(scope, "synthesizer_error"), &H::str(""));
+    }
+
+    #[test]
+    fn force_actuator_collection_uses_the_wrench_synthesizer() {
+        let f = facts(
+            r#"#usda 1.0
+               def Scope "Actuators" ( prepend apiSchemas = ["CollectionAPI:components"] )
+               {
+                   uniform token collection:components:expansionRule = "explicitOnly"
+                   prepend rel collection:components:includes = [</Actuators/Nozzle>]
+                   def Cube "Nozzle" ( prepend apiSchemas = ["LunCoForceActuatorAPI"] ) {}
+               }
+            "#,
+        );
+        let scopes = entries(&f, "network_scopes");
+        let scope = scopes
+            .iter()
+            .find(|scope| field(scope, "path") == &H::str("/Actuators"))
+            .expect("actuator collection fact");
+        assert_eq!(field(scope, "synthesizer"), &H::str("actuator-wrench"));
+        assert_eq!(field(scope, "synthesizer_error"), &H::str(""));
     }
 }

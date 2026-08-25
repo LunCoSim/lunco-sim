@@ -117,12 +117,17 @@ pub fn scale_screen_constant_markers(
     // The ACTIVE scene camera, for the same reason `update_globe_lod` filters on
     // one: an offscreen preview camera picked by iteration order would resize
     // every marker in the world to suit a view nobody is looking through.
-    let Some((cam_entity, _, cam_cell, cam_tf)) = q_camera.iter().find(|(_, c, _, _)| c.is_active)
-    else {
+    let active_cameras: Vec<_> = q_camera.iter().filter(|(_, c, _, _)| c.is_active).collect();
+    let [(cam_entity, _, cam_cell, cam_tf)] = active_cameras.as_slice() else {
         return;
     };
     let Ok(cam) = lunco_core::coords::world_position_seeded(
-        cam_entity, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+        *cam_entity,
+        *cam_cell,
+        *cam_tf,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
     ) else {
         return;
     };

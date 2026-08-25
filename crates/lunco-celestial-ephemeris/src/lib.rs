@@ -8,9 +8,9 @@
 //! `celestial-eop-data`'s `build.rs` shells out to the Unix `date`
 //! command.
 //!
-//! Apps that need real planetary positions add [`EphemerisPlugin`],
-//! which overwrites the `EphemerisResource` installed by
-//! `lunco_celestial::CelestialPlugin`.
+//! Apps that need real planetary positions add [`EphemerisPlugin`]. The
+//! celestial core owns the required provider contract; this plugin supplies
+//! the production VSOP/ELP implementation for that contract.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -535,8 +535,8 @@ mod frame_tests {
     }
 }
 
-/// Drop into an app to replace the NoOp ephemeris provider installed by
-/// `CelestialPlugin` with the full VSOP/ELP/JPL implementation.
+/// Install the full VSOP/ELP/JPL implementation for the celestial provider
+/// contract.
 ///
 /// ```ignore
 /// app.add_plugins(lunco_celestial::CelestialPlugin)

@@ -28,6 +28,7 @@ use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_core::HorizonShadowTerrain;
 use lunco_environment::horizon::{pick_sun, HorizonShadowCacheConfig, SunQuery};
+use lunco_environment::SunRenderState;
 use lunco_environment::{
     install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
 };
@@ -227,6 +228,7 @@ pub(crate) fn mark_streamed_horizon_stale(
 pub(crate) fn wire_tile_shadow_cache(
     mut commands: Commands,
     cfg: Res<HorizonShadowCacheConfig>,
+    render_sun: Option<Res<SunRenderState>>,
     terrains: Query<
         (
             Entity,
@@ -242,23 +244,26 @@ pub(crate) fn wire_tile_shadow_cache(
     // STRUCTURAL basis: a body's reflected fill is authored under that body's
     // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
     // is left is the scene's sun, so there is nothing to rank.
-    let sun = pick_sun(&sun).map(|(sun_gt, _, _)| sun_gt);
+    let sun = pick_sun(&sun);
+    let sun_world = render_sun
+        .as_deref()
+        .and_then(|state| state.direction_to_sun_world);
     let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, cache, wired) in &terrains {
         let (image, on) = match cache {
             Some(c) => {
-                let on = sun.is_some_and(|sun_gt| {
-                    let to_sun_world: Vec3 = sun_gt.back().into();
-                    let sun_local = terrain_gt
-                        .affine()
-                        .inverse()
-                        .transform_vector3(to_sun_world)
-                        .normalize_or_zero();
-                    cache_quality_valid
-                        && cfg.enabled
-                        && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
-                });
+                let on = sun.is_some()
+                    && sun_world.is_some_and(|to_sun_world| {
+                        let sun_local = terrain_gt
+                            .affine()
+                            .inverse()
+                            .transform_vector3(to_sun_world)
+                            .normalize_or_zero();
+                        cache_quality_valid
+                            && cfg.enabled
+                            && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
+                    });
                 (Some(c.image.clone()), if on { 1.0 } else { 0.0 })
             }
             None => (wired.map(|w| w.image.clone()), 0.0),

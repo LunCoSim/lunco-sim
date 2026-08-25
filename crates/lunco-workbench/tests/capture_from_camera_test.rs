@@ -2,7 +2,7 @@
 //! tool fires. The load-bearing case is the B3 fix: when `target: Some(vessel)`
 //! and the vessel has NO `Camera3d` descendant, the observer must NOT silently
 //! capture the primary window (that would photograph the wrong viewport);
-//! it warns + no-ops.
+//! it reports a structured error and no-ops.
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::Screenshot;
@@ -38,10 +38,9 @@ fn vessel_with_no_camera_does_not_capture() {
 }
 
 #[test]
-fn no_target_falls_back_to_primary_window() {
-    // The intended fallback: `target: None` captures the primary window
-    // (the active-scene-camera case). Even with no active camera, the None
-    // branch proceeds to a primary-window screenshot.
+fn no_target_without_an_active_viewport_camera_does_not_capture() {
+    // No active viewport camera is an invalid presentation contract. The
+    // capture must not substitute the primary window.
     let mut app = App::new();
     wire(&mut app);
     app.world_mut().trigger(CaptureFromCamera { target: None });
@@ -51,8 +50,5 @@ fn no_target_falls_back_to_primary_window() {
         .query::<&Screenshot>()
         .iter(app.world())
         .count();
-    assert_eq!(
-        screenshots, 1,
-        "target: None falls back to a primary-window capture"
-    );
+    assert_eq!(screenshots, 0, "missing active camera must refuse capture");
 }

@@ -212,8 +212,7 @@ pub fn produce_usd_canvas(
         .active_schema_root
         .as_ref()
         .filter(|root| roots.contains(root))
-        .cloned()
-        .or_else(|| roots.first().cloned());
+        .cloned();
     // The Connections view is an explicit authored boundary projection. The
     // collector above remains complete so the same USD topology stays
     // available to simulation, diagnostics, and future full-graph views.
@@ -508,7 +507,9 @@ impl Panel for UsdCanvasPanel {
                         }
                     });
             });
-            if state.active_schema_root.as_deref() != Some(requested_root.as_str()) {
+            if !requested_root.is_empty()
+                && state.active_schema_root.as_deref() != Some(requested_root.as_str())
+            {
                 let (nodes, wires) = project_schema(
                     state.source_nodes.clone(),
                     state.source_wires.clone(),
@@ -519,6 +520,13 @@ impl Panel for UsdCanvasPanel {
                 state.topo_hash = topology_hash(&nodes, &wires);
                 state.active_schema_root = Some(requested_root);
                 state.needs_fit = state.canvas.scene.bounds().is_some();
+            }
+
+            if state.active_schema_root.is_none() {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Select an authored schema to inspect its connections.");
+                });
+                return;
             }
 
             if state.canvas.scene.node_count() == 0 {

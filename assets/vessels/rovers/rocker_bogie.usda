@@ -1057,6 +1057,18 @@ def Xform "RockerBogie" (
     # Each wheel authors its `inputs:drive` connection to one of the two drive-bank
     # ports. The channel assignment is USD topology, not an index heuristic.
 
+    # The physical battery is a stable assembly child. The power variant below
+    # selects the electrical network, not the existence of the part; keeping
+    # this reference outside the variant preserves the component's composed
+    # children and relationships when a scene overrides its inputs.
+    def Xform "Battery" (
+        prepend references = @lunco://components/power/battery.usda@</Battery>
+    )
+    {
+        double3 xformOp:translate = (0, 0.35, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
     # is today's drive-forever behavior. `battery` composes the reusable
@@ -1068,16 +1080,12 @@ def Xform "RockerBogie" (
     # capability by changing suspension.
     variantSet "power" = {
         "infinite" {
+            over "Battery" (
+                delete references = @lunco://components/power/battery.usda@</Battery>
+            ) {}
         }
 
         "battery" {
-            def Xform "Battery" (
-                prepend references = @lunco://components/power/battery.usda@</Battery>
-            )
-            {
-                double3 xformOp:translate = (0, 0.35, 0)
-                uniform token[] xformOpOrder = ["xformOp:translate"]
-            }
             def Scope "Electrical" (
                 prepend apiSchemas = ["CollectionAPI:components"]
             )

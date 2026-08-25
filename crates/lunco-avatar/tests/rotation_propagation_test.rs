@@ -53,7 +53,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
         let root = commands
             .spawn((
                 BigSpace::default(),
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 GlobalTransform::default(),
             ))
             .id();
@@ -63,7 +63,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
                 ReferenceFrame::EclipticJ2000 {
                     center: lunco_celestial::ephemeris_id::SUN,
                 },
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::default(),
                 Transform::default(),
                 GlobalTransform::default(),

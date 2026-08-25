@@ -18,7 +18,7 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 | `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`, `TerrainShaderMode`) |
 | `terrain_layers` | composable USD-prim layer stack (`TerrainLayerStack`, `TerrainLayer`, parser registry) — craters / rocks / shader |
 | `derived_layers` | off-thread surface/normal map bake from the DEM |
-| `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` (lat/lon/height, metersPerUnit) |
+| `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` plus `FlatSiteSurface` derived from an explicitly designated standard USD site cube |
 | `terrain` | the DEM terrain surface + spawn requests (`DemTerrainSurface`, `DemTerrainRequest`, `SpawnDemTerrain`) |
 | `query` | terrain-height queries (`TerrainHeightProvider`, `register_terrain_queries`) |
 | `plugin` | `TerrainSurfacePlugin` (wires the full DEM → streaming → collider pipeline) |

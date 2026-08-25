@@ -12,7 +12,6 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml, ReachedWaypoints};
-use lunco_core::paths::prim_path_matches;
 use lunco_core::{
     on_command, register_commands, Command, ControlBinding, GlobalEntityId, InputPorts, Severity,
     TelemetryEvent, TelemetryValue, TriggerZone,
@@ -372,10 +371,7 @@ pub fn mark_reached_waypoints_on_enter(
                             };
                             let mut targets = Vec::new();
                             collect_targets(&value, &mut targets);
-                            if !targets
-                                .iter()
-                                .any(|target| prim_path_matches(target, marker_path))
-                            {
+                            if !targets.iter().any(|target| target == marker_path) {
                                 continue;
                             }
                             arrivals.push(Arrival::Authored {
@@ -461,8 +457,8 @@ fn authored_waypoint_is_next(
 ) -> bool {
     targets
         .iter()
-        .find(|target| !reached.iter().any(|done| prim_path_matches(done, target)))
-        .is_some_and(|next| prim_path_matches(next, candidate))
+        .find(|target| !reached.iter().any(|done| done == *target))
+        .is_some_and(|next| next.as_str() == candidate)
 }
 
 fn runtime_waypoint_is_next(index: usize, reached: &std::collections::HashSet<String>) -> bool {
@@ -544,6 +540,19 @@ mod tests {
 
         assert!(!authored_waypoint_is_next(&targets, &reached, "/Route/W0"));
         assert!(authored_waypoint_is_next(&targets, &reached, "/Route/W1"));
+    }
+
+    #[test]
+    fn authored_arrival_requires_exact_composed_prim_identity() {
+        let targets = vec!["/World/Route/W0".to_string()];
+        let reached = HashSet::from(["/Route/W0".to_string()]);
+
+        assert!(!authored_waypoint_is_next(&targets, &reached, "/Route/W0"));
+        assert!(authored_waypoint_is_next(
+            &targets,
+            &reached,
+            "/World/Route/W0"
+        ));
     }
 
     #[test]

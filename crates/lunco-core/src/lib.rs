@@ -59,14 +59,16 @@ pub mod mobility;
 pub mod tools;
 
 pub mod pacing;
-pub mod paths;
 
 /// Run-condition effectiveness — see [`gate::tracked`].
 pub mod gate;
 
 pub use architecture::*;
 pub use derived::RebuildOnChange;
-pub use faults::{RuntimeFault, RuntimeFaults};
+pub use faults::{
+    clear_runtime_diagnostics, DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics,
+    RuntimeFault, RuntimeFaults,
+};
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
@@ -230,18 +232,19 @@ impl std::str::FromStr for GlobalEntityId {
     }
 }
 
-/// Marker component for an avatar/entity in the simulation — this peer's
-/// ([`LocalAvatar`]) or, in a networked session, another user's
-/// ([`RemoteAvatar`]).
+/// Marker component for an embodiment in the simulation. Ownership and input
+/// eligibility are separate qualifiers: [`LocalAvatar`] marks this process's
+/// interactive embodiment and [`RemoteAvatar`] marks another session's
+/// replicated embodiment.
 #[derive(Component)]
 pub struct Avatar;
 
-/// **This peer's own avatar — there is exactly one, and that is enforced here.**
+/// **The one local interactive embodiment, when a client has one.**
 ///
-/// One process, one user, one avatar. Other users' avatars exist only in a
-/// networked session, belong to a session that is not this one, and are marked
-/// [`RemoteAvatar`] instead; they are a different path end to end and never
-/// acquire this marker.
+/// At most one entity in a process may carry this marker, and that invariant is
+/// enforced here. A headless/API or mission-control process can have no local
+/// avatar at all. Other sessions' embodiments belong to [`RemoteAvatar`] and
+/// never acquire this marker.
 ///
 /// # Why the invariant is a component hook
 ///
@@ -257,15 +260,16 @@ pub struct Avatar;
 ///
 /// The hook runs on EVERY insert, whatever the path, so a new spawner cannot
 /// forget it — there is no code to remember. The newest claimant wins (a scene
-/// that authors an avatar is stating what the user should be looking through),
-/// and the previous holder loses both markers, so it stops being an avatar
-/// rather than lingering as a second one.
+/// that authors an avatar is stating what the local operator should be looking
+/// through),
+/// and the previous holder loses both markers, so it stops being the local
+/// interactive embodiment rather than lingering as a second one.
 #[derive(Component, Clone, Copy, Debug, Default)]
 #[component(on_insert = local_avatar_claimed, on_remove = local_avatar_released)]
 pub struct LocalAvatar;
 
-/// Another user's avatar in a networked session, keyed by the session that owns
-/// it. Never this peer's — inserting it drops [`LocalAvatar`], so the two can
+/// Another session's replicated avatar, keyed by the session that owns it. Never
+/// this process's local embodiment — inserting it drops [`LocalAvatar`], so the two can
 /// never describe one entity.
 ///
 /// Spawned only by the networking layer, from replicated state. Local input
@@ -278,13 +282,13 @@ pub struct RemoteAvatar {
     pub session: u64,
 }
 
-/// The one entity currently holding [`LocalAvatar`], or `None` before the first
-/// avatar exists.
+/// The one entity currently holding [`LocalAvatar`], or `None` when no local
+/// interactive embodiment exists.
 ///
-/// A resource, so "which entity is the avatar" is a single slot the type system
-/// keeps singular, rather than a query that might return two and a convention
-/// that says it should not. Maintained by the hooks below; read it (or query
-/// `Single<_, With<LocalAvatar>>`) — never write it.
+/// This is a derived lookup index, not a second ownership model. The component
+/// hook is authoritative; it maintains this slot so consumers can resolve the
+/// local entity without scanning or selecting by ECS entity order. Read it (or
+/// query `Single<_, With<LocalAvatar>>`) — never write it.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TheLocalAvatar(pub Option<Entity>);
 
@@ -386,6 +390,21 @@ impl Default for SceneViewport {
             rect: None,
         }
     }
+}
+
+/// Ordering boundary for the main presentation viewport.
+///
+/// The workbench publishes layout data in [`SceneViewportSet::Publish`]. The
+/// USD/render camera owner then reconciles that data in
+/// [`SceneViewportSet::Reconcile`] before Bevy updates camera projections. The
+/// shared set is the cross-crate schedule contract; neither contributor needs
+/// to depend on the other's implementation crate.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SceneViewportSet {
+    /// Publish visibility and layout data into [`SceneViewport`].
+    Publish,
+    /// Reconcile the explicit viewport binding into render-camera state.
+    Reconcile,
 }
 
 /// Defines a spacecraft entity with its ephemeris and physical constraints.
@@ -718,7 +737,7 @@ impl CursorModeActive<'_> {
 /// focus, so Backspace typed into a text box edits text rather than backing out.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CancelIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, With<Avatar>>,
+    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
     egui_focus: Res<'w, EguiFocus>,
 }
 
@@ -741,7 +760,7 @@ impl CancelIntent<'_, '_> {
 /// focused text editor receives Delete normally.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct DeleteSelectionIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, With<Avatar>>,
+    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
     egui_focus: Res<'w, EguiFocus>,
 }
 
@@ -950,6 +969,7 @@ impl Plugin for LunCoCorePlugin {
         // heavier LunCoCorePlugin (log + big-space). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
+        app.add_systems(SceneTeardown, clear_runtime_diagnostics);
         // Runtime subsystem toggles (progressive-fidelity substrate) +
         // `SetSubsystemEnabled` command.
         subsystems::build_subsystems(app);
@@ -1016,6 +1036,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<exposure::EngineExposures>()
         .init_resource::<exposure::ExposureRefresh>()
         .init_resource::<RuntimeFaults>()
+        .init_resource::<RuntimeDiagnostics>()
         .init_resource::<pacing::SimulationBarrier>()
         .init_resource::<pacing::SimulationBarrierParticipants>();
 }

@@ -210,6 +210,11 @@ impl PhysicsHolds {
     pub const CINEMATIC: &'static str = "cinematic";
     /// A terminal runtime fault has invalidated the simulation state.
     pub const SAFETY_FAILURE: &'static str = "runtime-safety-failure";
+    /// The explicitly bound Avian frame is missing or a physical entity is
+    /// disconnected from it. This is raised by the coordinate-system owner
+    /// before the solver is admitted, so invalid positions cannot accumulate
+    /// force or contact state while the scene is being diagnosed.
+    pub const FRAME_CONTRACT: &'static str = "physics-frame-contract";
 
     /// Is any subsystem holding physics?
     #[inline]

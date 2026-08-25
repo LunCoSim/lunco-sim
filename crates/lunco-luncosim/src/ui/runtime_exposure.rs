@@ -16,6 +16,7 @@ use bevy_hui::prelude::{
     TemplateProperties, UiId,
 };
 use lunco_core::exposure::EngineExposures;
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 use lunco_workbench::{PanelId, PanelRects, ScenePickGate};
 use serde::Deserialize;
@@ -826,14 +827,34 @@ fn runtime_ui_is_allowed(
 /// part of the captured render target rather than editor chrome.
 pub(crate) fn bind_runtime_ui_to_camera(
     mut commands: Commands,
+    viewport: Option<Res<SceneViewport>>,
     cameras: Query<(Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>)>,
     roots: Query<(Entity, Option<&UiTargetCamera>), With<RuntimeUiSurface>>,
 ) {
-    let camera = cameras
+    // Windowed runtime UI is owned by the single egui host. Windowless
+    // recording has no host and therefore uses the viewport's explicitly
+    // resolved authored scene camera. Neither branch selects by ECS order.
+    let mut egui_cameras = cameras
         .iter()
-        .find(|(_, _, is_egui, _)| *is_egui)
-        .or_else(|| cameras.iter().find(|(_, _, _, is_scene)| *is_scene))
+        .filter(|(_, _, is_egui, _)| *is_egui)
         .map(|(entity, _, _, _)| entity);
+    let egui_camera = match (egui_cameras.next(), egui_cameras.next()) {
+        (None, None) => None,
+        (Some(camera), None) => Some(camera),
+        (Some(_), Some(_)) => {
+            error!("runtime UI binding refused: multiple PrimaryEguiContext cameras");
+            return;
+        }
+        (None, Some(_)) => unreachable!("an iterator cannot yield a second item without a first"),
+    };
+    let camera = egui_camera.or_else(|| {
+        let entity = viewport.as_deref()?.active_camera?;
+        cameras
+            .get(entity)
+            .ok()
+            .filter(|(_, camera, _, is_scene)| *is_scene && camera.is_active)
+            .map(|(entity, _, _, _)| entity)
+    });
     let Some(camera) = camera else {
         return;
     };

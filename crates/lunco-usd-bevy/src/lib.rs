@@ -130,12 +130,11 @@ pub use light::{
 /// system that processes USD prims into Bevy entities with meshes and transforms.
 pub struct UsdBevyPlugin;
 
-/// The authored camera pose is inserted into BigSpace's propagation pipeline,
-/// after floating-origin recentering and before high-precision propagation.
-/// Keeping this as a sibling set of BigSpace's propagation phases is necessary:
-/// `RecenterLargeTransforms` itself is a member of Bevy's `Propagate` set, so a
-/// standalone system cannot be ordered both after that member and before the
-/// containing set.
+/// The authored camera pose and persistent origin projection are inserted into
+/// BigSpace's propagation pipeline before floating-origin recentering and
+/// high-precision propagation. Keeping these systems as sibling sets of
+/// BigSpace's propagation phases is necessary because
+/// `RecenterLargeTransforms` itself is a member of Bevy's `Propagate` set.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 struct CameraPathSet;
 
@@ -239,6 +238,7 @@ impl Plugin for UsdBevyPlugin {
             .init_resource::<lunco_core::TheLocalAvatar>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
+            .init_resource::<camera_switch::CameraContractStatus>()
             // Ph0′: the live canonical stages, built main-thread from each
             // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
             // `NonSend` — holds `!Send` openusd `Stage`s.
@@ -256,8 +256,8 @@ impl Plugin for UsdBevyPlugin {
             .add_observer(light::on_usd_light_added)
             // Active-camera switch (avatar-free): the `SetActiveCamera` command
             // + `KeyC` cycle both fire the internal `ActivateCamera` trigger,
-            // which enforces the one-active-window-camera invariant and
-            // relocates the big_space FloatingOrigin. Works in a static,
+            // which enforces the one-active-window-camera invariant and updates
+            // the persistent BigSpace origin tracker. Works in a static,
             // input-less world (the command path needs neither).
             .add_observer(camera_switch::on_activate_camera)
             .add_observer(camera_switch::on_request_local_avatar_view)
@@ -266,19 +266,24 @@ impl Plugin for UsdBevyPlugin {
             // (bound camera + visibility + rect, written by the switch and the
             // workbench) and actuates it. Runs every frame so an explicitly
             // requested authored camera can be fulfilled after async projection.
-            .add_systems(
-                Update,
+            .add_systems(Update, camera_switch::cycle_active_camera)
+            .configure_sets(
+                PostUpdate,
                 (
-                    camera_switch::retire_presentation_fallback,
-                    camera_switch::cycle_active_camera,
-                    camera_switch::request_initial_avatar_view,
+                    lunco_core::SceneViewportSet::Publish,
+                    lunco_core::SceneViewportSet::Reconcile,
+                )
+                    .chain()
+                    .before(bevy::camera::CameraUpdateSystems),
+            )
+            .add_systems(
+                PostUpdate,
+                (
                     camera_switch::reconcile_scene_viewport
-                        .after(camera_switch::cycle_active_camera)
-                        .after(camera_switch::request_initial_avatar_view),
-                    camera_switch::enforce_one_window_camera
-                        .after(camera_switch::reconcile_scene_viewport),
+                        .in_set(lunco_core::SceneViewportSet::Reconcile)
+                        .before(camera_switch::update_camera_origin),
                     camera_switch::update_camera_selection_status
-                        .after(camera_switch::enforce_one_window_camera),
+                        .after(camera_switch::reconcile_scene_viewport),
                 ),
             )
             .add_systems(
@@ -286,8 +291,7 @@ impl Plugin for UsdBevyPlugin {
                 camera_switch::reset_camera_selection,
             )
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
-            // as a grid-direct follower (so it can host the FloatingOrigin at
-            // full precision). `resolve` rigs it once during load; `follow`
+            // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
             // `!resetXformStack!` detachment. In `Update`, so the reparent has
             // flushed long before `PostUpdate` propagates transforms — a prim
@@ -361,8 +365,7 @@ impl Plugin for UsdBevyPlugin {
                 PostUpdate,
                 CameraPathSet
                     .in_set(bevy::transform::TransformSystems::Propagate)
-                    .after(big_space::prelude::BigSpaceSystems::LocalFloatingOrigins)
-                    .before(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
+                    .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
             )
             .add_systems(
                 PostUpdate,
@@ -371,11 +374,18 @@ impl Plugin for UsdBevyPlugin {
                     camera_path::apply_camera_paths,
                 )
                     .chain()
-                    // The path is the complete pose owner. It must run after
-                    // generic interaction interpolation and BigSpace's local
-                    // recentering, otherwise either writer can leave one
-                    // stale cell-local pose in the extracted render frame.
+                    // The path is the complete pose owner. It runs after
+                    // generic interaction interpolation and before BigSpace's
+                    // recentering so the persistent origin tracker sees the
+                    // same cell-local pose in this frame.
                     .in_set(CameraPathSet),
+            )
+            .add_systems(
+                PostUpdate,
+                camera_switch::update_camera_origin
+                    .in_set(bevy::transform::TransformSystems::Propagate)
+                    .after(CameraPathSet)
+                    .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into
             // a cubemap and bind it to the cameras (`dome.rs`).
@@ -463,9 +473,11 @@ impl Plugin for UsdBevyPlugin {
                         >,
                     ),
                     camera_track::plan_camera_tracks,
+                    camera_switch::validate_authored_camera_contract,
                     camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
                 )
-                    .chain(),
+                    .chain()
+                    .after(sync_usd_visuals),
             );
     }
 }
@@ -4522,16 +4534,15 @@ fn local_transform_at_raw(
 
 /// Canonical local-transform decode via [`local_transform_at`]. An omitted
 /// transform stack is the USD identity; malformed authored data is returned to
-/// the caller instead of becoming identity.
+/// the caller instead of becoming identity. The returned transform is complete:
+/// translation, rotation, and scale are the result of the authored
+/// `xformOpOrder`, after stage-axis and stage-unit conversion.
 pub fn read_transform_from_usd(
     reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
     match local_transform_at(reader, path, 0.0) {
-        Ok(Some(tf)) => Ok(Transform {
-            scale: Vec3::ONE,
-            ..tf
-        }),
+        Ok(Some(tf)) => Ok(tf),
         Ok(None) => Ok(Transform::IDENTITY),
         Err(error) => Err(error),
     }
@@ -7911,6 +7922,16 @@ def Xform "Std"
         let tf = compose_xform_order_at(&reader, &SdfPath::new("/TranslateFirst").unwrap(), 0.0)
             .unwrap()
             .unwrap();
+        assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-5));
+        assert!(tf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
+    }
+
+    #[test]
+    fn shared_transform_reader_preserves_usd_scale() {
+        let __cs = parse(ORDER_SCENE);
+        let reader = __cs.view();
+        let tf =
+            read_transform_from_usd(&reader, &SdfPath::new("/TranslateFirst").unwrap()).unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-5));
         assert!(tf.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
     }

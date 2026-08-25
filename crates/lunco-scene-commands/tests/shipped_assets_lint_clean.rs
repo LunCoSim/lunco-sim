@@ -181,7 +181,30 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must prove composed boundary aliasing is rejected — \
          got {lint_errors:?}"
     );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("telemetry-target-required")),
+        "lint_selftest.usda must prove targetless metadata telemetry is rejected — got {lint_errors:?}"
+    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
+}
+
+#[test]
+fn targetless_metadata_telemetry_is_a_usd_lint_error() {
+    register_usd_lint_policy();
+    let path = assets_dir().join("scenes/tests/lint_selftest.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose lint fixture");
+    let canonical =
+        lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().into_owned());
+    let findings = lunco_usd_avian::lint_stage(&canonical.view());
+    assert!(
+        findings.iter().any(|finding| {
+            finding.rule == "telemetry-target-required"
+                && finding.subject == "/LintSelftest/BrokenTelemetry"
+        }),
+        "targetless metadata telemetry must be visible in the live USD lint findings: {findings:?}"
+    );
 }
 
 #[test]
@@ -195,6 +218,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("parent", H::str("/")),
         ("members", empty()),
         ("synthesizer", H::str("")),
+        ("synthesizer_error", H::str("")),
         ("modelica_member_count", H::Int(0)),
         (
             "collection_error",
@@ -225,6 +249,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         // testing a fact table we do not ship.
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
+        ("telemetry_declarations", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
@@ -262,6 +287,7 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("network_scopes", empty()),
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
+        ("telemetry_declarations", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);

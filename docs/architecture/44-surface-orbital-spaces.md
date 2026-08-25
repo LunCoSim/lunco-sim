@@ -46,8 +46,9 @@ body-fixed frame; it does not introduce a second semantic identity.
 2. The camera system resolves the frame and computes the complete f64 pose.
 3. The camera is attached to the destination grid with the atomic BigSpace
    mount operation.
-4. `FloatingOrigin` ownership moves with the camera; no parent grid is
-   re-posed and no next-frame correction is scheduled.
+4. The persistent `OriginAnchor` remains the sole `FloatingOrigin` owner. The
+   selected camera's f64 pose updates the anchor cell in `WorldGrid`; no parent
+   grid is re-posed and no next-frame correction is scheduled.
 
 Surface orientation is derived from the local gravity/up direction and the
 selected frame. Orbital orientation is derived from the inertial frame. This
@@ -64,8 +65,8 @@ camera-relative `GlobalTransform` with a grid-absolute position.
 
 ## Physics and terrain
 
-The active surface physics partition is selected through
-`ActivePhysicsFrame`. Avian receives f64 poses through
+The active surface physics partition is explicitly bound through
+`ActivePhysicsFrame`; the persistent shell does not select it implicitly. Avian receives f64 poses through
 `BigSpacePhysicsBridgePlugin`; celestial parent motion does not become rover
 motion. Terrain colliders and rover roots must share the active body-fixed
 surface grid. A streamed tile is attached once to its owning grid, not repaired

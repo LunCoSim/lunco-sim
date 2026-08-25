@@ -162,9 +162,10 @@ on the crop) rather than requiring the author to supply heights they cannot know
 ## Route line: drape, do not span
 
 `lunco-autopilot` mirrors `AutopilotBehaviorSpec` onto the vessel in three places
-(`lib.rs:1254`, `:1639`, `:1693`) explicitly so "the UI / path-line gizmo can read
-the waypoints". **That gizmo was never written.** The only `linestrip` in the tree
-is `cinematic.rs:136`, the camera-path preview.
+(`lib.rs:1254`, `:1639`, `:1693`) so the editor can derive the route from the same
+mission data that drives the vehicle. `sync_waypoint_path_mesh` is the route view;
+it is real 3D geometry in the active physics frame, not the camera-path preview's
+screen-space presentation.
 
 When it is written it must **drape over the relief, not connect the waypoints**. A
 straight chord between two waypoints 651 m apart passes *through* the crater wall:
@@ -172,6 +173,14 @@ it renders underground for most of its length, and draws a path the rover does n
 take. Sample `TerrainHeight` along each leg at a fixed step — 4 m is the natural
 choice, matching the baseline everything else about that site is measured at — and
 emit a polyline through those points, lifted slightly to avoid z-fighting.
+
+The route line is a transient render annotation, not another authored USD geometry
+source. USD remains authoritative for waypoint identity, composed `xformOpOrder`
+transforms, and mission topology; the renderer projects those resolved points onto the
+terrain oracle and adds its own small surface clearance. That clearance is independent
+of the waypoint marker's authored sphere radius and child transform. When a leg is
+reached, the same latched state removes its route segment and tints its marker, so the
+old annotation cannot compete with the gray translucent marker or reassert green state.
 
 > Body curvature is a separate, smaller effect: over a 1 km scene the surface falls
 > ≈0.29 m below a straight chord (`d²/2R`, R = 1737 km). Draping on the DEM

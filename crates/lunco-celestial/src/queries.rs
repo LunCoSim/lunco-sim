@@ -19,8 +19,6 @@ use lunco_time::WorldTime;
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisResource;
 use crate::geo::segment_hits_sphere;
-use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
-use crate::kepler::KeplerOrbit;
 use crate::link::{node_label, LinkNode, LinkState};
 use crate::registry::CelestialBodyRegistry;
 use crate::wifi::{WifiNode, WifiState};
@@ -153,7 +151,9 @@ impl ApiQueryProvider for BodyPositionProvider {
 /// — `up` is `[x,y,z]` for a surface point, null for an orbit. **Scene-local**
 /// antennas (placed through the site frame with no own anchor/orbit) need the
 /// big_space system context, so they resolve via the pose SYSTEM, not this query
-/// (`{found:false, reason:"scene_local"}` here) — the next retirement step.
+/// (`{found:false, reason:"pose_unavailable"}` here). The pose system is the
+/// sole owner of the f64-to-grid-local conversion; this query never recomputes
+/// an alternate pose from anchor/orbit components.
 pub struct SolarPoseProvider;
 
 impl ApiQueryProvider for SolarPoseProvider {
@@ -197,53 +197,9 @@ impl ApiQueryProvider for SolarPoseProvider {
                 "up": up,
             }));
         }
-        let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
-            return not_found();
-        };
-        let anchor = world.get::<GeodeticAnchor>(target).copied();
-        let orbit = world.get::<KeplerOrbit>(target).copied();
-        let (Some(eph), Some(reg)) = (
-            world.get_resource::<EphemerisResource>(),
-            world.get_resource::<CelestialBodyRegistry>(),
-        ) else {
-            return not_found();
-        };
-        let center_of = |naif: i32| eph.provider.global_position(naif, jd).map(ecliptic_to_bevy);
-
-        // (pos, up, kind, body). A diverging branch early-returns.
-        let (pos, up, kind, body) = if let Some(a) = anchor {
-            let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == a.body) else {
-                return not_found();
-            };
-            let Some(center) = center_of(a.body) else {
-                return not_found();
-            };
-            let center = center.raw();
-            let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
-            let up = (pos - center).normalize_or_zero();
-            (pos, Some(up), "surface", a.body)
-        } else if let Some(o) = orbit {
-            let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == o.body) else {
-                return not_found();
-            };
-            let Some(center) = center_of(o.body) else {
-                return not_found();
-            };
-            let pos = center.raw() + o.elements.position_bevy_m(desc.gm, jd);
-            (pos, None, "orbit", o.body)
-        } else {
-            return ApiResponse::ok(serde_json::json!({ "found": false, "reason": "scene_local" }));
-        };
-
         ApiResponse::ok(serde_json::json!({
-            "found": true,
-            "kind": kind,
-            "body": body,
-            "pos": [pos.x, pos.y, pos.z],
-            // Inline fallback (system hasn't posed this entity yet): no site frame
-            // on hand, so local ≈ solar pos. The component path returns true local.
-            "local": [pos.x, pos.y, pos.z],
-            "up": up.map(|u| serde_json::json!([u.x, u.y, u.z])),
+            "found": false,
+            "reason": "pose_unavailable",
         }))
     }
 }

@@ -119,6 +119,9 @@ class "LunCoTerrainAPI" (
     to be a registered one."""
 )
 {
+    uniform token lunco:terrain:surfaceRole (
+        doc = "Explicit local surface owner. \"flat-site\" projects an ENU-aligned UsdGeomCube into the finite globe handoff footprint. The role is topology, not animation."
+    )
     bool lunco:terrain:horizonShadows = false (
         doc = "Bake a horizon map so distant terrain self-shadows."
     )

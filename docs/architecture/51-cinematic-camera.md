@@ -97,7 +97,8 @@ The current editor supports the low-friction capture workflow:
 
 1. Fly the active window camera to the desired framing.
 2. Invoke `AddCameraHere` from the Cinematic panel, API, MCP, or Rhai.
-3. The command reads `world_pose`, not the camera's floating-origin
+3. The command reads `world_pose`, not the camera-relative render frame or the
+   persistent origin tracker
    `GlobalTransform`.
 4. It authors a `def Camera` and its transform through `ApplyUsdOp` in the root
    layer, so the edit is saved and journaled rather than being an ECS-only spawn.
@@ -107,6 +108,12 @@ The trajectory overlay samples the same evaluator as the runtime driver, draws
 control points and aim arrows, and shows the current playhead. It hides a path
 when the user is looking through that path's own camera because the trajectory is
 not legible from the eye it passes through.
+
+The overlay and `AddCameraHere` resolve the camera through
+`SceneViewport::active_camera`. They do not scan for the first active camera:
+render-to-texture and sensor cameras may be active for their own consumers, and
+entity order is not presentation ownership. If the viewport has no unique
+window camera, capture reports an error and the overlay does not guess.
 
 Keep authoring controls separated:
 

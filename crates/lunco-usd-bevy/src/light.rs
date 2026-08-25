@@ -1,7 +1,8 @@
 //! UsdLux light prims → Bevy lights.
 //!
-//! Scene files are the source of truth for lighting; binaries only provide
-//! defaults for scenes that author none. Two UsdLux prim types are honoured:
+//! Scene files are the source of truth for lighting. A scene that authors no
+//! dominant light is unlit and is reported by the environment contract; the
+//! loader does not create one. Two UsdLux prim types are honoured:
 //!
 //! - `DistantLight` — the sun. Orientation comes from the prim's
 //!   `xformOp:rotateXYZ` via the shared transform path in

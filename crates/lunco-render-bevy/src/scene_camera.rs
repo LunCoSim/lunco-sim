@@ -169,13 +169,10 @@ fn apply_camera_quality(
 /// Configure the existing camera while it is still borrowed by this system.
 /// Scene teardown is deferred, so a queued `EntityEntry` mutation can outlive
 /// the camera and panic when the teardown buffer is applied. The viewport
-/// reconciler remains the only writer of `is_active` after initial binding;
-/// this function only applies the camera's render-clear intent.
-fn configure_camera(camera: Option<&mut Camera>, initial_inactive: bool) {
+/// reconciler owns `is_active`; this function only applies the camera's
+/// render-clear intent.
+fn configure_camera(camera: Option<&mut Camera>) {
     let Some(camera) = camera else { return };
-    if initial_inactive {
-        camera.is_active = false;
-    }
     if !matches!(camera.clear_color, ClearColorConfig::Custom(_)) {
         camera.clear_color = ClearColorConfig::Custom(Color::BLACK);
     }
@@ -191,7 +188,7 @@ fn bind_scene_camera(
     let e = add.entity;
     let Ok(cam) = cams.get(e) else { return };
     if let Ok(mut camera) = cameras.get_mut(e) {
-        configure_camera(Some(&mut camera), true);
+        configure_camera(Some(&mut camera));
     }
     apply(&mut commands, e, cam, *profile);
 }
@@ -203,7 +200,7 @@ fn rebind_changed_scene_camera(
     mut commands: Commands,
 ) {
     for (e, cam, mut camera) in &mut changed {
-        configure_camera(camera.as_deref_mut(), false);
+        configure_camera(camera.as_deref_mut());
         apply(&mut commands, e, cam, *profile);
     }
 }

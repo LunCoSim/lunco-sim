@@ -53,9 +53,10 @@ an arbitrary rotation — that is why `Q` is derived from a two-valued token and
 never from free-form data.
 
 **Failure behaviour is loud, never silent.** An `upAxis` that is neither `Y` nor
-`Z`, or a non-finite/non-positive `metersPerUnit`, is an `error_once!` (and falls
-back to the canonical value). A *supported but non-canonical* stage logs a
-one-shot warning naming what is being converted.
+`Z`, or a non-finite/non-positive `metersPerUnit`, rejects the USD projection at
+the importer boundary. There is no canonical-value substitution for malformed
+metadata. A *supported but non-canonical* stage logs a one-shot warning naming
+what is being converted.
 
 **Every asset we ship is `upAxis="Y", metersPerUnit=1`, so
 `ConventionTransform::is_identity()` holds and the hot decoders early-out** —
@@ -396,4 +397,3 @@ its keep (YAGNI).
 - [`21-domain-usd.md`](21-domain-usd.md) — scene/stage ownership (Twin → active
   stage → Grid); the USD spoke runs at that document↔world boundary.
 - [`40-asset-io.md`](40-asset-io.md) — asset I/O constraints and the wasm-safe I/O layer.
-

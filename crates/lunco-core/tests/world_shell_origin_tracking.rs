@@ -18,7 +18,7 @@
 
 use bevy::prelude::*;
 use big_space::plugin::BigSpaceMinimalPlugins;
-use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
+use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{ensure_world_root, OriginAnchor, WorldGrid, WorldShellPlugin};
 
 #[test]
@@ -28,7 +28,7 @@ fn world_grid_global_transform_tracks_traveling_origin() {
         .add_plugins(BigSpaceMinimalPlugins)
         .add_plugins(WorldShellPlugin);
 
-    // Frame 0: shell exists, origin on the anchor at cell 0.
+    // Frame 0: shell exists, origin anchor is at cell 0.
     app.update();
 
     let world_grid = {
@@ -41,17 +41,15 @@ fn world_grid_global_transform_tracks_traveling_origin() {
     // origin propagation from the already-covered `translation_to_grid`
     // decomposition.
     const CELLS: i64 = 100_000; // 2e8 m — Earth-ish range
-    let camera = app
-        .world_mut()
-        .spawn((
-            Transform::default(),
-            GlobalTransform::default(),
-            CellCoord::new(CELLS, 0, 0),
-            ChildOf(world_grid),
-        ))
-        .id();
+    app.world_mut().spawn((
+        Transform::default(),
+        GlobalTransform::default(),
+        CellCoord::new(CELLS, 0, 0),
+        ChildOf(world_grid),
+    ));
 
-    // Claim the origin from the anchor, exactly like a camera does.
+    // The camera does not own FloatingOrigin. The persistent origin anchor
+    // follows its authoritative WorldGrid cell instead.
     let anchor = {
         let mut q = app
             .world_mut()
@@ -60,8 +58,7 @@ fn world_grid_global_transform_tracks_traveling_origin() {
     };
     app.world_mut()
         .entity_mut(anchor)
-        .remove::<FloatingOrigin>();
-    app.world_mut().entity_mut(camera).insert(FloatingOrigin);
+        .insert(CellCoord::new(CELLS, 0, 0));
 
     app.update();
     app.update(); // second frame: past any command-flush / tagging latency

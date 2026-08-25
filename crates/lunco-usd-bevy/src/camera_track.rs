@@ -37,7 +37,10 @@ use bevy::prelude::*;
 use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, WorldTime};
 
-use crate::camera_switch::{ActivateCamera, CameraSelectionOwner, ViewportCameraSelection};
+use crate::camera_switch::{
+    resolve_named_camera, ActivateCamera, CameraSelectionOwner, CameraSelectionStatus,
+    ViewportCameraSelection,
+};
 use crate::{
     attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, CanonicalStages,
     SdfPath, UsdPrimPath, UsdStageAsset,
@@ -78,6 +81,9 @@ pub struct CameraTrackPlan {
     /// command increments the shared revision so the held cut is re-applied
     /// after an operator override, even if its name is unchanged.
     pub last_director_revision: u64,
+    /// Stable diagnostic for an unresolved track target. This suppresses
+    /// per-frame log spam while keeping the owning camera status visible.
+    pub last_error: Option<String>,
 }
 
 /// The held camera name at time code `t`: the value of the greatest key ≤ `t`,
@@ -101,6 +107,7 @@ fn held_camera(keys: &[(f64, String)], t: f64) -> Option<&str> {
 pub fn plan_camera_tracks(
     canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
+    mut status: ResMut<CameraSelectionStatus>,
     q: Query<(Entity, &UsdPrimPath), (With<CameraTrack>, Without<CameraTrackPlan>)>,
 ) {
     for (entity, prim) in &q {
@@ -114,8 +121,12 @@ pub fn plan_camera_tracks(
         };
         let keys = read_token_timesamples(reader, &sdf_path, ACTIVE_CAMERA_ATTR);
         if keys.is_empty() {
-            // Marked but no readable keys (e.g. non-token samples) — plan it
-            // empty so we stop retrying; the sampler no-ops on it.
+            let message = format!(
+                "camera track '{}' has no readable activeCamera time samples",
+                prim.path
+            );
+            status.last_error = Some(message.clone());
+            warn!("[camera] {message}");
             commands
                 .entity(entity)
                 .try_insert(CameraTrackPlan::default());
@@ -126,6 +137,7 @@ pub fn plan_camera_tracks(
             keys,
             last: None,
             last_director_revision: 0,
+            last_error: None,
         });
     }
 }
@@ -181,17 +193,18 @@ pub fn bind_camera_tracks_to_preview(
 /// fights the viewport reconciler. Scrubbing backward re-evaluates the held key,
 /// so the correct camera is shown at any playhead position.
 ///
-/// If the named camera isn't spawned yet (async load), `last` is left unchanged
-/// so the cut retries next frame.
+/// If the named camera is absent or ambiguous, the track remains uncommitted
+/// and publishes one stable diagnostic. It never selects another camera.
 pub fn sample_camera_tracks(
     world: Res<WorldTime>,
     resolved: Res<ResolvedDomains>,
     selection: Res<ViewportCameraSelection>,
-    mut q: Query<(&mut CameraTrackPlan, Option<&TimeBinding>)>,
+    mut q: Query<(&mut CameraTrackPlan, Option<&TimeBinding>, &UsdPrimPath)>,
     q_cams: Query<(Entity, &Name), With<SceneCamera>>,
+    mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
 ) {
-    for (mut plan, binding) in &mut q {
+    for (mut plan, binding, prim) in &mut q {
         if selection.owner() == CameraSelectionOwner::User {
             continue;
         }
@@ -207,20 +220,27 @@ pub fn sample_camera_tracks(
         if plan.last.as_deref() == Some(want) && !needs_resume {
             continue;
         }
-        // Resolve the camera name (full USD path or leaf) → entity, same match
-        // rule as `SetActiveCamera`.
-        let hit = q_cams.iter().find(|(_, n)| {
-            let s = n.as_str();
-            s == want || s.rsplit('/').next() == Some(want)
-        });
-        match hit {
-            Some((e, _)) => {
+        match resolve_named_camera(want, &q_cams) {
+            Ok(e) => {
                 commands.trigger(ActivateCamera::director(e));
                 plan.last = Some(want.to_string());
                 plan.last_director_revision = selection.director_revision();
+                if let Some(message) = plan.last_error.take() {
+                    if status.last_error.as_deref() == Some(message.as_str()) {
+                        status.last_error = None;
+                    }
+                }
             }
-            None => {
-                // Camera not spawned yet — retry next frame (don't set `last`).
+            Err(reason) => {
+                let message = format!(
+                    "camera track '{}' cannot activate '{want}': {reason}",
+                    prim.path
+                );
+                if plan.last_error.as_deref() != Some(message.as_str()) {
+                    warn!("[camera] {message}");
+                    status.last_error = Some(message.clone());
+                    plan.last_error = Some(message);
+                }
             }
         }
     }

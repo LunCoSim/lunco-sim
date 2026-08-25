@@ -27,8 +27,10 @@
 
 use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
-use big_space::prelude::{FloatingOrigin, Grid};
-use lunco_core::{on_command, Command, LocalAvatar, SceneViewport, TheLocalAvatar};
+use big_space::prelude::{CellCoord, Grid};
+use lunco_core::{
+    on_command, Command, LocalAvatar, OriginAnchor, SceneViewport, TheLocalAvatar, WorldGrid,
+};
 use lunco_render::SceneCamera;
 
 use crate::UsdPrimPath;
@@ -68,7 +70,6 @@ pub enum CameraSelectionOwner {
     None,
     Director,
     User,
-    Fallback,
 }
 
 /// Change-gated view model for the Camera menu and no-camera presentation.
@@ -85,12 +86,21 @@ pub struct CameraSelectionStatus {
     pub last_error: Option<String>,
 }
 
-/// Engine-owned presentation camera used only when a loaded scene has no
-/// authored window camera. It is an explicit camera policy, not an authored
-/// scene fact: the status/menu can identify it and the camera is removed as
-/// soon as an authored presentation camera becomes available.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PresentationFallbackCamera;
+/// Mandatory authored presentation contract for a windowed scene.
+///
+/// The render host opts into `required`. The USD projection owns the verdict:
+/// exactly one authored camera track must resolve to authored scene cameras.
+/// A missing or invalid contract is not repaired by choosing a camera; the
+/// scene admission owner can reject it and the UI can highlight the finding.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct CameraContractStatus {
+    /// Whether the current host requires a presentable authored scene.
+    pub required: bool,
+    /// Whether the current authored contract has passed validation.
+    pub ready: bool,
+    /// Stable owning errors for the current scene contract.
+    pub errors: Vec<String>,
+}
 
 impl ViewportCameraSelection {
     /// Revision observed by the authored camera-track sampler.
@@ -139,7 +149,6 @@ pub struct ResumeCameraDirector {}
 pub enum CameraActivationSource {
     Director,
     User,
-    Fallback,
 }
 
 #[derive(Event)]
@@ -162,23 +171,57 @@ impl ActivateCamera {
             source: CameraActivationSource::User,
         }
     }
+}
 
-    pub fn fallback(target: Entity) -> Self {
-        Self {
-            target,
-            source: CameraActivationSource::Fallback,
+pub(crate) fn resolve_camera_names(
+    want: &str,
+    cameras: &[(Entity, String)],
+) -> Result<Entity, String> {
+    let exact: Vec<Entity> = cameras
+        .iter()
+        .filter_map(|(entity, name)| (name == want).then_some(*entity))
+        .collect();
+    match exact.as_slice() {
+        [entity] => return Ok(*entity),
+        [] => {}
+        _ => {
+            return Err(format!(
+                "camera path '{want}' is ambiguous; more than one scene camera has this path"
+            ));
+        }
+    }
+
+    let matches: Vec<(Entity, &str)> = cameras
+        .iter()
+        .filter_map(|(entity, name)| {
+            (name.rsplit('/').next() == Some(want)).then_some((*entity, name.as_str()))
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => Err(format!("camera '{want}' is not present in the scene")),
+        [(entity, _)] => Ok(*entity),
+        _ => {
+            let names = matches
+                .iter()
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "camera name '{want}' is ambiguous; use a full USD path ({names})"
+            ))
         }
     }
 }
 
-fn resolve_named_camera(
+pub(crate) fn resolve_named_camera(
     want: &str,
     q_cams: &Query<(Entity, &Name), With<SceneCamera>>,
-) -> Option<Entity> {
-    q_cams.iter().find_map(|(entity, name)| {
-        let value = name.as_str();
-        (value == want || value.rsplit('/').next() == Some(want)).then_some(entity)
-    })
+) -> Result<Entity, String> {
+    let cameras: Vec<(Entity, String)> = q_cams
+        .iter()
+        .map(|(entity, name)| (entity, name.as_str().to_string()))
+        .collect();
+    resolve_camera_names(want, &cameras)
 }
 
 fn record_camera_error(status: &mut CameraSelectionStatus, message: String) {
@@ -207,9 +250,8 @@ pub fn on_set_active_camera(
     }
     let want = trigger.event().name.trim();
     match resolve_named_camera(want, &q_cams) {
-        Some(target) => commands.trigger(ActivateCamera::director(target)),
-        None => {
-            let message = format!("director camera '{want}' is not present in the scene");
+        Ok(target) => commands.trigger(ActivateCamera::director(target)),
+        Err(message) => {
             record_camera_error(&mut status, message.clone());
             warn!("[camera] {message}");
         }
@@ -225,9 +267,8 @@ pub fn on_set_user_camera(
 ) {
     let want = trigger.event().name.trim();
     match resolve_named_camera(want, &q_cams) {
-        Some(target) => commands.trigger(ActivateCamera::user(target)),
-        None => {
-            let message = format!("operator camera '{want}' is not present in the scene");
+        Ok(target) => commands.trigger(ActivateCamera::user(target)),
+        Err(message) => {
             record_camera_error(&mut status, message.clone());
             warn!("[camera] {message}");
         }
@@ -257,38 +298,6 @@ pub fn on_request_local_avatar_view(
         return;
     };
     commands.trigger(ActivateCamera::user(target));
-}
-
-/// Establish the authored avatar as the initial presentation view once it has
-/// been projected. Scene teardown intentionally clears the previous camera
-/// selection because its USD key belongs to the outgoing stage; the incoming
-/// avatar is the authored replacement for that default view.
-///
-/// This is change-gated rather than a reconciler fallback. An explicit
-/// director or operator request therefore remains authoritative, while a
-/// scene reload cannot leave the main viewport with no camera merely because
-/// the replacement avatar was spawned after teardown.
-pub fn request_initial_avatar_view(
-    q_avatar: Query<
-        (),
-        (
-            With<LocalAvatar>,
-            Or<(Added<LocalAvatar>, Added<SceneCamera>)>,
-        ),
-    >,
-    local_avatar: Res<TheLocalAvatar>,
-    selection: Res<ViewportCameraSelection>,
-    mut commands: Commands,
-) {
-    if selection.owner() != CameraSelectionOwner::None {
-        return;
-    }
-    if local_avatar
-        .0
-        .is_some_and(|avatar| q_avatar.contains(avatar))
-    {
-        commands.trigger(lunco_core::RequestLocalAvatarView);
-    }
 }
 
 #[on_command(ResumeCameraDirector)]
@@ -350,10 +359,16 @@ pub fn cycle_active_camera(
         return;
     }
     cams.sort_by(|a, b| a.1.cmp(b.1));
-    let cur = vp
+    let Some(cur) = vp
         .active_camera
-        .and_then(|a| cams.iter().position(|(e, _)| *e == a))
-        .unwrap_or(0);
+        .and_then(|active| cams.iter().position(|(e, _)| *e == active))
+    else {
+        // Cycling is an operator action over an existing viewport binding. It
+        // must not turn a missing/stale binding into an implicit first-camera
+        // selection; the authored director or an explicit camera command owns
+        // initial presentation.
+        return;
+    };
     let next = cams[(cur + 1) % cams.len()].0;
     commands.trigger(ActivateCamera::user(next));
 }
@@ -386,7 +401,6 @@ pub fn on_activate_camera(
             selection.owner = match event.source {
                 CameraActivationSource::Director => CameraSelectionOwner::Director,
                 CameraActivationSource::User => CameraSelectionOwner::User,
-                CameraActivationSource::Fallback => CameraSelectionOwner::Fallback,
             };
             status.last_error = None;
             info!(
@@ -421,15 +435,16 @@ pub fn on_activate_camera(
 /// Reads the [`SceneViewport`] (active-camera binding + visibility + rect) and
 /// actuates it: exactly the bound camera is active (and only when visible); all
 /// other window cameras are off. RTT (`Image`-target) cameras are ignored.
-/// Also relocates the big_space [`FloatingOrigin`] onto the active camera when
-/// it is grid-direct.
+/// Also updates the persistent BigSpace [`OriginAnchor`] to the active camera's
+/// `WorldGrid` cell using the authoritative f64 hierarchy pose. The camera is
+/// a render consumer; it never owns the origin marker.
 ///
 /// There is deliberately no implicit camera selection here. If the selection
 /// is absent, stale, or still waiting for its authored camera to finish
 /// projection, every window camera is inactive and the status view model says
-/// why. The windowed host may publish an explicit fallback activation for a
-/// camera-less scene; this reconciler only fulfils that request and never
-/// chooses a different camera itself.
+/// why. A camera-less scene is an explicit no-camera state, not an engine view.
+/// This reconciler only fulfils an explicit request and never chooses a
+/// different camera itself.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
     selection: Res<ViewportCameraSelection>,
@@ -438,15 +453,12 @@ pub fn reconcile_scene_viewport(
             Entity,
             &mut Camera,
             &RenderTarget,
-            Option<&ChildOf>,
             Has<bevy::camera::Projection>,
             Option<&UsdPrimPath>,
+            Has<SceneCamera>,
         ),
-        With<SceneCamera>,
+        With<Camera3d>,
     >,
-    q_grids: Query<(), With<Grid>>,
-    q_origins: Query<Entity, With<FloatingOrigin>>,
-    mut commands: Commands,
 ) {
     // A camera is only ACTIVATABLE once its 3D pipeline (`Camera3d` → required
     // `Projection`) is bound by `lunco-render-bevy`. A `SceneCamera` spawns as a
@@ -465,16 +477,17 @@ pub fn reconcile_scene_viewport(
             Entity,
             &mut Camera,
             &RenderTarget,
-            Option<&ChildOf>,
             Has<bevy::camera::Projection>,
             Option<&UsdPrimPath>,
+            Has<SceneCamera>,
         ),
-        With<SceneCamera>,
+        With<Camera3d>,
     >,
                        e: Entity|
      -> bool {
-        q.get(e)
-            .is_ok_and(|(_, _, t, _, has_proj, _)| is_window_render_target(t) && has_proj)
+        q.get(e).is_ok_and(|(_, _, t, has_proj, _, scene_camera)| {
+            is_window_render_target(t) && has_proj && scene_camera
+        })
     };
 
     // ── Resolve only the explicit request ───────────────────────────────
@@ -483,10 +496,11 @@ pub fn reconcile_scene_viewport(
             RequestedCamera::Entity(entity) => Some(*entity),
             RequestedCamera::Authored(wanted) => q_cams
                 .iter()
-                .find(|(_, _, _, _, _, path)| {
-                    path.is_some_and(|path| {
-                        path.stage_handle.id() == wanted.stage && path.path == wanted.path
-                    })
+                .find(|(_, _, _, _, path, scene_camera)| {
+                    *scene_camera
+                        && path.is_some_and(|path| {
+                            path.stage_handle.id() == wanted.stage && path.path == wanted.path
+                        })
                 })
                 .map(|(entity, _, _, _, _, _)| entity),
         }?;
@@ -495,13 +509,6 @@ pub fn reconcile_scene_viewport(
     if vp.active_camera != active {
         vp.active_camera = active;
     }
-
-    // Can the active camera host the FloatingOrigin? (grid-direct only)
-    let grid_direct = active
-        .and_then(|e| q_cams.get(e).ok())
-        .and_then(|(_, _, _, parent, _, _)| parent)
-        .map(|c| q_grids.contains(c.parent()))
-        .unwrap_or(false);
 
     let visible = vp.visible;
     let rect = vp.rect;
@@ -539,20 +546,104 @@ pub fn reconcile_scene_viewport(
             cam.viewport = want_vp;
         }
     }
+}
 
-    // ── FloatingOrigin follows the active camera (grid-direct only) ──────
-    // Only mutate when it actually needs to move — re-inserting the marker
-    // every frame churns big_space's recentring and jitters camera follow.
-    if let (Some(active), true) = (active, grid_direct) {
-        let active_has_origin = q_origins.contains(active);
-        for prior in q_origins.iter() {
-            if prior != active {
-                commands.entity(prior).remove::<FloatingOrigin>();
+/// Project the selected camera into the persistent origin frame.
+///
+/// This runs after every camera pose writer, including mounted followers,
+/// avatar rigs, and cinematic paths, but before BigSpace recenters and
+/// propagates transforms. The camera pose is composed in f64 and split exactly
+/// once in the persistent `WorldGrid`; no camera-relative `GlobalTransform` is
+/// read and no camera receives `FloatingOrigin`.
+pub fn update_camera_origin(
+    vp: Res<SceneViewport>,
+    q_grids: Query<&Grid>,
+    q_world_grid: Query<Entity, With<WorldGrid>>,
+    mut q_origin: Query<(&mut CellCoord, &mut Transform), With<OriginAnchor>>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<OriginAnchor>>,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    // `FloatingOrigin` is owned by `OriginAnchor`, which is a valid Grid
+    // archetype. The camera pose is composed in f64 and split exactly once in
+    // the persistent `WorldGrid`; no camera-relative GlobalTransform is read.
+    let mut origin_errors = Vec::new();
+    let world_grids: Vec<Entity> = q_world_grid.iter().collect();
+    if let Ok((mut origin_cell, mut origin_transform)) = q_origin.single_mut() {
+        if let [world_grid] = world_grids.as_slice() {
+            if let Some(active) = vp.active_camera {
+                if let Some((camera_position, _camera_rotation)) = lunco_core::coords::pose_in_grid(
+                    active,
+                    *world_grid,
+                    &q_parents,
+                    &q_grids,
+                    &q_spatial,
+                ) {
+                    if let Ok(world_grid_component) = q_grids.get(*world_grid) {
+                        let (new_cell, new_translation) =
+                            world_grid_component.translation_to_grid(camera_position);
+                        if *origin_cell != new_cell {
+                            *origin_cell = new_cell;
+                        }
+                        if origin_transform.translation != new_translation
+                            || origin_transform.rotation != Quat::IDENTITY
+                            || origin_transform.scale != Vec3::ONE
+                        {
+                            *origin_transform = Transform::from_translation(new_translation);
+                        }
+                    } else {
+                        *origin_cell = CellCoord::default();
+                        *origin_transform = Transform::IDENTITY;
+                        origin_errors.push(
+                            "[camera-origin] the active WorldGrid has no BigSpace Grid component"
+                                .to_string(),
+                        );
+                    }
+                } else {
+                    *origin_cell = CellCoord::default();
+                    *origin_transform = Transform::IDENTITY;
+                    origin_errors.push(format!(
+                        "[camera-origin] active camera {active:?} has no complete f64 pose in WorldGrid"
+                    ));
+                }
+            } else {
+                *origin_cell = CellCoord::default();
+                *origin_transform = Transform::IDENTITY;
             }
+            // The origin tracker is a frame marker, not scene content. Keep its
+            // rotation and scale canonical, while retaining the f32 remainder
+            // returned by the same f64-to-grid split as the cell. Together the
+            // `(CellCoord, Transform)` pair places the render origin at the
+            // selected pose rather than at the nearest cell centre.
+            if origin_transform.rotation != Quat::IDENTITY || origin_transform.scale != Vec3::ONE {
+                origin_transform.rotation = Quat::IDENTITY;
+                origin_transform.scale = Vec3::ONE;
+            }
+        } else {
+            *origin_cell = CellCoord::default();
+            *origin_transform = Transform::IDENTITY;
         }
-        if !active_has_origin {
-            commands.entity(active).try_insert(FloatingOrigin);
+        if vp.active_camera.is_some() && world_grids.len() != 1 {
+            origin_errors.push(
+                format!(
+                    "[camera-origin] the persistent WorldGrid contract requires exactly one entity, found {}",
+                    world_grids.len()
+                ),
+            );
         }
+    }
+    if let Some(mut diagnostics) = diagnostics {
+        let findings: Vec<lunco_core::RuntimeDiagnostic> = origin_errors
+            .iter()
+            .map(|message| lunco_core::RuntimeDiagnostic {
+                code: "camera-origin".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "camera-origin".to_string(),
+                subject: "viewport-origin".to_string(),
+                message: message.clone(),
+            })
+            .collect();
+        diagnostics.replace_producer("camera-origin", findings);
     }
 }
 
@@ -591,6 +682,184 @@ pub fn update_camera_selection_status(
     }
 }
 
+/// Validate the authored window presentation contract after USD camera-track
+/// plans are derived. This is a structural admission check, not a policy lint:
+/// duplicate tracks, absent cameras, unresolved names, and multiple mounted
+/// stages are errors owned by the camera domain.
+pub fn validate_authored_camera_contract(
+    mount: Res<lunco_core::SceneMountState>,
+    scene_roots: Query<Has<crate::UsdVisualSynced>, With<crate::UsdSceneRoot>>,
+    pending_projection: Query<Entity, With<crate::UsdAwaitingStage>>,
+    q_scene_root: Query<(), With<crate::UsdSceneRoot>>,
+    q_child_of: Query<&ChildOf>,
+    q_entities: Query<Entity>,
+    tracks: Query<
+        (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
+        With<crate::camera_track::CameraTrack>,
+    >,
+    cameras: Query<(Entity, &Name, &UsdPrimPath), With<SceneCamera>>,
+    mut contract: ResMut<CameraContractStatus>,
+    mut status: ResMut<CameraSelectionStatus>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    if !contract.required {
+        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
+        if !contract.errors.is_empty() || !contract.ready {
+            *contract = CameraContractStatus {
+                ready: true,
+                ..default()
+            };
+        }
+        if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("[camera-contract]"))
+        {
+            status.last_error = None;
+        }
+        return;
+    }
+    if mount.active_root().is_none() {
+        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
+        if !contract.errors.is_empty() || contract.ready {
+            *contract = CameraContractStatus {
+                required: contract.required,
+                ..default()
+            };
+        }
+        if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("[camera-contract]"))
+        {
+            status.last_error = None;
+        }
+        return;
+    }
+
+    let active_root = mount.active_root();
+    let projection_pending = active_root.is_some_and(|root| {
+        !scene_roots.get(root).is_ok_and(|synced| synced)
+            || pending_projection.iter().any(|entity| {
+                crate::scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
+                    .ok()
+                    .flatten()
+                    == Some(root)
+            })
+    });
+    if projection_pending {
+        // USD projection is an explicit lifecycle phase. Do not turn the
+        // interval before authored camera entities exist into a contract
+        // failure; once the active root is fully projected, the same validator
+        // reports a real missing/invalid camera contract as an Error.
+        publish_camera_contract_diagnostics(&mut diagnostics, &[]);
+        if contract.required || contract.ready || !contract.errors.is_empty() {
+            *contract = CameraContractStatus::default();
+        }
+        if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("[camera-contract]"))
+        {
+            status.last_error = None;
+        }
+        return;
+    }
+
+    let mut stage_ids = std::collections::BTreeSet::new();
+    let mut camera_names = Vec::new();
+    for (entity, name, prim) in &cameras {
+        stage_ids.insert(prim.stage_handle.id());
+        camera_names.push((entity, name.as_str().to_string()));
+    }
+    for (prim, _) in &tracks {
+        stage_ids.insert(prim.stage_handle.id());
+    }
+
+    let mut errors = Vec::new();
+    if stage_ids.len() > 1 {
+        errors.push(
+            "[camera-contract] multiple USD stages provide one viewport; author explicit viewport scopes"
+                .to_string(),
+        );
+    }
+    if cameras.is_empty() {
+        errors.push(
+            "[camera-contract] scene has no authored SceneCamera for the window presentation"
+                .to_string(),
+        );
+    }
+    if tracks.is_empty() {
+        errors.push(
+            "[camera-contract] scene has no authored CameraTrack initial presentation".to_string(),
+        );
+    } else if tracks.iter().count() > 1 {
+        errors.push(
+            "[camera-contract] scene has multiple CameraTrack providers without an explicit viewport scope"
+                .to_string(),
+        );
+    }
+
+    for (prim, plan) in &tracks {
+        let Some(plan) = plan else {
+            errors.push(format!(
+                "[camera-contract] CameraTrack '{}' has not finished projection",
+                prim.path
+            ));
+            continue;
+        };
+        if plan.keys.is_empty() {
+            errors.push(format!(
+                "[camera-contract] CameraTrack '{}' has no activeCamera keys",
+                prim.path
+            ));
+        }
+        for (_, want) in &plan.keys {
+            if let Err(reason) = resolve_camera_names(want, &camera_names) {
+                errors.push(format!(
+                    "[camera-contract] CameraTrack '{}' cannot resolve '{want}': {reason}",
+                    prim.path
+                ));
+            }
+        }
+    }
+
+    let ready = errors.is_empty();
+    publish_camera_contract_diagnostics(&mut diagnostics, &errors);
+    let changed = contract.ready != ready || contract.errors != errors;
+    contract.ready = ready;
+    contract.errors = errors;
+    if changed {
+        if let Some(error) = contract.errors.first() {
+            status.last_error = Some(error.clone());
+            error!("[camera] {error}");
+        } else if status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("[camera-contract]"))
+        {
+            status.last_error = None;
+        }
+    }
+}
+
+fn publish_camera_contract_diagnostics(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    errors: &[String],
+) {
+    let Some(diagnostics) = diagnostics.as_deref_mut() else {
+        return;
+    };
+    let findings = errors.iter().map(|message| lunco_core::RuntimeDiagnostic {
+        code: "camera-contract".to_string(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: "usd-camera".to_string(),
+        subject: "window-presentation".to_string(),
+        message: message.clone(),
+    });
+    diagnostics.replace_producer("usd-camera", findings);
+}
+
 /// Scene teardown is the ownership boundary for camera selection. A stale
 /// authored key must not select a camera from the next scene.
 pub fn reset_camera_selection(
@@ -603,70 +872,6 @@ pub fn reset_camera_selection(
     *status = CameraSelectionStatus::default();
 }
 
-/// Hand ownership back to the authored scene when its camera is projected
-/// after the explicit presentation camera. This is the camera-selection
-/// boundary, so fallback retirement cannot leave both cameras active or make a
-/// later authored projection invisible behind stale fallback state.
-pub fn retire_presentation_fallback(
-    authored: Query<
-        (Entity, Option<&Name>, Option<&RenderTarget>),
-        (With<SceneCamera>, Without<PresentationFallbackCamera>),
-    >,
-    fallback: Query<Entity, With<PresentationFallbackCamera>>,
-    selection: Res<ViewportCameraSelection>,
-    mut viewport: ResMut<SceneViewport>,
-    mut status: ResMut<CameraSelectionStatus>,
-    mut commands: Commands,
-) {
-    if fallback.is_empty() {
-        return;
-    }
-
-    let Some((target, _, _)) = authored
-        .iter()
-        .find(|(_, _, render_target)| render_target.is_none_or(is_window_render_target))
-    else {
-        return;
-    };
-
-    for entity in &fallback {
-        commands.entity(entity).try_despawn();
-    }
-    if selection.owner() != CameraSelectionOwner::Fallback {
-        return;
-    }
-
-    viewport.active_camera = None;
-    *status = CameraSelectionStatus::default();
-    commands.trigger(ActivateCamera::director(target));
-}
-
-/// Final guard for the window render target. Scene-camera reconciliation owns
-/// the intended camera, but a stale render pipeline can outlive its
-/// `SceneCamera` marker for one deferred-command boundary during scene reload.
-/// Never allow that orphaned `Camera3d` to render alongside the selected view.
-pub(crate) fn enforce_one_window_camera(
-    vp: Res<SceneViewport>,
-    mut cameras: Query<(
-        Entity,
-        &mut Camera,
-        &RenderTarget,
-        Has<SceneCamera>,
-        Has<Camera3d>,
-    )>,
-) {
-    let active = vp.active_camera;
-    for (entity, mut camera, target, _scene_camera, has_pipeline) in &mut cameras {
-        if !is_window_render_target(target) || !has_pipeline {
-            continue;
-        }
-        // The active entity is filtered by the reconciler to a window camera
-        // with a complete 3D pipeline. Every other window Camera3d is off,
-        // including an orphan whose SceneCamera marker was just removed.
-        camera.is_active = Some(entity) == active;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,6 +879,7 @@ mod tests {
     fn window_cam(is_active: bool, name: &str) -> impl Bundle {
         (
             SceneCamera::default(),
+            Camera3d::default(),
             Camera {
                 is_active,
                 ..default()
@@ -695,6 +901,55 @@ mod tests {
             .filter(|(_, c)| c.is_active)
             .map(|(e, _)| e)
             .collect()
+    }
+
+    #[test]
+    fn selected_camera_projects_origin_anchor_without_claiming_floating_origin() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>();
+        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(321.25, -44.5, 17.75)),
+                GlobalTransform::default(),
+                CellCoord::new(12_345, -7, 3),
+                ChildOf(world_grid),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(camera);
+        app.add_systems(Update, update_camera_origin);
+
+        app.update();
+
+        let mut q_anchor = app.world_mut().query_filtered::<(
+            &CellCoord,
+            &Transform,
+            &Grid,
+            Has<big_space::prelude::FloatingOrigin>,
+        ), With<OriginAnchor>>();
+        let (anchor_cell, anchor_transform, _, anchor_has_origin) =
+            q_anchor.single(app.world()).unwrap();
+        assert_eq!(*anchor_cell, CellCoord::new(12_345, -7, 3));
+        assert_eq!(
+            anchor_transform.translation,
+            Vec3::new(321.25, -44.5, 17.75)
+        );
+        assert!(anchor_has_origin);
+        assert!(app
+            .world()
+            .get::<big_space::prelude::FloatingOrigin>(camera)
+            .is_none());
+
+        assert!(app
+            .world()
+            .resource::<lunco_core::RuntimeDiagnostics>()
+            .findings
+            .is_empty());
     }
 
     /// The reconciler activates exactly the bound camera and deactivates every
@@ -723,6 +978,40 @@ mod tests {
             vec![b],
             "only the bound camera renders"
         );
+    }
+
+    #[test]
+    fn reconciler_deactivates_a_stale_window_camera_without_scene_intent() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .add_systems(Update, reconcile_scene_viewport);
+        let active = app.world_mut().spawn(window_cam(false, "active")).id();
+        let orphan = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                Projection::default(),
+                RenderTarget::Window(bevy::window::WindowRef::Primary),
+                Name::new("orphan"),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(active);
+        app.world_mut()
+            .resource_mut::<ViewportCameraSelection>()
+            .requested = Some(RequestedCamera::Entity(active));
+
+        app.update();
+
+        assert!(app.world().get::<Camera>(active).unwrap().is_active);
+        assert!(!app.world().get::<Camera>(orphan).unwrap().is_active);
     }
 
     /// When the viewport is not visible (workbench Design perspective), no
@@ -865,145 +1154,25 @@ mod tests {
     }
 
     #[test]
-    fn authored_camera_retires_fallback_and_takes_selection_ownership() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<SceneViewport>()
-            .init_resource::<ViewportCameraSelection>()
-            .init_resource::<CameraSelectionStatus>()
-            .add_observer(on_activate_camera)
-            .add_systems(Update, retire_presentation_fallback);
-        let fallback = app
-            .world_mut()
-            .spawn((SceneCamera::default(), PresentationFallbackCamera))
-            .id();
-        let authored = app
-            .world_mut()
-            .spawn((SceneCamera::default(), Name::new("Authored")))
-            .id();
-        {
-            let mut selection = app.world_mut().resource_mut::<ViewportCameraSelection>();
-            selection.requested = Some(RequestedCamera::Entity(fallback));
-            selection.owner = CameraSelectionOwner::Fallback;
-        }
-
-        app.update();
-
-        assert!(app.world().get_entity(fallback).is_err());
-        let selection = app.world().resource::<ViewportCameraSelection>();
-        assert_eq!(selection.owner, CameraSelectionOwner::Director);
-        assert_eq!(selection.requested, Some(RequestedCamera::Entity(authored)));
-    }
-
-    #[test]
-    fn projected_local_avatar_reestablishes_initial_view_after_selection_reset() {
+    fn avatar_presence_does_not_select_a_camera() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
             .init_resource::<TheLocalAvatar>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
-            .add_observer(on_activate_camera)
-            .add_observer(on_request_local_avatar_view)
-            .add_systems(Update, request_initial_avatar_view);
+            .add_systems(Update, reconcile_scene_viewport);
 
-        let avatar = app
-            .world_mut()
-            .spawn((SceneCamera::default(), LocalAvatar))
-            .id();
-
+        app.world_mut()
+            .spawn((window_cam(false, "Avatar"), LocalAvatar));
         app.update();
 
-        assert_eq!(
-            app.world().resource::<SceneViewport>().active_camera,
-            None,
-            "camera binding is reconciler-owned and waits for the render host"
-        );
-        assert_eq!(
-            app.world().resource::<ViewportCameraSelection>().owner,
-            CameraSelectionOwner::User
-        );
-        assert!(
-            app.world()
-                .resource::<ViewportCameraSelection>()
-                .requested
-                .as_ref()
-                .is_some_and(|requested| matches!(
-                    requested,
-                    RequestedCamera::Entity(entity) if *entity == avatar
-                )),
-            "the incoming avatar must publish the existing selection intent"
-        );
-    }
-
-    #[test]
-    fn initial_avatar_view_does_not_override_explicit_director_selection() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<SceneViewport>()
-            .init_resource::<TheLocalAvatar>()
-            .init_resource::<ViewportCameraSelection>()
-            .init_resource::<CameraSelectionStatus>()
-            .add_observer(on_activate_camera)
-            .add_observer(on_request_local_avatar_view)
-            .add_systems(Update, request_initial_avatar_view);
-
-        let director = app
-            .world_mut()
-            .spawn((SceneCamera::default(), Name::new("Director")))
-            .id();
-        app.world_mut().trigger(ActivateCamera::director(director));
-
-        let _ = app
-            .world_mut()
-            .spawn((SceneCamera::default(), LocalAvatar))
-            .id();
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<ViewportCameraSelection>().owner,
-            CameraSelectionOwner::Director
-        );
-        assert_eq!(
-            app.world().resource::<ViewportCameraSelection>().requested,
-            Some(RequestedCamera::Entity(director))
-        );
-    }
-
-    #[test]
-    fn initial_avatar_view_waits_for_a_camera_added_after_the_avatar() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<SceneViewport>()
-            .init_resource::<TheLocalAvatar>()
-            .init_resource::<ViewportCameraSelection>()
-            .init_resource::<CameraSelectionStatus>()
-            .add_observer(on_activate_camera)
-            .add_observer(on_request_local_avatar_view)
-            .add_systems(Update, request_initial_avatar_view);
-
-        let avatar = app.world_mut().spawn(LocalAvatar).id();
-        app.update();
         assert_eq!(
             app.world().resource::<ViewportCameraSelection>().owner,
             CameraSelectionOwner::None,
-            "the intent must wait until the avatar has a usable scene camera"
+            "avatar projection is presence, not presentation policy"
         );
-
-        app.world_mut()
-            .entity_mut(avatar)
-            .insert(SceneCamera::default());
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<ViewportCameraSelection>().owner,
-            CameraSelectionOwner::User
-        );
-        assert_eq!(
-            app.world().resource::<ViewportCameraSelection>().requested,
-            Some(RequestedCamera::Entity(avatar))
-        );
+        assert_eq!(app.world().resource::<SceneViewport>().active_camera, None);
     }
 
     #[test]

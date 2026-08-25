@@ -180,7 +180,7 @@ impl GridFrameTransform {
     }
 }
 
-/// A point in the FLOATING-ORIGIN render frame (camera-relative). f64 so the
+/// A point in the OriginAnchor-relative render frame. f64 so the
 /// blessed conversions don't round-trip through f32; construct from render
 /// `Transform`/`GlobalTransform` data via [`RenderPos::from_render_f32`].
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -213,8 +213,8 @@ impl RenderPos {
 ///
 /// This is the user/runtime boundary for generic positions and orientations.
 /// Callers do not inspect a `Grid`, choose an ancestor, or read a
-/// camera-relative [`GlobalTransform`]; the world shell/celestial projection
-/// owns [`crate::ActivePhysicsFrame`] and this parameter performs the complete
+/// camera-relative [`GlobalTransform`]; the application/scene-mount owner binds
+/// [`crate::ActivePhysicsFrame`] explicitly and this parameter performs the complete
 /// BigSpace hierarchy conversion. Explicit astronomical products continue to
 /// use their typed semantic reference frames instead.
 #[derive(SystemParam)]
@@ -259,6 +259,7 @@ impl ActiveFramePoseQuery<'_, '_> {
 #[cfg(test)]
 mod active_frame_pose_tests {
     use super::*;
+    use crate::WorldGridConfig;
     use bevy::ecs::system::SystemState;
 
     fn read_pose(world: &mut World, entity: Entity) -> (GridPos, GridRot) {
@@ -274,11 +275,14 @@ mod active_frame_pose_tests {
     fn active_frame_pose_is_invariant_to_rotating_and_translating_ancestors() {
         let mut world = World::new();
         let root = world
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         let body = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                WorldGridConfig::default().grid(),
                 CellCoord::new(80_000, -4_000, 7_000),
                 Transform::from_rotation(Quat::from_rotation_y(0.8)),
                 ChildOf(root),
@@ -286,7 +290,7 @@ mod active_frame_pose_tests {
             .id();
         let site = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                WorldGridConfig::default().grid(),
                 CellCoord::new(500, -900, 200),
                 Transform::from_rotation(Quat::from_rotation_z(-0.4)),
                 ChildOf(body),
@@ -320,7 +324,10 @@ mod active_frame_pose_tests {
     fn active_frame_position_converts_to_the_entity_parent_once() {
         let mut world = World::new();
         let active = world
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         let parent_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let parent = world
@@ -352,7 +359,10 @@ mod active_frame_pose_tests {
     fn active_frame_rotation_converts_to_the_entity_parent_once() {
         let mut world = World::new();
         let active = world
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         let parent_rotation = Quat::from_rotation_y(0.8);
         let parent = world
@@ -551,6 +561,7 @@ pub fn common_grid_poses<F: QueryFilter>(
 #[cfg(test)]
 mod common_grid_tests {
     use super::common_grid;
+    use crate::WorldGridConfig;
     use bevy::ecs::system::SystemState;
     use bevy::prelude::*;
     use big_space::prelude::{CellCoord, Grid};
@@ -559,14 +570,18 @@ mod common_grid_tests {
     fn chooses_the_nearest_shared_grid() {
         let mut world = World::new();
         let root = world
-            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO))
+            .spawn((WorldGridConfig::default().grid(), CellCoord::ZERO))
             .id();
         let first_grid = world
-            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO, ChildOf(root)))
+            .spawn((
+                WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                ChildOf(root),
+            ))
             .id();
         let second_grid = world
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 ChildOf(first_grid),
             ))
@@ -1292,6 +1307,7 @@ mod tests {
     //! module is that missing safety net. Locks the contract before the snapshot
     //! apply path is made cell-aware.
     use super::*;
+    use crate::WorldGridConfig;
     use bevy::ecs::system::SystemState;
 
     const EDGE: f32 = 2000.0;
@@ -1419,7 +1435,7 @@ mod tests {
 
     #[test]
     fn render_point_round_trips_through_grid_global_transform() {
-        let grid = Grid::new(2_000.0, 100.0);
+        let grid = WorldGridConfig::default().grid();
         let cell = CellCoord::new(4, -3, 2);
         let local = Transform::from_translation(Vec3::new(12.5, -4.0, 99.0));
         let rendered = grid

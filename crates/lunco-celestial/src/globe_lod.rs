@@ -22,6 +22,7 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
+use lunco_core::SceneViewport;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
 use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square};
@@ -95,6 +96,20 @@ struct MeanSphereSource {
     radius_m: f64,
 }
 
+/// An explicitly authored flat site surface. Its top face is the local terrain
+/// datum; the existing composite source transitions from that finite footprint
+/// to the mean-body sphere outside the footprint collar.
+#[derive(Clone, Copy)]
+struct FlatSurfaceSource {
+    height_m: f64,
+}
+
+impl HeightSource for FlatSurfaceSource {
+    fn height_at(&self, _x: f64, _z: f64) -> f64 {
+        self.height_m
+    }
+}
+
 impl HeightSource for MeanSphereSource {
     fn height_at(&self, x: f64, z: f64) -> f64 {
         // The handoff coordinates are gnomonic (`x = R·tan(theta)`), not
@@ -107,7 +122,22 @@ impl HeightSource for MeanSphereSource {
 }
 
 #[derive(Clone)]
-struct HandoffSource(CompositeHeightSource<BoundarySiteSource, MeanSphereSource>);
+enum SiteSurfaceSource {
+    Dem(BoundarySiteSource),
+    Flat(FlatSurfaceSource),
+}
+
+impl HeightSource for SiteSurfaceSource {
+    fn height_at(&self, x: f64, z: f64) -> f64 {
+        match self {
+            Self::Dem(source) => source.height_at(x, z),
+            Self::Flat(source) => source.height_at(x, z),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HandoffSource(CompositeHeightSource<SiteSurfaceSource, MeanSphereSource>);
 
 impl HeightSource for HandoffSource {
     fn height_at(&self, x: f64, z: f64) -> f64 {
@@ -167,13 +197,13 @@ impl GlobeHandoff {
             half: half_extent,
         };
         let source = HandoffSource(CompositeHeightSource::new(
-            BoundarySiteSource {
+            SiteSurfaceSource::Dem(BoundarySiteSource {
                 oracle: oracle.clone(),
                 region,
                 half_extent,
                 datum_m: border_datum,
                 boundary_m: oracle.spacing() as f64,
-            },
+            }),
             MeanSphereSource { radius_m },
             region,
             blend_m,
@@ -187,6 +217,42 @@ impl GlobeHandoff {
             blend_m,
             source,
             source_key: oracle.surface_key(),
+        }
+    }
+
+    /// Compose an authored flat site cube with the mean-body sphere. The
+    /// footprint is deliberately square because the globe clip contract is a
+    /// square tangent-plane cutout; non-square authored geometry is rejected by
+    /// the USD terrain projection before it reaches this constructor.
+    pub fn new_flat(
+        dir: DVec3,
+        east: DVec3,
+        north: DVec3,
+        radius_m: f64,
+        height_m: f64,
+        half_extent: f64,
+    ) -> Self {
+        let sagitta_distance = (2.0 * radius_m * height_m.abs()).sqrt();
+        let blend_m = half_extent.max(sagitta_distance).max(0.0);
+        let region = Square {
+            center: [0.0, 0.0],
+            half: half_extent,
+        };
+        let source = HandoffSource(CompositeHeightSource::new(
+            SiteSurfaceSource::Flat(FlatSurfaceSource { height_m }),
+            MeanSphereSource { radius_m },
+            region,
+            blend_m,
+        ));
+        Self {
+            dir,
+            east,
+            north,
+            half_extent,
+            radius_m,
+            blend_m,
+            source,
+            source_key: height_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
         }
     }
 
@@ -525,10 +591,14 @@ pub(crate) fn update_globe_lod(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     budget: Res<GlobeLodBudget>,
+    // `SceneViewport` is the presentation owner. Reading `Camera::is_active`
+    // here would make simulation-space LOD depend on a render-side actuation
+    // that occurs later in PostUpdate, and would reintroduce a startup race.
+    viewport: Res<SceneViewport>,
     // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"
     // is a render-FREE question, and asking it with `Camera3d` was what made this
     // crate link bevy_core_pipeline → wgpu. See `lunco_render::camera`.
-    cameras: Query<(Entity, &Camera, &bevy::camera::RenderTarget), With<SceneCamera>>,
+    cameras: Query<(Entity, &bevy::camera::RenderTarget), With<SceneCamera>>,
     q_parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -536,23 +606,16 @@ pub(crate) fn update_globe_lod(
     visibility: Query<&Visibility>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobeHandoff>)>,
 ) {
-    // ONLY the active window camera may steer the LOD. `iter().next()` picked
-    // an arbitrary Camera3d — including offscreen preview cameras — and
-    // archetype moves can flip iteration order between frames, alternating
-    // the LOD focus point and thrashing the whole tile set every frame.
-    let mut active_cameras = cameras
-        .iter()
-        .filter(|(_, c, target)| {
-            c.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
-        })
-        .map(|(entity, _, _)| entity);
-    let Some(camera_entity) = active_cameras.next() else {
+    // ONLY the explicitly bound window camera may steer the LOD. The binding is
+    // intentionally allowed to be absent while a scene is projecting; an empty
+    // cover during that lifecycle interval is correct and must not panic the app.
+    let Some(camera_entity) = viewport.active_camera.filter(|entity| {
+        cameras
+            .get(*entity)
+            .is_ok_and(|(_, target)| matches!(target, bevy::camera::RenderTarget::Window(_)))
+    }) else {
         return;
     };
-    assert!(
-        active_cameras.next().is_none(),
-        "globe LOD requires exactly one active window SceneCamera"
-    );
 
     for (body_ent, lod, mut tiles, handoff) in &mut bodies {
         // Camera relative to the body centre in the rotating frame the tiles
@@ -944,7 +1007,7 @@ mod tests {
     #[test]
     fn cross_body_lod_camera_uses_the_authoritative_big_space_pose() {
         let mut world = World::new();
-        let grid = Grid::new(2_000.0, 100.0);
+        let grid = lunco_core::WorldGridConfig::default().grid();
         let root = world.spawn(grid.clone()).id();
 
         let earth_center = DVec3::new(-4_671_234.375, 81_234.625, -19_876.125);
@@ -1061,6 +1124,20 @@ mod tests {
         assert_eq!(source.height_at(10.0, 10.0), 200.0);
         assert_eq!(source.height_at(20.0, 20.0), 100.0);
         assert!(source.height_at(15.0, 15.0) < 200.0);
+    }
+
+    #[test]
+    fn flat_site_handoff_owns_the_authored_datum_inside_its_square() {
+        let handoff = GlobeHandoff::new_flat(DVec3::X, DVec3::Z, DVec3::Y, 1_737_400.0, 0.0, 100.0);
+        assert!(handoff
+            .geometry()
+            .contains(DVec3::new(1.0, 0.00001, 0.00001).normalize()));
+        assert!(!handoff
+            .geometry()
+            .contains(DVec3::new(1.0, 0.001, 0.0).normalize()));
+        let patch = handoff.patch();
+        assert_eq!(patch.source.height_at(0.0, 0.0), 0.0);
+        assert_eq!(patch.source.height_at(50.0, -50.0), 0.0);
     }
 
     #[test]

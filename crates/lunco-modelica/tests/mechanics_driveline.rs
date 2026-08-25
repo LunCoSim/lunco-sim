@@ -1,14 +1,10 @@
 //! `LunCo.Mechanics` — the rotational domain, and the connector that makes a
 //! driveline composable.
 //!
-//! `Electrical` has had `Pin` and `Thermal` has had `HeatPort` since the
-//! beginning, so a battery joins a motor acausally and the node balances itself.
-//! Torque had no such connector, so the one coupling every rover depends on —
-//! motor to gearbox to wheel — was spelled as a CAUSAL wire
-//! (`Gearbox.inputs:torque.connect = Motor.outputs:torque`). A causal wire
-//! carries torque one way and cannot carry speed back, so the motor never sees
-//! its own shaft speed, which is why its torque-speed curve had to live outside
-//! the model entirely.
+//! `Flange` is the complete rotational boundary for explicitly composed
+//! Modelica driveline models. The production rover motor/gearbox/wheel path is
+//! a separate USD/Avian owner; its causal USD connection is read by the native
+//! powertrain projector and must not be mixed into an electrical Modelica island.
 //!
 //! These tests pin the two properties that claim is resting on: the members
 //! compile as package members, and a driveline built from them with `connect()`
@@ -131,8 +127,7 @@ fn gearbox_loses_torque_to_friction_but_never_revolutions() {
         "the speed relation is exact — a gearbox does not lose revolutions"
     );
     assert!(
-        gear.contains("ratio * eta * flange_a.tau")
-            && gear.contains("flange_b.tau = -max("),
+        gear.contains("ratio * eta * flange_a.tau") && gear.contains("flange_b.tau = -max("),
         "efficiency applies on the torque path and the authored output rating limits it"
     );
 }

@@ -91,6 +91,48 @@ pub fn is_domain_network_root(view: &StageView<'_>, prim: &SdfPath) -> bool {
     view.any_attr_with_prefix(prim, "collection:components:")
 }
 
+/// The default synthesizer for a collection of Modelica program facets.
+pub const DEFAULT_DOMAIN_SYNTHESIZER: &str = "acausal-network";
+
+/// The geometry-derived synthesizer for a collection of force actuators.
+pub const ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER: &str = "actuator-wrench";
+
+/// Derive the owner of a component collection from its composed member roles.
+///
+/// A collection of LunCoProgramAPI members is a Modelica network. A
+/// collection of LunCoForceActuatorAPI members is a geometry-derived wrench
+/// allocator. Mixed or unclassified collections are invalid and must be
+/// reported by the caller; no owner is guessed.
+pub fn derive_synthesizer_name(view: &StageView<'_>, root: &SdfPath) -> Result<String, String> {
+    let members = view
+        .collection_members(root, "components")
+        .map_err(|error| format!("could not read component collection: {error}"))?;
+    let mut force_actuators = 0usize;
+    let mut modelica_programs = 0usize;
+    let mut unclassified = Vec::new();
+    for member in members.iter().filter(|path| !path.is_property_path()) {
+        let is_force = view.has_api_schema(member, "LunCoForceActuatorAPI");
+        let is_program = view.has_api_schema(member, "LunCoProgramAPI");
+        match (is_force, is_program) {
+            (true, false) => force_actuators += 1,
+            (false, true) => modelica_programs += 1,
+            _ => unclassified.push(member.to_string()),
+        }
+    }
+    if force_actuators > 0 && modelica_programs == 0 && unclassified.is_empty() {
+        return Ok(ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER.to_string());
+    }
+    if modelica_programs > 0 && force_actuators == 0 && unclassified.is_empty() {
+        return Ok(DEFAULT_DOMAIN_SYNTHESIZER.to_string());
+    }
+    if force_actuators > 0 || modelica_programs > 0 || !unclassified.is_empty() {
+        return Err(format!(
+            "component collection has incompatible member roles: force_actuators={force_actuators}, modelica_programs={modelica_programs}, unclassified={unclassified:?}"
+        ));
+    }
+    Ok(DEFAULT_DOMAIN_SYNTHESIZER.to_string())
+}
+
 /// Every Modelica program prim on the stage that belongs to SOME component
 /// collection.
 ///

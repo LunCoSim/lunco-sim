@@ -64,6 +64,7 @@
 //                             modelica_member_count,
 //                             units[], dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
+//                             synthesizer_error,
 //                             ambiguous_boundary_sources[], collection_error }
 //       scopes applying CollectionAPI:components, including codeless-schema
 //       runtimes whose applied-schema enumeration is incomplete.
@@ -128,8 +129,92 @@ fn lint_usd(facts) {
     for f in dangling_network_connector(facts) { out.push(f); }
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
+    for f in invalid_network_synthesizer(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    for f in telemetry_target_contract(facts) { out.push(f); }
     out
+}
+
+/// A telemetry declaration either lives on the prim that exposes its sampled
+/// port or names exactly one measured prim through the standard relationship.
+/// A Scope with no runtime surface is never allowed to self-bind: that would
+/// create a channel which is visible in metadata but has no producer.
+fn telemetry_target_contract(facts) {
+    let out = [];
+    for declaration in facts.telemetry_declarations {
+        let path = declaration.path;
+        if !declaration.source_valid {
+            out.push(telemetry_source_missing_finding(path));
+        }
+        let issue_kind = telemetry_target_issue_kind(declaration);
+        if issue_kind == 1 {
+            out.push(telemetry_target_cardinality_finding(path));
+        }
+        if issue_kind == 2 {
+            out.push(telemetry_target_required_finding(path));
+        }
+        if issue_kind == 3 {
+            out.push(telemetry_target_missing_finding(path));
+        }
+    }
+    out
+}
+
+fn telemetry_target_issue_kind(declaration) {
+    if declaration.targets.len() > 1 {
+        return 1;
+    }
+    if telemetry_target_required(declaration) {
+        return 2;
+    }
+    if telemetry_target_missing(declaration) {
+        return 3;
+    }
+    0
+}
+
+fn telemetry_target_required(declaration) {
+    declaration.targets.len() == 0 && !declaration.direct_surface
+}
+
+fn telemetry_target_missing(declaration) {
+    declaration.targets.len() == 1 && !declaration.target_exists
+}
+
+fn telemetry_source_missing_finding(path) {
+    finding(
+        "telemetry-source-missing",
+        "error",
+        path,
+        "Telemetry declaration has no non-empty lunco:telemetry:port or lunco:telemetry:reflect; author one source field.",
+    )
+}
+
+fn telemetry_target_cardinality_finding(path) {
+    finding(
+        "telemetry-target-cardinality",
+        "error",
+        path,
+        "Telemetry declaration has multiple lunco:telemetry:target relationships; author exactly one target.",
+    )
+}
+
+fn telemetry_target_required_finding(path) {
+    finding(
+        "telemetry-target-required",
+        "error",
+        path,
+        "Telemetry declaration has no target relationship and its prim exposes no sampled port; place it on the measured prim or author exactly one lunco:telemetry:target.",
+    )
+}
+
+fn telemetry_target_missing_finding(path) {
+    finding(
+        "telemetry-target-missing",
+        "error",
+        path,
+        "Telemetry target relationship resolves to no composed prim; author a target that exists on the composed stage.",
+    )
 }
 
 /// A link endpoint must be the single physical phase centre of its assembly.
@@ -254,11 +339,12 @@ fn unsupported_program_prim_type(facts) {
 fn empty_component_network(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        if scope.synthesizer_error != "" { continue; }
         // A non-default synthesizer owns the collection contract.  It may
         // legitimately contain physical USD members rather than Modelica
         // facets (for example the authored actuator-wrench allocator), so the
         // generic acausal-network empty check does not apply.
-        if scope.synthesizer != "" { continue; }
+        if scope.synthesizer != "" && scope.synthesizer != "acausal-network" { continue; }
         if scope.collection_error != "" || scope.modelica_member_count != 0 { continue; }
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
@@ -303,15 +389,29 @@ fn invalid_network_program_source(facts) {
 fn invalid_modelica_causal_cardinality(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        if scope.synthesizer_error != "" { continue; }
         // Boundary cardinality is part of the selected synthesizer's public
         // contract.  Only the default acausal-network synthesizer promises
         // scalar Modelica input/output semantics here.
-        if scope.synthesizer != "" { continue; }
+        if scope.synthesizer != "" && scope.synthesizer != "acausal-network" { continue; }
         for property in scope.invalid_causal_properties {
             let m = "has invalid causal connection cardinality —";
             m += " a scalar Modelica input accepts at most one source and a network output requires exactly one.";
             out.push(finding("invalid-modelica-causal-cardinality", "error", property, m));
         }
+    }
+    out
+}
+
+/// A mixed or unclassified collection has no safe domain owner.
+fn invalid_network_synthesizer(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.synthesizer_error == "" { continue; }
+        let m = "has no unambiguous domain synthesizer — ";
+        m += scope.synthesizer_error;
+        m += ". Use one typed member role per collection or select a registered synthesizer explicitly.";
+        out.push(finding("invalid-network-synthesizer", "error", scope.path, m));
     }
     out
 }

@@ -14,7 +14,7 @@ use bevy::math::Isometry3d;
 
 use crate::SpawnState;
 use lunco_controller::ControllerLink;
-use lunco_core::{on_command, register_commands, Avatar, Command};
+use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
 use lunco_usd_bevy::UsdPrimPath;
 
@@ -189,7 +189,7 @@ pub(crate) fn clear_selection(
 /// Releasing control leaves the last vessel focused, just as it leaves the
 /// camera at its current view.
 pub fn select_possessed_vessel(
-    q_avatar: Query<Ref<ControllerLink>, With<Avatar>>,
+    q_avatar: Query<Ref<ControllerLink>, (With<Avatar>, With<LocalAvatar>)>,
     q_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
@@ -680,6 +680,7 @@ mod tests {
         let vessel = app.world_mut().spawn_empty().id();
         app.world_mut().spawn((
             Avatar,
+            LocalAvatar,
             ControllerLink {
                 vessel_entity: vessel,
             },

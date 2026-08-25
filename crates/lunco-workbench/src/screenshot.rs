@@ -300,12 +300,12 @@ fn deliver_screenshot(
 /// rather than advertising a `take_photo` that captures nothing.
 ///
 /// `default`: `target` must have a reflect default or the executor's constructibility guard
-/// drops a no-param call — `photo()` in `control.rhai` sends `{}`. The default (`None`) is
-/// exactly the documented "capture from the active scene camera".
+/// drops a no-param call — `photo()` in `control.rhai` sends `{}`. The default (`None`) means
+/// capture the explicitly resolved active scene camera.
 #[Command(default)]
 pub struct CaptureFromCamera {
-    /// Vessel whose mounted camera to capture from. `None` → the active scene camera,
-    /// falling back to the primary window when none is bound.
+    /// Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved
+    /// active scene camera.
     pub target: Option<Entity>,
 }
 
@@ -328,33 +328,28 @@ fn on_capture_from_camera(
         save_path: Some(timestamped_name("photo")),
         region: None,
     };
-    let camera_entity = match target {
+    let Some(camera_entity) = (match target {
         // A specific vessel → find a `Camera3d` among its descendants (its USD `def Camera`
         // mount).
         Some(vessel) => find_descendant_camera(vessel, &cameras, &children),
-        // No target → the active scene camera, else `None` (→ primary window).
+        // No target → the camera selected by the viewport authority.
         None => viewport.as_deref().and_then(|v| v.active_camera),
-    };
-
-    // Distinguish "explicit target requested but not found" (a vessel with no camera —
-    // capturing the primary window would silently photograph the WRONG viewport, which for a
-    // science instrument is worse than no data) from "no target requested" (the
-    // active-camera/primary-window fallback is intended). The former warns + no-ops.
-    let Some(camera_entity) = camera_entity else {
-        if target.is_some() {
-            warn!(
-                "[CaptureFromCamera] target vessel has no Camera3d descendant; not capturing \
-                 (would photograph the wrong viewport)"
-            );
-            return;
-        }
-        commands.spawn((Screenshot::primary_window(), request));
+    }) else {
+        let message = if target.is_some() {
+            "target vessel has no unique mounted Camera3d"
+        } else {
+            "no active viewport camera is resolved"
+        };
+        report_capture_failure(&mut commands, message);
         return;
     };
 
     // Bevy's `Screenshot` captures a render TARGET (window/image), not a camera directly.
     let Ok((cam, _, rt)) = cameras.get(camera_entity) else {
-        commands.spawn((Screenshot::primary_window(), request));
+        report_capture_failure(
+            &mut commands,
+            format!("resolved camera {camera_entity:?} is no longer realized"),
+        );
         return;
     };
 
@@ -367,11 +362,10 @@ fn on_capture_from_camera(
     // (`RenderTarget::Image` + `Screenshot::image`) so the camera renders its own view
     // off-screen regardless of what the window shows. Until then, an explicit vessel capture
     // only succeeds when its camera is live.
-    if target.is_some() && !cam.is_active {
-        warn!(
-            "[CaptureFromCamera] target vessel's camera is not active; not capturing (a window \
-             capture would photograph the operator's viewport, not the vessel's). Needs a \
-             render-to-image target for inactive mounted cameras."
+    if !cam.is_active {
+        report_capture_failure(
+            &mut commands,
+            "resolved camera is not active; capture would photograph a different viewport",
         );
         return;
     }
@@ -381,29 +375,45 @@ fn on_capture_from_camera(
             bevy::window::WindowRef::Primary => Screenshot::primary_window(),
             bevy::window::WindowRef::Entity(entity) => Screenshot::window(*entity),
         },
-        // Image/texture-view targets aren't capturable via `Screenshot` (they'd
-        // double-render); fall back to the primary window.
-        _ => Screenshot::primary_window(),
+        // Image/texture-view targets need an explicit image capture path. A primary-window
+        // substitute would silently return a different camera's pixels.
+        _ => {
+            report_capture_failure(
+                &mut commands,
+                "resolved camera does not target a capturable window",
+            );
+            return;
+        }
     };
     commands.spawn((screenshot, request));
 }
 
-/// Walk `root`'s descendants (BFS) and return the first `Camera3d` — a vessel's mounted camera.
+fn report_capture_failure(commands: &mut Commands, message: impl Into<String>) {
+    let message = message.into();
+    warn!("[CaptureFromCamera] {message}");
+    lunco_core::trigger_error(commands, "camera-capture-failed", message);
+}
+
+/// Walk `root`'s descendants and return a camera only when the mounted-camera contract is
+/// unique. Descendant/entity order is not camera ownership.
 fn find_descendant_camera(
     root: Entity,
     cameras: &Query<(&Camera, &Camera3d, &bevy::camera::RenderTarget), With<SceneCamera>>,
     children: &Query<&Children>,
 ) -> Option<Entity> {
     let mut stack = vec![root];
+    let mut found = None;
     while let Some(entity) = stack.pop() {
         if cameras.get(entity).is_ok() {
-            return Some(entity);
+            if found.replace(entity).is_some() {
+                return None;
+            }
         }
         if let Ok(kids) = children.get(entity) {
             stack.extend(kids.iter());
         }
     }
-    None
+    found
 }
 
 /// Register the science instrument tools into the global `lunco_tools` registry, so a
@@ -418,7 +428,8 @@ fn register_science_tools() {
         vec!["take_photo/0".into()],
         |world, vessel, _gid, _args| {
             // The command's observer resolves the vessel's `Camera3d` descendant and captures
-            // from the window it renders to. A vessel with no camera no-ops with a warn.
+            // from the window it renders to. An invalid or ambiguous camera contract reports
+            // an error and produces no image.
             world.trigger(CaptureFromCamera {
                 target: Some(vessel),
             });

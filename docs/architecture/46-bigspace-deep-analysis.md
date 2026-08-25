@@ -13,8 +13,8 @@ Keep this page operational. The complete contract is in
 | Grid lookup | `lunco-celestial` | `ReferenceFrameIndex` |
 | f64 pose composition | `lunco-core` | `ActiveFramePoseQuery`, frame helpers |
 | Cell/local split | `big_space` | `Grid::translation_to_grid` |
-| Camera origin | `lunco-usd-bevy` | camera mount operation |
-| Physics pose bridge | `lunco-usd-avian` | `ActivePhysicsFrame` bridge |
+| Camera origin | `lunco-core` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |
+| Physics pose bridge | `lunco-usd-avian` | explicitly bound `ActivePhysicsFrame` bridge |
 | Scene ownership | `lunco-core` / `lunco-usd` | `SceneMountState`, typed transitions |
 
 ## Correct data flow
@@ -48,10 +48,17 @@ When a camera, body, rover, trajectory, or line jitters:
    `translation_to_grid` exactly once.
 5. Verify the entity is attached atomically and has no competing transform
    writer.
-6. For physics, verify `ActivePhysicsFrame` and the bridge path, not the
+6. For physics, verify that the application/scene mount explicitly bound
+   `ActivePhysicsFrame` to the intended `WorldGrid` or site grid, then verify
+   the bridge path, not the
    rendered `GlobalTransform`.
 7. For a scene replacement, verify the old root was invalidated before
    deferred despawn and that projection only accepts the active root.
+8. For physics admission, verify the bridge's frame diagnostic and
+   `PhysicsHolds::FRAME_CONTRACT` are clear before `StepSimulation` can run.
+9. For site lighting and solar poses, verify there is no more than one
+   `SiteAnchor`; ambiguous authoring must produce a diagnostic and no selected
+   site frame.
 
 Do not add a guard that corrects an invalid pose after the fact. Fix the
 producer, frame declaration, or ownership boundary that made the invalid state

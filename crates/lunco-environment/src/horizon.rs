@@ -81,6 +81,7 @@
 
 use std::sync::Arc;
 
+use crate::SunRenderState;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
@@ -782,6 +783,7 @@ pub fn start_shadow_cache_bake(
     mut images: ResMut<Assets<Image>>,
     cfg: Res<HorizonShadowCacheConfig>,
     sun: SunQuery,
+    render_sun: Option<Res<SunRenderState>>,
     terrains: Query<
         (
             Entity,
@@ -802,10 +804,15 @@ pub fn start_shadow_cache_bake(
         );
         return;
     }
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
+    let Some((_, tan_r, _csm_far)) = pick_sun(&sun) else {
         return;
     };
-    let to_sun_world: Vec3 = sun_gt.back().into();
+    let Some(to_sun_world) = render_sun
+        .as_deref()
+        .and_then(|state| state.direction_to_sun_world)
+    else {
+        return;
+    };
     let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
     let march_steps = cfg.march_steps;
     let samples_per_axis = cfg.samples_per_axis;
@@ -963,7 +970,6 @@ pub type SunQuery<'w, 's> = Query<
     'w,
     's,
     (
-        &'static GlobalTransform,
         &'static DirectionalLight,
         Option<&'static SunAngularDiameter>,
         Option<&'static CascadeShadowConfig>,
@@ -987,10 +993,10 @@ pub type SunQuery<'w, 's> = Query<
 /// `DistantLight`s — and that is reported rather than papered over, because no
 /// tiebreak here can know which one the author meant.
 ///
-/// Returns the transform, tan(angular radius), and the CSM far bound in metres
-/// (0 when the sun casts no cascade shadows — the march then covers the whole
-/// range).
-pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)> {
+/// Returns the authored light's render metadata, tan(angular radius), and the
+/// CSM far bound in metres (0 when the sun casts no cascade shadows — the
+/// march then covers the whole range). Direction comes from [`SunRenderState`].
+pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a DirectionalLight, f32, f32)> {
     let mut it = sun.iter();
     let first = it.next()?;
     if it.next().is_some() {
@@ -1003,7 +1009,7 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
         );
         return None;
     }
-    let (gt, light, ang, csm) = first;
+    let (light, ang, csm) = first;
     let csm_far = if light.shadow_maps_enabled {
         csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
     } else {
@@ -1015,7 +1021,7 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
         );
         return None;
     };
-    Some((gt, tan_sun_radius(diameter_deg), csm_far))
+    Some((light, tan_sun_radius(diameter_deg), csm_far))
 }
 
 // ─────────────────────────────────────────────────────────────────────────

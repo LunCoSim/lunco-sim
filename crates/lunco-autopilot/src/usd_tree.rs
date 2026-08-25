@@ -71,7 +71,7 @@ use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use lunco_core::{coords::GridPos, paths::prim_path_matches};
+use lunco_core::coords::GridPos;
 use serde_json::Value;
 
 /// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the
@@ -189,8 +189,10 @@ pub fn load_behavior_xml_assets(
 /// resolve into [`TargetBindings`].
 ///
 /// A `target` that parses as a coordinate triple (`"10;0;3"`, the plain BT.CPP form)
-/// is NOT a prim path and is skipped: a tree with baked coordinates still runs, it
-/// just has no draggable pins.
+/// is not a prim path and is skipped: a tree with baked coordinates still runs, it
+/// just has no draggable pins. Every other target is a USD identity and is handed to
+/// the USD resolver. The resolver requires an absolute composed prim path; relative
+/// or malformed targets therefore become explicit unresolved-route errors.
 pub fn target_paths(xml: &str) -> Vec<String> {
     let Ok(value) = crate::btcpp_xml::xml_to_value(xml) else {
         return Vec::new();
@@ -204,7 +206,7 @@ fn collect_target_paths(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Object(map) => {
             if let Some(Value::String(s)) = map.get("target") {
-                if s.starts_with('/') {
+                if parse_coord_target(s).is_none() {
                     out.push(s.clone());
                 }
             }
@@ -432,7 +434,7 @@ fn strip_reached_legs(v: &mut Value, reached: &std::collections::HashSet<String>
                     child
                         .get("target")
                         .and_then(|t| t.as_str())
-                        .map(|t| !reached.iter().any(|r| prim_path_matches(r, t)))
+                        .map(|t| !reached.iter().any(|r| r == t))
                         .unwrap_or(true)
                 });
             }
@@ -664,30 +666,17 @@ fn bake_targets(
         Value::Object(map) => {
             let resolved = match map.get("target") {
                 Some(Value::String(s)) => {
-                    if s.starts_with('/') {
+                    if let Some(p) = parse_coord_target(s) {
+                        // Verbatim: an authored waypoint is ALREADY in the
+                        // frame the tick runs in.
+                        Some(serde_json::json!([p.x, p.y, p.z]))
+                    } else {
                         match bindings.0.get(s.as_str()).and_then(|e| pose(*e)) {
                             Some(p) => Some(serde_json::json!([p.0.x, p.0.y, p.0.z])),
                             None => {
                                 missing.push(s.clone());
                                 None
                             }
-                        }
-                    } else {
-                        let parts: Vec<&str> = s.split(';').collect();
-                        if parts.len() == 3 {
-                            if let (Ok(x), Ok(y), Ok(z)) = (
-                                parts[0].trim().parse::<f64>(),
-                                parts[1].trim().parse::<f64>(),
-                                parts[2].trim().parse::<f64>(),
-                            ) {
-                                // Verbatim: an authored waypoint is ALREADY in the
-                                // frame the tick runs in.
-                                Some(serde_json::json!([x, y, z]))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
                         }
                     }
                 }
@@ -1197,6 +1186,21 @@ mod editor_tests {
             .map(|c| c["target"].as_str().unwrap())
             .collect();
         assert_eq!(legs, vec!["/Scene/Route/W0", "/Scene/Route/W1"]);
+    }
+
+    #[test]
+    fn strip_reached_legs_requires_exact_composed_prim_identity() {
+        let mut v = serde_json::json!({
+            "kind": "sequence",
+            "children": [
+                { "kind": "drive_to", "target": "/World/Route/W0" }
+            ]
+        });
+        let reached = std::collections::HashSet::from(["/Route/W0".to_string()]);
+
+        strip_reached_legs(&mut v, &reached);
+
+        assert_eq!(v["children"].as_array().unwrap().len(), 1);
     }
 
     #[test]

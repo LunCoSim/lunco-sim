@@ -106,10 +106,110 @@ pub enum PhysicsBridgeSystems {
 /// `Position` ↔ (cell, `Transform`) sync.
 pub struct BigSpacePhysicsBridgePlugin;
 
+fn physics_frame_contract_ready(
+    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
+    q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+) -> bool {
+    let Some(active) = active else {
+        return false;
+    };
+    !diagnostics.is_some_and(|diagnostics| {
+        diagnostics
+            .findings
+            .iter()
+            .any(|finding| finding.producer == "usd-avian")
+    }) && q_grids.get(active.0).is_ok()
+        && q_physical.iter().all(|entity| {
+            lunco_core::coords::pose_in_grid(entity, active.0, &q_parents, &q_grids, &q_spatial)
+                .is_some()
+        })
+}
+
+/// Validate the frame before Avian's nested schedule reads it. The bridge must
+/// stop at this boundary when a physical entity is not connected to the one
+/// explicitly bound frame; selecting another grid would create load-order
+/// dependent physics and hide the ownership error.
+fn validate_physics_frame_contract(
+    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+) {
+    let mut findings = Vec::new();
+    if !q_physical.is_empty() {
+        let Some(active) = active else {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-frame".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "usd-avian".to_string(),
+                subject: "physics-world".to_string(),
+                message: "physical entities exist but no physics frame is explicitly bound"
+                    .to_string(),
+            });
+            if let Some(mut diagnostics) = diagnostics {
+                diagnostics.replace_producer("usd-avian", findings);
+            }
+            if let Some(holds) = holds.as_deref_mut() {
+                holds.set(lunco_physics::PhysicsHolds::FRAME_CONTRACT, true);
+            }
+            return;
+        };
+        if q_grids.get(active.0).is_err() {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "physics-frame".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "usd-avian".to_string(),
+                subject: "physics-world".to_string(),
+                message: format!(
+                    "explicit physics frame {0:?} is not a live BigSpace Grid",
+                    active.0
+                ),
+            });
+        } else {
+            for entity in &q_physical {
+                if lunco_core::coords::pose_in_grid(
+                    entity, active.0, &q_parents, &q_grids, &q_spatial,
+                )
+                .is_none()
+                {
+                    findings.push(lunco_core::RuntimeDiagnostic {
+                        code: "physics-frame".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "usd-avian".to_string(),
+                        subject: format!("physical-entity:{entity:?}"),
+                        message: format!(
+                            "physical entity {entity:?} is disconnected from explicitly bound physics frame {0:?}",
+                            active.0
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    let frame_contract_invalid = !findings.is_empty();
+    if let Some(mut diagnostics) = diagnostics {
+        diagnostics.replace_producer("usd-avian", findings);
+    }
+    if let Some(holds) = holds.as_deref_mut() {
+        holds.set(
+            lunco_physics::PhysicsHolds::FRAME_CONTRACT,
+            frame_contract_invalid,
+        );
+    }
+}
+
 impl Plugin for BigSpacePhysicsBridgePlugin {
     fn build(&self, app: &mut App) {
-        // Runtime-gated in avian (`run_if` on the resource), so overriding the
-        // resource after `PhysicsPlugins` disables all three systems.
+        // The bridge owns the frame admission contract. The fixed solver set
+        // below is gated directly, while PhysicsGatePlugin consumes the same
+        // hold to pause Time<Physics> and prevent force accumulation.
         // `transform_to_collider_scale` stays on: collider scale changes are
         // spawn-shaped and scale is big_space-preserved.
         app.insert_resource(PhysicsTransformConfig {
@@ -118,6 +218,16 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
             position_to_transform: false,
             ..default()
         });
+        app.init_resource::<lunco_core::RuntimeDiagnostics>();
+        app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.add_systems(
+            PreUpdate,
+            validate_physics_frame_contract.before(lunco_physics::apply_physics_holds),
+        );
+        app.configure_sets(
+            FixedPostUpdate,
+            PhysicsSystems::StepSimulation.run_if(physics_frame_contract_ready),
+        );
         // Every body (and standalone collider) carries the bridge's shadow
         // copy from spawn; the NaN sentinel makes the first READ always fire,
         // which is also what initialises `Position` (avian's own spawn init
@@ -145,6 +255,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             pose_to_position
+                .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
                 // Before the physics STEP consumes Position/Rotation. Pinning
@@ -163,6 +274,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             reset_frame_dependent_solver_state
+                .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::FrameReset)
                 .after(PhysicsBridgeSystems::Read)
                 .before(PhysicsStepSystems::First),
@@ -176,6 +288,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             FixedPostUpdate,
             pose_to_position
+                .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
                 .before(PhysicsSystems::StepSimulation),
@@ -183,6 +296,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             position_to_pose
+                .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Writeback)
                 .in_set(PhysicsSystems::Writeback)
                 .after(PhysicsStepSystems::Last)
@@ -192,6 +306,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             propagate_collider_transforms_rootless
+                .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsTransformSystems::Propagate)
                 .after(PhysicsBridgeSystems::Read)
                 .before(PhysicsStepSystems::First),
@@ -1145,8 +1260,30 @@ mod tests {
     //! writeback conversion (world → parent-grid-local → cell remainder)
     //! must reproduce the original translation.
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_core::coords::world_pose;
+
+    #[test]
+    fn disconnected_physics_is_held_before_solver_admission() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeDiagnostics>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        world.spawn((RigidBody::Dynamic, Transform::default()));
+
+        world
+            .run_system_once(validate_physics_frame_contract)
+            .expect("frame validation system runs");
+
+        assert!(world
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::FRAME_CONTRACT));
+        assert!(world
+            .resource::<lunco_core::RuntimeDiagnostics>()
+            .findings
+            .iter()
+            .any(|finding| finding.code == "physics-frame"));
+    }
 
     #[test]
     fn world_pose_round_trips_through_cell_remainder() {

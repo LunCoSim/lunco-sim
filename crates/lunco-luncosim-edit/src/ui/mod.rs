@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, ControlBinding, InputPorts};
+use lunco_core::{Avatar, ControlBinding, InputPorts, TheLocalAvatar};
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
     PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
@@ -157,7 +157,8 @@ pub fn usd_selection_view_changed(
 /// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
     bindings: Res<lunco_controller::InputBindingsSettings>,
-    q_avatar: Query<&ControllerLink, With<Avatar>>,
+    local_avatar: Res<TheLocalAvatar>,
+    q_avatar: Query<&ControllerLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
     q_names: Query<Ref<Name>>,
     q_bindings: Query<Ref<ControlBinding>>,
     q_inputs: Query<Ref<InputPorts>>,
@@ -165,7 +166,10 @@ fn refresh_view_help_controls(
     mut last_target: Local<Option<Entity>>,
     mut published: Local<bool>,
 ) {
-    let target = q_avatar.iter().next().map(|link| link.vessel_entity);
+    let target = local_avatar
+        .0
+        .and_then(|entity| q_avatar.get(entity).ok())
+        .map(|link| link.vessel_entity);
     let target_changed = *last_target != target;
     let endpoint_changed = target.is_some_and(|entity| {
         q_names.get(entity).is_ok_and(|name| name.is_changed())

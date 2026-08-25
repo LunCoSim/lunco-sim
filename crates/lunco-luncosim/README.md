@@ -17,7 +17,9 @@ built from three named plugins composed by a tiny shell:
 - **`SandboxCorePlugin`** — sim / physics / cosim / USD / networking / API.
   Headless-safe, added unconditionally.
 - **`ui::SandboxUiPlugin`** (`ui` feature) — egui workbench, picking, the
-  in-scene editor, materials, panels, fallback camera. Added only when windowed.
+  in-scene editor, materials, panels, and authored-camera presentation. Added
+  only when windowed; a scene without an authored camera contract is rejected
+  for presentation rather than receiving an engine-created camera.
 - **`SandboxHeadlessPlugin`** — the `ScheduleRunner` plus the Modelica/spawn
   cores a server needs in the UI plugin's place. Added only when headless.
 

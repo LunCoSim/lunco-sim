@@ -474,7 +474,7 @@ mod tests {
         let mut app = App::new();
         let frame = app
             .world_mut()
-            .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
+            .spawn(lunco_core::WorldGridConfig::default().grid())
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
         let terrain = app

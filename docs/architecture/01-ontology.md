@@ -94,7 +94,13 @@ LunCoSim uses a layered approach to separate human intent from computer logic an
 ## 3. Core Entities
 
 ### Avatar
-The user's physical representation in the simulation. It provides **Agency** (Camera management, Mouse/Keyboard capture). An Avatar interacts with the world by **Possessing** a Space System and attaching a **Space SystemController**.
+An embodiment in the simulation that can carry presentation state and agency
+bindings. `Avatar` itself is not a user or session and does not grant local
+input authority. The `LocalAvatar` ownership marker identifies the one
+embodiment eligible for this process's input and interactive camera; a
+`RemoteAvatar` is another session's replicated embodiment. Session/control
+authority remains independent, so headless API, autopilot, and mission control
+can operate without an avatar.
 
 ### Space System
 A high-level container entity (Rover, Satellite, Space Station). A Space System is composed of a **Physical Plant** and an **OBC Emulator**.

@@ -28,4 +28,15 @@ def Xform "TerrainOnly" (
         double3 xformOp:translate = (300.0, 2600.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
+
+    # A window host never infers presentation from avatar presence. The bare
+    # terrain demo therefore authors its initial view explicitly as data too.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
+    }
 }

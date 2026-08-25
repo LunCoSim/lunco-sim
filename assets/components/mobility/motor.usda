@@ -5,8 +5,8 @@
     metersPerUnit = 1
 )
 
-# A DRIVE MOTOR as a real part: a mass, a housing that collides, a torque curve, an
-# efficiency, a power draw and a waste-heat output. One machine carries as many of these
+# A DRIVE MOTOR as a real part: a mass, a housing that collides, a torque curve, a
+# power draw and a waste-heat output. One machine carries as many of these
 # as it has driven wheels, and each is independently commanded, independently sized and
 # independently able to overheat or fail.
 #
@@ -53,7 +53,7 @@
 # Scope includes the actual motor path in `CollectionAPI:components`; runtime projection
 # compiles all included facets into one circuit DAE, never one solver per part.
 def Xform "Motor" (
-    doc = "Reusable driven-wheel motor with mass, torque, efficiency, power, and thermal telemetry."
+    doc = "Reusable driven-wheel motor with mass, torque, power, and thermal telemetry."
     kind = "component"
     prepend apiSchemas = [
         "LunCoCatalogAPI",
@@ -184,9 +184,9 @@ def Xform "Motor" (
     # road speed than a ceiling it cannot.
     #
     # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm. The mechanical
-    # curve and the electrical facet are separate until the Modelica motor is
-    # shaft-coupled; the electrical nameplate below is therefore calibrated to
-    # the compact rover winding rather than guessed from the base speed tier.
+    # curve is an Avian drivetrain contract. The Modelica facet is deliberately
+    # the electrical load only; it does not claim a second shaft state or
+    # attempt to couple a free mechanical connector into the electrical island.
     #
     # ⚠ THE RIM CEILING IS NOT THE ROAD SPEED. `vessels/rovers/rocker_bogie.usda`
     # `Motor_FL` holds the measured table (12 rad/s → 2.71 m/s, 19.5 rad/s →
@@ -218,7 +218,6 @@ def Xform "Motor" (
     # against a 1.5 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
     # or the motor is rated to sustain more than it can ever produce.
     float lunco:motor:continuousTorque = 0.9
-    float inputs:efficiency = 0.85
     # The current-controlled electrical facet is a compact 28 V, 500 W drive.
     # This is the continuous electrical nameplate used by the composed Modelica
     # network; it keeps the Lunokhod winding's ~500 W mechanical envelope and
@@ -248,19 +247,20 @@ def Xform "Motor" (
     # `inputs:torque`, or a telemetry channel.
     float outputs:torque
 
-    # Waste heat, watts: (1 − efficiency) of the electrical input. This is the port a
-    # thermal model or a radiator consumes; nothing in the physics step reads it.
+    # Winding heat, watts: the solved copper loss in the electrical facet. This is
+    # the port a thermal model or a radiator consumes; nothing in the physics
+    # step reads it.
     float outputs:heat
 
     # Electrical power drawn by the solved motor model. This is an authored
-    # observable of the DCMotor facet, so generated electrical islands expose it
-    # through their canonical member-output boundary alongside `heat`.
+    # observable of the electrical DCMotor facet, so generated electrical
+    # islands expose it through their canonical member-output boundary alongside
+    # `heat`.
     float outputs:electrical_power
     # Instantaneous electrical measurements from the same solved terminal. These
     # are public component outputs, not values reconstructed by the drivetrain.
     float outputs:terminal_voltage_v
     float outputs:terminal_current_a
-    float outputs:mechanical_power_w
     float outputs:available_demand
 
     # --- Telemetry ---
@@ -284,8 +284,9 @@ def Xform "Motor" (
     #
     # The enclosing generated electrical domain admits the authored motor output
     # ports (`heat`, electrical power, terminal measurements) and presents them
-    # back on this physical Motor prim. Solver-only connector values and wrapper
-    # aliases remain execution data, not operator telemetry.
+    # back on this physical Motor prim. Mechanical torque and speed remain the
+    # USD/Avian powertrain contract; solver-only electrical values and wrapper
+    # aliases remain execution data, not a second mechanical owner.
     #
     # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
     # no dimension. The browser renders that as a blank unit cell rather than a

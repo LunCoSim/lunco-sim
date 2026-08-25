@@ -121,10 +121,29 @@ recomputes it every frame from the Sun–Earth–site geometry as
 its own driver on the next frame. There is correspondingly no slider — the inspector shows
 a readout, and what moves it is the sim clock.
 
-> The Sun's own values remain **static almanac numbers** for the Shackleton region. The
-> intended end state is ephemeris-driven there too (Sun direction/distance ⇒ illuminance and
-> angular size), at which point the constants become the fallback and live values flow from a
-> runtime `Sun` entity — which is what earthshine already does.
+> The Sun's shipped values are the documented calibration for scenes without a live solar
+> distance model. An ephemeris-driven scene publishes semantic direction/irradiance through
+> `SunState`; the render light is only a projection and no runtime path falls back from a
+> missing semantic sample to a render transform.
+
+The solar dataflow has one authority:
+
+```
+ephemeris + site frame → SunState → DirectionalLight projection
+                              └──→ LocalSolar → EnvironmentProbe → Modelica controller
+```
+
+`DirectionalLight` is not a provider endpoint, and a Modelica source does not
+drive it. Controllers such as `SunTracker` consume the environment-probe
+outputs and drive their actuators. This keeps physical environment production,
+render presentation, and vehicle control as separate graph domains.
+
+The render boundary also owns the visible contract failures. `RuntimeDiagnostics` reports
+`environment-sun/sun-contract` when the active scene has zero or multiple unscoped suns,
+`sun-state` when the semantic sample is absent or invalid, `physics-frame` when the bound
+frame is missing, and `sun-parent` when a child light has no live parent transform. The
+environment projector clears its own findings only after the corresponding state is valid;
+`RuntimeDiagnostics` and `LintReport` expose the same findings to the UI and API.
 
 ## Invariants
 

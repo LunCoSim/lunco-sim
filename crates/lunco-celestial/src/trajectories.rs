@@ -218,7 +218,7 @@ impl Plugin for TrajectoryPlugin {
 ///
 /// Screenshots and sampled probes cannot catch single-frame glitches — this
 /// runs AFTER propagation every frame and tracks each landmark's rendered
-/// position relative to the floating-origin camera (world axes, so pure
+/// position relative to the origin-tracking anchor (world axes, so pure
 /// camera rotation is invisible to it). A visible "jump" is a DISCONTINUITY
 /// in that relative motion, i.e. a large second difference: smooth orbiting
 /// (even fast dragging) produces a steady per-frame delta; a one-frame
@@ -410,12 +410,15 @@ pub fn trajectory_probe_system(
 pub fn spawn_trajectory_update_task(
     world: Res<WorldTime>,
     real: Res<Time<bevy::time::Real>>,
-    ephemeris: Res<EphemerisResource>,
+    ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
     mut q_views: Query<(Entity, &TrajectoryView, &mut TrajectoryPath), Without<TrajectoryTask>>,
     frame_index: Res<crate::ReferenceFrameIndex>,
 ) {
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
     let current_epoch = world.epoch_jd;
     let now_real = real.elapsed_secs_f64();
     let pool = bevy::tasks::ComputeTaskPool::get();

@@ -32,6 +32,7 @@ impl Plugin for TerrainSurfacePlugin {
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
+        app.register_type::<crate::georef::FlatSiteSurface>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
         // The streamed mesh cache and LOD controls are rendering-quality resources even when

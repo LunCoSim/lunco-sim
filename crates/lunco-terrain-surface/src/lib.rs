@@ -69,7 +69,7 @@ pub use band::SurfaceBand;
 pub use collider_ring::{ColliderTileOf, ColliderTiles, TerrainColliderRing};
 pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
 pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
-pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};
+pub use georef::{FlatSiteSurface, TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
 /// Re-exported because it is already part of this crate's PUBLIC surface —

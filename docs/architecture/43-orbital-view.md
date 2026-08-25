@@ -72,7 +72,7 @@ destination `Grid::translation_to_grid` split. `CellCoord` and cell-local
 `Transform` are storage/render representation only. `GlobalTransform` is not
 telemetry or physics authority.
 
-Avian uses the selected `ActivePhysicsFrame`. The
+Avian uses the explicitly bound `ActivePhysicsFrame`. The
 `BigSpacePhysicsBridgePlugin` owns f64 pose exchange and collider propagation,
 so body motion above a lunar surface does not become rover motion. Physical
 entities outside the active frame are rejected instead of being silently

@@ -51,7 +51,7 @@ catalog's labels still use `display_channel_label`.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`, and its optional `lunco:telemetry:target` relationship lets a declaration prim observe any composed prim without adding a domain-specific channel component |
+| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`. A declaration on a prim with its own sampled port may omit `lunco:telemetry:target` and self-target; a metadata declaration Scope must author exactly one target relationship to the composed measured prim. Missing, multiple, or unresolved targets are runtime diagnostics and USD lint errors. |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |
@@ -288,8 +288,14 @@ double lunco:telemetry:deadband  = 0.01
 int    lunco:telemetry:retention = 2000                   # SAMPLES, not seconds
 ```
 
-`lunco:telemetry` with neither `:port` nor `:reflect` warns and authors nothing — silently
+`lunco:telemetry` with neither `:port` nor `:reflect` is a terminal
+`usd-telemetry` projection diagnostic and authors no channel — silently
 creating a channel with no source would be a channel that can never speak.
+When the composed USD stage revision changes, the telemetry projector removes
+all previously derived channels and declaration markers before rebuilding the
+index. A target that has no projected runtime entity is likewise terminal and
+remains visible in the diagnostics/lint surface; it is never retried as a
+silent first-pass candidate.
 
 `ChannelSource::Diagnostic` is deliberately **not** USD-authorable: a diagnostic is
 engine-global, not a property of a prim. `lunco-telemetry` publishes those itself

@@ -62,7 +62,7 @@ fn appending_waypoints_while_running_resumes_route_and_drives_the_new_legs() {
     let frame = app
         .world_mut()
         .spawn((
-            Grid::new(2_000.0, 100.0),
+            lunco_core::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
         ))

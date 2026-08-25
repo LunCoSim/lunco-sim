@@ -20,7 +20,7 @@
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
+use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
@@ -118,10 +118,7 @@ pub fn attach_site_scene_to_surface_grid(
         &crate::registry::CelestialBody,
         &crate::globe_lod::GlobeLod,
     )>,
-    q_avatars: Query<
-        (Entity, &Transform, Option<&CellCoord>, &ChildOf),
-        (With<lunco_core::Avatar>, With<FloatingOrigin>),
-    >,
+    q_avatars: Query<(Entity, &Transform, Option<&CellCoord>, &ChildOf), With<lunco_core::Avatar>>,
     // Environment probes are physical assembly consumers too: a probe nested
     // under a rigid body samples that body's local environment. Keep the
     // celestial ownership binding on the probe instead of making the
@@ -163,17 +160,11 @@ pub fn attach_site_scene_to_surface_grid(
     let Ok(body_surface_grid_component) = q_grids.get(body_surface_grid) else {
         return;
     };
-    let make_site_grid = || {
-        Grid::new(
-            grid_config.cell_edge_length,
-            grid_config.switching_threshold,
-        )
-    };
+    let make_site_grid = || grid_config.grid();
 
     // Capture the relative avatar pose before changing the root's parent or
-    // making it a Grid. The avatar is grid-direct because it carries the one
-    // FloatingOrigin, while the rover/terrain remain descendants of the scene
-    // root; this is the one intentional branch crossing in the handoff.
+    // making it a Grid. The avatar is grid-direct in the same frame as the
+    // rover/terrain; the persistent OriginAnchor owns FloatingOrigin separately.
     let scene_root_world_pose =
         lunco_core::coords::world_pose(scene_root, &q_parents, &q_grids, &q_spatial).ok();
 
@@ -213,7 +204,7 @@ pub fn attach_site_scene_to_surface_grid(
         commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
     }
 
-    // Move the FloatingOrigin avatar into the same site grid. The conversion is
+    // Move the avatar into the same site grid. The conversion is
     // relative to the root sampled above; ancestor translation/rotation cancels
     // and no body-fixed vector is ever mistaken for ENU.
     for (avatar, _avatar_transform, _avatar_cell, avatar_child) in &q_avatars {
@@ -546,12 +537,9 @@ fn stamp_low_precision_roots(
 /// **The body comes from each terrain's own [`lunco_terrain_surface::TerrainGeoref`],
 /// never from a `SiteAnchor` query.** The radius folds into the surface oracle,
 /// so it decides the composed GEOMETRY and the `content_key` every tile/derived
-/// cache keys on. Resolving it via `q_site.iter().next()` made that a function of
-/// archetype order: a scene with a second anchor (ground stations author body 399
-/// Earth) could curve a lunar DEM to Earth's 6371 km radius, and which anchor won
-/// varied per launch with async USD load order — terrain that differed every boot
-/// and re-baked its whole cache. `SiteAnchor` still gates curvature on/off (it is
-/// what makes a scene site-anchored at all); it just no longer chooses the body.
+/// cache keys on. `TerrainGeoref` is therefore the authoritative body selection
+/// for DEM-backed terrain. `SiteAnchor` only declares that the scene is mounted
+/// on a celestial surface; it does not select a terrain body.
 pub fn sync_terrain_body_curvature(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
@@ -568,18 +556,23 @@ pub fn sync_terrain_body_curvature(
         &lunco_terrain_surface::DemHeightField,
         Option<&lunco_terrain_surface::TerrainGeoref>,
     )>,
+    q_flat: Query<&lunco_terrain_surface::FlatSiteSurface>,
     q_globes: Query<(
         Entity,
         &crate::registry::CelestialBody,
         Option<&crate::globe_lod::GlobeHandoff>,
     )>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     // The site anchor still places the scene on the globe (that IS its job, and it
     // is the scene root by intent) — it just no longer decides which BODY the
     // terrain curves to.
-    let Some(anchor) = q_site.iter().next() else {
+    if q_site.is_empty() {
         // Site gone (scene unload): stop curving future DEM builds and
         // restore full globe coverage.
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.replace_producer("celestial-terrain", std::iter::empty());
+        }
         if current.is_some() {
             commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
         }
@@ -591,7 +584,10 @@ pub fn sync_terrain_body_curvature(
             }
         }
         return;
-    };
+    }
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer("celestial-terrain", std::iter::empty());
+    }
     // The body every terrain in this scene sits on, from the DOCUMENT. Reducing by
     // the authored id (`min`, not iteration order) keeps the pick a pure function
     // of the scene: a scene whose terrains disagree is malformed — one global
@@ -607,9 +603,8 @@ pub fn sync_terrain_body_curvature(
             Some(_) => {}
         }
     }
-    // No DEM is NOT "nothing to do" for curvature bookkeeping: a scene can stand
-    // on a plain authored ground slab and still be site-anchored. It simply has no
-    // source-driven globe handoff because there is no measured footprint.
+    // A site scene without DEM still needs an explicit finite surface owner so
+    // the globe cannot render through the authored local ground.
     if mixed {
         error_once!(
             "terrains in this scene author different `lunco:anchor:body` values; \
@@ -619,9 +614,127 @@ pub fn sync_terrain_body_curvature(
         return;
     }
     let has_dem = body.is_some();
-    let body = body.unwrap_or(anchor.body);
+    let body = match body {
+        Some(body) => body,
+        None => match q_site.single() {
+            Ok(anchor) => anchor.body,
+            Err(_) => {
+                if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                    diagnostics.replace_producer(
+                        "celestial-terrain",
+                        [lunco_core::RuntimeDiagnostic {
+                            code: "site-anchor-cardinality".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "celestial-terrain".to_string(),
+                            subject: "SiteAnchor".to_string(),
+                            message: "terrain without authored georeferencing requires exactly one SiteAnchor".to_string(),
+                        }],
+                    );
+                }
+                if current.is_some() {
+                    commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
+                }
+                return;
+            }
+        },
+    };
+    if !has_dem && current.is_some() {
+        commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
+    }
+    let flat_surface = if has_dem {
+        None
+    } else {
+        match q_flat.iter().collect::<Vec<_>>().as_slice() {
+            [surface] if surface.is_valid() => {
+                let square = (surface.half_extent_x_m - surface.half_extent_z_m).abs()
+                    <= 1.0e-5_f64.max(surface.half_extent_x_m * 1.0e-6);
+                let centered =
+                    surface.center_x_m.abs() <= 1.0e-5 && surface.center_z_m.abs() <= 1.0e-5;
+                if square && centered {
+                    Some(**surface)
+                } else {
+                    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                        diagnostics.replace_producer(
+                            "celestial-terrain",
+                            [lunco_core::RuntimeDiagnostic {
+                                code: "flat-surface-contract".to_string(),
+                                severity: lunco_core::DiagnosticSeverity::Error,
+                                producer: "celestial-terrain".to_string(),
+                                subject: "FlatSiteSurface".to_string(),
+                                message: "flat-site surface must be a square Cube centered at the site ENU origin".to_string(),
+                            }],
+                        );
+                    }
+                    None
+                }
+            }
+            [] => {
+                if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                    diagnostics.replace_producer(
+                        "celestial-terrain",
+                        [lunco_core::RuntimeDiagnostic {
+                            code: "flat-surface-missing".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "celestial-terrain".to_string(),
+                            subject: "SiteAnchor".to_string(),
+                            message: "site-anchored non-DEM terrain requires exactly one terrain prim with lunco:terrain:surfaceRole=\"flat-site\"".to_string(),
+                        }],
+                    );
+                }
+                None
+            }
+            _ => {
+                if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                    diagnostics.replace_producer(
+                        "celestial-terrain",
+                        [lunco_core::RuntimeDiagnostic {
+                            code: "flat-surface-cardinality".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "celestial-terrain".to_string(),
+                            subject: "FlatSiteSurface".to_string(),
+                            message: "site-anchored non-DEM terrain requires exactly one flat-site surface owner".to_string(),
+                        }],
+                    );
+                }
+                None
+            }
+        }
+    };
+    if !has_dem && flat_surface.is_none() {
+        for (e, _, handoff) in &q_globes {
+            if handoff.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
+            }
+        }
+        return;
+    }
     let Some(desc) = registry.get(body) else {
         return;
+    };
+    let matching_anchors: Vec<_> = q_site.iter().filter(|anchor| anchor.body == body).collect();
+    let anchor = match matching_anchors.as_slice() {
+        [anchor] => Some(*anchor),
+        [] => None,
+        _ => {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.replace_producer(
+                    "celestial-terrain",
+                    [lunco_core::RuntimeDiagnostic {
+                        code: "site-anchor-body".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "celestial-terrain".to_string(),
+                        subject: "SiteAnchor".to_string(),
+                        message: format!(
+                            "terrain curvature body {body} requires exactly one matching SiteAnchor, found {}",
+                            matching_anchors.len()
+                        ),
+                    }],
+                );
+            }
+            return;
+        }
     };
     if has_dem && current.is_none_or(|c| c.radius_m != desc.radius_m) {
         commands.insert_resource(lunco_terrain_surface::TerrainBodyCurvature {
@@ -658,20 +771,15 @@ pub fn sync_terrain_body_curvature(
             .total_cmp(&b.0.half_extent())
             .then_with(|| a.0.surface_key().cmp(&b.0.surface_key()))
     });
-    let half_extent = selected_dem.map_or(0.0, |(dem, _)| dem.0.half_extent() as f64);
+    let half_extent = selected_dem.map_or_else(
+        || flat_surface.map_or(0.0, |surface| surface.half_extent_x_m),
+        |(dem, _)| dem.0.half_extent() as f64,
+    );
     let oracle = selected_dem.map(|(dem, _)| dem.0.clone());
     for (e, globe, handoff) in &q_globes {
         if globe.ephemeris_id != body {
             continue;
         }
-        let Some(oracle) = oracle.clone() else {
-            if handoff.is_some() {
-                commands
-                    .entity(e)
-                    .remove::<crate::globe_lod::GlobeHandoff>();
-            }
-            continue;
-        };
         if half_extent <= 0.0 || half_extent >= desc.radius_m {
             if handoff.is_some() {
                 commands
@@ -680,15 +788,52 @@ pub fn sync_terrain_body_curvature(
             }
             continue;
         }
+        let Some(anchor) = anchor else {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.replace_producer(
+                    "celestial-terrain",
+                    [lunco_core::RuntimeDiagnostic {
+                        code: "site-anchor-body".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "celestial-terrain".to_string(),
+                        subject: "SiteAnchor".to_string(),
+                        message: format!(
+                            "terrain body {body} has no matching SiteAnchor for globe handoff"
+                        ),
+                    }],
+                );
+            }
+            if handoff.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<crate::globe_lod::GlobeHandoff>();
+            }
+            continue;
+        };
         let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, desc.radius_m);
-        let next = crate::globe_lod::GlobeHandoff::new(
-            tangent.up,
-            tangent.east,
-            tangent.north,
-            desc.radius_m,
-            oracle,
-            half_extent,
-        );
+        let next = match (oracle.clone(), flat_surface) {
+            (Some(oracle), _) => crate::globe_lod::GlobeHandoff::new(
+                tangent.up,
+                tangent.east,
+                tangent.north,
+                desc.radius_m,
+                oracle,
+                half_extent,
+            ),
+            (None, Some(surface)) => crate::globe_lod::GlobeHandoff::new_flat(
+                tangent.up,
+                tangent.east,
+                tangent.north,
+                desc.radius_m,
+                // `FlatSiteSurface::top_y_m` is local to the authored ENU site
+                // frame. The site root itself is anchored at the body's datum
+                // height, so the globe handoff must use the same absolute
+                // height as `local_to_geodetic`: anchor height plus local Y.
+                anchor.geodetic.height_m + surface.top_y_m,
+                half_extent,
+            ),
+            (None, None) => continue,
+        };
         if handoff != Some(&next) {
             commands.entity(e).try_insert(next);
             debug!(
@@ -762,12 +907,15 @@ mod tests {
 
         let world_grid = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), CellCoord::ZERO))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+            ))
             .id();
         let body_fixed_grid = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -776,7 +924,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                Grid::new(2_000.0, 100.0),
+                lunco_core::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(body_fixed_grid),
@@ -827,7 +975,6 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_core::Avatar,
-                FloatingOrigin,
                 CellCoord::ZERO,
                 Transform::from_xyz(0.0, 4.0, 8.0),
                 GlobalTransform::default(),

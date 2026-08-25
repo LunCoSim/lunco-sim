@@ -69,21 +69,18 @@ fn electrical_observables_follow_the_physical_power_chain() {
         motor.contains("heat = resistance * winding_current * winding_current;"),
         "motor heat must be winding loss from the solved current"
     );
+    assert!(motor.contains("winding_current = winding_voltage / resistance;"));
+    assert!(motor.contains("requested_demand = max(-1.0, min(1.0, demand));"));
     assert!(
-        motor.contains("winding_current = (winding_voltage - back_emf) / resistance;"),
-        "motor current must include back-EMF from the solved shaft speed"
+        motor.contains("available_demand = requested_demand * max(0.0, min(1.0, p.v / v_rated));")
     );
+    assert!(motor.contains("p.i = abs(winding_current);"));
+    assert!(!motor.contains("LunCo.Mechanics.Flange"));
+    assert!(!motor.contains("shaft.tau"));
+    assert!(!motor.contains("mechanical_power_w"));
     assert!(
-        motor.contains("shaft.tau = -shaft_torque;"),
-        "the solved motor torque must enter the authored rotational flange"
-    );
-    assert!(
-        motor.contains("shaft_speed = der(shaft.phi);"),
-        "the motor must receive shaft speed through the rotational boundary"
-    );
-    assert!(
-        !motor.contains("available_demand") && !motor.contains("efficiency"),
-        "the old voltage-authority proxy and independent efficiency scale must be removed"
+        !motor.contains("efficiency"),
+        "the electrical facet must not declare a parameter with no source reader"
     );
 }
 

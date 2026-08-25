@@ -461,15 +461,38 @@ pub fn apply_replicated_spawns(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     q_scene_root: Query<Entity, With<UsdSceneRoot>>,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if pending.0.is_empty() {
         return;
     }
     // Wait until the scene anchor exists (scene still loading) — keep the queue.
     // It is the only legal anchor, so there is nothing to do without it.
-    let Some(scene_root) = q_scene_root.iter().next() else {
+    let root_count = q_scene_root.iter().count();
+    let Some(scene_root) = q_scene_root.single().ok() else {
+        if let Some(mut diagnostics) = diagnostics {
+            if root_count > 1 {
+                diagnostics.replace_producer(
+                    "scene-spawn",
+                    [lunco_core::RuntimeDiagnostic {
+                        code: "scene-spawn".to_string(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "scene-spawn".to_string(),
+                        subject: "UsdSceneRoot".to_string(),
+                        message: format!(
+                            "replicated spawn requires exactly one UsdSceneRoot, found {root_count}"
+                        ),
+                    }],
+                );
+            } else {
+                diagnostics.replace_producer("scene-spawn", std::iter::empty());
+            }
+        }
         return;
     };
+    if let Some(mut diagnostics) = diagnostics {
+        diagnostics.replace_producer("scene-spawn", std::iter::empty());
+    }
     // Drain in place — the loop body touches only `commands`/`catalog`/
     // `asset_server`, never `pending`, so the old `.collect::<Vec<_>>()`
     // was a pure-waste allocation (CQ-216).
@@ -1627,7 +1650,7 @@ pub fn persist_environment_light_to_runtime_layer(
 
     for (prim, tf) in &q_sun {
         // Ownership guard: only author for suns the active document actually
-        // holds (base or runtime), so an engine-fallback sun never gets opinions.
+        // holds (base or runtime), so an unowned runtime entity never gets opinions.
         let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
             continue;
         };
@@ -2442,6 +2465,24 @@ pub struct PendingFocus {
     pub distance: f32,
 }
 
+fn replace_focus_diagnostic(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    message: Option<String>,
+) {
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer(
+            "scene-focus",
+            message.map(|message| lunco_core::RuntimeDiagnostic {
+                code: "scene-focus".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "scene-focus".to_string(),
+                subject: "PendingFocus".to_string(),
+                message,
+            }),
+        );
+    }
+}
+
 /// Observer: validate + record the focus; all spatial math happens in
 /// [`apply_pending_focus`].
 #[on_command(FocusEntityById)]
@@ -2481,7 +2522,7 @@ pub fn apply_pending_focus(
             Option<&mut lunco_avatar::FreeFlightCamera>,
             Has<lunco_avatar::OrbitViewReturn>,
         ),
-        With<lunco_core::Avatar>,
+        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
     q_grids: Query<&Grid>,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
@@ -2489,6 +2530,8 @@ pub fn apply_pending_focus(
     q_children: Query<&Children>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let Some(pending) = pending else { return };
     let (target, distance) = (pending.target, pending.distance);
@@ -2528,10 +2571,15 @@ pub fn apply_pending_focus(
     // avatar's exact orbit-entry transaction first, then retry this retained
     // focus next First frame. Applying a local delta while the camera is still
     // in an inertial body grid mixes semantic frames.
-    if let Some((avatar, .., true)) = q_avatar.iter().next() {
-        commands.trigger(lunco_avatar::ReleaseVessel { target: avatar });
-        info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
-        return;
+    if let Some(avatar) = local_avatar.as_deref().and_then(|slot| slot.0) {
+        if q_avatar
+            .get(avatar)
+            .is_ok_and(|(_, _, _, _, _, _, orbit_return)| orbit_return)
+        {
+            commands.trigger(lunco_avatar::ReleaseVessel { target: avatar });
+            info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
+            return;
+        }
     }
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
@@ -2545,18 +2593,22 @@ pub fn apply_pending_focus(
         warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
         return;
     };
-    // Tolerate 0/≥1 avatars robustly. `single_mut()` errored when the avatar was
-    // momentarily in a non-freeflight camera mode (FreeFlightCamera removed by
-    // possess/follow/orbit) OR when more than one Avatar existed (USD avatar +
-    // fallback) — both surfaced as "no Avatar" and killed double-click focus.
-    // Take the first avatar; the FreeFlightCamera is now optional.
-    let avatar_count = q_avatar.iter().count();
-    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt, _)) =
-        q_avatar.iter_mut().next()
-    else {
-        warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
+    let Some(avatar_ent) = local_avatar.as_deref().and_then(|slot| slot.0) else {
+        let message = "no authoritative LocalAvatar is available for local focus".to_string();
+        warn!("FOCUS_ENTITY: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
     };
+    let Ok((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt, _)) =
+        q_avatar.get_mut(avatar_ent)
+    else {
+        let message =
+            format!("authoritative LocalAvatar {avatar_ent:?} has no complete focus state");
+        warn!("FOCUS_ENTITY: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
+    };
+    replace_focus_diagnostic(&mut diagnostics, None);
     // Work in the avatar→target DELTA, not the target's absolute
     // `GlobalTransform`. Both GTs are read in the same instant so whatever
     // convention/origin big_space happens to be mid-way through this frame
@@ -2622,7 +2674,7 @@ pub fn apply_pending_focus(
         }
     }
     info!(
-        "FOCUS_ENTITY: framed api_id={} at {:.1} m (avatars={avatar_count})",
+        "FOCUS_ENTITY: framed api_id={} at {:.1} m (avatar={avatar_ent:?})",
         cmd.entity_id, dist
     );
 }
@@ -2655,24 +2707,35 @@ pub fn on_set_camera_look_at(
             &ChildOf,
             Option<&mut lunco_avatar::FreeFlightCamera>,
         ),
-        With<lunco_core::Avatar>,
+        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
     q_grids: Query<&Grid>,
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    let Some((entity, mut tf, mut cell, child_of, ff_opt)) = q_avatar.iter_mut().next() else {
-        warn!("SET_CAMERA: no Avatar entity in the scene");
+    let Some(entity) = local_avatar.as_deref().and_then(|slot| slot.0) else {
+        let message = "no authoritative LocalAvatar is available for SetCameraLookAt".to_string();
+        warn!("SET_CAMERA: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
     };
+    let Ok((entity, mut tf, mut cell, child_of, ff_opt)) = q_avatar.get_mut(entity) else {
+        let message = format!("authoritative LocalAvatar {entity:?} has no complete camera state");
+        warn!("SET_CAMERA: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
+    };
+    replace_focus_diagnostic(&mut diagnostics, None);
     // Explicit camera coordinates are canonical WorldGrid coordinates. Every
     // camera path uses that frame, so the command can apply immediately.
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
-    let Some(root) = q_world_grid.iter().next() else {
+    let Ok(root) = q_world_grid.single() else {
         warn!("SET_CAMERA: no canonical WorldGrid");
         return;
     };
@@ -3453,7 +3516,7 @@ mod tests {
         use big_space::prelude::{CellCoord, Grid};
 
         let mut world = World::new();
-        let active_grid = Grid::new(2_000.0, 100.0);
+        let active_grid = lunco_core::WorldGridConfig::default().grid();
         let root_cell = CellCoord::new(200, -100, 350);
         let root_rotation = DQuat::from_rotation_x(0.7) * DQuat::from_rotation_y(-1.1);
         let root_transform =
@@ -3722,7 +3785,10 @@ mod tests {
 
         let active = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(active));
         let parent_rotation = Quat::from_rotation_y(0.7);
@@ -3794,7 +3860,10 @@ mod tests {
 
         let grid = app
             .world_mut()
-            .spawn((Grid::new(2_000.0, 100.0), GlobalTransform::default()))
+            .spawn((
+                lunco_core::WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
             .id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
         let ent = app

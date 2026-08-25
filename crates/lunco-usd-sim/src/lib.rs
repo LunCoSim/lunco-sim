@@ -53,7 +53,7 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
+use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
@@ -562,9 +562,10 @@ impl Plugin for UsdSimPlugin {
         // `try_wire_wheel` is part of this plugin's unconditional schedule and
         // records malformed authored topology as a scene-terminal fault.  Do
         // not make callers depend on the unrelated full core plugin merely to
-        // satisfy that system parameter; the plugin owns the system and must
-        // establish its shared fault resource when used on its own.
+        // satisfy those system parameters; the plugin owns the systems and must
+        // establish their shared scene diagnostics when used on its own.
         app.init_resource::<lunco_core::RuntimeFaults>();
+        app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<InputBindingsSettings>();
         crate::shader_ports::build(app);
         app.configure_sets(Update, UsdSimSet::ActivateDynamicBodies)
@@ -621,6 +622,7 @@ impl Plugin for UsdSimPlugin {
             .add_systems(
                 Update,
                 (
+                    seed_authored_sun_state.after(lunco_usd_bevy::sync_usd_visuals),
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
                         .after(lunco_usd_bevy::sync_usd_visuals),
@@ -897,7 +899,6 @@ fn process_usd_sim_prims(
     all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     grid_components: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -923,9 +924,12 @@ fn process_usd_sim_prims(
     // only a GPU-side observer could mint) is structurally gone. See
     // `NoRenderVisuals` and `docs/architecture/render-decoupling.md`.
     no_render_visuals: Option<Res<NoRenderVisuals>>,
+    mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
+    let mut authored_diagnostics = Vec::new();
     let Ok(input_map) = input_bindings.input_map() else {
         error!("[usd-sim] refusing to create avatar controllers from invalid input bindings");
+        runtime_diagnostics.replace_producer("usd-sim", std::iter::empty());
         return;
     };
     // Whether visual components will ever arrive. `false` headless ⇒ build the
@@ -1023,12 +1027,13 @@ fn process_usd_sim_prims(
             &q_child_of,
             &grid_components,
             &q_spatial,
-            &q_existing_floating_origins,
             active_sun.as_deref(),
             &input_map,
             &mut commands,
+            &mut authored_diagnostics,
         );
     }
+    runtime_diagnostics.replace_producer("usd-sim", authored_diagnostics);
 }
 
 /// Per-stage joint scan (Pass 1), generic over the read source ([`UsdRead`]):
@@ -1384,6 +1389,21 @@ fn read_raycast_observation(
     })
 }
 
+fn push_usd_sim_diagnostic(
+    findings: &mut Vec<lunco_core::RuntimeDiagnostic>,
+    subject: &str,
+    code: &str,
+    message: impl Into<String>,
+) {
+    findings.push(lunco_core::RuntimeDiagnostic {
+        code: code.to_string(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: "usd-sim".to_string(),
+        subject: subject.to_string(),
+        message: message.into(),
+    });
+}
+
 #[cfg(test)]
 mod raycast_tests {
     use super::read_raycast_observation;
@@ -1457,10 +1477,10 @@ fn process_usd_sim_prim_read(
     q_child_of: &Query<&ChildOf>,
     grid_components: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     active_sun: Option<&lunco_environment::LunarSun>,
     input_map: &leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent>,
     commands: &mut Commands,
+    diagnostics: &mut Vec<lunco_core::RuntimeDiagnostic>,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
     let is_avatar =
@@ -1468,6 +1488,12 @@ fn process_usd_sim_prim_read(
             Ok(Some(value)) => value,
             Ok(None) => false,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "avatar-attribute",
+                    "lunco:avatar must be an authored boolean",
+                );
                 warn!(
                     "USD prim {} has malformed `lunco:avatar`; prim ignored",
                     prim_path.path
@@ -1483,6 +1509,12 @@ fn process_usd_sim_prim_read(
                 // An invalid authored exposure is a broken camera contract, not
                 // an invitation to replace it with a calibrated value. Mark the
                 // prim complete so the scene does not retry the same bad opinion.
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "avatar-exposure",
+                    "avatar camera exposure must be a finite EV100 value",
+                );
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             }
@@ -1519,6 +1551,12 @@ fn process_usd_sim_prim_read(
             Ok(Some(value)) => value,
             Ok(None) => false,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "billboard-attribute",
+                    "lunco:billboard must be an authored boolean",
+                );
                 warn!(
                     "USD prim {} has malformed `lunco:billboard`; label ignored",
                     prim_path.path
@@ -1559,10 +1597,18 @@ fn process_usd_sim_prim_read(
             Ok(billboard) => {
                 commands.entity(entity).try_insert(billboard);
             }
-            Err(()) => warn!(
-                "USD prim {} has invalid billboard attributes; label ignored",
-                prim_path.path
-            ),
+            Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "billboard-contract",
+                    "billboard attributes are malformed or outside their documented range",
+                );
+                warn!(
+                    "USD prim {} has invalid billboard attributes; label ignored",
+                    prim_path.path
+                );
+            }
         }
     }
     let waypoint =
@@ -1570,6 +1616,12 @@ fn process_usd_sim_prim_read(
             Ok(Some(value)) => value,
             Ok(None) => false,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "waypoint-attribute",
+                    "lunco:waypoint must be an authored boolean",
+                );
                 warn!(
                     "USD prim {} has malformed `lunco:waypoint`; marker ignored",
                     prim_path.path
@@ -1628,10 +1680,18 @@ fn process_usd_sim_prim_read(
             Ok(marker) => {
                 commands.entity(entity).try_insert(marker);
             }
-            Err(()) => warn!(
-                "USD prim {} has invalid screen marker attributes; marker ignored",
-                prim_path.path
-            ),
+            Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "screen-marker-contract",
+                    "screen marker attributes are malformed or outside their documented range",
+                );
+                warn!(
+                    "USD prim {} has invalid screen marker attributes; marker ignored",
+                    prim_path.path
+                );
+            }
         }
     }
 
@@ -1706,6 +1766,12 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(observation);
             }
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "raycast-contract",
+                    "raycast axis, offset, and maxDistance must be authored with finite valid values",
+                );
                 warn!(
                     "USD raycast {} has malformed or invalid axis, offset, or maxDistance",
                     sdf_path
@@ -1725,20 +1791,6 @@ fn process_usd_sim_prim_read(
             "Detected Avatar prim at {}, setting up camera",
             prim_path.path
         );
-        // `big_space` enforces "exactly one `FloatingOrigin` per
-        // `BigSpace`". Other crates (e.g. `lunco-celestial`'s
-        // Observer Camera) may have already spawned one at startup.
-        // The USD Avatar is the user's intended perspective, so it
-        // takes over: remove `FloatingOrigin` from every prior
-        // holder before we add it to this entity. Without this we
-        // get a per-frame `multiple floating origins → resetting
-        // this big space` error from big_space and broken
-        // transform propagation.
-        for prior in q_existing_floating_origins.iter() {
-            if prior != entity {
-                commands.entity(prior).remove::<FloatingOrigin>();
-            }
-        }
         // PRIOR AVATARS are not this code's problem. `LocalAvatar` is singular
         // by construction (`lunco_core`'s component hook): inserting it below
         // demotes whatever held it, and `lunco_avatar::demote_former_avatar`
@@ -1757,6 +1809,14 @@ fn process_usd_sim_prim_read(
                 if matches!(value.as_str(), "freeflight" | "orbit" | "springarm") {
                     value
                 } else {
+                    push_usd_sim_diagnostic(
+                        diagnostics,
+                        &prim_path.path,
+                        "camera-mode",
+                        format!(
+                            "avatar camera mode `{value}` is unsupported; use `freeflight`, `orbit`, or `springarm`"
+                        ),
+                    );
                     warn!(
                         "USD avatar {} has unsupported camera mode `{}`; avatar ignored",
                         prim_path.path, value
@@ -1766,6 +1826,12 @@ fn process_usd_sim_prim_read(
                 }
             }
             Some(_) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "camera-mode",
+                    "lunco:cameraMode must be a token: `freeflight`, `orbit`, or `springarm`",
+                );
                 warn!(
                     "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
                     prim_path.path
@@ -1774,6 +1840,12 @@ fn process_usd_sim_prim_read(
                 return;
             }
             None if reader.has_authored_attribute(&sdf_path, "lunco:cameraMode") => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "camera-mode",
+                    "authored lunco:cameraMode is malformed",
+                );
                 warn!(
                     "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
                     prim_path.path
@@ -1794,6 +1866,12 @@ fn process_usd_sim_prim_read(
         let mut yaw = match read_camera_real("lunco:cameraYaw", std::f32::consts::PI * 0.8) {
             Ok(value) => value,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "camera-yaw",
+                    "authored lunco:cameraYaw must be finite",
+                );
                 warn!(
                     "USD avatar {} has malformed `lunco:cameraYaw`; avatar ignored",
                     prim_path.path
@@ -1805,6 +1883,12 @@ fn process_usd_sim_prim_read(
         let mut pitch = match read_camera_real("lunco:cameraPitch", -0.3) {
             Ok(value) => value,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "camera-pitch",
+                    "authored lunco:cameraPitch must be finite",
+                );
                 warn!(
                     "USD avatar {} has malformed `lunco:cameraPitch`; avatar ignored",
                     prim_path.path
@@ -1827,6 +1911,12 @@ fn process_usd_sim_prim_read(
         let look_at = match read_authored_camera_look_at(reader, &sdf_path) {
             Ok(value) => value,
             Err(()) => {
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "camera-look-at",
+                    "authored lunco:cameraLookAt must be a finite double3",
+                );
                 warn!(
                     "USD avatar {} has malformed `lunco:cameraLookAt`; avatar ignored",
                     prim_path.path
@@ -1851,9 +1941,8 @@ fn process_usd_sim_prim_read(
         }
 
         // Avatar position from the LIVE composed scene hierarchy. The USD
-        // transform is local to its authored parent (`/Traverse` here), while
-        // the FloatingOrigin must be a high-precision entity in the same
-        // BigSpace. Resolve the nearest actual Grid in that parent chain: this
+        // transform is local to its authored parent (`/Traverse` here). Resolve
+        // the nearest actual Grid in that parent chain: this
         // is the scene's frame owner (WorldGrid during bootstrap, or the body's
         // surface grid after celestial placement), never a marker-selected
         // parallel grid. Resolve the pose directly in that Grid's frame; a
@@ -1928,7 +2017,9 @@ fn process_usd_sim_prim_read(
             )
         };
 
-        // Build camera based on mode, then parent to Grid for FloatingOrigin
+        // Build the avatar camera in its explicit scene Grid. BigSpace's
+        // persistent OriginAnchor owns FloatingOrigin; camera role and origin
+        // ownership are separate contracts.
         match camera_mode.as_str() {
             "freeflight" => {
                 commands.entity(entity).try_insert((
@@ -1940,7 +2031,6 @@ fn process_usd_sim_prim_read(
                     },
                     AdaptiveNearPlane,
                     avatar_tf,
-                    FloatingOrigin,
                     avatar_cell,
                     Avatar,
                     LocalAvatar,
@@ -1962,7 +2052,6 @@ fn process_usd_sim_prim_read(
                     },
                     AdaptiveNearPlane,
                     avatar_tf,
-                    FloatingOrigin,
                     avatar_cell,
                     Avatar,
                     LocalAvatar,
@@ -1989,7 +2078,6 @@ fn process_usd_sim_prim_read(
                     avian3d::prelude::RotationInterpolation,
                     AdaptiveNearPlane,
                     avatar_tf,
-                    FloatingOrigin,
                     avatar_cell,
                     Avatar,
                     LocalAvatar,
@@ -3813,6 +3901,53 @@ fn any_unprojected_celestial(
     !q.is_empty()
 }
 
+/// Seed the semantic sun provider from an authored USD `DistantLight` in
+/// scenes that do not declare a celestial site. The light's composed world
+/// rotation is the USD fact; `DirectionalLight` is used only for the authored
+/// illuminance carried by the same light. The direction is projected from the
+/// light's composed world rotation into the explicitly bound physics frame,
+/// so a parent transform cannot silently change the semantic axes. Ephemeris
+/// owns SunState once a site exists, and this system never overwrites a
+/// semantic sample already published by a provider or command.
+fn seed_authored_sun_state(
+    sun_state: Option<ResMut<lunco_environment::SunState>>,
+    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    q_frames: Query<&GlobalTransform>,
+    q_suns: Query<
+        (&GlobalTransform, &bevy::light::DirectionalLight),
+        (
+            With<lunco_usd_bevy::UsdAuthoredLight>,
+            Without<lunco_environment::Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+        ),
+    >,
+) {
+    let Some(mut sun_state) = sun_state else {
+        return;
+    };
+    if sun_state.direction_to_sun.is_some() || q_suns.iter().count() != 1 {
+        return;
+    }
+    let Some(active_frame) = active_frame else {
+        return;
+    };
+    let Ok(frame_gt) = q_frames.get(active_frame.0) else {
+        return;
+    };
+    let Ok((global_transform, light)) = q_suns.single() else {
+        return;
+    };
+    let emit_direction_world = global_transform.rotation() * Vec3::NEG_Z;
+    let direction_to_sun = frame_gt
+        .rotation()
+        .inverse()
+        .mul_vec3(-emit_direction_world);
+    if !direction_to_sun.is_finite() || direction_to_sun.length_squared() < 1.0e-12 {
+        return;
+    }
+    sun_state.publish(direction_to_sun.normalize(), Some(light.illuminance));
+}
+
 /// Project a prim's USD-authored link/celestial vocabulary (geodetic anchors, Kepler
 /// orbits, link nodes, occluders) to `lunco-celestial` components — as its OWN system,
 /// independent of `process_usd_sim_prims` (wheels/joints/avatar) and
@@ -4144,8 +4279,13 @@ fn resolve_behavior_targets(
             targets
         );
         for path in targets {
+            let valid_target = SdfPath::new(&path).is_ok_and(|target| {
+                target.is_abs()
+                    && !target.is_property_path()
+                    && !target.is_prim_variant_selection_path()
+            });
             let found = q_prims.iter().find(|(e, p)| {
-                let match_path = lunco_core::paths::prim_path_matches(&p.path, &path);
+                let match_path = valid_target && p.path == path;
                 let match_stage = vessel_path
                     .map(|vp| p.stage_handle == vp.stage_handle)
                     .unwrap_or(true);

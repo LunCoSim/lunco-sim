@@ -7,7 +7,7 @@ use lunco_workbench::{
 };
 
 use crate::commands::TeleportToSurface;
-use lunco_core::{Avatar, CelestialBody};
+use lunco_core::CelestialBody;
 use lunco_time::{
     SetTimeTransport, TimeTransport, TransportMode, WorldTime, KINEMATIC_WARP_RATE_OPTIONS,
     REALTIME_RATE_OPTIONS,
@@ -136,7 +136,7 @@ impl Panel for CelestialBodiesPanel {
 /// Change-gated view-model for the celestial body browser (WP-8).
 ///
 /// `CelestialBodiesPanel` used to run two world scans per frame (an
-/// `Avatar` lookup and a `(Entity, &Name, &CelestialBody)` walk). Neither
+/// `LocalAvatar` lookup and a `(Entity, &Name, &CelestialBody)` walk). Neither
 /// depends on per-frame UI state, so [`populate_celestial_bodies_view`]
 /// flattens both into this resource — rebuilt only when a body's
 /// `CelestialBody`/`Name` changes, a body despawns, or the avatar changes
@@ -174,9 +174,9 @@ pub fn populate_celestial_bodies_view(
         ),
     >,
     mut removed: RemovedComponents<CelestialBody>,
-    avatar: Query<Entity, With<Avatar>>,
+    avatar: Query<Entity, With<lunco_core::LocalAvatar>>,
 ) {
-    let avatar_ent = avatar.iter().next();
+    let avatar_ent = avatar.single().ok();
     let dirty = !changed.is_empty() || removed.read().next().is_some() || view.avatar != avatar_ent;
     if !dirty {
         return;

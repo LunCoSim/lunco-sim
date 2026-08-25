@@ -1,7 +1,7 @@
 //! One user, one avatar — proven against the mechanism, not the callers.
 //!
 //! Every way an avatar comes into being inserts `LocalAvatar`: a USD scene's
-//! `Avatar` prim, the app's fallback free-flight camera, a scene recompose that
+//! `Avatar` prim, an independently authored free-flight camera, a scene recompose that
 //! hands the same prim a fresh entity. The invariant therefore cannot live in
 //! any of them; it lives in the component hook, and these tests spawn avatars
 //! the crude way — several, directly — because that is what a caller that never

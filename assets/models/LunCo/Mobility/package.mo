@@ -16,8 +16,9 @@ and not merely in their constants, and collapsing them would trade a real distin
 smaller file count.</p>
 
 <p><b>What does not belong here:</b> the torque a motor can actually produce (that is
-<code>Electrical.DCMotor</code>), the reduction between motor and wheel
-(<code>Mechanics.GearRatio</code>), and anything about the contact patch, which is Avian's.
+the native USD/Avian motor powertrain), the reduction between motor and wheel, and anything
+about the contact patch, which is Avian's. <code>Electrical.DCMotor</code> is the electrical
+load facet of that native powertrain; it does not own its shaft torque or speed.
 The output of a model in this package is a NORMALISED demand, not a torque — it says what the
 driver asked of each side, and the driveline decides what that costs.</p>
 </html>")

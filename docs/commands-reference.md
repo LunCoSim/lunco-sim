@@ -680,9 +680,10 @@ type and literal, journals the edit, and re-composes the live stage.
  `SimConnection` (cosim wires are scene-derived in current code), then
  reloads the asset from disk and spawns a fresh root entity. Existing
  pipelines (`sync_usd_visuals`, `process_usd_cosim_prims`, the
- avian/sim translators) take it from there. The first `Grid` entity
- in the world is used as the parent — i.e. the `BigSpace` host
- stays put across reloads.
+ avian/sim translators) take it from there. The canonical `WorldGrid`
+ entity is used as the parent — i.e. the `BigSpace` host stays put
+ across reloads; malformed or duplicate world-shell state is reported
+ instead of selecting an arbitrary grid.
 
  Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
  for every entity carrying a `ModelicaModel` (the Modelica worker
@@ -1478,7 +1479,7 @@ type and literal, journals the edit, and re-composes the live stage.
 |---|---|---|
 | `avatar` | `Option < Entity >` |  The avatar entity taking possession — a user's *local* representation in  the world, used only to bind the chase camera. `None` for headless or  direct API control with no avatar: the host-side authority claim keys on  `target`, so possession works fully without one. |
 | `target` | `Entity` |  The entity to possess (becomes the controlled vessel). |
-| `bind_camera` | `bool` |  Whether possession also rebinds the avatar's camera to the chase rig —  the default, interactive behaviour. `false` claims control authority  only: what a recording scenario wants, where the script drives the  vessel through ports while an authored camera path owns the view.  (With no explicit avatar the camera bind falls back to "any local  avatar" — in a recording scene that IS the path-driven camera, and the  `SpringArmCamera` would silently steal the shot.) |
+| `bind_camera` | `bool` |  Whether possession also rebinds the local avatar's camera to the chase rig — the default interactive behaviour. `false` claims control authority only: a recording scenario can drive the vessel through ports while an authored camera path owns the view. If camera binding is requested, `avatar` must be the explicit local avatar or the scene's authoritative `TheLocalAvatar`; an absent or invalid local avatar is reported as an error. |
 
 #### `ReleaseVessel`
 
@@ -1556,7 +1557,7 @@ type and literal, journals the edit, and re-composes the live stage.
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Option < Entity >` |  Vessel whose mounted camera to capture from. `None` → the active scene camera,  falling back to the primary window when none is bound. |
+| `target` | `Option < Entity >` |  Vessel whose unique mounted camera to capture from. `None` → the explicitly resolved active scene camera; an absent, ambiguous, inactive, or non-window camera is an error. |
 
 #### `CaptureScreenshot`
 

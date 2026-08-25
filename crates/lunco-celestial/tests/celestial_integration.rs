@@ -6,10 +6,9 @@ use lunco_time::WorldTime;
 use std::sync::Arc;
 
 /// Test ephemeris that returns an **epoch-dependent** position, so advancing the
-/// clock provably moves a body. The default `NoOpEphemerisProvider` returns
-/// `ZERO` at every epoch — it can't validate motion (Earth stays pinned at the
-/// origin), which is why this test only ever exercised motion with a real
-/// provider. The scale (AU per day) is large enough that a 10-day step shifts
+/// clock provably moves a body. The test installs a real provider explicitly;
+/// without one, ephemeris-driven motion is unavailable rather than synthesized.
+/// The scale (AU per day) is large enough that a 10-day step shifts
 /// Earth across many `Grid` cells, so the `CellCoord` change is unambiguous.
 #[derive(Debug)]
 struct StubEphemeris;
@@ -595,14 +594,14 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
             .is_none(),
         "the hierarchy root must be gone"
     );
-    let persistent_root = app
+    let persistent_grid = app
         .world_mut()
-        .query_filtered::<Entity, With<lunco_core::WorldRoot>>()
+        .query_filtered::<Entity, With<lunco_core::WorldGrid>>()
         .single(app.world())
-        .expect("the persistent world shell must survive scene teardown");
+        .expect("the persistent world grid must survive scene teardown");
     assert_eq!(
         app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
-        persistent_root,
+        persistent_grid,
         "scene teardown must restore Avian's frame before despawning the celestial surface Grid"
     );
 
@@ -659,9 +658,8 @@ fn test_celestial_startup_and_movement() {
         app.world_mut()
             .spawn(lunco_celestial::CelestialBodyDecl { naif });
     }
-    // Override the NoOp provider (installed by CelestialPlugin) with one whose
-    // output depends on the epoch, so the clock seek below actually repositions
-    // Earth's grid via `ephemeris_update_system`.
+    // Install the provider whose output depends on the epoch, so the clock seek
+    // below actually repositions Earth's grid via `ephemeris_update_system`.
     app.insert_resource(EphemerisResource {
         provider: Arc::new(StubEphemeris),
     });
@@ -758,7 +756,7 @@ fn test_celestial_startup_and_movement() {
 /// from below.
 ///
 /// With no anchor, no sun steering may happen AT ALL — asserted on
-/// `SunDirectionWorld`, the system's own
+/// semantic `SunState`, the system's own
 /// published output, rather than on one light: the steering picks the BRIGHTEST
 /// `DirectionalLight`, so an assertion aimed at a particular light passes for the
 /// irrelevant reason that some other light won the max.
@@ -843,9 +841,9 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
 
     assert_eq!(
         app.world()
-            .resource::<lunco_celestial::SunDirectionWorld>()
-            .0,
-        Vec3::ZERO,
+            .resource::<lunco_environment::SunState>()
+            .direction_to_sun,
+        None,
         "an unanchored scene has no known ecliptic→world rotation, so the sun must not be \
          steered at all — a direction here is the raw ecliptic vector aimed along the horizon"
     );
@@ -858,7 +856,7 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
 
 /// **The celestial takeover must not add a SECOND sun to a scene that authored one.**
 ///
-/// The takeover used to spawn its own marked "fallback" sun. `lunco-usd-bevy` retired
+/// The takeover must not spawn a second scene sun. `lunco-usd-bevy` keeps
 /// such lights when an authored one appeared, but that retirement was edge-triggered on
 /// the authored light's `Add` — and the celestial hierarchy is enabled by the site
 /// anchor the scene load itself detects, so it runs AFTER that edge has passed. Its
@@ -872,7 +870,7 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
 /// "helpful" default sun here.
 ///
 /// Two suns is not merely wasteful. `update_sun_light_system` used to steer the
-/// BRIGHTEST `DirectionalLight`, so the 128 klx fallback took the aim and the
+/// BRIGHTEST `DirectionalLight`, so a second light could take the aim and the
 /// scene's authored sun stayed frozen at its authored `xformOp:rotateXYZ` — the
 /// summer-space-school twin lighting and shadowing Hadley from a direction the
 /// ephemeris never sanctioned ("the DistantLight does not follow the sun"). It
@@ -897,7 +895,7 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
         .world_mut()
         .spawn((
             DirectionalLight {
-                illuminance: 10_000.0, // dimmer than the 128 klx fallback, as the twin authors it
+                illuminance: 10_000.0, // dimmer than the authored calibrated sun
                 ..default()
             },
             Transform::default(),
@@ -908,7 +906,7 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
         app.update();
     }
 
-    // CONTROL: the takeover really ran, so a missing fallback means "suppressed",
+    // CONTROL: the takeover really ran, so the absence of a second sun means "suppressed",
     // not "the hierarchy never came up".
     let mut q_grid = app
         .world_mut()
@@ -925,8 +923,8 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
         lights,
         vec![authored],
         "the scene authored its own sun, so the celestial takeover must not spawn a \
-         fallback beside it — two DirectionalLights make `update_sun_light_system`'s \
-         brightest-wins pick steer the wrong one"
+         second sun beside it — two DirectionalLights would violate the structural \
+         one-sun contract"
     );
 }
 

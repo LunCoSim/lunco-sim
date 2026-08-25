@@ -59,6 +59,7 @@ def Xform "CommsDemoScene" (
         prepend apiSchemas = ["LunCoTerrainAPI"]
     )
     {
+        token lunco:terrain:surfaceRole = "flat-site"
         double size = 1.0
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (400, 0.2, 400)

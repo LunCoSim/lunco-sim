@@ -95,10 +95,10 @@ pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
     mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
+    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::LocalAvatar>)>,
     q_global: Query<&GlobalTransform>,
 ) {
-    let Some(cam_gtf) = q_camera.iter().next() else {
+    let Some(cam_gtf) = q_camera.single().ok() else {
         return;
     };
     // `rotation()`, not `compute_transform()`: nothing here reads the decomposed
@@ -417,10 +417,13 @@ pub fn spawn_declared_missions(
 
 pub fn update_spacecraft_position_system(
     world: Res<lunco_time::WorldTime>,
-    ephemeris: Res<crate::ephemeris::EphemerisResource>,
+    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
     q_grids: Query<&big_space::prelude::Grid>,
     mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord, &ChildOf)>,
 ) {
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
     let jd = world.epoch_jd;
     // ONE ephemeris evaluation for the Sun (NAIF 10), not one PER SPACECRAFT: the
     // sun's position at `jd` does not depend on which craft is asking, and the

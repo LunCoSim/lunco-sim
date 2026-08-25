@@ -166,7 +166,7 @@ Attach the GNC control loop model from `LunCo.GNC` (`LanderPID.mo`, `ThrusterMap
 
 ## 3. Supported Vessel Modalities
 
-- **Wheeled Rovers**: `DCMotor.mo` + `Battery.mo` + `PDU.mo` + Rocker-bogie joints.
+- **Wheeled Rovers**: USD/Avian motor and reduction powertrain + `DCMotor.mo` electrical facet + `Battery.mo`/`PDU.mo` + Rocker-bogie joints.
 - **Powered Descent Landers**: `BellNozzle.mo` + `RCSThruster.mo` + `CryoTank.mo` + `PoweredDescentGuidance.mo` + `LanderPID.mo`.
 - **Spider-Rovers (Legged Quadrupeds/Hexapods)**: 12 $\times$ `ServoAxis.mo` + `EncoderSensor.mo` + `TouchdownSensor.mo` footpads + Trot/Crawl gait generator.
 - **Lander-Jumpers**: `JumperSpring.mo` + `RCSThruster.mo` + `TouchdownSensor.mo` hopping state machine.

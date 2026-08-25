@@ -20,6 +20,13 @@ use lunco_usd_bevy::camera_switch::{
 };
 use lunco_workbench::{CurrentSceneName, CurrentScenePath, MenuCtx};
 
+const DIAGNOSTICS_STATUS_SOURCE: &str = "Diagnostics";
+
+#[derive(Resource, Default)]
+struct DiagnosticsStatusMirror {
+    signature: Option<String>,
+}
+
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
 mod code_panel;
@@ -28,8 +35,6 @@ mod dataset_provisioning;
 mod models_palette;
 /// Which floating viewport overlays are shown (persisted, off by default).
 mod overlays;
-/// Explicit presentation policy for camera-less loaded scenes.
-mod presentation_camera;
 /// Rhai behaviour editor — edit + save + hot-reload the script on the selected
 /// prim, with a diagnostics list. The writable counterpart of `code_panel`.
 mod rhai_editor_panel;
@@ -165,18 +170,12 @@ impl Plugin for SandboxUiPlugin {
         }
 
         add_runtime_ui_layer(app);
-        app.init_resource::<presentation_camera::PresentationFallbackCameraSettings>();
-        app.add_systems(
-            Update,
-            (
-                presentation_camera::spawn_presentation_fallback_camera
-                    .after(lunco_usd_bevy::camera_switch::retire_presentation_fallback),
-                presentation_camera::activate_presentation_fallback
-                    .after(presentation_camera::spawn_presentation_fallback_camera),
-                presentation_camera::report_presentation_fallback
-                    .after(presentation_camera::activate_presentation_fallback),
-            ),
-        );
+        // A windowed host requires an authored presentation contract. The USD
+        // projection owns validation; this flag only declares the host's
+        // admission requirement and never creates a camera.
+        app.world_mut()
+            .resource_mut::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
+            .required = true;
         app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
@@ -187,6 +186,8 @@ impl Plugin for SandboxUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin);
+        app.init_resource::<DiagnosticsStatusMirror>()
+            .add_systems(Update, sync_diagnostics_status);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_plugins(update::UpdatePlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
@@ -280,6 +281,7 @@ impl Plugin for SandboxUiPlugin {
                     init_current_scene_path,
                     register_sandbox_scenarios_menu,
                     register_camera_menu,
+                    register_diagnostics_menu,
                     register_downloadable_assets_settings,
                     register_graphics_settings,
                 ),
@@ -516,11 +518,17 @@ fn register_camera_menu(world: &mut World) {
                 CameraSelectionOwner::None => "none",
                 CameraSelectionOwner::Director => "director",
                 CameraSelectionOwner::User => "operator",
-                CameraSelectionOwner::Fallback => "default presentation",
             };
             ui.label(format!("Active: {active}  ·  Owner: {owner}"));
             if let Some(error) = &state.last_error {
                 ui.colored_label(bevy_egui::egui::Color32::from_rgb(235, 130, 130), error);
+            }
+            if let Some(contract) =
+                ctx.resource::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
+            {
+                for error in &contract.errors {
+                    ui.colored_label(bevy_egui::egui::Color32::from_rgb(255, 110, 110), error);
+                }
             }
             if state.avatar_available && ui.button("Observe avatar").clicked() {
                 ctx.trigger(ObserveAvatar {});
@@ -532,12 +540,8 @@ fn register_camera_menu(world: &mut World) {
             }
             ui.separator();
             if state.cameras.is_empty() {
-                if state.owner == CameraSelectionOwner::Fallback {
-                    ui.label("No authored window camera is available.");
-                    ui.label("Using the default presentation view.");
-                } else {
-                    ui.label("No authored window camera is available yet.");
-                }
+                ui.label("No authored window camera is available.");
+                ui.label("This scene has no presentation until one is authored.");
             } else {
                 ui.label("Operator camera");
                 for name in &state.cameras {
@@ -571,6 +575,164 @@ fn register_camera_menu(world: &mut World) {
                 ui.close();
             }
         }
+    });
+}
+
+/// Mirror the current owning-boundary diagnostics onto the workbench status
+/// bus. The resources remain authoritative; this is only the UI projection so
+/// the status bar and its Diagnostics history show the same errors that the API
+/// and the explicit menu expose.
+fn sync_diagnostics_status(
+    runtime: Option<Res<lunco_core::RuntimeDiagnostics>>,
+    lint: Option<Res<lunco_lint::LintReport>>,
+    mut mirror: ResMut<DiagnosticsStatusMirror>,
+    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+) {
+    let mut entries = Vec::new();
+    if let Some(runtime) = runtime {
+        entries.extend(runtime.findings.iter().map(|finding| {
+            (
+                runtime_severity_rank(finding.severity),
+                format!(
+                    "[runtime/{}] {} — {}",
+                    finding.code, finding.subject, finding.message
+                ),
+            )
+        }));
+    }
+    if let Some(lint) = lint {
+        entries.extend(lint.findings.iter().map(|finding| {
+            (
+                lint_severity_rank(finding.severity),
+                format!("[lint/{}] {}", finding.rule, finding.line()),
+            )
+        }));
+    }
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let signature = entries
+        .iter()
+        .map(|(rank, message)| format!("{rank}:{message}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if mirror.signature.as_deref() == Some(signature.as_str()) {
+        return;
+    }
+    mirror.signature = Some(signature);
+
+    if entries.is_empty() {
+        bus.push(
+            DIAGNOSTICS_STATUS_SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
+            "No active runtime or authoring diagnostics",
+        );
+        return;
+    }
+
+    let errors = entries.iter().filter(|(rank, _)| *rank == 3).count();
+    let warnings = entries.iter().filter(|(rank, _)| *rank == 2).count();
+    let level = if errors > 0 {
+        lunco_workbench::status_bus::StatusLevel::Error
+    } else if warnings > 0 {
+        lunco_workbench::status_bus::StatusLevel::Warn
+    } else {
+        lunco_workbench::status_bus::StatusLevel::Info
+    };
+    let summary = match (errors, warnings) {
+        (0, 0) => format!("{} informational diagnostics", entries.len()),
+        (0, warnings) => format!(
+            "{warnings} warning(s), {} informational diagnostic(s)",
+            entries.len() - warnings
+        ),
+        (errors, 0) => format!(
+            "{errors} error(s), {} informational diagnostic(s)",
+            entries.len() - errors
+        ),
+        (errors, warnings) => format!(
+            "{errors} error(s), {warnings} warning(s), {} informational diagnostic(s)",
+            entries.len() - errors - warnings
+        ),
+    };
+    bus.push(
+        DIAGNOSTICS_STATUS_SOURCE,
+        level,
+        format!("{summary}: {}", entries[0].1),
+    );
+}
+
+fn runtime_severity_rank(severity: lunco_core::DiagnosticSeverity) -> u8 {
+    match severity {
+        lunco_core::DiagnosticSeverity::Error => 3,
+        lunco_core::DiagnosticSeverity::Warning => 2,
+        lunco_core::DiagnosticSeverity::Info => 1,
+    }
+}
+
+fn lint_severity_rank(severity: lunco_lint::LintSeverity) -> u8 {
+    match severity {
+        lunco_lint::LintSeverity::Error => 3,
+        lunco_lint::LintSeverity::Warn => 2,
+        lunco_lint::LintSeverity::Info => 1,
+    }
+}
+
+/// Show the complete current diagnostic set, including the exact lint finding
+/// and source subject. Error and warning rows use the shared theme tokens so a
+/// malformed scene is visibly distinct from ordinary status history.
+fn register_diagnostics_menu(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_custom_menu("Diagnostics", |ui, ctx| {
+        let Some(theme) = ctx.resource::<lunco_theme::Theme>() else {
+            ui.label("Diagnostics theme is unavailable.");
+            return;
+        };
+        let error = theme.tokens.error;
+        let warning = theme.tokens.warning;
+        let info = theme.tokens.text_subdued;
+        let runtime = ctx.resource::<lunco_core::RuntimeDiagnostics>();
+        let lint = ctx.resource::<lunco_lint::LintReport>();
+        let runtime_count = runtime.map(|report| report.findings.len()).unwrap_or(0);
+        let lint_count = lint.map(|report| report.findings.len()).unwrap_or(0);
+        ui.label(format!(
+            "Runtime: {runtime_count} · Authoring lint: {lint_count}"
+        ));
+
+        if runtime_count == 0 && lint_count == 0 {
+            ui.label("No active diagnostics.");
+            return;
+        }
+        ui.separator();
+        bevy_egui::egui::ScrollArea::vertical()
+            .max_height(420.0)
+            .show(ui, |ui| {
+                if let Some(runtime) = runtime {
+                    for finding in &runtime.findings {
+                        let color = match finding.severity {
+                            lunco_core::DiagnosticSeverity::Error => error,
+                            lunco_core::DiagnosticSeverity::Warning => warning,
+                            lunco_core::DiagnosticSeverity::Info => info,
+                        };
+                        ui.colored_label(
+                            color,
+                            format!(
+                                "[runtime/{}] {} — {}",
+                                finding.code, finding.subject, finding.message
+                            ),
+                        );
+                    }
+                }
+                if let Some(lint) = lint {
+                    for finding in &lint.findings {
+                        let color = match finding.severity {
+                            lunco_lint::LintSeverity::Error => error,
+                            lunco_lint::LintSeverity::Warn => warning,
+                            lunco_lint::LintSeverity::Info => info,
+                        };
+                        ui.colored_label(color, finding.line());
+                    }
+                }
+            });
     });
 }
 

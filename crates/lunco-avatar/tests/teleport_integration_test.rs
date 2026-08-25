@@ -43,7 +43,7 @@ fn test_full_teleport_workflow() {
             let root = commands
                 .spawn((
                     BigSpace::default(),
-                    Grid::new(2_000.0, 100.0),
+                    lunco_core::WorldGridConfig::default().grid(),
                     GlobalTransform::default(),
                 ))
                 .id();
@@ -53,7 +53,7 @@ fn test_full_teleport_workflow() {
                     ReferenceFrame::EclipticJ2000 {
                         center: lunco_celestial::ephemeris_id::SUN,
                     },
-                    Grid::new(2_000.0, 100.0),
+                    lunco_core::WorldGridConfig::default().grid(),
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),
@@ -66,7 +66,7 @@ fn test_full_teleport_workflow() {
                     ReferenceFrame::EclipticJ2000 {
                         center: lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER,
                     },
-                    Grid::new(2_000.0, 100.0),
+                    lunco_core::WorldGridConfig::default().grid(),
                     CellCoord::default(),
                     Transform::default(),
                     GlobalTransform::default(),

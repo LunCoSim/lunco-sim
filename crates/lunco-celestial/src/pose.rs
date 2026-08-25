@@ -5,8 +5,8 @@
 //! from its `GeodeticAnchor` (ground stations), `KeplerOrbit` (satellites, incl.
 //! LEO / lunar-orbit relays), or — for scene-local prims that move with a body
 //! (a rover-mounted antenna) — the site tangent frame. The scene-local path needs
-//! the big_space `Query` context that a read-only `query("SolarPose")` provider
-//! cannot get, which is exactly why this is a SYSTEM (docs 10/12).
+//! the big_space `Query` context, which is exactly why this is a SYSTEM (docs
+//! 10/12) and why the API query reads this component instead of recomputing it.
 //!
 //! This is the generic substrate any subsystem reuses (comms / solar / thermal /
 //! sensors): mark a prim [`SolarTracked`] (or give it an anchor/orbit) and its
@@ -256,7 +256,7 @@ pub fn update_solar_poses(
     let tree = FrameTree::new(jd, &registry, provider);
 
     // The site frame (scene-root anchor), for scene-local prims.
-    let site = match q_site.iter().next() {
+    let site = match q_site.single().ok() {
         Some(anchor) => match (body_of(anchor.body), body_center(anchor.body, &mut centers)) {
             (Some(desc), Some(center)) => Some((
                 anchor.body,

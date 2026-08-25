@@ -100,6 +100,7 @@ use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -700,9 +701,10 @@ pub(crate) fn sync_egui_host_msaa(
     mut removed: RemovedComponents<SceneCamera>,
     host_added: Query<(), Added<WorkbenchEguiHost>>,
     scene_cams: Query<
-        (&Camera, &Msaa, &RenderTarget, Has<Hdr>),
+        (Entity, &Camera, &Msaa, &RenderTarget, Has<Hdr>),
         (With<SceneCamera>, Without<WorkbenchEguiHost>),
     >,
+    viewport: Option<Res<SceneViewport>>,
     // The host must match the scene camera's `Hdr` too, not just MSAA. Both feed bevy's
     // main-texture key `(target, usages, format, msaa)` — the `Hdr` marker selects the
     // `Rgba16Float` format. A scene camera with bloom/AgX is HDR, so a non-HDR egui host
@@ -718,17 +720,18 @@ pub(crate) fn sync_egui_host_msaa(
     if dirty.is_empty() && host_added.is_empty() && !had_removal {
         return;
     }
-    // Prefer the camera that is actually drawing the window; fall back to any
-    // window-targeting scene camera so the host is already correct on the
-    // frames before one is activated. All scene cameras take their MSAA from
-    // the same setting, so which one we read only matters in a world that is
-    // already inconsistent.
+    // The viewport owns presentation selection. There is no valid substitute:
+    // before a camera is resolved, no scene camera is rendering the window and
+    // the egui host must not inherit an arbitrary camera's texture format.
     let is_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(_));
+    let Some(active_camera) = viewport.as_deref().and_then(|vp| vp.active_camera) else {
+        return;
+    };
     let want = scene_cams
-        .iter()
-        .find(|(c, _, t, _)| c.is_active && is_window(t))
-        .or_else(|| scene_cams.iter().find(|(_, _, t, _)| is_window(t)))
-        .map(|(_, msaa, _, hdr)| (*msaa, hdr));
+        .get(active_camera)
+        .ok()
+        .filter(|(_, camera, _, target, _)| camera.is_active && is_window(target))
+        .map(|(_, _, msaa, _, hdr)| (*msaa, hdr));
     let Some((want_msaa, want_hdr)) = want else {
         // No 3D camera on the window (Design mode, the Modelica workbench).
         // Nothing renders the scene, so nothing clears the target — but
@@ -771,8 +774,8 @@ pub(crate) fn ensure_egui_host(
             // default-order (0) `Camera3d`, regardless of which entity
             // spawned first. Without this, the render order ties on
             // `order` and falls back to entity-creation order — and
-            // 3D cameras that arrive late (USD avatar, fallback
-            // free-flight, …) end up painting OVER the chrome,
+            // 3D cameras that arrive late from USD projection end up painting
+            // OVER the chrome,
             // bleeding 3D through the top-right of the menu bar.
             //
             // `ClearColorConfig::None` keeps the 3D scene the Camera3d
@@ -823,8 +826,12 @@ pub(crate) fn apply_workbench_viewport(
     // authority that actuates `Camera::is_active` and `Camera::viewport`.
     let (visible, rect) = resolve_scene_viewport_layout(layout.as_deref());
     let Some(mut vp) = vp else { return };
-    vp.visible = visible;
-    vp.rect = rect;
+    if vp.visible != visible {
+        vp.visible = visible;
+    }
+    if vp.rect != rect {
+        vp.rect = rect;
+    }
 }
 
 /// Resolve the workbench's contribution to the scene viewport without touching
@@ -1194,7 +1201,7 @@ impl Plugin for WorkbenchViewportPlugin {
             )
             .add_systems(
                 PostUpdate,
-                apply_workbench_viewport.before(bevy::camera::CameraUpdateSystems),
+                apply_workbench_viewport.in_set(lunco_core::SceneViewportSet::Publish),
             );
     }
 }

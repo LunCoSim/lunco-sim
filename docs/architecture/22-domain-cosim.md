@@ -421,8 +421,10 @@ It used to wait for `variables`. For the few hundred milliseconds until the
 worker answered, the prim existed with **no ports at all** — so every wire into
 it hit `write_port → false` and the propagation master reported a *dangling
 wire*: a diagnostic that means "your wiring is wrong", raised for wiring that was
-correct. On the solar-rover demo that was `sun_azimuth`, `panel_yaw` and
-`vehicle_throttle` on every load.
+correct. On older solar-rover scenes that included `sun_azimuth`, `panel_yaw`
+and `vehicle_throttle` on every load. The current solar-rover scene has no
+sun-to-light Modelica wire: ephemeris owns the semantic sun sample, and the
+rover's `SunTracker` consumes the explicit `EnvironmentProbe` outputs.
 
 Two lessons generalise beyond Modelica:
 
@@ -453,8 +455,9 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 
 It despawns every entity carrying `UsdPrimPath`, despawns every
 `SimConnection`, force-reads the asset from disk, and spawns a fresh
-root under the first `Grid`. Authoring loop: edit `.usda`, curl, see
-new scene.
+root directly under the canonical `WorldGrid`. Authoring loop: edit `.usda`, curl, see
+the new scene. Invalid or duplicate world-shell state is reported rather than
+selecting an arbitrary grid.
 
 `CosimStatus` (`ApiQueryProvider`) returns a snapshot of every
 USD-driven cosim entity (`UsdSourcedCosim`) — position, velocity,

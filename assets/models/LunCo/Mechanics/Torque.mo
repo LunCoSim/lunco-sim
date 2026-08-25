@@ -3,9 +3,10 @@ within LunCo.Mechanics;
 // the acausal driveline.
 //
 // Everything upstream of a driveline is a COMMAND (a throttle, a controller output, a
-// solved motor torque); everything inside it is a shared node. This is where the one
-// becomes the other, and it is the part `DCMotor` needs in order to put its computed
-// torque onto a shaft rather than merely reporting it as an output.
+// solved drivetrain torque); everything inside it is a shared node. This is a
+// standalone mechanical boundary for models that explicitly compose a
+// rotational driveline. The electrical `DCMotor` facet is intentionally not a
+// member of that mechanical network; USD/Avian owns the rover powertrain.
 //
 // The sign: `tau` is defined as torque INTO the flange, so a source driving the shaft
 // forwards pushes torque out of itself. Getting this backwards is the classic way to

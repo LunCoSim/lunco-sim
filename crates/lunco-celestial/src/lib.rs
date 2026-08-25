@@ -143,8 +143,9 @@ pub fn celestial_declared(q: Query<(), With<CelestialBodyDecl>>) -> bool {
 /// genuine host policy: whether the app owns its own camera.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CelestialConfig {
-    /// Spawn the celestial Observer Camera and let it claim the single
-    /// `FloatingOrigin`. Leave off in apps that own their camera (sandbox).
+    /// Spawn the celestial Observer Camera. BigSpace origin ownership remains
+    /// with the persistent `OriginAnchor`; leave this off in apps that own
+    /// their viewport camera (sandbox).
     pub spawn_observer_camera: bool,
 }
 
@@ -212,6 +213,10 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        // Globe LOD consumes the shared presentation binding, not Bevy's
+        // render activation flag. Keep the binding substrate available in
+        // standalone celestial hosts as well as the full USD application.
+        app.init_resource::<lunco_core::SceneViewport>();
         // Celestial shell geometry uses the same authoritative graphics
         // settings as USD projection. Initialise the documented default here
         // so setup does not substitute a private Balanced profile.
@@ -227,7 +232,7 @@ impl Plugin for CelestialPlugin {
         // Generic celestial geometry queries (Occultation / BodyPosition /
         // SolarPose) — the domain-free substrate authored subsystems compose
         // over (docs 10/12) — plus the solar-pose tracking system that feeds
-        // `SolarPose` (incl. scene-local prims a read-only query can't resolve).
+        // the sole `SolarFramePose` reader path, including scene-local prims.
         queries::register_celestial_queries(app);
         app.register_type::<pose::SolarTracked>();
         app.add_systems(
@@ -290,16 +295,6 @@ impl Plugin for CelestialPlugin {
         );
         app.insert_resource(CelestialBodyRegistry::default_system());
 
-        // Insert a no-op `EphemerisResource` so downstream systems
-        // (missions, trajectories, body positioning) can unconditionally
-        // depend on `Res<EphemerisResource>`. Apps that want real
-        // planetary positions add `lunco-celestial-ephemeris`'s
-        // `EphemerisPlugin`, which overwrites this with the
-        // VSOP2013/ELP-backed `CelestialEphemerisProvider`.
-        app.insert_resource(ephemeris::EphemerisResource {
-            provider: std::sync::Arc::new(ephemeris::NoOpEphemerisProvider),
-        });
-
         // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
         // after disabling TransformPlugin.
         app.add_plugins(trajectories::TrajectoryPlugin);
@@ -356,7 +351,7 @@ impl Plugin for CelestialPlugin {
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `placement::OrbitalViewPin`).
         app.init_resource::<placement::OrbitalViewPin>();
-        app.init_resource::<systems::SunDirectionWorld>();
+        app.init_resource::<lunco_environment::SunState>();
         app.init_resource::<lunco_controller::InputBindingsSettings>();
 
         // Celestial cadence: the tree is re-solved on an ANGULAR ERROR BUDGET,
@@ -463,18 +458,19 @@ impl Plugin for CelestialPlugin {
         // Systems like terrain_spawn_system run in that crate
 
         // Ephemeris-driven sun direction (doc 19 — T2). The system returns
-        // early when the ephemeris is degenerate (`NoOpEphemerisProvider`
-        // returns ZERO), so manual `SetEnvironmentLight` (yaw/pitch) control
-        // stays authoritative in sandbox/web contexts without a real
-        // ephemeris — the single-writer rule that resolved the old web-build
-        // clobbering. With a real ephemeris the sun tracks the sim clock:
+        // early when no ephemeris provider or site frame is available, so
+        // manual `SetEnvironmentLight` (yaw/pitch) remains an explicit
+        // operator command in non-orbital contexts. With a real ephemeris the
+        // sun tracks the sim clock:
         // required since the celestial sun light is a TOP-LEVEL entity (it
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
         // orientation from the site-anchored hierarchy.
         app.add_systems(
             Update,
-            update_sun_light_system.run_if(cadence::tracked_needs_solve()),
+            update_sun_light_system
+                .run_if(cadence::tracked_needs_solve())
+                .before(lunco_environment::project_sun_state_to_light),
         );
     }
 }
@@ -507,7 +503,7 @@ fn teardown_celestial_scene(
     mut commands: Commands,
     mut active_physics_frame: ResMut<lunco_core::ActivePhysicsFrame>,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
-    q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     mut registry: ResMut<MissionRegistry>,
     curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
 ) {
@@ -516,16 +512,16 @@ fn teardown_celestial_scene(
     // is about to be despawned, so restore the persistent shell frame in the
     // same lifecycle operation. Leaving an Entity id to a dead Grid makes the
     // physics bridge's next frame conversion structurally impossible.
-    let world_root = q_world_root
+    let world_grid = q_world_grid
         .single()
-        .expect("WorldShellPlugin must provide exactly one persistent WorldRoot");
+        .expect("WorldShellPlugin must provide exactly one persistent WorldGrid");
     // This assignment is intentionally immediate. `clear_scene_entities` queues
     // this teardown from inside a larger scene-replacement command buffer, and
     // the replacement mount is queued after it. Inserting the resource through
     // `Commands` would append the reset behind the replacement mount and restore
     // the outgoing WorldRoot AFTER the new body-fixed frame had been selected.
     // That made the bridge transport the live bodies into the wrong Avian frame.
-    active_physics_frame.0 = world_root;
+    active_physics_frame.0 = world_grid;
 
     let mut n = 0;
     for e in &q_derived {
@@ -561,7 +557,7 @@ mod scene_teardown_tests {
         app.init_resource::<MissionRegistry>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
-        let world_root = app.world_mut().spawn(lunco_core::WorldRoot).id();
+        let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
         let outgoing_frame = app.world_mut().spawn_empty().id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(outgoing_frame));
         let outgoing = app
@@ -583,7 +579,7 @@ mod scene_teardown_tests {
         assert!(app.world().get_entity(replacement_decl).is_ok());
         assert_eq!(
             app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
-            world_root
+            world_grid
         );
     }
 
@@ -593,7 +589,7 @@ mod scene_teardown_tests {
         app.init_resource::<MissionRegistry>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
-        let world_root = app.world_mut().spawn(lunco_core::WorldRoot).id();
+        let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
         let outgoing_frame = app.world_mut().spawn_empty().id();
         let replacement_frame = app.world_mut().spawn_empty().id();
         app.insert_resource(lunco_core::ActivePhysicsFrame(outgoing_frame));
@@ -611,7 +607,7 @@ mod scene_teardown_tests {
         );
         assert_ne!(
             app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
-            world_root
+            world_grid
         );
     }
 }
