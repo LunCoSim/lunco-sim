@@ -12,7 +12,7 @@ use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::InputPorts;
 
 use crate::wheel_kinematics::{wheel_heading, wheel_hub_pose, wheel_hub_velocity};
-use crate::WheelRaycast;
+use crate::{WheelBodyMount, WheelRaycast};
 
 /// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
 /// for a wheel of inertia `i` (`τ = I·ω/dt`). The brake applies the negative
@@ -48,7 +48,13 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
-    mut q_wheels: Query<(Entity, &mut WheelRaycast, &Transform, &RayHits, &ChildOf)>,
+    mut q_wheels: Query<(
+        Entity,
+        &mut WheelRaycast,
+        &Transform,
+        &RayHits,
+        &WheelBodyMount,
+    )>,
     mut q_ports: ParamSet<(
         Query<&lunco_core::architecture::Port>,
         Query<&mut lunco_core::architecture::Port>,
@@ -65,10 +71,9 @@ pub(crate) fn update_wheel_spin(
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        // A raycast wheel is carried by the rigid body immediately above it.
-        // That body may be the vessel root or an articulated rocker/bogie link;
-        // mobility must follow the authored body topology rather than assuming
-        // every wheel hangs directly from the actuator owner.
+        // The wheel body owner is resolved from authored topology and carried by
+        // `WheelBodyMount`. A raycast wheel may be nested under a visual or
+        // suspension carrier, so its ECS parent is not a physics ownership edge.
         With<RigidBody>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
@@ -91,7 +96,7 @@ pub(crate) fn update_wheel_spin(
         return;
     }
 
-    for (entity, mut wheel, local_tf, hits, parent) in q_wheels.iter_mut() {
+    for (entity, mut wheel, local_tf, hits, mount) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -137,7 +142,7 @@ pub(crate) fn update_wheel_spin(
         let braking = lunco_core::architecture::owning_input_ports(entity, &q_child_of, &q_inputs)
             .map(|c| c.brake_active)
             .unwrap_or(false);
-        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(parent.parent()) {
+        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(mount.body) {
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
             // (host / the owned rover), or the delivered snapshot hint on a
@@ -152,19 +157,19 @@ pub(crate) fn update_wheel_spin(
                 (lin.0, ang.0)
             };
             // Reconstruct the hub in the grid-absolute physics frame from the
-            // chassis body pose + the wheel's chassis-local transform (the wheel
-            // is a `ChildOf` the chassis, so `local_tf` *is* that transform) —
+            // resolved body pose and authored body-local mount —
             // never from `global_tf.translation()`, whose render frame drifted
             // the slip lever once the rover drove off origin (CQ-201).
+            let wheel_local_rotation =
+                mount.local.rotation.as_dquat() * local_tf.rotation.as_dquat();
             let (hub_pos, _) = wheel_hub_pose(
                 GridPos(pos.0),
                 GridRot(rot.0),
-                local_tf.translation.as_dvec3(),
-                local_tf.rotation.as_dquat(),
+                mount.local.translation.as_dvec3(),
+                wheel_local_rotation,
             );
             let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, GridPos(pos.0));
-            let (wheel_forward, wheel_right) =
-                wheel_heading(GridRot(rot.0), local_tf.rotation.as_dquat());
+            let (wheel_forward, wheel_right) = wheel_heading(GridRot(rot.0), wheel_local_rotation);
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.
@@ -183,7 +188,6 @@ pub(crate) fn update_wheel_spin(
         } else {
             0.0
         };
-
         let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
         // This is the shared analytic tire solve. The physical realization gets
         // its normal load and contact point from Avian, then calls this same
@@ -211,22 +215,6 @@ pub(crate) fn update_wheel_spin(
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
         if let Ok(mut speed_port) = q_ports.p1().get_mut(wheel.speed_port) {
             speed_port.value = w;
-        }
-
-        #[cfg(feature = "drive-diag")]
-        {
-            if let Ok(dbgport) = q_ports.p0().get(wheel.drive_port) {
-                if dbgport.value.abs() > f64::EPSILON {
-                    let (vlin, vang) = q_chassis
-                        .get(parent.parent())
-                        .map(|(l, a, _, _, _, _, _)| (l.0, a.0))
-                        .unwrap_or((DVec3::ZERO, DVec3::ZERO));
-                    bevy::log::info!(
-                        "[drive-diag] update_wheel_spin: wheel={:?} port={} w={:.3} tau={:.1} f_long={:.1} muN={:.1} chassis_v=({:.3},{:.3},{:.3}) yaw_rate={:.4}",
-                        entity, dbgport.value, w, tau_drive, f_long, friction_mu * wheel.last_normal_force, vlin.x, vlin.y, vlin.z, vang.y
-                    );
-                }
-            }
         }
 
         // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────
@@ -334,7 +322,7 @@ pub(crate) fn update_wheel_spin(
 #[cfg(test)]
 mod tests {
     use super::update_wheel_spin;
-    use crate::{Suspension, WheelRaycast};
+    use crate::{Suspension, WheelBodyMount, WheelRaycast};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
@@ -448,6 +436,10 @@ mod tests {
                 local_axis: DVec3::Y,
             },
             Transform::from_translation(wheel_local),
+            WheelBodyMount {
+                body: chassis,
+                local: Transform::from_translation(wheel_local),
+            },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
             // One hit ⇒ the wheel is on the ground (the integrator only checks
             // presence, not distance/normal, for the grip path).
@@ -548,6 +540,10 @@ mod tests {
                     local_axis: DVec3::Y,
                 },
                 Transform::default(),
+                WheelBodyMount {
+                    body: chassis,
+                    local: Transform::IDENTITY,
+                },
                 GlobalTransform::default(),
                 RayHits(vec![]),
                 ChildOf(chassis),

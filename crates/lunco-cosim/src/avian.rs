@@ -23,7 +23,7 @@ use avian3d::prelude::{
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
     RevoluteJoint, RigidBody, Rotation, Sensor, Sleeping, WriteRigidBodyForces,
 };
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 use crate::connection::PortDirection;
@@ -195,8 +195,24 @@ pub struct JointTorqueActuator {
     pub speed_port_entity: Entity,
     /// Passive opposing torque when the owning vessel's brake command is active.
     pub brake_torque: f64,
+    /// Rotational inertia at the actuator boundary, kg m². It bounds the
+    /// braking impulse for one fixed step so a brake cannot integrate through
+    /// zero and reverse the joint every tick.
+    pub rotational_inertia: f64,
     /// Mapping from the joint coordinate to body-2's world axis.
     pub drive_sign: f64,
+}
+
+/// Return the world-space axis of a revolute joint's positive coordinate.
+///
+/// Avian defines the coordinate axis in the joint frame: `hinge_axis` is
+/// rotated by `frame1.basis` before it is expressed in body 1's world
+/// orientation.  Keeping that projection here makes every mechanical boundary
+/// (torque, speed feedback, and tire contact) use the solver's actual axis,
+/// including a runtime steering change to the joint frame.
+pub fn revolute_hinge_axis_world(joint: &RevoluteJoint, body1_rotation: DQuat) -> Option<DVec3> {
+    let local_axis = joint.local_hinge_axis1()?;
+    (body1_rotation * local_axis).try_normalize()
 }
 
 impl Default for JointTorqueActuator {
@@ -205,9 +221,37 @@ impl Default for JointTorqueActuator {
             port_entity: Entity::PLACEHOLDER,
             speed_port_entity: Entity::PLACEHOLDER,
             brake_torque: 0.0,
+            rotational_inertia: 0.0,
             drive_sign: 1.0,
         }
     }
+}
+
+/// Resolve the physical brake torque for one fixed step.
+///
+/// The authored value is a torque limit. Near zero speed, applying that full
+/// limit for an entire step would overshoot the stop and reverse the joint;
+/// the impulse needed to reach zero is the physically valid bound for this
+/// discrete projection. Both the joint actuator and the contact tire use this
+/// function so the brake has one torque owner and one sampled value.
+#[inline]
+pub fn bounded_brake_torque(
+    max_torque: f64,
+    rotational_inertia: f64,
+    coordinate_speed: f64,
+    dt: f64,
+) -> f64 {
+    if !max_torque.is_finite()
+        || max_torque <= 0.0
+        || !rotational_inertia.is_finite()
+        || rotational_inertia <= 0.0
+        || !coordinate_speed.is_finite()
+        || !dt.is_finite()
+        || dt <= 0.0
+    {
+        return 0.0;
+    }
+    -coordinate_speed.signum() * max_torque.min(rotational_inertia * coordinate_speed.abs() / dt)
 }
 
 /// Apply solved joint torque as equal and opposite body torques.
@@ -247,6 +291,7 @@ pub fn apply_joint_torque_actuators(
         };
         if !torque.is_finite()
             || !actuator.brake_torque.is_finite()
+            || !actuator.rotational_inertia.is_finite()
             || !actuator.drive_sign.is_finite()
         {
             continue;
@@ -258,10 +303,9 @@ pub fn apply_joint_torque_actuators(
             else {
                 continue;
             };
-            let axis = (body1_rotation.0 * joint.hinge_axis).normalize_or_zero();
-            if axis == DVec3::ZERO {
+            let Some(axis) = revolute_hinge_axis_world(joint, body1_rotation.0) else {
                 continue;
-            }
+            };
             let coordinate_speed = (body2_omega.0 - body1_omega.0).dot(axis) * actuator.drive_sign;
             (axis, coordinate_speed)
         };
@@ -272,7 +316,12 @@ pub fn apply_joint_torque_actuators(
             if lunco_core::architecture::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
                 .is_some_and(|inputs| inputs.brake_active)
             {
-                -coordinate_speed.signum() * actuator.brake_torque
+                bounded_brake_torque(
+                    actuator.brake_torque,
+                    actuator.rotational_inertia,
+                    coordinate_speed,
+                    physics_time.delta_secs_f64(),
+                )
             } else {
                 0.0
             };
@@ -1181,6 +1230,33 @@ fn nearest_rigid_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_brake_torque_stops_without_reversing_in_one_step() {
+        let torque = bounded_brake_torque(100.0, 2.0, 0.25, 0.1);
+        assert_eq!(torque, -5.0);
+
+        let torque = bounded_brake_torque(100.0, 2.0, -0.25, 0.1);
+        assert_eq!(torque, 5.0);
+    }
+
+    #[test]
+    fn bounded_brake_torque_respects_authored_limit_away_from_zero() {
+        let torque = bounded_brake_torque(100.0, 2.0, 20.0, 0.1);
+        assert_eq!(torque, -100.0);
+    }
+
+    #[test]
+    fn bounded_brake_torque_rejects_invalid_boundary_inputs() {
+        for (max_torque, inertia, speed, dt) in [
+            (0.0, 2.0, 1.0, 0.1),
+            (100.0, 0.0, 1.0, 0.1),
+            (100.0, 2.0, f64::NAN, 0.1),
+            (100.0, 2.0, 1.0, 0.0),
+        ] {
+            assert_eq!(bounded_brake_torque(max_torque, inertia, speed, dt), 0.0);
+        }
+    }
 
     #[test]
     fn unchanged_mass_property_writes_do_not_dirty_avian_state() {

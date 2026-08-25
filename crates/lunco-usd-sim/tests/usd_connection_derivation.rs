@@ -536,8 +536,7 @@ fn battery_telemetry_target_is_a_modelica_network_member() {
 fn infinite_power_variant_does_not_publish_battery_telemetry() {
     let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/scenes/tests/wheelie_check.usda");
-    let stage =
-        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose wheelie_check.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose wheelie_check.usda");
     let view = lunco_usd_bevy::StageView::new(&stage);
 
     let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
@@ -546,8 +545,10 @@ fn infinite_power_variant_does_not_publish_battery_telemetry() {
         "the infinite power realization must not include a battery member"
     );
     assert!(
-        view.value::<bool>(&SdfPath::new("/WheelieCheck/Rover/Battery").unwrap(), "active")
-            == Some(false),
+        view.value::<bool>(
+            &SdfPath::new("/WheelieCheck/Rover/Battery").unwrap(),
+            "active"
+        ) == Some(false),
         "the infinite power realization must deactivate the authored battery component"
     );
 }

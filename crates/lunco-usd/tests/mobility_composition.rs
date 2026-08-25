@@ -53,12 +53,12 @@ fn each_rover_composes_the_suspension_it_asked_for() {
     for (asset, wheel, want) in [
         (
             "vessels/rovers/skid_rover.usda",
-            "/SkidRover/Wheel_FL",
+            "/SkidRover/Suspension_FL/Wheel_FL",
             STANDARD,
         ),
         (
             "vessels/rovers/ackermann_rover.usda",
-            "/AckermannRover/Wheel_FL",
+            "/AckermannRover/Suspension_FL/Wheel_FL",
             STANDARD,
         ),
         (
@@ -107,10 +107,13 @@ fn each_rover_composes_the_suspension_it_asked_for() {
 #[test]
 fn every_rover_wheel_composes_its_applied_schemas() {
     for (asset, wheel) in [
-        ("vessels/rovers/skid_rover.usda", "/SkidRover/Wheel_FL"),
+        (
+            "vessels/rovers/skid_rover.usda",
+            "/SkidRover/Suspension_FL/Wheel_FL",
+        ),
         (
             "vessels/rovers/ackermann_rover.usda",
-            "/AckermannRover/Wheel_FL",
+            "/AckermannRover/Suspension_FL/Wheel_FL",
         ),
         (
             "vessels/rovers/six_wheel_rover.usda",
@@ -161,8 +164,14 @@ fn suspension_visuals_declare_their_role() {
     let view = cs.view();
 
     for (prim, role) in [
-        ("/SkidRover/Wheel_FL/SuspensionPiston", "piston"),
-        ("/SkidRover/Wheel_FL/SuspensionSpring", "spring"),
+        (
+            "/SkidRover/Suspension_FL/Wheel_FL/SuspensionPiston",
+            "piston",
+        ),
+        (
+            "/SkidRover/Suspension_FL/Wheel_FL/SuspensionSpring",
+            "spring",
+        ),
     ] {
         let p = SdfPath::new(prim).unwrap();
         assert!(
@@ -176,7 +185,7 @@ fn suspension_visuals_declare_their_role() {
         );
     }
 
-    let casing = SdfPath::new("/SkidRover/Wheel_FL/SuspensionCasing").unwrap();
+    let casing = SdfPath::new("/SkidRover/Suspension_FL/Wheel_FL/SuspensionCasing").unwrap();
     assert!(
         view.has_api_schema(&casing, "LunCoSuspensionVisualAPI"),
         "the casing must declare its static suspension visual role"
@@ -193,7 +202,7 @@ fn suspension_visuals_declare_their_role() {
 fn a_wheel_composes_its_tire() {
     let cs = compose("vessels/rovers/skid_rover.usda");
     let view = cs.view();
-    let fl = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
+    let fl = SdfPath::new("/SkidRover/Suspension_FL/Wheel_FL").unwrap();
 
     // Grip — `regolith` is the wheel's default tire.
     assert_eq!(
@@ -294,7 +303,7 @@ fn wheel_resync_claims_are_prim_scoped() {
     use lunco_usd_sim::wheel_params::claims_edit;
     let stage = compose("vessels/rovers/skid_rover.usda");
     let view = stage.view();
-    let wheel = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
+    let wheel = SdfPath::new("/SkidRover/Suspension_FL/Wheel_FL").unwrap();
     let chassis = SdfPath::new("/SkidRover/Chassis").unwrap();
     let root = SdfPath::new("/SkidRover").unwrap();
 
@@ -313,4 +322,47 @@ fn wheel_resync_claims_are_prim_scoped() {
     ));
     assert!(!claims_edit(&view, &chassis, "primvars:displayColor"));
     assert!(!claims_edit(&view, &root, "lunco:spawnable"));
+}
+
+#[test]
+fn physical_wheel_clearance_pairs_compose_through_the_variant() {
+    let cs = compose("scenes/tests/drivetrain_parity.usda");
+    let view = cs.view();
+    let wheel =
+        SdfPath::new("/DrivetrainParity/RoverPhysical/Suspension_FL/Wheel_FL").expect("wheel path");
+    let paths = view.prim_paths();
+    let unique_paths = paths.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        paths.len(),
+        unique_paths.len(),
+        "composed prim traversal must expose each live path once"
+    );
+    assert!(
+        view.has_api_schema(&wheel, "PhysicsFilteredPairsAPI"),
+        "physical wheel must compose the standard filtered-pairs API"
+    );
+    assert_eq!(
+        view.rel_targets(&wheel, "physics:filteredPairs"),
+        vec![SdfPath::new("/DrivetrainParity/RoverPhysical/Chassis").unwrap()],
+        "the authored clearance relation must translate with the rover reference"
+    );
+    let topology = lunco_usd_sim::wheel_params::collect_wheel_attachment_topology(&view);
+    assert!(
+        topology.binding_for(wheel.as_str()).is_some(),
+        "the composed physical wheel must have exactly one standard attachment"
+    );
+
+    for suspension in ["FL", "FR", "RL", "RR"] {
+        let parent = SdfPath::new(&format!(
+            "/DrivetrainParity/RoverPhysical/Suspension_{suspension}"
+        ))
+        .expect("suspension path");
+        let children = view.children(&parent);
+        let unique_children = children.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            children.len(),
+            unique_children.len(),
+            "composed child traversal must expose one physical carrier per authored path"
+        );
+    }
 }

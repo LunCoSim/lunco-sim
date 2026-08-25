@@ -41,7 +41,8 @@ fn first_rel_target(view: &StageView<'_>, prop_path: &str) -> Option<String> {
     view.rel_target(&prim, name).map(|p| p.as_str().to_string())
 }
 
-/// Reference composition: a referenced rover surfaces its Chassis + wheels.
+/// Reference composition: a referenced rover surfaces its Chassis, suspension
+/// carriers, and nested wheels.
 #[test]
 fn reference_geometry_composes() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");
@@ -49,8 +50,8 @@ fn reference_geometry_composes() {
     for p in [
         "/SandboxScene/Skid_Raycast_1",
         "/SandboxScene/Skid_Raycast_1/Chassis",
-        "/SandboxScene/Skid_Raycast_1/Wheel_FL",
-        "/SandboxScene/Skid_Raycast_1/Wheel_RR",
+        "/SandboxScene/Skid_Raycast_1/Suspension_FL/Wheel_FL",
+        "/SandboxScene/Skid_Raycast_1/Suspension_RR/Wheel_RR",
     ] {
         assert!(
             view.has_prim(&SdfPath::new(p).unwrap()),
@@ -110,15 +111,16 @@ fn joint_relationship_targets_survive() {
     )
     .expect("Wheel_FL_Hinge must have a physics:body1 target");
     assert_eq!(
-        target, "/SandboxScene/Skid_Physical_1/Wheel_FL",
+        target, "/SandboxScene/Skid_Physical_1/Suspension_FL/Wheel_FL",
         "joint body1 target"
     );
 }
 
 /// Standalone rover composition (as the Bevy-pipeline tests do): the root's
-/// `children` (what `instantiate_usd_prim` iterates) must include the
-/// Chassis + 4 wheels, apiSchemas must compose on the root, and the wheel/
-/// chassis physics attributes the avian/sim consumers read must be present.
+/// `children` (what `instantiate_usd_prim` iterates) must include the Chassis
+/// and four suspension carriers; each carrier owns its wheel. API schemas must
+/// compose on the root, and the wheel/chassis physics attributes the avian/sim
+/// consumers read must be present.
 #[test]
 fn standalone_rover_reader_is_complete() {
     let cs = compose("vessels/rovers/skid_rover.usda");
@@ -131,10 +133,23 @@ fn standalone_rover_reader_is_complete() {
         .iter()
         .filter_map(|p| p.name().map(str::to_string))
         .collect();
-    for w in ["Chassis", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+    for w in [
+        "Chassis",
+        "Suspension_FL",
+        "Suspension_FR",
+        "Suspension_RL",
+        "Suspension_RR",
+    ] {
         assert!(
             names.iter().any(|n| n == w),
             "SkidRover children missing {w}; got {names:?}"
+        );
+    }
+    for wheel in ["FL", "FR", "RL", "RR"] {
+        let path = format!("/SkidRover/Suspension_{wheel}/Wheel_{wheel}");
+        assert!(
+            view.has_prim(&SdfPath::new(&path).unwrap()),
+            "missing {path}"
         );
     }
 
@@ -150,7 +165,7 @@ fn standalone_rover_reader_is_complete() {
     // Wheel parameters the sim reads. Native USD types are preserved by the
     // adapter, so `double` reads as f64 and `float` as f32 (the sim reads each
     // at its authored type — see lunco_usd_sim::setup_*_wheel).
-    let fl = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
+    let fl = SdfPath::new("/SkidRover/Suspension_FL/Wheel_FL").unwrap();
     assert_eq!(
         view.value::<f64>(&fl, "radius"),
         Some(0.4),
@@ -186,18 +201,17 @@ fn drivetrain_physical_variant_brings_joints() {
                 .unwrap_or_else(|| panic!("{hinge} missing physics:body1 target"));
             assert_eq!(
                 target,
-                format!("/SandboxScene/{rover}/{w}"),
+                format!("/SandboxScene/{rover}/Suspension_{}/{}", &w[6..], w),
                 "asset-local body1 must translate into the instance namespace"
             );
         }
     }
 }
 
-/// Both drivetrain realizations share ONE authored wheel pose — the axle mount
-/// at y = -0.65. The variant no longer moves the wheel: the raycast strut top
+/// Both drivetrain realizations share ONE authored carrier pose — the axle mount
+/// at y = -0.65. The wheel itself is at the carrier origin; the raycast strut top
 /// is derived from the authored suspension geometry (`restLength − radius`
-/// above the axle), not from a baked-in ride-height translate, so selecting a
-/// realization must leave the composed wheel where the asset authored it.
+/// above the axle), not from a baked-in ride-height translate.
 #[test]
 fn drivetrain_variants_share_the_axle_mount() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");
@@ -207,12 +221,12 @@ fn drivetrain_variants_share_the_axle_mount() {
             .unwrap_or_else(|| panic!("{path} missing xformOp:translate"))[1]
     };
     assert!(
-        (y("/SandboxScene/Skid_Physical_1/Wheel_FL") - (-0.65)).abs() < 1e-6,
-        "physical wheel sits at the authored axle mount y=-0.65"
+        (y("/SandboxScene/Skid_Physical_1/Suspension_FL") - (-0.65)).abs() < 1e-6,
+        "physical carrier sits at the authored axle mount y=-0.65"
     );
     assert!(
-        (y("/SandboxScene/Skid_Raycast_1/Wheel_FL") - (-0.65)).abs() < 1e-6,
-        "raycast wheel shares the same axle mount — no baked ride-height translate"
+        (y("/SandboxScene/Skid_Raycast_1/Suspension_FL") - (-0.65)).abs() < 1e-6,
+        "raycast carrier shares the same axle mount — no baked ride-height translate"
     );
 }
 
@@ -234,8 +248,8 @@ fn drivetrain_physical_composes_articulation_and_drive() {
     );
 }
 
-/// A `raycast` instance must NOT carry joints — the fallback variant is empty,
-/// so the joint prims authored only under `physical` are absent.
+/// A `raycast` instance must NOT carry joints — the raycast realization has no
+/// authored joint graph, so the joint prims authored only under `physical` are absent.
 #[test]
 fn drivetrain_raycast_has_no_joints() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");

@@ -722,6 +722,7 @@ mod tests {
             "LunCoSuspensionAPI",
             "LunCoWheelAPI",
             "LunCoSuspensionVisualAPI",
+            "LunCoMassContributionAPI",
         ] {
             assert!(
                 reg.api_schemas().contains(&api.to_string()),

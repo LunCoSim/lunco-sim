@@ -1450,15 +1450,6 @@ fn extract_avian_prim(
         return;
     }
 
-    // Skip wheel prims — the sim plugin handles those.
-    if reader
-        .real_f32(sdf_path, "physxVehicleWheel:radius")
-        .is_some()
-    {
-        commands.entity(entity).try_insert(UsdAvianProcessed);
-        return;
-    }
-
     // `guide` geometry is annotation — a debug axis, a planned path, a sensor
     // cone. It is never physical, whatever schemas happen to be on it, so it is
     // refused a body and a collider both rather than being quietly collided with.
@@ -1472,6 +1463,18 @@ fn extract_avian_prim(
     // which pairs never collide, not what this prim IS.
     if let Some(pending) = filtered_pairs::read_filtered_pairs(reader, sdf_path) {
         commands.entity(entity).try_insert(pending);
+    }
+
+    // Skip wheel prims — the sim plugin handles their colliders and bodies. The
+    // standard filtered-pairs API above is still owned by this bridge, because
+    // it is orthogonal to wheel realization and must be admitted before the
+    // wheel projector returns.
+    if reader
+        .real_f32(sdf_path, "physxVehicleWheel:radius")
+        .is_some()
+    {
+        commands.entity(entity).try_insert(UsdAvianProcessed);
+        return;
     }
 
     let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);
@@ -2320,6 +2323,8 @@ fn on_add_usd_prim(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
+    faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else {
@@ -2344,6 +2349,10 @@ fn on_add_usd_prim(
         // no live stage (asset carries no recipe / build failed) — skip
         return;
     };
+    let view = StageView::new(cs.stage());
+    let is_physics_joint = view
+        .prim_type_name(&sdf_path)
+        .is_some_and(|type_name| type_name.starts_with("Physics") && type_name.ends_with("Joint"));
     // A wheel prim on the LIVE stage → owned by the sim plugin, skip.
     if cs
         .stage()
@@ -2358,6 +2367,25 @@ fn on_add_usd_prim(
     }
     if let Some(joint) = read_joint_spec_typed(cs.stage(), &sdf_path) {
         commands.entity(entity).try_insert(joint);
+    } else if is_physics_joint && view.boolean(&sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
+        // A recognized standard joint that cannot be projected is an authored
+        // scene error. Silently omitting it leaves the mechanism unconstrained,
+        // which is a physically different assembly and can make a vehicle look
+        // valid until the first dynamic step. Keep the failure at the USD/Avian
+        // boundary and let the shared fault/hold gate stop integration.
+        let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
+        error!("USD physics joint {} rejected: {detail}", sdf_path);
+        if let Some(mut faults) = faults {
+            faults.raise(
+                "usd-physics-joint-invalid",
+                Some(entity),
+                sdf_path.to_string(),
+                detail,
+            );
+        }
+        if let Some(mut holds) = holds {
+            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        }
     }
 
     // Note: Physics mapping (RigidBody, Mass, Collider, Damping) is handled by

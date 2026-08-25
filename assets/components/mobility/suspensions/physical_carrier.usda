@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "SuspensionCarrier"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A suspension carrier is the hub between a vehicle chassis' prismatic travel
+# and a wheel's revolute spin.  The carrier's mass is a real part of the
+# mechanism: a full rigid realization projects it as a body, while a raycast
+# realization folds the same authored mass into its owning body through
+# LunCoMassContributionAPI.
+#
+# The transform and the wheel-relative placement belong to the vehicle.  This
+# component owns only the standard mass contract and the marker that tells a
+# reduced realization how to account for that physical part.
+def Xform "SuspensionCarrier" (
+    kind = "component"
+    prepend apiSchemas = ["PhysicsMassAPI", "LunCoMassContributionAPI"]
+)
+{
+    float physics:mass = 5.0
+    float3 physics:diagonalInertia = (0.5, 0.5, 0.5)
+}

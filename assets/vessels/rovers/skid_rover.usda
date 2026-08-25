@@ -22,13 +22,12 @@
 #
 # **`drivetrain` variantSet (raycast | physical)** — the standard
 # OpenUSD way to ship two locomotion models in one asset:
-#   * `raycast` (fallback)  — wheels are visual-only at ride height;
+#   * `raycast`             — wheels are visual-only contact probes;
 #     the PhysX-style raycaster drives the body. No joints.
-#   * `physical`            — wheels drop fully BELOW the chassis and
-#     each is bound to the body by a `PhysicsRevoluteJoint` with a
-#     `PhysicsDriveAPI:angular` motor; the root gains
-#     `PhysicsArticulationRootAPI`. Joint rel-targets are **asset-local**
-#     (`</SkidRover/Wheel_FL>`) and translate through the reference arc
+#   * `physical`            — each wheel is mounted on an authored prismatic
+#     suspension carrier and bound to that carrier by a
+#     `PhysicsRevoluteJoint`; the root gains `PhysicsArticulationRootAPI`.
+#     Joint rel-targets are asset-local and translate through the reference arc
 #     when instanced in a scene.
 #
 # Instantiate in scenes via reference + variant selection + overrides:
@@ -83,6 +82,10 @@ def Xform "SkidRover" (
     #   I_y = m*(x^2 + z^2)/12 = 1000*(4.00 + 12.25)/12 = 1354
     #   I_z = m*(x^2 + y^2)/12 = 1000*(4.00 +  0.09)/12 =  341
     float3 physics:diagonalInertia = (1028.0, 1354.0, 341.0)
+    # The symmetric box chassis has its centre at the vehicle origin. Author it
+    # explicitly so the two drivetrain realizations start from the same body
+    # frame; Avian must not derive a shifted COM from the compound child tree.
+    float3 physics:centerOfMass = (0.0, 0.0, 0.0)
     # Lift the spawn point 1 m so the rover settles onto terrain (read by the
     # spawn catalog — keeps spawn height as USD data, not Rust category logic).
     float lunco:spawnLift = 1.0
@@ -162,19 +165,24 @@ def Xform "SkidRover" (
 
     # --- Wheels (reference the reusable mobility component) ---
     # WHERE A WHEEL SITS IS A PROPERTY OF THE VEHICLE, so it is authored HERE,
-    # once, and NOT in the `drivetrain` variant. It used to be authored twice —
-    # `raycast_drivetrain.usda` put the wheel prim at y=-0.15 and
-    # `physical_drivetrain.usda` at y=-0.65 — because the prim meant two
-    # different points: the strut top in one realization, the axle in the other.
-    # One rover then had two ride heights and two centre-of-mass heights, which
-    # no tire parameter can compensate for.
+    # once, and NOT in the `drivetrain` variant. The wheel prim is the axle frame
+    # in both realizations; the raycast strut top is derived from its suspension
+    # geometry rather than represented by a second mount.
     #
-    # The wheel prim IS THE AXLE, in both realizations. y=-0.65 is the physical
-    # rover's authored drop (chassis half-height 0.15 ⇒ bottom at y=-0.15; a
-    # Ø0.8 wheel centred at -0.65 tops out at -0.25 and clears it by 0.10 m).
+    # The suspension carrier is the authored axle mount in both realizations.
+    # y=-0.65 is the physical rover's authored drop (chassis half-height 0.15
+    # ⇒ bottom at y=-0.15; a Ø0.8 wheel centred at -0.65 tops out at -0.25
+    # and clears it by 0.10 m).
     # The raycast realization derives its cast origin — the strut top, at
     # `restLength − radius` above the axle — from the authored suspension
     # geometry instead of from a baked-in translate.
+    def Xform "Suspension_FL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
     def Cylinder "Wheel_FL" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         # No local `kind`: a wheel IS a component model, and the kind composes in from
@@ -185,7 +193,7 @@ def Xform "SkidRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.65, -1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 0
@@ -194,6 +202,14 @@ def Xform "SkidRover" (
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </SkidRover/Shaft_FL.outputs:torque>
     }
+    }
+
+    def Xform "Suspension_FR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_FR" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -205,7 +221,7 @@ def Xform "SkidRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.65, -1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 1
@@ -214,6 +230,14 @@ def Xform "SkidRover" (
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </SkidRover/Shaft_FR.outputs:torque>
     }
+    }
+
+    def Xform "Suspension_RL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_RL" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -225,7 +249,7 @@ def Xform "SkidRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.65, 1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 2
@@ -234,6 +258,14 @@ def Xform "SkidRover" (
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </SkidRover/Shaft_RL.outputs:torque>
     }
+    }
+
+    def Xform "Suspension_RR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_RR" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -245,7 +277,7 @@ def Xform "SkidRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.65, 1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 3
@@ -254,11 +286,12 @@ def Xform "SkidRover" (
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </SkidRover/Shaft_RR.outputs:torque>
     }
+    }
 
     # --- Motors + reductions -------------------------------------------
     # One motor and one reduction PER DRIVEN WHEEL, each its own part with its own
-    # mass, torque curve, efficiency and waste heat. Torque and top speed used to be
-    # authored on the wheel; they are the MOTOR's, and what reaches the axle is
+    # mass, torque curve, efficiency and waste heat. Torque and top speed are
+    # properties of the MOTOR, and what reaches the axle is
     #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
     # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
     # noLoadSpeed/ratio = 2400/200 = 12 rad/s — the ONE top-speed number both the
@@ -454,12 +487,9 @@ def Xform "SkidRover" (
     # mass, how much grip they have and what torque reaches them are properties of
     # the ROVER and are authored above, outside this variantSet.
     #
-    # `raycast` (the fallback, declared on the root) is therefore EMPTY: a raycast
-    # wheel is the absence of a joint. It used to reference a
-    # `raycast_drivetrain.usda` whose entire content was a second, different set of
-    # wheel translates — one rover with two ride heights. That file is gone; the
-    # strut geometry the raycast wheel needs is derived from the authored
-    # suspension (`restLength`) instead of being baked into a mount.
+    # `raycast` is therefore EMPTY: a raycast wheel is the absence of a joint.
+    # Its strut geometry is derived from the authored suspension (`restLength`)
+    # instead of being baked into a second mount.
     #
     # `physical` brings what genuinely only exists in that realization: the
     # articulation root and the per-wheel revolute joints.
@@ -470,26 +500,38 @@ def Xform "SkidRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
-            # Physical wheels are rigid axles. Replace the compliant raycast
-            # suspension arc with the explicit rigid-mount component; leaving the
-            # standard arc composed would make the physical projection claim a
-            # spring it does not integrate.
-            over "Wheel_FL" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_FR" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_RL" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_RR" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
+            # The physical realization turns each authored carrier into a
+            # rigid body. The standard wheel suspension remains on the wheel
+            # for the raycast realization; this variant supplies the same
+            # compliance through the authored prismatic joints.
+            over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_RR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            # The wheel is a separate rigid body and its full suspension travel can
+            # enter the chassis envelope.  Use the standard authored filtered-pair
+            # contract for this deliberate clearance; the revolute joint already
+            # filters wheel↔carrier, while this relation covers wheel↔chassis.
+            over "Suspension_FL/Wheel_FL" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </SkidRover/Chassis>
+            }
+            over "Suspension_FR/Wheel_FR" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </SkidRover/Chassis>
+            }
+            over "Suspension_RL/Wheel_RL" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </SkidRover/Chassis>
+            }
+            over "Suspension_RR/Wheel_RR" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </SkidRover/Chassis>
+            }
         }
     }
 
@@ -534,10 +576,10 @@ def Xform "SkidRover" (
             {
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </SkidRover/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </SkidRover/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </SkidRover/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </SkidRover/Wheel_RR.outputs:shaft_speed>
+                float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
+                float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
+                float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
+                float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
                 float outputs:bus_voltage.connect = </SkidRover/PowerSource.outputs:terminal_voltage_v>
                 float outputs:bus_current.connect = </SkidRover/PowerSource.outputs:terminal_current_a>
                 float outputs:bus_power.connect = </SkidRover/PowerSource.outputs:terminal_power_w>
@@ -591,10 +633,10 @@ def Xform "SkidRover" (
             {
                 float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
                 float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </SkidRover/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </SkidRover/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </SkidRover/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </SkidRover/Wheel_RR.outputs:shaft_speed>
+                float inputs:shaft_speed_FL.connect = </SkidRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
+                float inputs:shaft_speed_FR.connect = </SkidRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
+                float inputs:shaft_speed_RL.connect = </SkidRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
+                float inputs:shaft_speed_RR.connect = </SkidRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
                 float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
                 float outputs:battery_drained.connect = </SkidRover/Battery.outputs:drained>
                 float outputs:battery_net_power.connect = </SkidRover/Battery.outputs:net_power_w>

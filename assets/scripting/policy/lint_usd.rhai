@@ -90,6 +90,13 @@
 //       report them instead of allowing the runtime refusal to be discovered
 //       only in logs.
 //
+//   facts.wheel_attachments[]  #{ path, valid, suspension, tire, index }
+//       standard PhysX wheel-attachment bindings resolved by the same topology
+//       reader as runtime wheel admission. `valid = false` means no unique
+//       direct/relationship-form binding exists.
+//   facts.invalid_wheel_attachments[]  paths of malformed attachment prims or
+//       wheels rejected by that canonical topology reader.
+//
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
 //   #{ rule, severity, subject, message }
@@ -149,6 +156,7 @@ fn lint_usd(facts) {
     for f in mass_outside_any_body(facts) { out.push(f); }
     for f in conditionally_stable_joint_drive(facts) { out.push(f); }
     for f in invalid_gear_drive(facts) { out.push(f); }
+    for f in invalid_wheel_attachment_topology(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
@@ -241,6 +249,23 @@ fn invalid_gear_drive(facts) {
         if drive.valid { continue; }
         let m = "has a malformed PhysxPhysicsGearJoint angular drive or ratio — the canonical USD-sim reader refuses to install this coupling. Author a finite non-zero gearRatio, finite non-negative stiffness/damping/maxForce, and drive:angular:physics:type = force or acceleration.";
         out.push(finding("invalid-gear-drive", "error", drive.path, m));
+    }
+    out
+}
+
+/// The standard wheel attachment is the one identity that connects a wheel to
+/// its tire, suspension and vehicle index. Runtime admission rejects an absent
+/// or ambiguous binding; report the same canonical result before simulation.
+fn invalid_wheel_attachment_topology(facts) {
+    let out = [];
+    for wheel in facts.wheel_attachments {
+        if wheel.valid { continue; }
+        let m = "has no unique PhysxVehicleWheelAttachmentAPI binding — the runtime refuses to spawn this wheel. Author exactly one direct or relationship-form attachment with a wheel, suspension, tire and non-negative index.";
+        out.push(finding("invalid-wheel-attachment-topology", "error", wheel.path, m));
+    }
+    for path in facts.invalid_wheel_attachments {
+        let m = "is an invalid PhysxVehicleWheelAttachmentAPI topology — the canonical runtime resolver refused this attachment instead of selecting a first or last target. Author one singular wheel, suspension, tire and index relationship.";
+        out.push(finding("invalid-wheel-attachment-topology", "error", path, m));
     }
     out
 }

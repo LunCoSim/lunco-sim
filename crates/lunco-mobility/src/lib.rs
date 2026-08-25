@@ -9,8 +9,9 @@
 //! realizations behind one authored tire law: raycast wheels use an analytical
 //! suspension/contact point, while jointed wheels use Avian for normal contact
 //! and the revolute constraint.
-//! 1. **Suspension Logic**: An emulated spring-damper system computes normal
-//!    forces based on ray length, preventing high-frequency jitter.
+//! 1. **Suspension Logic**: Raycast wheels compute normal forces from their
+//!    authored spring and the measured ray stroke; jointed suspension uses the
+//!    standard USD prismatic-drive projection and Avian's native solver.
 //! 2. **Traction Physics**: Both realizations apply the same longitudinal and
 //!    lateral tire equations; only the source of the normal load and contact
 //!    point differs.
@@ -47,30 +48,6 @@ use wheel_spin::update_wheel_spin;
 
 pub mod wheel_kinematics;
 use wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
-
-/// definition keeps the `#[cfg]` out of the physics systems themselves.
-#[cfg(feature = "drive-diag")]
-macro_rules! drive_diag {
-    ($($arg:tt)*) => { bevy::log::info!($($arg)*) };
-}
-#[cfg(not(feature = "drive-diag"))]
-macro_rules! drive_diag {
-    ($($arg:tt)*) => {};
-}
-
-/// Run `$body` only when the `drive-diag` feature is on. Used where the
-/// diagnostic needs extra work (an extra port read + throttle guard) that must
-/// also compile out, not just the log call.
-#[cfg(feature = "drive-diag")]
-macro_rules! drive_diag_block {
-    ($body:block) => {
-        $body
-    };
-}
-#[cfg(not(feature = "drive-diag"))]
-macro_rules! drive_diag_block {
-    ($body:block) => {};
-}
 
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
@@ -114,6 +91,8 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
             .register_type::<RaycastWheelMassFolded>()
+            .register_type::<WheelBodyMount>()
+            .register_type::<RaycastMassContribution>()
             .add_observer(mark_wheel_ports_causal)
             // A vehicle's mass must not depend on which `drivetrain` variant
             // realizes its wheels. Ungated: this is a one-shot mass-property
@@ -158,7 +137,6 @@ impl Plugin for LunCoMobilityPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    suspension_system,
                     apply_wheel_suspension,
                     update_suspension_visuals,
                     // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
@@ -249,7 +227,6 @@ impl Plugin for LunCoMobilityPlugin {
         app.add_systems(
             lunco_core::RollbackReplay,
             (
-                suspension_system,
                 apply_wheel_suspension,
                 update_suspension_visuals,
                 // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
@@ -278,16 +255,16 @@ impl Plugin for LunCoMobilityPlugin {
 /// path, name, or drivetrain variant participates in the result.
 fn sync_raycast_assembly_filters(
     joints: Option<Res<avian3d::dynamics::solver::joint_graph::JointGraph>>,
-    mut raycasters: Query<(&ChildOf, &mut RayCaster), With<WheelRaycast>>,
+    mut raycasters: Query<(&WheelBodyMount, &mut RayCaster), With<WheelRaycast>>,
     colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
 ) {
     let graph_changed = joints.as_ref().is_some_and(Res::is_changed);
-    for (parent, mut raycaster) in &mut raycasters {
+    for (mount, mut raycaster) in &mut raycasters {
         if !graph_changed && !raycaster.is_added() {
             continue;
         }
 
-        let carrier = parent.parent();
+        let carrier = mount.body;
         let mut members = HashSet::from([carrier]);
         let mut pending = vec![carrier];
         if let Some(joints) = joints.as_deref() {
@@ -319,6 +296,31 @@ fn sync_raycast_assembly_filters(
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
 pub struct RaycastWheelMassFolded;
+
+/// The authored rigid body that owns a wheel realization and the wheel's pose
+/// in that body's frame. USD hierarchy is allowed to contain non-body carrier
+/// prims, so a wheel's direct `ChildOf` is not a physics ownership contract.
+/// The USD projector resolves this once from composed body topology; mobility
+/// systems consume the result without path or name rules.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct WheelBodyMount {
+    pub body: Entity,
+    pub local: Transform,
+}
+
+/// Mass and authored principal inertia of a physical child that is absent as a
+/// rigid body in the active reduced realization. The USD projector resolves the
+/// owner and body-local pose; the fold is then the same composed mass-property
+/// operation as the existing wheel fold.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct RaycastMassContribution {
+    pub owner: Entity,
+    pub local: Transform,
+    pub mass: f64,
+    pub principal: DVec3,
+}
 
 /// Resolve a wheel's authored carrier chain to the vehicle's actuator owner.
 ///
@@ -413,12 +415,14 @@ fn publish_raycast_support_footprints(
     }
 }
 
-/// Fold each raycast wheel's authored mass onto its immediate rigid-body carrier.
+/// Fold each raycast wheel and authored reduced-realization mass contribution
+/// onto its resolved rigid-body owner.
 ///
 /// A ROVER'S MASS IS A PROPERTY OF THE ROVER, NOT OF HOW ITS WHEELS ARE REALIZED.
 /// A raycast wheel is not an Avian rigid body, but its authored mass still belongs
-/// to the body that carries its suspension and tire force. For a direct wheel that
-/// body is the vehicle root; for an articulated wheel it is the rocker or bogie.
+/// to the body that carries its suspension and tire force. A composed USD mass
+/// contribution follows the same owner contract, so reduced and full realizations
+/// use one mass-property operation.
 /// Folding all descendant wheels into the actuator root made the force owner and
 /// mass owner disagree, destabilising the articulated linkage under drive.
 ///
@@ -460,7 +464,8 @@ fn publish_raycast_support_footprints(
 /// the solver integrates against.
 pub fn fold_raycast_wheel_mass(
     mut commands: Commands,
-    q_wheels: Query<(&WheelRaycast, &Transform, &ChildOf)>,
+    q_wheels: Query<(&WheelRaycast, &WheelBodyMount)>,
+    q_contributions: Query<&RaycastMassContribution>,
     mut q_body: Query<
         (
             &mut Mass,
@@ -472,21 +477,33 @@ pub fn fold_raycast_wheel_mass(
         Without<RaycastWheelMassFolded>,
     >,
 ) {
-    let mut wheels_by_carrier = std::collections::HashMap::<Entity, Vec<(f64, DVec3)>>::new();
-    for (wheel, transform, parent) in q_wheels.iter() {
-        wheels_by_carrier
-            .entry(parent.parent())
+    let mut additions_by_carrier =
+        std::collections::HashMap::<Entity, Vec<(f64, DVec3, DVec3)>>::new();
+    for (wheel, mount) in q_wheels.iter() {
+        additions_by_carrier.entry(mount.body).or_default().push((
+            wheel.mass,
+            mount.local.translation.as_dvec3(),
+            DVec3::ZERO,
+        ));
+    }
+    for contribution in &q_contributions {
+        additions_by_carrier
+            .entry(contribution.owner)
             .or_default()
-            .push((wheel.mass, transform.translation.as_dvec3()));
+            .push((
+                contribution.mass,
+                contribution.local.translation.as_dvec3(),
+                contribution.principal,
+            ));
     }
 
-    for (carrier, wheels) in wheels_by_carrier {
+    for (carrier, additions) in additions_by_carrier {
         // The wheel's `mass` arrives from `WheelParams::apply_to_raycast`, which may
         // land a frame after the component itself. A wheel still reading zero means
         // the vehicle is not ready to fold and must be left for a later tick — never
         // folded at half its real mass.
-        let pending = wheels.iter().any(|(mass, _)| *mass <= 0.0);
-        if pending || wheels.is_empty() {
+        let pending = additions.iter().any(|(mass, _, _)| *mass <= 0.0);
+        if pending || additions.is_empty() {
             continue;
         }
 
@@ -505,7 +522,7 @@ pub fn fold_raycast_wheel_mass(
             .unwrap_or(DVec3::ZERO);
         let carrier_mass = mass.0 as f64;
 
-        let added: f64 = wheels.iter().map(|(m, _)| *m).sum();
+        let added: f64 = additions.iter().map(|(m, _, _)| *m).sum();
         let total = carrier_mass + added;
         mass.0 += added as f32;
 
@@ -513,7 +530,7 @@ pub fn fold_raycast_wheel_mass(
         // point mass at its carrier-local mount.
         let com_new = if total > 0.0 {
             let mut moment = com_carrier * carrier_mass;
-            for (m, d) in &wheels {
+            for (m, d, _) in &additions {
                 moment += *d * *m;
             }
             moment / total
@@ -534,8 +551,9 @@ pub fn fold_raycast_wheel_mass(
                 )
             };
             let mut principal = perp(carrier_mass, com_carrier - com_new);
-            for (m, d) in &wheels {
+            for (m, d, authored_principal) in &additions {
                 principal += perp(*m, *d - com_new);
+                principal += *authored_principal;
             }
             inertia.principal += principal.as_vec3();
         }
@@ -772,17 +790,11 @@ pub fn longitudinal_tire_step(
     if f_slip.abs() <= mu_n {
         (w_grip, f_slip)
     } else {
-        // At exact standstill the previous-step slip is zero even when the
-        // candidate grip force is non-zero (for example, a fresh drive torque).
-        // Use the candidate slip direction in that case; otherwise the first
-        // saturated tick incorrectly applies zero patch force.
-        let previous_slip = axle_speed * radius - hub_speed;
-        let slip_sign = if previous_slip.abs() > f64::EPSILON {
-            previous_slip.signum()
-        } else {
-            f_slip.signum()
-        };
-        let traction_torque = slip_sign * mu_n * radius;
+        // The implicit candidate is the current step's authoritative slip
+        // state.  Reusing the previous-step slip here makes a newly commanded
+        // drive inherit a stale sign from a tiny residual velocity and apply
+        // the Coulomb force backwards for one full step.
+        let traction_torque = f_slip.signum() * mu_n * radius;
         let speed = axle_speed
             + dt * (drive_torque + brake_torque - traction_torque - bearing_damping * axle_speed)
                 / inertia;
@@ -792,7 +804,9 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{parking_brake_force, tire_patch_force, TireLateralStiffnessGraph};
+    use super::{
+        longitudinal_tire_step, parking_brake_force, tire_patch_force, TireLateralStiffnessGraph,
+    };
     use bevy::math::DVec3;
 
     #[test]
@@ -862,6 +876,24 @@ mod tire_patch_tests {
             (force.z + supported_mass * gravity.z).abs() < 1.0e-9,
             "parking force must exactly balance this contact's tangential gravity share"
         );
+    }
+
+    #[test]
+    fn saturated_drive_uses_current_candidate_after_a_small_residual_reversal() {
+        let (_, force) = longitudinal_tire_step(
+            -1.0e-3,
+            0.0,
+            0.4,
+            6.8,
+            8_000.0,
+            0.0,
+            400.0,
+            0.0,
+            455.0,
+            1.5,
+            1.0 / 60.0,
+        );
+        assert!(force > 0.0);
     }
 }
 
@@ -1070,7 +1102,7 @@ fn apply_wheel_suspension(
         &Suspension,
         &RayHits,
         &Transform,
-        &ChildOf,
+        &WheelBodyMount,
     )>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
@@ -1083,8 +1115,8 @@ fn apply_wheel_suspension(
 ) {
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
-    for (mut wheel, susp, hits, wheel_tf, parent) in q_wheels.iter_mut() {
-        let parent_entity = parent.parent();
+    for (mut wheel, susp, hits, wheel_tf, mount) in q_wheels.iter_mut() {
+        let parent_entity = mount.body;
         if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
             // A Kinematic chassis (a client's replicated proxy rover, or a body
             // mid gizmo-drag) must NOT receive the suspension spring force — its
@@ -1098,8 +1130,8 @@ fn apply_wheel_suspension(
             let (world_pos, _) = wheel_hub_pose(
                 GridPos(forces.position().0),
                 GridRot(forces.rotation().0),
-                wheel_tf.translation.as_dvec3(),
-                wheel_tf.rotation.as_dquat(),
+                mount.local.translation.as_dvec3(),
+                (mount.local.rotation * wheel_tf.rotation).as_dquat(),
             );
 
             let mut current_distance = susp.rest_length;
@@ -1200,20 +1232,26 @@ fn apply_wheel_suspension(
 /// spatial query (which reads `Position`), so the cast sees this tick's pose.
 fn sync_raycast_wheel_physics_pose(
     mut q_wheels: Query<
-        (Entity, &mut Position, &mut Rotation, &Transform, &ChildOf),
+        (
+            Entity,
+            &mut Position,
+            &mut Rotation,
+            &Transform,
+            &WheelBodyMount,
+        ),
         With<WheelRaycast>,
     >,
     q_chassis: Query<(&Position, &Rotation), (With<RigidBody>, Without<WheelRaycast>)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    for (wheel, mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
-        if let Ok((cpos, crot)) = q_chassis.get(parent.parent()) {
+    for (wheel, mut wpos, mut wrot, wtf, mount) in q_wheels.iter_mut() {
+        if let Ok((cpos, crot)) = q_chassis.get(mount.body) {
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
                 GridRot(crot.0),
-                wtf.translation.as_dvec3(),
-                wtf.rotation.as_dquat(),
+                mount.local.translation.as_dvec3(),
+                (mount.local.rotation * wtf.rotation).as_dquat(),
             );
             // The wheel's `Position`/`Rotation` IS avian's ray-origin frame: the
             // caster's local origin is `DVec3::ZERO`, so the global origin is
@@ -1234,9 +1272,7 @@ fn sync_raycast_wheel_physics_pose(
                         "raycast wheel",
                         format!(
                             "hub_position={:?}, hub_rotation={:?}, chassis={:?}",
-                            hub_pos.0,
-                            hub_rot.0,
-                            parent.parent(),
+                            hub_pos.0, hub_rot.0, mount.body,
                         ),
                     ) {
                         error!(
@@ -1270,7 +1306,13 @@ fn sync_raycast_wheel_physics_pose(
 /// from sliding like it's on ice and limits drive force to what the tire can
 /// actually grip.
 fn apply_wheel_drive(
-    q_wheels: Query<(&WheelRaycast, &Suspension, &Transform, &RayHits, &ChildOf)>,
+    q_wheels: Query<(
+        &WheelRaycast,
+        &Suspension,
+        &Transform,
+        &RayHits,
+        &WheelBodyMount,
+    )>,
     q_ports: Query<&Port>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
@@ -1290,29 +1332,23 @@ fn apply_wheel_drive(
 ) {
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
-    for (wheel, susp, wheel_tf, hits, parent) in q_wheels.iter() {
-        let parent_entity = parent.parent();
+    for (wheel, susp, wheel_tf, hits, mount) in q_wheels.iter() {
+        let parent_entity = mount.body;
         if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
             if fixed_dynamic_bodies.contains(&parent_entity) {
                 continue;
             }
-            // drive-diag: the drive port the wheel reads, the body kind (Dynamic
-            // vs Kinematic — the snap-back tell), and ground contact. Throttle-
-            // gated so it only fires while driving. Whole block compiles out
-            // (incl. the extra port read) without the `drive-diag` feature.
-            drive_diag_block!({
-                if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
-                    if dbgport.value.abs() > f64::EPSILON {
-                        info!("[drive-diag] apply_wheel_drive: chassis {:?} body={:?} port.value={} normal_force={} has_contact={}",
-                            parent_entity, body, dbgport.value, wheel.last_normal_force, hits.iter().next().is_some());
-                    }
-                }
-            });
             // Skip forces if body is kinematic
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
             if q_ports.get(wheel.drive_port).is_ok() {
+                let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
+                    GridPos(forces.position().0),
+                    GridRot(forces.rotation().0),
+                    mount.local.translation.as_dvec3(),
+                    (mount.local.rotation * wheel_tf.rotation).as_dquat(),
+                );
                 // Traction only exists when the ray is hitting the ground.
                 let Some(hit) = hits
                     .iter_sorted()
@@ -1327,19 +1363,6 @@ fn apply_wheel_drive(
                         continue;
                     }
 
-                    // Reconstruct the wheel's world pose in the grid-absolute physics
-                    // frame from the chassis Position/Rotation + the wheel's LOCAL
-                    // transform (exactly as `apply_wheel_suspension` does); the
-                    // `GridPos` signature keeps the render-frame `GlobalTransform`
-                    // out (CQ-201). `wheel_tf.rotation` carries the steer angle (set
-                    // in `apply_wheel_steering`); roll-spin lives on the child
-                    // visual, so the drive direction stays correct.
-                    let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
-                        GridPos(forces.position().0),
-                        GridRot(forces.rotation().0),
-                        wheel_tf.translation.as_dvec3(),
-                        wheel_tf.rotation.as_dquat(),
-                    );
                     // The tyre force belongs at the ray's contact point, not at
                     // the hub. Applying it at the hub erased the wheel-radius
                     // moment and was only equivalent on a flat, upright contact.
@@ -1382,26 +1405,6 @@ fn apply_wheel_drive(
                         DVec3::ZERO
                     };
                     forces.apply_force_at_point(wheel.tire_force + parking_force, contact_point);
-                    drive_diag_block!({
-                        if wheel.tire_force.length() > 1.0 {
-                            let arm = contact_point - forces.position().0;
-                            let moment = arm.cross(wheel.tire_force);
-                            info!(
-                                "[drive-diag] apply_wheel_drive: chassis {:?} tire_force=({:.1},{:.1},{:.1}) at=({:.2},{:.2},{:.2}) body_pos=({:.2},{:.2},{:.2}) computed_moment_y={:.1}",
-                                parent_entity,
-                                wheel.tire_force.x,
-                                wheel.tire_force.y,
-                                wheel.tire_force.z,
-                                contact_point.x,
-                                contact_point.y,
-                                contact_point.z,
-                                forces.position().0.x,
-                                forces.position().0.y,
-                                forces.position().0.z,
-                                moment.y
-                            );
-                        }
-                    });
                 }
             }
         }
@@ -1430,18 +1433,18 @@ fn apply_wheel_steering(
     mut q_wheels: Query<(
         Entity,
         &mut Transform,
-        &ChildOf,
+        &WheelBodyMount,
         &lunco_hardware::SteeringActuator,
         &WheelRaycast,
         Option<&SteerBaseRotation>,
     )>,
     q_chassis: Query<&RigidBody, With<RigidBody>>,
 ) {
-    for (entity, mut transform, parent, steer, wheel, base) in q_wheels.iter_mut() {
+    for (entity, mut transform, mount, steer, wheel, base) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
         // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
         // local steer ports are stale and would point the wheels wrong.
-        if let Ok(body) = q_chassis.get(parent.parent()) {
+        if let Ok(body) = q_chassis.get(mount.body) {
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
@@ -1755,10 +1758,11 @@ fn solve_differential_gear(
     }
 }
 
-/// Suspension configuration for joint-based (non-raycast) chassis.
+/// Authored raycast-wheel suspension parameters.
 ///
-/// **Why**: Some vehicles use physical collision wheels for higher fidelity,
-/// but still require emulated spring-damper logic for PrismaticJoints.
+/// Jointed suspension does not use this component: a physical prismatic joint
+/// reads its standard `PhysicsDriveAPI:linear` directly through the USD/Avian
+/// bridge, leaving Avian as the sole solver for that degree of freedom.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct Suspension {
@@ -1779,59 +1783,6 @@ impl Default for Suspension {
             spring_k: 50000.0,
             damping_c: 2000.0,
             local_axis: DVec3::Y,
-        }
-    }
-}
-
-/// Solves linear suspension equations for entities linked by joints.
-///
-/// **Model**: the ONE suspension force law, [`suspension_force_mag`], applied
-/// along the prismatic joint's slider axis — the same bounded-damping law the
-/// raycast strut uses. This path used to clamp the TOTAL `(spring + damping)`
-/// to `[0, MAX]`, which dropped all damping on the rebound half-cycle — the
-/// exact `.max(0)` cliff the shared law was written to remove. The force is
-/// applied as an equal and opposite pair on the two connected bodies.
-fn suspension_system(
-    q_joints: Query<(&PrismaticJoint, &Suspension)>,
-    // Force must land only on a body the solver will integrate. A disabled body
-    // (frozen while its program compiles, say) never has its accumulators
-    // cleared, so force applied to it is stored, not spent, and discharges in
-    // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_bodies: Query<Forces, lunco_physics::Integrable>,
-) {
-    for (joint, susp) in q_joints.iter() {
-        let e1 = joint.body1;
-        let e2 = joint.body2;
-
-        if let Ok([mut forces1, mut forces2]) = q_bodies.get_many_mut([e1, e2]) {
-            let pos1 = forces1.position().0;
-            let rot1 = forces1.rotation().0;
-            let pos2 = forces2.position().0;
-            let rot2 = forces2.rotation().0;
-
-            let world_axis: DVec3 = rot1 * susp.local_axis;
-
-            let anchor1_world: DVec3 = pos1 + rot1 * joint.local_anchor1().unwrap_or_default();
-            let anchor2_world: DVec3 = pos2 + rot2 * joint.local_anchor2().unwrap_or_default();
-
-            let diff_world: DVec3 = anchor2_world - anchor1_world;
-            let current_length: f64 = -diff_world.dot(world_axis);
-            let vel1 = forces1.velocity_at_point(anchor1_world);
-            let vel2 = forces2.velocity_at_point(anchor2_world);
-            let rel_vel: f64 = (vel2 - vel1).dot(world_axis);
-
-            let compression: f64 = (susp.rest_length - current_length).max(0.0);
-            let total_force_mag: f64 =
-                suspension_force_mag(compression, susp.spring_k, rel_vel, susp.damping_c);
-
-            if !total_force_mag.is_finite() {
-                continue;
-            }
-
-            let force_vec: DVec3 = world_axis * total_force_mag;
-
-            forces1.apply_force_at_point(force_vec, anchor1_world);
-            forces2.apply_force_at_point(-force_vec, anchor2_world);
         }
     }
 }
@@ -1905,8 +1856,6 @@ fn apply_drive_mix(
         // Read this vehicle's logical command inputs off the command surface.
         let throttle = inputs.cmd("throttle");
         let steer = inputs.cmd("steer");
-
-        drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, inputs.brake_active, actuators.ports);
 
         // While braking, force throttle/steer to 0 and drive the brake gate (1.0)
         // so brake-coefficient ports engage and drive ports zero out — matching the
@@ -2020,6 +1969,7 @@ mod raycast_wheel_mass_tests {
             .id();
 
         for (x, z) in [(-1.0, -1.225), (1.0, -1.225), (-1.0, 1.225), (1.0, 1.225)] {
+            let local = Transform::from_translation(Vec3::new(x, -0.65, z));
             let wheel = app
                 .world_mut()
                 .spawn((
@@ -2028,7 +1978,11 @@ mod raycast_wheel_mass_tests {
                         wheel_radius: 0.4,
                         ..default()
                     },
-                    Transform::from_translation(Vec3::new(x, -0.65, z)),
+                    local,
+                    WheelBodyMount {
+                        body: chassis,
+                        local,
+                    },
                     ChildOf(chassis),
                 ))
                 .id();
@@ -2148,6 +2102,10 @@ mod raycast_wheel_mass_tests {
                 mass: 25.0,
                 ..default()
             },
+            WheelBodyMount {
+                body: chassis,
+                local: Transform::IDENTITY,
+            },
             Transform::default(),
             ChildOf(chassis),
         ));
@@ -2175,12 +2133,17 @@ mod raycast_wheel_mass_tests {
                 ChildOf(chassis),
             ))
             .id();
+        let local = Transform::from_translation(Vec3::new(0.0, -0.65, -1.2));
         app.world_mut().spawn((
             WheelRaycast {
                 mass: 25.0,
                 ..default()
             },
-            Transform::from_translation(Vec3::new(0.0, -0.65, -1.2)),
+            WheelBodyMount {
+                body: rocker,
+                local,
+            },
+            local,
             ChildOf(rocker),
         ));
 
@@ -2464,12 +2427,9 @@ mod oracle {
         (chis, forces)
     }
 
-    // The production law and the OLD buggy `.max(0)` cliff it replaced.
+    // The production force law used by every raycast wheel.
     fn fixed(k: f64, c: f64) -> impl Fn(f64, f64) -> f64 {
         move |chi, v| suspension_force_mag(chi, k, v, c)
-    }
-    fn buggy(k: f64, c: f64) -> impl Fn(f64, f64) -> f64 {
-        move |chi, v| (chi * k + v * c).max(0.0) // clamps the TOTAL, not the damping term
     }
 
     fn max_abs_dev(a: &[f64], b_fine: &[f64]) -> f64 {
@@ -2510,9 +2470,8 @@ mod oracle {
 
     #[test]
     fn fixed_law_settles_no_limit_cycle() {
-        // Under-damped config (c small → clear ringing) must still DECAY. The
-        // dead-band / `.max(0)` bugs produced a sustained tick-period limit-cycle;
-        // assert the late window is quiet relative to the early one.
+        // An under-damped configuration still has to decay under the authored
+        // force law; this is the physical settling property the runtime needs.
         let (k, c) = (8000.0, 400.0);
         let (rust, _f) = step_law(fixed(k, c), 0.15, 0.0, 5.0);
         let win = rust.len() / 5;
@@ -2529,32 +2488,18 @@ mod oracle {
     }
 
     #[test]
-    fn bounded_law_caps_the_landing_spike_the_cliff_let_through() {
+    fn bounded_law_caps_a_hard_landing_force() {
         // Hard landing: χ starts at 0 with a fast downward (compressing) velocity.
-        // The continuous force AND the old `.max(0)` law spike to ≈ c·v at impact
-        // (the 27 kN-class transient); the production law bounds it to 2·k·χ. This
-        // is the design trade — fidelity for fixed-step stability — and the property
-        // the oracle guards.
+        // The authored law must remain finite and respect its displacement-scaled
+        // force bound on every active contact step.
         let (k, c) = (8000.0, 2800.0);
         let v_impact = 12.0;
         let (chi_fixed, f_fixed) = step_law(fixed(k, c), 0.0, v_impact, 0.5);
-        let (_chi_buggy, f_buggy) = step_law(buggy(k, c), 0.0, v_impact, 0.5);
-        // The impact tick: step 0 applies zero force for both laws (χ starts at 0),
-        // so by step 1 both see the SAME state (χ = chi_fixed[0], same fast v). The
-        // force difference there is purely the law — the cleanest contrast.
-        let (chi_at_impact, sf, sb) = (chi_fixed[0], f_fixed[1], f_buggy[1]);
-        let bound = 2.0 * k * chi_at_impact;
-        println!("[oracle] impact tick (χ = {chi_at_impact:.3} m): fixed {sf:.0} N (≤ 2·k·χ = {bound:.0}), cliff {sb:.0} N");
-        // The production law obeys its bound; the cliff passes the full c·v spike.
-        assert!(sf <= bound + 1.0, "fixed law must stay within 2·k·χ");
-        assert!(
-            sb > 3.0 * sf,
-            "cliff spikes the impact ({sb} N) far past the bounded force ({sf} N)"
-        );
-        assert!(
-            sb > 20_000.0,
-            "cliff lets a >20 kN landing transient through"
-        );
+        for (chi, force) in chi_fixed.iter().zip(f_fixed.iter()).skip(1) {
+            assert!(chi.is_finite() && force.is_finite());
+            assert!(*force >= 0.0);
+            assert!(*force <= 2.0 * k * chi.max(0.0) + 1.0);
+        }
     }
 }
 
@@ -2603,7 +2548,7 @@ mod differential_tests {
     }
 
     #[test]
-    fn implicit_force_drive_remains_finite_beyond_the_old_explicit_limit() {
+    fn implicit_force_drive_stays_finite_under_a_stiff_authored_drive() {
         let mut error = 1.0;
         let mut velocity = 0.0;
         let inverse_mass = 1.0 / 60.0;
@@ -2837,6 +2782,10 @@ mod suspension_visuals_tests {
                     spring_k: 1000.0,
                     damping_c: 100.0,
                     local_axis: DVec3::Y,
+                },
+                WheelBodyMount {
+                    body: chassis,
+                    local: Transform::IDENTITY,
                 },
                 Transform::default(),
                 RayHits(vec![RayHitData {

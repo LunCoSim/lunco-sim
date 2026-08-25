@@ -16,6 +16,7 @@
 use openusd::ar::ResolvedPath;
 use openusd::sdf::{FieldKey, Path as SdfPath, Value};
 use openusd::usd::Stage;
+use std::collections::HashSet;
 
 use crate::view::StageView;
 
@@ -574,21 +575,39 @@ impl UsdRead for StageView<'_> {
     }
 
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
-        self.stage()
-            .prim(prim.clone())
-            .children()
-            .map(|cs| cs.iter().map(|c| c.path().clone()).collect())
-            .unwrap_or_default()
+        // OpenUSD can expose the same composed child more than once where a
+        // reference/variant overlay meets an existing parent opinion.  The
+        // composed read contract is a set of live prims, not a list of arc
+        // contributions: returning the duplicate would make the visual
+        // projector spawn two ECS entities for one authored path.  Normalize
+        // it at this shared reader boundary so every consumer gets one child.
+        let mut children = Vec::new();
+        let mut seen = HashSet::new();
+        if let Ok(composed) = self.stage().prim(prim.clone()).children() {
+            for child in composed.iter() {
+                let path = child.path().clone();
+                if seen.insert(path.clone()) {
+                    children.push(path);
+                }
+            }
+        }
+        children
     }
 
     fn prim_paths(&self) -> Vec<SdfPath> {
         // Every live (active, defined, non-abstract) composed prim path, in
-        // traversal order.
+        // traversal order. Some composed variant/reference overlays can expose
+        // the same path more than once through the underlying traversal; the
+        // read contract is a set of prims, so normalize that representation at
+        // this shared seam before topology consumers see it.
         let mut paths = Vec::new();
+        let mut seen = HashSet::new();
         let _ = self
             .stage()
             .traverse(openusd::usd::PrimPredicate::DEFAULT, |p| {
-                paths.push(p.clone())
+                if seen.insert(p.clone()) {
+                    paths.push(p.clone());
+                }
             });
         paths
     }

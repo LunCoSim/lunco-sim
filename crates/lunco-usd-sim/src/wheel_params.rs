@@ -45,7 +45,7 @@
 
 use avian3d::prelude::{Collider, ColliderDensity, Friction, Position, RevoluteJoint, Rotation};
 use bevy::asset::AssetId;
-use bevy::log::{error, info, warn};
+use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
 use lunco_hardware::SteeringActuator;
@@ -445,7 +445,7 @@ impl WheelParams {
 
         // The shipped compact composition applies the attachment, wheel, and
         // suspension APIs to one composed prim. That is an explicit standard
-        // direct-composition form, not a heuristic fallback. Relationship-form
+        // direct-composition form. Relationship-form
         // assets pass the referenced suspension from the stage topology map.
         let direct_suspension = (attachment_suspension.is_none()
             && reader.has_api_schema(wheel, "PhysxVehicleWheelAttachmentAPI")
@@ -796,7 +796,7 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
 // catches up — by RE-READING the composed stage, never by accepting values from
 // a side channel. Both funnels call [`resync_wheels_for_stage`] for edits that
 // [`claims_edit`] recognises, INSTEAD of their generic
-// `refresh_prim_subtree`/`reinstantiate_entity` fallback. That fallback is
+// `refresh_prim_subtree`/`reinstantiate_entity` path. That path is
 // actively destructive for wheels: it despawns the wheel's synthesized
 // `Port` children and visual child while `UsdSimProcessed` survives, so
 // the sim params are never re-derived, the solved joint boundary points at a dead
@@ -806,7 +806,7 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
 // ---------------------------------------------------------------------------
 
 /// Attribute families [`resync_wheels_for_stage`] claims from the generic
-/// refresh fallback. Prim-scoped where a name is not wheel-specific:
+/// refresh path. Prim-scoped where a name is not wheel-specific:
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
 pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> bool {
@@ -880,9 +880,9 @@ struct WheelUpdate {
 /// makes the resync a fixed point (double-firing from both funnels is
 /// harmless).
 ///
-/// A wheel whose re-read now FAILS (a half-authored edit removed a required
-/// attr) keeps its old values — never break a running wheel; the collected
-/// missing-attr warning names what to restore.
+/// A wheel whose re-read fails is a terminal authored-state error for the active
+/// scene. The resync raises the shared runtime fault and safety hold after the
+/// stage borrow is released; it never continues with stale wheel parameters.
 pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     // 1. Collect this stage's spawned wheels + vehicle roots (plain data out).
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
@@ -922,6 +922,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     //    `refresh_domes_live`).
     let mut updates: Vec<WheelUpdate> = Vec::new();
     let mut mixes: Vec<(Entity, Option<lunco_mobility::kernels::DriveMix>)> = Vec::new();
+    let mut failures: Vec<(Option<Entity>, String, String)> = Vec::new();
     {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -936,10 +937,11 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
             if topology.invalid_wheel_attachments.contains(path) {
-                warn!(
-                    "[wheel resync] {} has malformed or ambiguous wheel attachment topology — keeping the spawned values",
-                    path
-                );
+                failures.push((
+                    Some(*entity),
+                    path.clone(),
+                    "malformed or ambiguous wheel attachment topology".to_owned(),
+                ));
                 continue;
             }
             let susp = topology
@@ -952,21 +954,23 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
-                    let (max_steer_angle, ackermann_strength) = match crate::steering_vehicle_of(
-                        &view, path,
-                    ) {
-                        Some(vehicle) => match crate::steering_vehicle_params(&view, &vehicle) {
-                            Ok((max, strength)) => (Some(max), strength),
-                            Err(reason) => {
-                                warn!(
-                                    "[wheel resync] {} has invalid Ackermann steering: {} — keeping the spawned values",
-                                    path, reason
-                                );
-                                continue;
+                    let (max_steer_angle, ackermann_strength) =
+                        match crate::steering_vehicle_of(&view, path) {
+                            Some(vehicle) => {
+                                match crate::steering_vehicle_params(&view, &vehicle) {
+                                    Ok((max, strength)) => (Some(max), strength),
+                                    Err(reason) => {
+                                        failures.push((
+                                            Some(*entity),
+                                            path.clone(),
+                                            format!("invalid Ackermann steering: {reason}"),
+                                        ));
+                                        continue;
+                                    }
+                                }
                             }
-                        },
-                        None => (None, 0.0),
-                    };
+                            None => (None, 0.0),
+                        };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
@@ -975,16 +979,33 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                         ackermann_strength,
                     });
                 }
-                Err(missing) => warn!(
-                    "[wheel resync] {} now missing required attrs {:?} — keeping \
-                     the spawned values (restore the attrs to re-derive)",
-                    path, missing
-                ),
+                Err(missing) => failures.push((
+                    Some(*entity),
+                    path.clone(),
+                    format!("missing or invalid required attributes: {missing:?}"),
+                )),
             }
         }
         for (e, path) in &vehicles {
             let Ok(sp) = SdfPath::new(path) else { continue };
             mixes.push((*e, crate::derive_drive_mix(&view, &sp, path)));
+        }
+    }
+
+    for (entity, subject, detail) in failures {
+        let first = world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(
+                "usd-wheel-resync-invalid",
+                entity,
+                subject.clone(),
+                detail.clone(),
+            );
+        world
+            .get_resource_or_insert_with(lunco_physics::PhysicsHolds::default)
+            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        if first {
+            error!("[wheel resync] terminal authored-state failure on {subject}: {detail}");
         }
     }
 
@@ -1044,7 +1065,6 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             tire.min_validated_speed = u.params.min_validated_speed;
             tire.friction_mu = u.params.friction_mu;
             tire.bearing_damping = u.params.bearing_damping;
-            tire.axle_axis_local = u.params.axle_axis;
         }
         // Keep the physical wheel's tensor in lock-step with the composed
         // authored assembly MOI. Updating only density
@@ -1089,6 +1109,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         let Some(je) = joint_entity else { continue };
         if let Some(mut actuator) = world.get_mut::<lunco_cosim::JointTorqueActuator>(je) {
             actuator.brake_torque = u.params.brake_torque_max;
+            actuator.rotational_inertia = u.params.axle_inertia();
         }
         if let (Some(lock), Some(mut steer)) =
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))

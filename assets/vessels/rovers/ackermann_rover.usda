@@ -11,11 +11,11 @@
 # 2.0 m × 0.3 m × 3.5 m. Mass: 1000 kg.
 #
 # Carries the `drivetrain` variantSet (raycast | physical):
-#   * `raycast` (fallback)  — visual-only wheels at ride height.
-#   * `physical`            — wheels dropped below the chassis and bound
-#     by per-wheel `PhysicsRevoluteJoint`s; front knuckles can castor the
-#     wheels without the colliders ever intersecting the body. Joint
-#     rel-targets are asset-local and translate through the reference arc.
+#   * `raycast`             — visual-only contact-probe wheels.
+#   * `physical`            — each wheel is mounted on an authored prismatic
+#     suspension carrier and bound to it by a per-wheel
+#     `PhysicsRevoluteJoint`. Joint rel-targets are asset-local and translate
+#     through the reference arc.
 
 def Xform "AckermannRover" (
     doc = "Four-wheel Ackermann-steer lunar rover with selectable raycast or physical drivetrain."
@@ -55,6 +55,9 @@ def Xform "AckermannRover" (
     float physxVehicleAckermannSteering:strength = 0.0
 
     float physics:mass = 1000.0
+    # Symmetric box chassis: the body frame origin is the authored COM for both
+    # raycast and joint realizations.
+    float3 physics:centerOfMass = (0.0, 0.0, 0.0)
     float lunco:spawnLift = 1.0
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
@@ -109,6 +112,13 @@ def Xform "AckermannRover" (
     # realizations — see `skid_rover.usda` for the full rationale. The wheel prim
     # IS THE AXLE either way; the raycast realization derives its strut top
     # (`restLength − radius` above the axle) from the authored suspension.
+    def Xform "Suspension_FL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
     def Cylinder "Wheel_FL" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
@@ -117,7 +127,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.65, -1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 0
@@ -127,6 +137,14 @@ def Xform "AckermannRover" (
         float inputs:drive.connect = </AckermannRover/Shaft_FL.outputs:torque>
         float inputs:steer.connect = </AckermannRover.outputs:steering>
     }
+    }
+
+    def Xform "Suspension_FR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_FR" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -136,7 +154,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.65, -1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 1
@@ -146,6 +164,14 @@ def Xform "AckermannRover" (
         float inputs:drive.connect = </AckermannRover/Shaft_FR.outputs:torque>
         float inputs:steer.connect = </AckermannRover.outputs:steering>
     }
+    }
+
+    def Xform "Suspension_RL" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_RL" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -155,7 +181,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.65, 1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 2
@@ -164,6 +190,14 @@ def Xform "AckermannRover" (
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </AckermannRover/Shaft_RL.outputs:torque>
     }
+    }
+
+    def Xform "Suspension_RR" (
+        prepend references = @lunco://components/mobility/suspensions/physical_carrier.usda@</SuspensionCarrier>
+    )
+    {
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
     def Cylinder "Wheel_RR" (
         prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
@@ -173,7 +207,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.65, 1.225)
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int physxVehicleWheelAttachment:index = 3
@@ -181,6 +215,7 @@ def Xform "AckermannRover" (
         # The 6.8 kg.m2 value is the composed USD mechanical contract.
         float physxVehicleWheel:moi = 6.8
         float inputs:drive.connect = </AckermannRover/Shaft_RR.outputs:torque>
+    }
     }
 
     # --- Motors + reductions -------------------------------------------
@@ -374,26 +409,34 @@ def Xform "AckermannRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
-            # Physical wheels are rigid axles. Replace the compliant raycast
-            # suspension arc with the explicit rigid-mount component; leaving the
-            # standard arc composed would make the physical projection claim a
-            # spring it does not integrate.
-            over "Wheel_FL" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_FR" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_RL" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
-            over "Wheel_RR" (
-                delete references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
-                prepend references = @lunco://components/mobility/suspensions/rigid.usda@</Suspension>
-            ) {}
+            over "Suspension_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_FR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_RL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            over "Suspension_RR" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {}
+            # The wheel is a separate rigid body and its full suspension travel can
+            # enter the chassis envelope.  Use the standard authored filtered-pair
+            # contract for this deliberate clearance; the revolute joint already
+            # filters wheel↔carrier, while this relation covers wheel↔chassis.
+            over "Suspension_FL/Wheel_FL" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </AckermannRover/Chassis>
+            }
+            over "Suspension_FR/Wheel_FR" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </AckermannRover/Chassis>
+            }
+            over "Suspension_RL/Wheel_RL" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </AckermannRover/Chassis>
+            }
+            over "Suspension_RR/Wheel_RR" (
+                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+            ) {
+                rel physics:filteredPairs = </AckermannRover/Chassis>
+            }
         }
     }
 
@@ -414,10 +457,10 @@ def Xform "AckermannRover" (
             {
                 float inputs:drive_left.connect = </AckermannRover.outputs:drive_left>
                 float inputs:drive_right.connect = </AckermannRover.outputs:drive_right>
-                float inputs:shaft_speed_FL.connect = </AckermannRover/Wheel_FL.outputs:shaft_speed>
-                float inputs:shaft_speed_FR.connect = </AckermannRover/Wheel_FR.outputs:shaft_speed>
-                float inputs:shaft_speed_RL.connect = </AckermannRover/Wheel_RL.outputs:shaft_speed>
-                float inputs:shaft_speed_RR.connect = </AckermannRover/Wheel_RR.outputs:shaft_speed>
+                float inputs:shaft_speed_FL.connect = </AckermannRover/Suspension_FL/Wheel_FL.outputs:shaft_speed>
+                float inputs:shaft_speed_FR.connect = </AckermannRover/Suspension_FR/Wheel_FR.outputs:shaft_speed>
+                float inputs:shaft_speed_RL.connect = </AckermannRover/Suspension_RL/Wheel_RL.outputs:shaft_speed>
+                float inputs:shaft_speed_RR.connect = </AckermannRover/Suspension_RR/Wheel_RR.outputs:shaft_speed>
                 float outputs:bus_voltage.connect = </AckermannRover/PowerSource.outputs:terminal_voltage_v>
                 float outputs:bus_current.connect = </AckermannRover/PowerSource.outputs:terminal_current_a>
                 float outputs:bus_power.connect = </AckermannRover/PowerSource.outputs:terminal_power_w>

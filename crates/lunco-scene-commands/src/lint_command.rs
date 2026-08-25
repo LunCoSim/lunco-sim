@@ -46,6 +46,7 @@ pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
     let mut facts = lunco_usd_avian::physics_facts(view);
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
+    lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
     facts
 }
 

@@ -16,15 +16,11 @@
 # (`</SandboxScene/Skid_Physical_1/...>`). The wheel prims the joint targets
 # point at are supplied by the rover, not here.
 #
-# IT DOES NOT PLACE THE WHEELS. It used to carry `over "Wheel_*"` translates
-# (y=-0.65) against `raycast_drivetrain.usda`'s (y=-0.15), which made the wheel
-# prim mean the axle in one realization and the strut top in the other: one
-# rover, two ride heights, two centre-of-mass heights. The mount belongs to the
-# VEHICLE and is authored on the rover (`skid_rover.usda` / `ackermann_rover.usda`).
-# The drop those `over`s used to state now lives there and is the SAME number:
-# chassis half-height 0.15 ⇒ bottom at y=-0.15; wheels at y=-0.65 (Ø0.8 → top at
-# y=-0.25) clear it by 0.10 m, so the wheel colliders never touch the body and the
-# joints stay stable without relying on collision-disable.
+# IT DOES NOT PLACE THE WHEELS. The mount belongs to the VEHICLE and is authored
+# once on the rover (`skid_rover.usda` / `ackermann_rover.usda`), so both
+# realizations use the same axle frame. The chassis half-height is 0.15 m and
+# the wheel mount is y=-0.65 m; a Ø0.8 m wheel therefore clears the chassis by
+# 0.10 m, keeping the wheel colliders separate from the body by authored geometry.
 #
 # NOT `lunco:spawnable`. This asset is an OVERLAY: the joints target wheels that must
 # ALREADY exist on the host. Spawned on its own it would leave a bare articulation root
@@ -38,12 +34,81 @@ def Xform "Drivetrain" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
 )
 {
-    # Each wheel is bound to the rover root by a `PhysicsRevoluteJoint` with a
-    # `PhysicsDriveAPI:angular` motor. Targets are authored against this file's
-    # `Drivetrain` root and translate onto the referencing rover.
+    # Each wheel has the same authored two-link topology: the chassis carries a
+    # prismatic suspension carrier, and the wheel spins on a revolute joint on
+    # that carrier. The carrier mass is authored by the vehicle's reusable
+    # `SuspensionCarrier` reference. No runtime branch replaces this topology.
+    def PhysicsPrismaticJoint "Suspension_FL_Slider" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Suspension_FL>
+        uniform token physics:axis = "Y"
+        float physics:lowerLimit = -0.7
+        float physics:upperLimit = 0.35
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:targetVelocity = 0.0
+        float drive:linear:physics:stiffness = 15000.0
+        float drive:linear:physics:damping = 3000.0
+        float drive:linear:physics:maxForce = 60000.0
+    }
+    def PhysicsPrismaticJoint "Suspension_FR_Slider" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Suspension_FR>
+        uniform token physics:axis = "Y"
+        float physics:lowerLimit = -0.7
+        float physics:upperLimit = 0.35
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:targetVelocity = 0.0
+        float drive:linear:physics:stiffness = 15000.0
+        float drive:linear:physics:damping = 3000.0
+        float drive:linear:physics:maxForce = 60000.0
+    }
+    def PhysicsPrismaticJoint "Suspension_RL_Slider" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Suspension_RL>
+        uniform token physics:axis = "Y"
+        float physics:lowerLimit = -0.7
+        float physics:upperLimit = 0.35
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:targetVelocity = 0.0
+        float drive:linear:physics:stiffness = 15000.0
+        float drive:linear:physics:damping = 3000.0
+        float drive:linear:physics:maxForce = 60000.0
+    }
+    def PhysicsPrismaticJoint "Suspension_RR_Slider" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </Drivetrain>
+        rel physics:body1 = </Drivetrain/Suspension_RR>
+        uniform token physics:axis = "Y"
+        float physics:lowerLimit = -0.7
+        float physics:upperLimit = 0.35
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:targetVelocity = 0.0
+        float drive:linear:physics:stiffness = 15000.0
+        float drive:linear:physics:damping = 3000.0
+        float drive:linear:physics:maxForce = 60000.0
+    }
+
+    # Each wheel is bound to its carrier by a `PhysicsRevoluteJoint` with a
+    # `PhysicsDriveAPI:angular` declaration. The runtime wheel actuator consumes
+    # the solved shaft torque at this authored joint boundary.
     #
     # The joints DELIBERATELY omit `physics:localPos0`/`localPos1`: each wheel's
-    # placement is the rover's own `Wheel_*.xformOp:translate`, and the avian joint
+    # placement is the rover's own `Suspension_*.xformOp:translate`, and the avian joint
     # reader DERIVES the anchor from that (body1's origin in body0's frame, anchor on
     # body1 = origin) — so the position is authored once, not typed twice and left to
     # drift. Author a `localPos0` on a joint to override the derivation.
@@ -51,8 +116,8 @@ def Xform "Drivetrain" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
     {
-        rel physics:body0 = </Drivetrain>
-        rel physics:body1 = </Drivetrain/Wheel_FL>
+        rel physics:body0 = </Drivetrain/Suspension_FL>
+        rel physics:body1 = </Drivetrain/Suspension_FL/Wheel_FL>
         uniform token physics:axis = "X"
         uniform token drive:angular:physics:type = "force"
     }
@@ -60,8 +125,8 @@ def Xform "Drivetrain" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
     {
-        rel physics:body0 = </Drivetrain>
-        rel physics:body1 = </Drivetrain/Wheel_FR>
+        rel physics:body0 = </Drivetrain/Suspension_FR>
+        rel physics:body1 = </Drivetrain/Suspension_FR/Wheel_FR>
         uniform token physics:axis = "X"
         uniform token drive:angular:physics:type = "force"
     }
@@ -69,8 +134,8 @@ def Xform "Drivetrain" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
     {
-        rel physics:body0 = </Drivetrain>
-        rel physics:body1 = </Drivetrain/Wheel_RL>
+        rel physics:body0 = </Drivetrain/Suspension_RL>
+        rel physics:body1 = </Drivetrain/Suspension_RL/Wheel_RL>
         uniform token physics:axis = "X"
         uniform token drive:angular:physics:type = "force"
     }
@@ -78,8 +143,8 @@ def Xform "Drivetrain" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
     {
-        rel physics:body0 = </Drivetrain>
-        rel physics:body1 = </Drivetrain/Wheel_RR>
+        rel physics:body0 = </Drivetrain/Suspension_RR>
+        rel physics:body1 = </Drivetrain/Suspension_RR/Wheel_RR>
         uniform token physics:axis = "X"
         uniform token drive:angular:physics:type = "force"
     }

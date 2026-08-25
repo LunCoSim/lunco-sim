@@ -990,6 +990,16 @@ class "LunCoSuspensionVisualAPI" (
     )
 }
 
+class "LunCoMassContributionAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "A physical child mass that a reduced realization folds into its owning rigid body while a full realization projects as its own body. The mass itself remains authored through standard PhysicsMassAPI properties."
+)
+{
+}
+
 class "LunCoTutorialTrackAPI" (
     inherits = </APISchemaBase>
     customData = {

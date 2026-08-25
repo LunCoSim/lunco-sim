@@ -1,7 +1,8 @@
 //! A ROVER IS THE SAME VEHICLE WHICHEVER WAY ITS WHEELS ARE REALIZED.
 //!
 //! `drivetrain = raycast | physical` chooses how a wheel is *simulated* — a
-//! suspension raycast with an analytic tire, or a rigid body on a revolute joint.
+//! suspension raycast with an analytic tire, or a rigid body on an authored
+//! prismatic-carrier/revolute-wheel assembly.
 //! It is not licence to change the vehicle. Mass, inertia, damping, wheelbase,
 //! track, wheel radius, tire grip and the motor's torque/speed curve are
 //! properties of the ROVER, and a variant that quietly alters one of them makes
@@ -55,20 +56,9 @@ fn vec3(view: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> Opt
 }
 
 /// `prim`'s subpath under whichever rover root it belongs to, so the two
-/// compositions' prims line up for comparison (`…/RoverRaycast/Wheel_FL` and
-/// `…/RoverPhysical/Wheel_FL` both key as `/Wheel_FL`).
+/// compositions' prims line up for comparison.
 fn under(prim: &str, root: &str) -> Option<String> {
     prim.strip_prefix(root).map(str::to_string)
-}
-
-/// The physical realization intentionally replaces the compliant raycast
-/// suspension arc with a rigid mount. These are the only composed attributes
-/// allowed to differ between the two realizations; each is asserted separately
-/// below so this list cannot become a silent escape hatch for vehicle changes.
-fn is_realization_specific_suspension_attribute(key: &str) -> bool {
-    key.ends_with(".lunco:suspension:restLength")
-        || key.ends_with(".physxVehicleSuspension:springDamperRate")
-        || key.ends_with("/SuspensionCasing.xformOp:translate")
 }
 
 /// Every `prim.attr = value` under one rover, keyed by the prim's path RELATIVE
@@ -93,15 +83,18 @@ fn attrs(stage: &CanonicalStage, root: &str) -> std::collections::BTreeMap<Strin
     out
 }
 
-/// Where a wheel sits on the rover — authored ONCE, on the rover.
-///
-/// It used to be authored per drivetrain, which was the bug: `raycast_drivetrain.usda`
-/// placed the wheel prim at the strut top (y = -0.15) and `physical_drivetrain.usda`
-/// at the axle (y = -0.65), so the prim meant two different points and the two rovers
-/// shared neither a ride height nor a centre-of-mass height. The prim is the AXLE in
-/// both realizations now; the raycast wheel derives its strut top from the authored
-/// suspension (`lunco_mobility::strut_offset`).
+/// The carrier mount is authored once on the rover and both realizations consume
+/// that same composed frame. The raycast wheel derives its strut top from the
+/// authored suspension (`lunco_mobility::strut_offset`).
 const WHEEL_MOUNT_TRANSLATE: &str = "xformOp:translate";
+
+fn wheel_path(root: &str, wheel: &str) -> String {
+    format!("{root}/Suspension_{}/{wheel}", &wheel[6..])
+}
+
+fn carrier_path(root: &str, wheel: &str) -> String {
+    format!("{root}/Suspension_{}", &wheel[6..])
+}
 
 #[test]
 fn the_two_realizations_compose_the_same_vehicle() {
@@ -129,7 +122,6 @@ fn the_two_realizations_compose_the_same_vehicle() {
     // job. A prim on BOTH sides with a different value is the variant exceeding it,
     // except for the explicitly tested suspension realization projection.
     let mut diffs: Vec<String> = Vec::new();
-    let mut realization_specific_diffs = Vec::new();
     for (key, va) in &ra {
         let Some(vb) = rb.get(key) else { continue };
         if va == vb {
@@ -145,22 +137,10 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if key.ends_with(".primvars:displayColor") {
             continue;
         }
-        if is_realization_specific_suspension_attribute(key) {
-            realization_specific_diffs.push(key.clone());
-            continue;
-        }
         diffs.push(format!(
             "  {key}\n      raycast : {va}\n      physical: {vb}"
         ));
     }
-
-    assert_eq!(
-        realization_specific_diffs.len(),
-        12,
-        "expected four wheels × three explicitly realization-specific suspension attributes, got {}: {:?}",
-        realization_specific_diffs.len(),
-        realization_specific_diffs
-    );
 
     assert!(
         diffs.is_empty(),
@@ -178,32 +158,60 @@ fn suspension_projection_matches_each_wheel_realization() {
     let view = stage.view();
 
     for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-        let raycast = SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap();
-        let physical = SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap();
+        let raycast = SdfPath::new(&wheel_path(RAYCAST, wheel)).unwrap();
+        let physical = SdfPath::new(&wheel_path(PHYSICAL, wheel)).unwrap();
         let raycast_rest = view.real(&raycast, "lunco:suspension:restLength");
         let physical_rest = view.real(&physical, "lunco:suspension:restLength");
         assert!(
             raycast_rest.is_some_and(|value| value > 0.0),
             "{wheel} raycast realization must compose positive suspension travel"
         );
+        assert_eq!(physical_rest, raycast_rest, "{wheel} shared wheel contract");
+
+        let carrier = SdfPath::new(&carrier_path(PHYSICAL, wheel)).unwrap();
+        assert!(
+            view.has_api_schema(&carrier, "PhysicsRigidBodyAPI"),
+            "{wheel} physical carrier must be a rigid body"
+        );
+        let slider =
+            SdfPath::new(&format!("{PHYSICAL}/Suspension_{}_Slider", &wheel[6..])).unwrap();
+        assert!(
+            view.has_api_schema(&slider, "PhysicsDriveAPI:linear"),
+            "{wheel} physical carrier must be connected by the authored standard linear drive"
+        );
+        for (attribute, expected) in [
+            ("drive:linear:physics:targetPosition", 0.0),
+            ("drive:linear:physics:targetVelocity", 0.0),
+            ("drive:linear:physics:stiffness", 15000.0),
+            ("drive:linear:physics:damping", 3000.0),
+            ("drive:linear:physics:maxForce", 60000.0),
+        ] {
+            assert_eq!(
+                view.real_f32(&slider, attribute),
+                Some(expected),
+                "{wheel} physical standard drive {attribute}"
+            );
+        }
         assert_eq!(
-            physical_rest,
-            Some(0.0),
-            "{wheel} physical realization must compose the authored rigid mount"
+            view.rel_target(&slider, "physics:body1")
+                .map(|p| p.as_str().to_string()),
+            Some(carrier.as_str().to_string()),
+            "{wheel} slider body1"
         );
 
-        let raycast_casing = SdfPath::new(&format!("{RAYCAST}/{wheel}/SuspensionCasing")).unwrap();
+        let raycast_casing =
+            SdfPath::new(&format!("{}/SuspensionCasing", raycast.as_str())).unwrap();
         let physical_casing =
-            SdfPath::new(&format!("{PHYSICAL}/{wheel}/SuspensionCasing")).unwrap();
+            SdfPath::new(&format!("{}/SuspensionCasing", physical.as_str())).unwrap();
         let raycast_translate = vec3(&view, &raycast_casing, WHEEL_MOUNT_TRANSLATE);
         let physical_translate = vec3(&view, &physical_casing, WHEEL_MOUNT_TRANSLATE);
         assert!(
             raycast_translate.is_some() && physical_translate.is_some(),
             "{wheel} must compose the casing geometry in both realizations"
         );
-        assert_ne!(
+        assert_eq!(
             raycast_translate, physical_translate,
-            "{wheel} casing geometry must reflect compliant versus rigid suspension"
+            "{wheel} casing geometry is shared authored vehicle geometry"
         );
     }
 }
@@ -222,12 +230,12 @@ fn the_wheels_sit_at_the_same_place_on_the_vehicle() {
     for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
         let pa = vec3(
             &view,
-            &SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap(),
+            &SdfPath::new(&carrier_path(RAYCAST, wheel)).unwrap(),
             WHEEL_MOUNT_TRANSLATE,
         );
         let pb = vec3(
             &view,
-            &SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap(),
+            &SdfPath::new(&carrier_path(PHYSICAL, wheel)).unwrap(),
             WHEEL_MOUNT_TRANSLATE,
         );
         let (Some(pa), Some(pb)) = (pa, pb) else {
@@ -237,9 +245,15 @@ fn the_wheels_sit_at_the_same_place_on_the_vehicle() {
             (pa[0] - pb[0]).abs() < 1e-6
                 && (pa[1] - pb[1]).abs() < 1e-6
                 && (pa[2] - pb[2]).abs() < 1e-6,
-            "{wheel} sits somewhere else depending on how it is simulated: \
+            "{wheel} carrier sits somewhere else depending on how it is simulated: \
              raycast {pa:?} vs physical {pb:?}"
         );
+        for root in [RAYCAST, PHYSICAL] {
+            let wheel_prim = SdfPath::new(&wheel_path(root, wheel)).unwrap();
+            let local = vec3(&view, &wheel_prim, WHEEL_MOUNT_TRANSLATE)
+                .expect("wheel must author its carrier-local origin");
+            assert_eq!(local, [0.0, 0.0, 0.0], "{root}/{wheel} local mount");
+        }
         checked += 1;
     }
 
@@ -298,8 +312,8 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
 
     let mut checked = 0;
     for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-        let raycast_path = SdfPath::new(&format!("{RAYCAST}/{wheel}")).unwrap();
-        let physical_path = SdfPath::new(&format!("{PHYSICAL}/{wheel}")).unwrap();
+        let raycast_path = SdfPath::new(&wheel_path(RAYCAST, wheel)).unwrap();
+        let physical_path = SdfPath::new(&wheel_path(PHYSICAL, wheel)).unwrap();
         // The shipped wheel composition applies wheel and suspension APIs directly
         // on the wheel prim. That is the standard direct-composition form; a
         // separate attachment prim may be supplied by a scene through the same
@@ -398,7 +412,6 @@ def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"])
         &wheel,
         Some(&suspension),
         Some(&tire),
-        None,
     )
     .expect("separate tire target is a supported standard composition");
     assert_eq!(params.slip_stiffness, 9876.0);

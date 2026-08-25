@@ -424,7 +424,7 @@ fn on_tick(me) {
             // Sample the steer servo's REALISED deflection while the command is
             // still at the lock — read now, not after braking, or the servo has
             // already slewed back toward centre.
-            let fl = find("/AckermannParity/RoverRaycast/Wheel_FL");
+            let fl = find("/AckermannParity/RoverRaycast/Suspension_FL/Wheel_FL");
             if type_of(fl) != "()" && fl >= 0 {
                 this.deflect_rc = get(fl, "SteeringActuator.output_angle");
             }
@@ -616,10 +616,10 @@ fn verdict(s) {
         f.push(t_true(dl.forward > 0.5 && dl.steer.abs() < 1e-6, m_dl));
     }
 
-    let m_def = "steer servo deflection on RoverRaycast/Wheel_FL: " + s.deflect_rc;
+    let m_def = "steer servo deflection on RoverRaycast/Suspension_FL/Wheel_FL: " + s.deflect_rc;
     m_def += " rad, expected >= 0.05 - the `steering` port never reached the actuator";
     if type_of(s.deflect_rc) == "()" {
-        f.push("steer servo deflection: MISSING - no SteeringActuator on RoverRaycast/Wheel_FL");
+        f.push("steer servo deflection: MISSING - no SteeringActuator on RoverRaycast/Suspension_FL/Wheel_FL");
     } else {
         f.push(t_true(s.deflect_rc.abs() >= 0.05, m_def));
     }

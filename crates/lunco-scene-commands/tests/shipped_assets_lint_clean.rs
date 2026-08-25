@@ -256,6 +256,8 @@ fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
             ])]),
         ),
         ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
@@ -316,6 +318,8 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("connector_programs", empty()),
         ("drives", empty()),
         ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
@@ -360,6 +364,8 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("connector_programs", empty()),
         ("drives", empty()),
         ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
