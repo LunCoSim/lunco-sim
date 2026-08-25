@@ -7468,6 +7468,7 @@ dependencies = [
  "resvg 0.47.0",
  "serde",
  "serde_json",
+ "ureq",
  "usvg 0.47.0",
  "velopack",
  "wasm-bindgen",

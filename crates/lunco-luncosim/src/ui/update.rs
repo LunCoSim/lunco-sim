@@ -5,8 +5,12 @@
 //! as one unit: assets added by a release arrive, and files absent from the
 //! release are not retained as an accidental second asset tree.
 
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
@@ -15,12 +19,20 @@ use lunco_settings::AppSettingsExt;
 use lunco_workbench::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 use lunco_workbench::WorkbenchLayout;
 use serde::{Deserialize, Serialize};
-use velopack::sources::GithubSource;
-use velopack::{UpdateCheck, UpdateInfo, UpdateManager};
+use velopack::sources::UpdateSource;
+use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset, VelopackAssetFeed};
 
 const UPDATE_STATUS_SOURCE: &str = "updates";
 /// Public machine-only repository containing immutable update releases.
 pub(crate) const UPDATE_REPOSITORY: &str = "https://github.com/LunCoSim/lunco-sim-updates";
+/// Bound each HTTP operation so a broken route cannot leave the UI in an
+/// indefinite `Downloading` state. Range requests keep this per-chunk rather
+/// than applying an unnecessarily short timeout to the complete 90 MB package.
+const UPDATE_HTTP_TIMEOUT: Duration = Duration::from_secs(45);
+const UPDATE_DOWNLOAD_CHUNK_BYTES: u64 = 1024 * 1024;
+const UPDATE_DOWNLOAD_ATTEMPTS: usize = 3;
+const UPDATE_RETRY_DELAYS: [Duration; UPDATE_DOWNLOAD_ATTEMPTS - 1] =
+    [Duration::from_secs(1), Duration::from_secs(4)];
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const UPDATE_CHANNEL: &str = "win-x64";
 #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
@@ -42,6 +54,247 @@ const UPDATE_PACKAGE_GUIDANCE: &str = "On Windows, install the official Setup.ex
 const UPDATE_PACKAGE_GUIDANCE: &str = "On macOS, install the official .pkg for your CPU and launch the installed LunCoSim.app; updates replace the app bundle and restart it.";
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 const UPDATE_PACKAGE_GUIDANCE: &str = "Run the official Velopack package from its installed location; source builds and ordinary archives are not update-managed.";
+
+/// GitHub-backed source used by the native updater.
+///
+/// Velopack's built-in `GithubSource` uses an unbounded HTTP agent in the
+/// pinned Rust release. That is unsafe for an interactive application: a
+/// stalled route leaves its synchronous download worker alive forever, while
+/// the UI can only observe the last progress value. This source keeps
+/// Velopack's feed, package metadata, checksum, and apply machinery, but owns
+/// the transport boundary so checks and package range requests have bounded
+/// waits. The release repository contains full packages, so a one-megabyte
+/// range also makes retrying a weak connection practical.
+#[derive(Clone)]
+struct TimeoutGithubSource {
+    repository: &'static str,
+    prerelease: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    name: Option<String>,
+    prerelease: bool,
+    published_at: Option<String>,
+    assets: Vec<GithubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    url: Option<String>,
+    browser_download_url: Option<String>,
+    name: Option<String>,
+}
+
+impl TimeoutGithubSource {
+    fn new(repository: &'static str, prerelease: bool) -> Self {
+        Self {
+            repository,
+            prerelease,
+        }
+    }
+
+    fn releases_url(&self) -> String {
+        let repository = self
+            .repository
+            .trim_end_matches('/')
+            .strip_prefix("https://github.com/")
+            .unwrap_or(self.repository.trim_end_matches('/'));
+        format!("https://api.github.com/repos/{repository}/releases?per_page=10&page=1")
+    }
+
+    fn get_releases(&self) -> Result<Vec<GithubRelease>, velopack::Error> {
+        let json = self.request_text(&self.releases_url(), "application/vnd.github.v3+json")?;
+        let mut releases: Vec<GithubRelease> = serde_json::from_str(&json)?;
+        releases.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        if !self.prerelease {
+            releases.retain(|release| !release.prerelease);
+        }
+        Ok(releases)
+    }
+
+    fn request_text(&self, url: &str, accept: &str) -> Result<String, velopack::Error> {
+        let agent = update_http_agent();
+        let mut response = agent.get(url).header("Accept", accept).call()?;
+        Ok(response.body_mut().read_to_string()?)
+    }
+
+    fn asset_url(release: &GithubRelease, asset_name: &str) -> Result<String, velopack::Error> {
+        let release_name = release.name.as_deref().unwrap_or("unknown");
+        let asset = release
+            .assets
+            .iter()
+            .find(|asset| {
+                asset
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(asset_name))
+            })
+            .ok_or_else(|| {
+                velopack::Error::Other(format!(
+                    "Could not find asset called '{asset_name}' in GitHub Release '{release_name}'."
+                ))
+            })?;
+
+        asset
+            .browser_download_url
+            .clone()
+            .or_else(|| asset.url.clone())
+            .ok_or_else(|| {
+                velopack::Error::Other(
+                    "Could not find a valid asset URL for the specified update.".to_owned(),
+                )
+            })
+    }
+
+    fn download_asset(
+        &self,
+        url: &str,
+        size: u64,
+        local_file: &Path,
+        progress_sender: Option<mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        if size == 0 {
+            return Err(velopack::Error::Other(
+                "The update package has no advertised size.".to_owned(),
+            ));
+        }
+
+        let agent = update_http_agent();
+        let mut file = File::create(local_file)?;
+        let mut offset = 0_u64;
+        while offset < size {
+            let end = (offset + UPDATE_DOWNLOAD_CHUNK_BYTES - 1).min(size - 1);
+            let bytes = download_range_with_retries(&agent, url, offset, end)?;
+            let expected = end - offset + 1;
+            if bytes.len() as u64 != expected {
+                return Err(velopack::Error::Other(format!(
+                    "The update server returned {}/{} bytes for range {offset}-{end}.",
+                    bytes.len(),
+                    expected
+                )));
+            }
+
+            file.write_all(&bytes)?;
+            offset = end + 1;
+            if let Some(progress_sender) = &progress_sender {
+                let progress = ((offset.saturating_mul(100) / size).min(100)) as i16;
+                let _ = progress_sender.send(progress);
+            }
+        }
+        file.flush()?;
+        Ok(())
+    }
+}
+
+impl UpdateSource for TimeoutGithubSource {
+    fn get_release_feed(
+        &self,
+        channel: &str,
+        _app: &velopack::bundle::Manifest,
+        _staged_user_id: &str,
+    ) -> Result<VelopackAssetFeed, velopack::Error> {
+        let releases = self.get_releases()?;
+        let feed_name = format!("releases.{channel}.json");
+        let mut assets = Vec::new();
+        let mut loaded_feed = false;
+
+        for release in &releases {
+            let Ok(url) = Self::asset_url(release, &feed_name) else {
+                continue;
+            };
+            // A feed request that fails is not equivalent to an empty feed:
+            // treating it as empty would tell the user that no update exists
+            // precisely when the network hid the newest release.
+            let json = self.request_text(&url, "application/octet-stream")?;
+            let feed: VelopackAssetFeed = serde_json::from_str(&json)?;
+            assets.extend(feed.Assets);
+            loaded_feed = true;
+        }
+
+        if !loaded_feed {
+            return Err(velopack::Error::Other(format!(
+                "No {feed_name} feed was found in the update repository."
+            )));
+        }
+        Ok(VelopackAssetFeed { Assets: assets })
+    }
+
+    fn download_release_entry(
+        &self,
+        asset: &VelopackAsset,
+        local_file: &Path,
+        progress_sender: Option<mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        let releases = self.get_releases()?;
+        let url = releases
+            .iter()
+            .find_map(|release| Self::asset_url(release, &asset.FileName).ok())
+            .ok_or_else(|| {
+                velopack::Error::Other(format!(
+                    "Could not find asset '{}' in any GitHub release.",
+                    asset.FileName
+                ))
+            })?;
+        self.download_asset(&url, asset.Size, local_file, progress_sender)
+    }
+}
+
+fn update_http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(UPDATE_HTTP_TIMEOUT))
+        .timeout_resolve(Some(UPDATE_HTTP_TIMEOUT))
+        .timeout_connect(Some(UPDATE_HTTP_TIMEOUT))
+        .timeout_recv_response(Some(UPDATE_HTTP_TIMEOUT))
+        .timeout_recv_body(Some(UPDATE_HTTP_TIMEOUT))
+        .build()
+        .into()
+}
+
+fn download_range_with_retries(
+    agent: &ureq::Agent,
+    url: &str,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, velopack::Error> {
+    let mut last_error = None;
+    for attempt in 0..UPDATE_DOWNLOAD_ATTEMPTS {
+        match download_range(agent, url, start, end) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                last_error = Some(error);
+                if let Some(delay) = UPDATE_RETRY_DELAYS.get(attempt) {
+                    thread::sleep(*delay);
+                }
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| velopack::Error::Other("The update range request failed.".to_owned())))
+}
+
+fn download_range(
+    agent: &ureq::Agent,
+    url: &str,
+    start: u64,
+    end: u64,
+) -> Result<Vec<u8>, velopack::Error> {
+    let range = format!("bytes={start}-{end}");
+    let mut response = agent
+        .get(url)
+        .header("Accept", "application/octet-stream")
+        .header("Range", &range)
+        .call()?;
+    if response.status().as_u16() != 206 {
+        return Err(velopack::Error::Other(format!(
+            "The update server did not honour range {range} (HTTP {}).",
+            response.status().as_u16()
+        )));
+    }
+    let mut bytes = Vec::new();
+    response.body_mut().as_reader().read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 
 /// Persisted preference for the native desktop updater.
 #[derive(Resource, Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -195,11 +448,11 @@ fn queue_status_bar_action(source: &str, state: &UpdateState, actions: &mut Upda
         UpdateStatus::Available => actions.download_requested = true,
         UpdateStatus::ReadyToRestart => actions.apply_requested = true,
         UpdateStatus::Error if state.ready.is_some() => actions.apply_requested = true,
+        UpdateStatus::Error => actions.check_requested = true,
         UpdateStatus::Checking
         | UpdateStatus::Downloading
         | UpdateStatus::Idle
-        | UpdateStatus::NotInstalled
-        | UpdateStatus::Error => {}
+        | UpdateStatus::NotInstalled => {}
     }
 }
 
@@ -396,7 +649,10 @@ fn process_update_actions(
                 let (progress_sender, progress_receiver) = mpsc::channel();
                 state.status = UpdateStatus::Downloading;
                 state.error = None;
-                state.download_progress = Some(0);
+                // No bytes have arrived yet. Keep this indeterminate instead
+                // of presenting a misleading frozen 0% bar while the first
+                // bounded range request is connecting.
+                state.download_progress = None;
                 tasks.download_progress = Some(Arc::new(Mutex::new(progress_receiver)));
                 tasks.download = Some(
                     IoTaskPool::get().spawn(async move { download_update(info, progress_sender) }),
@@ -414,12 +670,12 @@ fn process_update_actions(
             Ok(manager) => {
                 if let Err(error) = manager.apply_updates_and_restart(&info) {
                     state.status = UpdateStatus::Error;
-                    state.error = Some(format!("Could not install update: {error}"));
+                    state.error = Some(user_facing_update_error("install the update", error));
                 }
             }
             Err(error) => {
                 state.status = UpdateStatus::Error;
-                state.error = Some(format!("Could not prepare update: {error}"));
+                state.error = Some(user_facing_update_error("prepare the update", error));
             }
         }
     }
@@ -553,11 +809,21 @@ fn render_update_dialog(
                     }
                 }
                 UpdateStatus::Downloading => {
-                    let progress = state.download_progress.unwrap_or_default();
-                    ui.label("Downloading. You can keep working.");
-                    ui.add_sized(
-                        [ui.available_width(), 24.0],
-                        egui::ProgressBar::new(f32::from(progress) / 100.0).show_percentage(),
+                    if let Some(progress) = state.download_progress {
+                        ui.label(format!("Downloading update… {progress}%"));
+                        ui.add_sized(
+                            [ui.available_width(), 24.0],
+                            egui::ProgressBar::new(f32::from(progress) / 100.0)
+                                .show_percentage(),
+                        );
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Connecting to the update server…");
+                        });
+                    }
+                    ui.label(
+                        "You can keep working. If the connection fails, LunCoSim will keep the current version and offer Retry download.",
                     );
                 }
                 UpdateStatus::ReadyToRestart => {
@@ -626,18 +892,27 @@ fn mirror_update_status_to_status_bus(
             );
         }
         UpdateStatus::Downloading => {
-            let progress = u64::from(state.download_progress.unwrap_or_default());
             let version = state
                 .available
                 .as_ref()
                 .map(|info| info.TargetFullRelease.Version.as_str())
                 .unwrap_or("update");
-            bus.set_progress(
-                UPDATE_STATUS_SOURCE,
-                format!("downloading {version}… {progress}%"),
-                progress,
-                100,
-            );
+            if let Some(progress) = state.download_progress {
+                let progress = u64::from(progress);
+                bus.set_progress(
+                    UPDATE_STATUS_SOURCE,
+                    format!("downloading {version}… {progress}%"),
+                    progress,
+                    100,
+                );
+            } else {
+                bus.set_progress(
+                    UPDATE_STATUS_SOURCE,
+                    format!("connecting to update server for {version}…"),
+                    0,
+                    0,
+                );
+            }
         }
         UpdateStatus::Available => {
             bus.remove_progress(UPDATE_STATUS_SOURCE);
@@ -710,8 +985,8 @@ fn mirror_update_status_to_status_bus(
                 } else {
                     bus.push(
                         UPDATE_STATUS_SOURCE,
-                        StatusLevel::Error,
-                        format!("update check failed: {error}"),
+                        StatusLevel::Attention,
+                        format!("update check failed: {error} · Check again"),
                     );
                 }
             }
@@ -747,21 +1022,25 @@ fn check_for_updates() -> UpdateCheckResult {
     let manager = match create_update_manager() {
         Ok(manager) => manager,
         Err(velopack::Error::NotInstalled(_)) => return UpdateCheckResult::NotInstalled,
-        Err(error) => return UpdateCheckResult::Error(error.to_string()),
+        Err(error) => {
+            return UpdateCheckResult::Error(user_facing_update_error("check for updates", error))
+        }
     };
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(info)) => UpdateCheckResult::Available(info),
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
             UpdateCheckResult::NoUpdate
         }
-        Err(error) => UpdateCheckResult::Error(error.to_string()),
+        Err(error) => {
+            UpdateCheckResult::Error(user_facing_update_error("check for updates", error))
+        }
     }
 }
 
 fn download_update(info: UpdateInfo, progress: mpsc::Sender<i16>) -> UpdateDownloadResult {
     let result = create_update_manager()
         .and_then(|manager| manager.download_updates(&info, Some(progress)))
-        .map_err(|error| error.to_string());
+        .map_err(|error| user_facing_update_error("download the update", error));
     UpdateDownloadResult { info, result }
 }
 
@@ -770,7 +1049,7 @@ fn clamp_download_progress(progress: i16) -> u8 {
 }
 
 fn create_update_manager() -> Result<UpdateManager, velopack::Error> {
-    let source = GithubSource::new(UPDATE_REPOSITORY, None, true);
+    let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true);
     UpdateManager::new(
         source,
         Some(velopack::UpdateOptions {
@@ -779,6 +1058,24 @@ fn create_update_manager() -> Result<UpdateManager, velopack::Error> {
         }),
         None,
     )
+}
+
+fn user_facing_update_error(action: &str, error: velopack::Error) -> String {
+    match error {
+        velopack::Error::Network(_) => {
+            "Could not reach the update service. Check your internet connection and try again. The current LunCoSim version is still safe to use.".to_owned()
+        }
+        velopack::Error::ChecksumInvalid(..) | velopack::Error::SizeInvalid(..) => {
+            "The update download was incomplete or corrupted. No update was installed; try again.".to_owned()
+        }
+        velopack::Error::Io(error) => format!(
+            "Could not {action} because of a local file error: {error}. Check disk space and permissions, then try again."
+        ),
+        velopack::Error::Json(_) => {
+            "The update service returned invalid release data. Try again later.".to_owned()
+        }
+        error => format!("Could not {action}: {error}"),
+    }
 }
 
 fn unix_now() -> u64 {
@@ -885,5 +1182,66 @@ mod tests {
         queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
 
         assert_eq!(actions, UpdateActions::default());
+    }
+
+    #[test]
+    fn status_bar_click_retries_a_failed_update_check() {
+        let state = UpdateState {
+            status: UpdateStatus::Error,
+            error: Some("network unavailable".to_owned()),
+            ..Default::default()
+        };
+        let mut actions = UpdateActions::default();
+
+        queue_status_bar_action(UPDATE_STATUS_SOURCE, &state, &mut actions);
+
+        assert!(actions.check_requested);
+        assert!(!actions.download_requested);
+        assert!(!actions.apply_requested);
+    }
+
+    #[test]
+    fn timeout_source_targets_machine_feed_with_bounded_range_downloads() {
+        let source = TimeoutGithubSource::new(UPDATE_REPOSITORY, true);
+
+        assert_eq!(
+            source.releases_url(),
+            "https://api.github.com/repos/LunCoSim/lunco-sim-updates/releases?per_page=10&page=1"
+        );
+        assert_eq!(UPDATE_DOWNLOAD_CHUNK_BYTES, 1024 * 1024);
+        assert!(UPDATE_HTTP_TIMEOUT.as_secs() > 0);
+        assert_eq!(UPDATE_DOWNLOAD_ATTEMPTS, 3);
+    }
+
+    #[test]
+    fn range_download_requests_and_returns_only_the_selected_bytes() {
+        use std::io::Read as _;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read test server address");
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept range request");
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 256];
+                let length = stream.read(&mut chunk).expect("read range request");
+                request.extend_from_slice(&chunk[..length]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            assert!(request.contains("range: bytes=3-6"));
+            std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 3-6/10\r\n\r\n3456",
+            )
+            .expect("write range response");
+        });
+
+        let bytes = download_range(&update_http_agent(), &format!("http://{address}"), 3, 6)
+            .expect("range request succeeds");
+        assert_eq!(bytes, b"3456");
     }
 }

@@ -64,6 +64,12 @@ percentage while you keep working. When the package is ready, click
 **Install and restart**. The Settings → Updates menu remains available for
 manual checks and update preferences.
 
+Update checks and downloads use bounded network requests. A slow or unavailable
+connection leaves the current installation untouched, reports a recoverable
+error instead of claiming that no update exists, and exposes **Check again** or
+**Retry download**. The first download phase is shown as an indeterminate
+connection state rather than a misleading frozen 0%.
+
 Windows updates replace the installed application managed by Velopack. macOS
 updates replace the installed `.app` bundle. Linux updates replace the same
 writable AppImage. Always launch the installed package or same AppImage rather

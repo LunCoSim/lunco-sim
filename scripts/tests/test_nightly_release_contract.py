@@ -45,13 +45,16 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn(
             '"https://github.com/LunCoSim/lunco-sim-updates"', updater
         )
-        self.assertIn("GithubSource::new(UPDATE_REPOSITORY, None, true)", updater)
+        self.assertIn("TimeoutGithubSource::new(UPDATE_REPOSITORY, true)", updater)
+        self.assertIn("UPDATE_HTTP_TIMEOUT", updater)
+        self.assertIn('.header("Range", &range)', updater)
         self.assertIn('const UPDATE_CHANNEL: &str = "linux-x64";', updater)
         self.assertIn("Download update", updater)
         self.assertIn("Install and restart", updater)
         self.assertIn('const UPDATE_CHANNEL: &str = "win-x64";', updater)
         self.assertIn('const UPDATE_CHANNEL: &str = "osx-x64";', updater)
         self.assertIn('const UPDATE_CHANNEL: &str = "osx-arm64";', updater)
+        self.assertNotIn("let source = GithubSource::new", updater)
         self.assertNotIn("HttpSource", updater)
 
     def test_linux_download_explains_the_update_managed_appimage_path(self) -> None:
