@@ -1,0 +1,23 @@
+#usda 1.0
+(
+    defaultPrim = "AvianShaft"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Generic mechanical boundary between an authored rotational network and an
+# Avian wheel. The speed is measured by the runtime projection; torque is the
+# solved network output consumed by the same projection.
+def Xform "AvianShaft" (
+    doc = "Generic solved rotational boundary for an Avian revolute or raycast wheel."
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProgramAPI"]
+)
+{
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Mechanics/AvianShaft.mo@
+    float inputs:speed
+    custom token connectors:flange
+    float outputs:torque
+    float outputs:speed_rad_s
+}

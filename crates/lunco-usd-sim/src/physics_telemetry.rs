@@ -13,7 +13,6 @@ use avian3d::prelude::{
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::SimTick;
-use lunco_hardware::MotorReadback;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
@@ -72,7 +71,6 @@ pub fn retain_physics_telemetry(
         &Suspension,
         &avian3d::prelude::RayHits,
     )>,
-    motors: Query<(Entity, &UsdPrimPath, &MotorReadback)>,
 ) {
     let Some(settings) = settings else {
         state.previous.clear();
@@ -403,33 +401,6 @@ pub fn retain_physics_telemetry(
                 wheel.surface_speed(),
                 "m/s",
                 "Wheel contact-patch speed implied by axle angular velocity.",
-            ),
-        ];
-        if retain_samples(
-            signals,
-            settings.as_ref(),
-            entity,
-            &prim.path,
-            time,
-            samples,
-        ) {
-            commands.entity(entity).try_insert(SignalSource);
-        }
-    }
-
-    for (entity, prim, readback) in &motors {
-        let samples = [
-            (
-                "torque".to_string(),
-                readback.torque,
-                "N.m",
-                "Delivered signed axle torque from the live motor operating point.",
-            ),
-            (
-                "axle_speed".to_string(),
-                readback.axle_speed,
-                "rad/s",
-                "Measured signed axle speed used by the motor torque-speed law.",
             ),
         ];
         if retain_samples(

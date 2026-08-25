@@ -18,6 +18,8 @@
 //! `lunco-modelica`, the crate that understands `.mo`.
 
 use include_dir::{include_dir, Dir};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::{Path, PathBuf};
 
 /// Bundled model tree. Baked at compile time — rebuild after editing files
 /// under `assets/models/`.
@@ -85,6 +87,89 @@ pub fn package_files(package: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Top-level structured Modelica packages embedded under `assets/models/`.
+///
+/// A directory is a Modelica package root only when it contains `package.mo`.
+/// Keeping this inventory data-driven lets every consumer use normal
+/// root-segment lookup (`LunCo.Electrical.Pin` → `LunCo`) without naming a
+/// particular library in Rust.
+pub fn package_roots() -> Vec<String> {
+    let mut roots = MODELS_DIR
+        .dirs()
+        .filter(|dir| {
+            dir.files().any(|file| {
+                file.path()
+                    .file_name()
+                    .is_some_and(|name| name == "package.mo")
+            })
+        })
+        .filter_map(|dir| dir.path().file_name()?.to_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots
+}
+
+/// Top-level structured package roots from the live native asset tree, with
+/// the embedded tree as the portable fallback on wasm or when the package is
+/// not present on disk.
+pub fn package_roots_live() -> Vec<String> {
+    let mut roots = package_roots();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let models_dir = crate::assets_dir_abs().join("models");
+        if let Ok(entries) = std::fs::read_dir(models_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("package.mo").is_file() {
+                    if let Some(root) = path.file_name().and_then(|name| name.to_str()) {
+                        roots.push(root.to_string());
+                    }
+                }
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Read one structured package from the live native asset tree, falling back
+/// to the embedded snapshot on wasm or when the native tree is unavailable.
+/// The asset crate owns this filesystem access; Modelica consumers receive
+/// only the source-root file list.
+pub fn package_files_live(package: &str) -> Vec<(String, String)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(root) = crate::models_package_root_path(package) {
+        let mut files = Vec::new();
+        read_disk_package_files(&root, &mut files);
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        // Once the live tree declares a structured package, it is the
+        // authoritative editable source. Do not silently replace an empty or
+        // unreadable package with stale embedded bytes; the resolver must show
+        // the package as unavailable and surface the asset error.
+        return files;
+    }
+    package_files(package)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_disk_package_files(root: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            read_disk_package_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "mo") {
+            if let Ok(source) = std::fs::read_to_string(&path) {
+                out.push((path.display().to_string(), source));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +197,29 @@ mod tests {
         // RC_Circuit.mo ships in-tree; a loud failure here if it goes missing.
         assert!(model_source("RC_Circuit.mo").is_some());
         assert!(model_source("DoesNotExist.mo").is_none());
+    }
+
+    #[test]
+    fn package_roots_are_structured_and_sorted() {
+        let roots = package_roots();
+        assert_eq!(roots, {
+            let mut sorted = roots.clone();
+            sorted.sort();
+            sorted
+        });
+        assert!(roots.iter().any(|root| root == "LunCo"));
+    }
+
+    #[test]
+    fn live_package_inventory_keeps_standard_members_visible() {
+        let roots = package_roots_live();
+        assert!(roots.iter().any(|root| root == "LunCo"));
+        let files = package_files_live("LunCo");
+        assert!(
+            files.iter().any(|(path, source)| {
+                path.ends_with("Electrical/Battery.mo") && source.contains("model Battery")
+            }),
+            "the live or embedded structured package must expose Battery.mo"
+        );
     }
 }

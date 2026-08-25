@@ -1441,12 +1441,13 @@ const SETTLE_CLEARANCE: f64 = 0.05;
 /// Authored physical rovers put the chassis at the surface with the wheels hanging
 /// below it, so at the authored pose the wheels start EMBEDDED in the one-sided
 /// terrain heightfield and sink forever (no upward contact — proven: a rover that
-/// DROPS onto the same heightfield rests perfectly). This lifts the whole
+/// DROPS onto the same heightfield rests perfectly). This translates the whole
 /// joint-connected assembly, in the grid-absolute frame avian `Position` lives in,
-/// so its lowest member clears the surface, then consumes the marker. The rover
-/// then drops the last few cm and rests via normal contacts. It is NOT a per-frame
-/// rescue — it fires exactly once per assembly, at activation, and is pure initial
-/// PLACEMENT (the same job the command-spawn rest-depth lift does for GUI spawns).
+/// to the authored support condition, then consumes the marker. A probe-based
+/// assembly may move either up or down: its probe length is the authored rest
+/// condition, not merely a minimum clearance. It is NOT a per-frame rescue — it
+/// fires exactly once per assembly, at activation, and is pure initial PLACEMENT
+/// (the same job the command-spawn rest-depth lift does for GUI spawns).
 pub fn settle_grounded_assemblies(
     terrains: Query<(
         Entity,
@@ -1464,7 +1465,12 @@ pub fn settle_grounded_assemblies(
             Option<&mut avian3d::prelude::AngularVelocity>,
             Option<&mut RayHits>,
         )>,
-        Query<(Entity, &ColliderAabb, Option<&ColliderOf>)>,
+        Query<(
+            Entity,
+            &Collider,
+            Option<&ColliderAabb>,
+            Option<&ColliderOf>,
+        )>,
         Query<&avian3d::prelude::Rotation>,
         lunco_physics::GridSpatialQuery,
     )>,
@@ -1473,6 +1479,7 @@ pub fn settle_grounded_assemblies(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial_transforms: Query<(Option<&CellCoord>, &Transform)>,
+    local_gravity: Query<&lunco_environment::LocalGravity>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     mut commands: Commands,
@@ -1489,50 +1496,52 @@ pub fn settle_grounded_assemblies(
     if holds.is_some_and(|holds| holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY)) {
         return;
     }
-    // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
-    // owner is anchored at the grid origin cell). Wait for it if not built yet —
-    // the marker persists.
-    let Some((terrain, hf, ring)) = terrains.iter().next() else {
-        // `NeedsGroundSettle` is raised at USD/Avian admission because a
-        // physical wheel may need the one-time placement transaction supplied
-        // by a DEM collider ring.  A flat authored ground (or a static DEM
-        // without a collider ring) has no terrain-owned placement transaction
-        // to perform.  Leaving the marker armed here would make the application
-        // hold `GROUND_ACTIVATION` forever even though the only applicable
-        // collider is already in the ordinary physics world.
-        for entity in &q_needs {
-            commands
-                .entity(entity)
-                .try_remove::<lunco_core::NeedsGroundSettle>();
-        }
+    // Query the DEM oracle in the SAME grid-absolute frame as avian `Position`
+    // (terrain owner is anchored at the grid origin cell). A flat authored
+    // ground has no DEM oracle, but its ordinary Avian colliders are still a
+    // valid support surface and are handled by the same footprint transaction
+    // below.
+    let terrain_context = terrains.iter().next().and_then(|(terrain, hf, ring)| {
+        let (terrain_world, terrain_rotation) = lunco_core::coords::grid_relative_pose(
+            terrain,
+            active_frame.0,
+            &parents,
+            &grids,
+            &spatial_transforms,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))?;
+        let half = hf.0.half_extent() as f64;
+        let terrain_from_physics = terrain_rotation.0.inverse();
+        let terrain_up = terrain_rotation.0 * DVec3::Y;
+        // Initial placement must query the same surface product that the
+        // streamed heightfield collider contains. The collider is intentionally
+        // sampled through the terrain's contact band (the visual/contact
+        // invariant); using the raw DEM here places wheel axles against a
+        // different surface and creates startup spring compression.
+        let contact_oracle = ring.contact_band.limited(&hf.0);
+        Some((
+            terrain_world,
+            terrain_from_physics,
+            terrain_up,
+            half,
+            contact_oracle,
+        ))
+    });
+    if terrains.iter().next().is_some() && terrain_context.is_none() {
+        // A DEM provider exists but its composed pose is not available in the
+        // active physics frame yet. Do not sample an arbitrary frame or release
+        // the placement transaction early.
         return;
-    };
-    let half = hf.0.half_extent() as f64;
-    let Some((terrain_world, terrain_rotation)) = lunco_core::coords::grid_relative_pose(
-        terrain,
-        active_frame.0,
-        &parents,
-        &grids,
-        &spatial_transforms,
-    )
-    .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
-        return;
-    };
-    let terrain_from_physics = terrain_rotation.0.inverse();
-    let terrain_up = terrain_rotation.0 * DVec3::Y;
+    }
+    let terrain_up = terrain_context
+        .as_ref()
+        .map(|(_, _, terrain_up, _, _)| *terrain_up);
 
-    // Avian Position and the terrain now share the active physics frame. The
-    // retained DEM is still in the terrain prim's local frame, so this one
-    // explicit pose conversion is the complete frame boundary.
-    // Initial placement must query the same surface product that the streamed
-    // heightfield collider contains. The collider is intentionally sampled
-    // through the terrain's contact band (the visual/contact invariant); using
-    // the raw DEM here places wheel axles against a different surface and
-    // creates startup spring compression before the first physics step.
-    let contact_oracle = ring.contact_band.limited(&hf.0);
     let sample_height = |point: DVec3| {
-        let local = terrain_from_physics * (point - terrain_world.0);
-        (local.x.abs() <= half && local.z.abs() <= half)
+        let (terrain_world, terrain_from_physics, _, half, contact_oracle) =
+            terrain_context.as_ref()?;
+        let local = *terrain_from_physics * (point - terrain_world.0);
+        (local.x.abs() <= *half && local.z.abs() <= *half)
             .then(|| (local, contact_oracle.height_at(local.x, local.z)))
     };
 
@@ -1546,11 +1555,25 @@ pub fn settle_grounded_assemblies(
     // `ColliderOf`. This avoids turning initial placement into a metre-scale
     // drop merely because a body has a small wheel or a long leg.
     let mut collider_bounds: HashMap<Entity, (DVec3, DVec3)> = HashMap::default();
-    for (collider, aabb, owner) in avian.p1().iter() {
-        if !aabb.min.is_finite() {
-            continue;
-        }
+    let mut static_support_present = false;
+    let mut static_support_live = false;
+    let mut static_support_bounds = Vec::new();
+    for (collider, _, aabb, owner) in avian.p1().iter() {
         let body = owner.map_or(collider, |owner| owner.body);
+        let bounds_live = aabb.is_some_and(|aabb| aabb.min.is_finite() && aabb.max.is_finite());
+        if dynamics
+            .get(body)
+            .is_ok_and(|rb| matches!(rb, RigidBody::Static | RigidBody::Kinematic))
+        {
+            static_support_present = true;
+            static_support_live |= bounds_live;
+            if let Some(aabb) = aabb.filter(|_| bounds_live) {
+                static_support_bounds.push((aabb.min, aabb.max));
+            }
+        }
+        let Some(aabb) = aabb.filter(|_| bounds_live) else {
+            continue;
+        };
         collider_bounds
             .entry(body)
             .and_modify(|(min, max)| {
@@ -1572,8 +1595,10 @@ pub fn settle_grounded_assemblies(
         }
         let members = joint_component(seed, &adj);
         done.extend(members.iter().copied());
-        let mut lift = 0.0_f64;
+        let mut rigid_lift = 0.0_f64;
+        let mut probe_displacement: Option<f64> = None;
         let mut over_terrain = false;
+        let mut placement_axis = terrain_up;
         // Probe-only contact geometry belongs to the same
         // placement pass as rigid members. It is authored in the vehicle frame,
         // transformed once by the solved root pose, and sampled from the same
@@ -1600,9 +1625,30 @@ pub fn settle_grounded_assemblies(
                 })
             });
         if let Some((footprint_owner, footprint)) = raycast_footprint {
+            // A static/kinematic collider is the authoritative readiness
+            // boundary for a flat authored support surface. Avian exposes the
+            // collider entity before its broad-phase AABB; do not consume the
+            // one-shot placement request in that interval. If no such support
+            // provider exists, the normal unsupported-body path below may
+            // retire the request immediately.
+            if terrain_context.is_none() && static_support_present && !static_support_live {
+                continue;
+            }
             let Some(root_pos) = pos_of.get(&footprint_owner) else {
                 continue;
             };
+            let placement_up = if let Some(terrain_up) = terrain_up {
+                terrain_up
+            } else {
+                let Ok(gravity) = local_gravity.get(footprint_owner) else {
+                    continue;
+                };
+                if !gravity.0.is_finite() || gravity.0.length_squared() <= f64::EPSILON {
+                    continue;
+                }
+                -gravity.0.normalize()
+            };
+            placement_axis = Some(placement_up);
             let root_rot = avian
                 .p2()
                 .get(footprint_owner)
@@ -1633,15 +1679,54 @@ pub fn settle_grounded_assemblies(
                 let hit = avian.p3().cast_ray_grid(
                     GridPos(origin),
                     direction,
-                    (2.0 * half).max(contact.probe_length),
+                    terrain_context.as_ref().map_or_else(
+                        || {
+                            // Avian's scalar ray length is finite by contract.
+                            // Derive the search interval from the live support
+                            // collider bounds rather than using an arbitrary
+                            // world-distance constant or an infinite ray.
+                            static_support_bounds
+                                .iter()
+                                .flat_map(|(min, max)| {
+                                    [
+                                        DVec3::new(min.x, min.y, min.z),
+                                        DVec3::new(min.x, min.y, max.z),
+                                        DVec3::new(min.x, max.y, min.z),
+                                        DVec3::new(min.x, max.y, max.z),
+                                        DVec3::new(max.x, min.y, min.z),
+                                        DVec3::new(max.x, min.y, max.z),
+                                        DVec3::new(max.x, max.y, min.z),
+                                        DVec3::new(max.x, max.y, max.z),
+                                    ]
+                                })
+                                .map(|corner| (corner - origin).length())
+                                .fold(contact.probe_length, f64::max)
+                        },
+                        |(_, _, _, half, _)| (2.0 * *half).max(contact.probe_length),
+                    ),
                     true,
                     &filter,
                 );
                 let Some(hit) = hit else {
                     continue;
                 };
-                let required = contact.probe_length - hit.distance;
-                lift = lift.max(required);
+                // Translate along the physical support axis, not an assumed
+                // global Y. The projection keeps arbitrary gravity/terrain
+                // orientation and authored probe directions in one contract.
+                let alignment = -direction.as_dvec3().dot(placement_up);
+                if !alignment.is_finite() || alignment <= f64::EPSILON {
+                    continue;
+                }
+                let required = (contact.probe_length - hit.distance) / alignment;
+                // A support probe describes a target distance, not a one-sided
+                // clearance. Positive displacement lifts an embedded probe;
+                // negative displacement lowers a probe that starts above its
+                // authored travel range. Clamping this to zero leaves the
+                // assembly "settled" while its actual suspension has no
+                // contact, after which a rigid hull can fall onto the terrain
+                // and corrupt the articulated solve.
+                probe_displacement =
+                    Some(probe_displacement.map_or(required, |previous| previous.max(required)));
                 over_terrain = true;
             }
         } else {
@@ -1655,7 +1740,7 @@ pub fn settle_grounded_assemblies(
                         continue;
                     };
                     over_terrain = true;
-                    lift = lift.max(surface + SETTLE_CLEARANCE - local.y);
+                    rigid_lift = rigid_lift.max(surface + SETTLE_CLEARANCE - local.y);
                     continue;
                 };
                 // A ColliderAabb is expressed in the same physics frame as
@@ -1668,19 +1753,33 @@ pub fn settle_grounded_assemblies(
                                 continue;
                             };
                             over_terrain = true;
-                            lift = lift.max(surface + SETTLE_CLEARANCE - local.y);
+                            rigid_lift = rigid_lift.max(surface + SETTLE_CLEARANCE - local.y);
                         }
                     }
                 }
             }
         }
-        // A ground-settle request is a placement transaction, not a request to
-        // force a positive teleport. Once the live surface has been sampled,
-        // zero (or negative) required lift is the valid result for an authored
-        // pose that already clears the terrain. Leaving the marker armed in
-        // that case holds physics forever even though the contact product is
-        // ready and no correction is needed.
+        // A ground-settle request is a placement transaction. Probe-owned
+        // assemblies use the signed displacement that establishes the authored
+        // rest distance; collider-only assemblies use their non-negative
+        // clearance lift. Once the live surface has been sampled, zero is a
+        // valid result and consumes the request without holding physics.
         if !over_terrain {
+            if terrain_context.is_none() {
+                // No DEM transaction exists and no static support collider was
+                // found under this footprint. Consume the request so normal
+                // physics establishes the unsupported state; an activation hold
+                // must never become a permanent substitute for missing support.
+                for &member in &members {
+                    commands
+                        .entity(member)
+                        .try_remove::<lunco_core::NeedsGroundSettle>();
+                }
+            }
+            continue;
+        }
+        let displacement = probe_displacement.unwrap_or(rigid_lift.max(0.0));
+        if !displacement.is_finite() {
             continue;
         }
         // Consume only after the live surface has been observed. During
@@ -1690,20 +1789,23 @@ pub fn settle_grounded_assemblies(
         for &m in &members {
             let mut entity = commands.entity(m);
             entity.try_remove::<lunco_core::NeedsGroundSettle>();
-            if lift > 0.0 {
+            if displacement != 0.0 {
                 entity.try_insert((
                     lunco_core::PhysicsPoseAuthoritative,
                     lunco_physics::PhysicsPoseSeeded,
                 ));
             }
         }
-        if lift <= 0.0 {
+        if displacement == 0.0 {
             continue;
         }
-        let lift_vector = terrain_up * lift;
+        let Some(placement_up) = placement_axis else {
+            continue;
+        };
+        let placement_vector = placement_up * displacement;
         for &m in &members {
             if let Ok((_, mut pos, _, lin, ang, hits)) = avian.p0().get_mut(m) {
-                pos.0 += lift_vector;
+                pos.0 += placement_vector;
                 if let Some(mut v) = lin {
                     v.0 = DVec3::ZERO;
                 }
@@ -1743,12 +1845,12 @@ pub fn settle_grounded_assemblies(
                 }
             }
             if descendant {
-                pos.0 += lift_vector;
+                pos.0 += placement_vector;
             }
         }
         warn!(
             "[ground-settle] dropped assembly (seed {seed:?}, {} bodies) onto the terrain: \
-             lifted {lift:.2} m so the wheels clear the one-sided heightfield",
+             translated {displacement:.2} m so authored supports meet the one-sided heightfield",
             members.len(),
         );
     }

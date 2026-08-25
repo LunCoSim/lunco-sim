@@ -253,6 +253,13 @@ impl StatusEvent {
 /// terrain again. One `const`, one compile error if it ever moves.
 pub const TERRAIN_SOURCE: &str = "terrain";
 
+/// The status source for optional derived terrain visual products. It is kept
+/// separate from [`TERRAIN_SOURCE`] because refinement must not replace the
+/// tile-streaming progress entry or make the terrain stream appear complete.
+/// The optional source is intentionally not part of the screenshot readiness
+/// allowlist: ground and resident tiles are presentable before refinement.
+pub const TERRAIN_DERIVED_SOURCE: &str = "terrain-derived";
+
 /// The status source for native/web DEM generation. It is separate from
 /// [`TERRAIN_SOURCE`], which reports streamed tile residency, so one terrain
 /// lifecycle cannot clear the other's progress entry.

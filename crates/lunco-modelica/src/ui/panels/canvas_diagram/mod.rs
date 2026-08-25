@@ -114,6 +114,8 @@ fn build_registry() -> VisualRegistry {
             icon_only: d.icon_only,
             expandable_connector: d.expandable_connector,
             icon_graphics: d.icon_graphics.clone(),
+            resolution: d.resolution,
+            resolution_message: d.resolution_message.clone(),
             parameters: d.parameters.clone(),
             rotation_deg: d.rotation_deg,
             mirror_x: d.mirror_x,
@@ -146,15 +148,22 @@ fn build_registry() -> VisualRegistry {
             d.kind,
             crate::visual_diagram::PortKind::Input | crate::visual_diagram::PortKind::Output,
         ) || causal_by_name;
-        // Materialise the per-frame HashMap lookup keys here, once per
-        // projection — avoids two `format!()` allocations per edge per
-        // frame in `OrthogonalEdgeVisual::draw`.
-        let flow_lookup_keys = d.flow_vars.first().map(|fv| {
-            (
-                format!("{}.{}", d.source_path, fv.name),
-                format!("{}.{}", d.target_path, fv.name),
-            )
-        });
+        // Materialise all flow-variable lookup keys once per projection —
+        // avoids per-frame formatting and supports connectors with more than
+        // one `flow` member (for example a fluid port carrying mass, energy,
+        // and species flows). The visual chooses the first currently-active
+        // physical flow, so direction remains data-driven rather than tied to
+        // one connector field or one domain's variable name.
+        let flow_lookup_keys = d
+            .flow_vars
+            .iter()
+            .map(|fv| {
+                (
+                    format!("{}.{}", d.source_path, fv.name),
+                    format!("{}.{}", d.target_path, fv.name),
+                )
+            })
+            .collect();
         OrthogonalEdgeVisual {
             color: d
                 .icon_color
@@ -309,6 +318,15 @@ pub struct CanvasDocState {
     /// drill-in resource but the canvas kept showing the previous
     /// target's cached scene — the visible "click did nothing" bug.
     pub last_seen_target: Option<String>,
+    /// Root-instance namespace for the currently rendered drilled class.
+    /// Computed with the off-thread projection from the same AST; live
+    /// snapshot painting only uses this resolved value.
+    pub target_unit_instance: Option<String>,
+    /// Last projection failure for this document/target. A failed projection
+    /// clears the rendered scene and stays visible until the source, target,
+    /// or layout changes; it must never degrade into a blank canvas or a
+    /// fabricated node.
+    pub projection_error: Option<String>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
     /// Background decoration — the target class's own
@@ -390,6 +408,8 @@ impl Default for CanvasDocState {
             last_seen_source_hash: 0,
             pending_fit: false,
             last_seen_target: None,
+            target_unit_instance: None,
+            projection_error: None,
             context_menu: None,
             projection_task: None,
             background_diagram,

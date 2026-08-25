@@ -7,6 +7,7 @@
 //! Usage:
 //!   cargo run -p lunco-assets -- download            # download every group
 //!   cargo run -p lunco-assets -- download -g modelica  # download one group
+//!   cargo run -p lunco-assets -- download --bundle lunica-native
 //!   cargo run -p lunco-assets -- process             # process all downloaded assets
 //!   cargo run -p lunco-assets -- process -g celestial  # process one group
 //!   cargo run -p lunco-assets -- list                # list every group
@@ -49,11 +50,15 @@ fn main() {
     // affected outputs and nothing silently serves the wrong tier.
     let mut quality: &str = "good";
     let mut parallel_limit: Option<usize> = None;
+    let mut binary: Option<&str> = None;
+    let mut stage_cache: Option<&str> = None;
+    let mut stage_destination: Option<&str> = None;
+    let mut bundle_target: Option<&str> = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "download" | "list" | "process" => action = Some(args[i].as_str()),
+            "download" | "list" | "process" | "stage" => action = Some(args[i].as_str()),
             "-g" | "--group" => {
                 i += 1;
                 group = args.get(i).map(|s| s.as_str());
@@ -84,6 +89,22 @@ fn main() {
                         return;
                     }
                 }
+            }
+            "--binary" => {
+                i += 1;
+                binary = args.get(i).map(|s| s.as_str());
+            }
+            "--cache" => {
+                i += 1;
+                stage_cache = args.get(i).map(|s| s.as_str());
+            }
+            "--destination" => {
+                i += 1;
+                stage_destination = args.get(i).map(|s| s.as_str());
+            }
+            "--bundle" => {
+                i += 1;
+                bundle_target = args.get(i).map(|s| s.as_str());
             }
             "--help" | "-h" => {
                 print_usage();
@@ -120,7 +141,8 @@ fn main() {
                 .map_err(|e| e.to_string()),
             ("process", key) => process_for_twin(&twin_root, key, quality),
             ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
-            _ => unreachable!(),
+            ("stage", _) => Err("stage cannot be used with --twin".to_string()),
+            _ => Err("invalid arguments for --twin".to_string()),
         };
         if let Err(e) = result {
             eprintln!("Error: {}", e);
@@ -131,7 +153,14 @@ fn main() {
 
     let result = match action {
         "download" => {
-            if let Some(key) = asset_key {
+            if let Some(bundle) = bundle_target {
+                if group.is_some() || asset_key.is_some() {
+                    Err("--bundle cannot be combined with --group or --asset".to_string())
+                } else {
+                    download::download_all_for_bundle_with_limit(bundle, parallel)
+                        .map_err(|e| e.to_string())
+                }
+            } else if let Some(key) = asset_key {
                 // `-a` targets a single asset in any group. Takes precedence
                 // over `-g` (one asset is more specific than one group).
                 download::download_one_engine(key).map_err(|e| e.to_string())
@@ -152,11 +181,23 @@ fn main() {
             if let Some(g) = group {
                 download::list_group(g).map_err(|e| e.to_string())
             } else {
-                list_all_groups();
-                Ok(())
+                list_all_groups()
             }
         }
-        _ => unreachable!(),
+        "stage" => {
+            let binary = binary.ok_or_else(|| "stage requires --binary".to_string());
+            let cache = stage_cache
+                .map(PathBuf::from)
+                .unwrap_or_else(lunco_assets::cache_dir);
+            let destination = stage_destination
+                .map(PathBuf::from)
+                .ok_or_else(|| "stage requires --destination".to_string());
+            match (binary, destination) {
+                (Ok(binary), Ok(destination)) => stage_engine_bundle(binary, &cache, &destination),
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            }
+        }
+        _ => Err("invalid arguments".to_string()),
     };
 
     if let Err(e) = result {
@@ -192,14 +233,17 @@ fn process_filtered(
     }
 
     let mut processed = 0;
-    let twin_cache = twin_root.map(lunco_assets::twin_cache_dir);
     for (key, entry) in &manifest.assets {
         if only_key.is_some_and(|k| k != key) {
             continue;
         }
         if let Some(ref proc_cfg) = entry.process {
-            let source_path = download::entry_dest_path(entry, twin_cache.as_deref());
-            if !source_path.exists() {
+            let owner_cache = twin_root.map(|root| {
+                lunco_assets::datasets::DatasetScope::twin_cache_root(root, entry.shared)
+            });
+            let source_path = download::entry_dest_path(entry, owner_cache.as_deref())
+                .map_err(|error| format!("invalid destination for {key}: {error}"))?;
+            if !download::installed_destination_present(entry, &source_path) {
                 println!(
                     "  ⚠ {} source not found at {}, skipping",
                     key,
@@ -217,8 +261,14 @@ fn process_filtered(
                     cfg.target_resolution = Some([(w / 4).max(64), (h / 4).max(64)]);
                 }
             }
-            process::process_asset(&source_path, &cfg, twin_root)
-                .map_err(|e| format!("Failed to process {}: {}", key, e))?;
+            process::process_asset(
+                &source_path,
+                &cfg,
+                &entry_cache_root(entry, twin_root),
+                twin_root,
+                &process::ProcessControl::unrestricted(),
+            )
+            .map_err(|e| format!("Failed to process {}: {}", key, e))?;
             processed += 1;
         }
     }
@@ -235,6 +285,15 @@ fn process_filtered(
     Ok(())
 }
 
+fn entry_cache_root(
+    entry: &download::AssetEntry,
+    twin_root: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    twin_root
+        .map(|root| lunco_assets::datasets::DatasetScope::twin_cache_root(root, entry.shared))
+        .unwrap_or_else(lunco_assets::cache_dir)
+}
+
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).
 fn process_group(group: &str) -> Result<(), String> {
     println!("Processing `{group}`...");
@@ -248,20 +307,21 @@ fn process_group(group: &str) -> Result<(), String> {
 
 /// Process every engine manifest group.
 fn process_all_groups() -> Result<(), String> {
-    for (group, _) in lunco_assets::engine_manifests() {
+    let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
+    for (group, _) in manifests {
         process_group(&group)?;
     }
     Ok(())
 }
 
 /// List every engine manifest group.
-fn list_all_groups() {
-    for (group, _) in lunco_assets::engine_manifests() {
+fn list_all_groups() -> Result<(), String> {
+    let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
+    for (group, _) in manifests {
         println!();
-        if let Err(e) = download::list_group(&group) {
-            eprintln!("  Error: {}", e);
-        }
+        download::list_group(&group).map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 /// Process a Twin folder's `[*.process]` entries: sources + twin-targeted
@@ -281,6 +341,94 @@ fn process_for_twin(
     )
 }
 
+/// Stage the complete set of manifest-declared artifacts for one binary. The
+/// manifest owns both the artifact path and the package target; this command
+/// only materialises that declaration into a bundle directory.
+fn stage_engine_bundle(
+    binary: &str,
+    cache_root: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), String> {
+    let mut staged = std::collections::BTreeSet::new();
+    for (group, path) in lunco_assets::engine_manifests().map_err(|e| e.to_string())? {
+        let manifest =
+            download::AssetManifest::from_file(&path).map_err(|e| format!("{group}: {e}"))?;
+        for (key, entry) in manifest.assets {
+            if !entry.bundled_for(binary) {
+                continue;
+            }
+            let source = download::entry_dest_path(&entry, Some(cache_root))
+                .map_err(|e| format!("{group}/{key}: invalid source path: {e}"))?;
+            let artifact = download::entry_artifact_path(&entry, cache_root, None)
+                .map_err(|e| format!("{group}/{key}: invalid artifact path: {e}"))?;
+            let relative = artifact.strip_prefix(cache_root).map_err(|_| {
+                format!(
+                    "{group}/{key}: bundle artifact {} is outside cache {}",
+                    artifact.display(),
+                    cache_root.display()
+                )
+            })?;
+            let relative = lunco_assets::asset_path::slashed(relative);
+            if !staged.insert(relative.clone()) {
+                return Err(format!(
+                    "{group}/{key}: artifact path collides with another bundled dataset: {relative}"
+                ));
+            }
+            let complete = match &entry.process {
+                Some(process) => lunco_assets::process::processed_output_present(
+                    &artifact,
+                    process,
+                    Some(&source),
+                ),
+                None => download::installed_destination_present(&entry, &artifact),
+            };
+            if !complete {
+                return Err(format!(
+                    "{group}/{key}: bundled artifact is missing or invalid at {}",
+                    artifact.display()
+                ));
+            }
+            copy_bundle_path(&artifact, &destination.join(&relative))
+                .map_err(|e| format!("{group}/{key}: cannot stage {}: {e}", artifact.display()))?;
+            println!("  staged {relative}");
+        }
+    }
+    println!("staged {} artifact(s) for {binary}", staged.len());
+    Ok(())
+}
+
+fn copy_bundle_path(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("symlink is not a package artifact: {}", source.display()),
+        ));
+    }
+    if metadata.is_file() {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(source, destination)?;
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsupported package artifact: {}", source.display()),
+        ));
+    }
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        copy_bundle_path(&entry.path(), &destination.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
 fn print_usage() {
     println!("LunCoSim Asset Manager");
     println!();
@@ -288,6 +436,9 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- download              Download every declared asset");
     println!("  cargo run -p lunco-assets -- download -g GROUP     Download one manifest group");
     println!("  cargo run -p lunco-assets -- download -a KEY       Download a single asset by key");
+    println!(
+        "  cargo run -p lunco-assets -- download --bundle TARGET  Download package-declared assets"
+    );
     println!("  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)");
     println!("  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)");
     println!(
@@ -300,6 +451,7 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- list                  List every declared asset");
     println!("  cargo run -p lunco-assets -- list -g GROUP         List one manifest group");
     println!("  cargo run -p lunco-assets -- list -t DIR           List a Twin folder's assets");
+    println!("  cargo run -p lunco-assets -- stage --binary BIN --cache DIR --destination DIR");
     println!();
     println!("Process kinds (in an Assets.toml [name.process] section):");
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");

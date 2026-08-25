@@ -109,7 +109,7 @@ def Xform "PartsAttached" (
         }
     )
     {
-        double3 xformOp:translate = (-60.0, 1.0, 120.0)
+        double3 xformOp:translate = (-60.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -120,7 +120,7 @@ def Xform "PartsAttached" (
         }
     )
     {
-        double3 xformOp:translate = (-20.0, 1.0, 120.0)
+        double3 xformOp:translate = (-20.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -131,7 +131,7 @@ def Xform "PartsAttached" (
         }
     )
     {
-        double3 xformOp:translate = (20.0, 1.0, 120.0)
+        double3 xformOp:translate = (20.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -142,7 +142,7 @@ def Xform "PartsAttached" (
         }
     )
     {
-        double3 xformOp:translate = (60.0, 1.0, 120.0)
+        double3 xformOp:translate = (60.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

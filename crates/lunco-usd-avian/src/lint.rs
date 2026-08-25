@@ -9,9 +9,9 @@
 //! Deciding what is WRONG is policy: `assets/scripting/policy/lint_usd.rhai`,
 //! entry `lint_usd(facts)`, reached through the `lint.usd` hook
 //! ([`lunco_lint::run_lint`]). A rule can be added, tightened or silenced by
-//! editing that script and re-registering the hook — against a running sim, with
-//! no rebuild. That is deliberate: a rule you cannot try immediately is a rule
-//! nobody writes.
+//! editing that script and re-registering the hook, then invoking the explicit
+//! lint command against the selected composed stage — with no rebuild. That is
+//! deliberate: a rule you cannot try immediately is a rule nobody writes.
 //!
 //! # Why this exists at all
 //!
@@ -61,9 +61,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_lint::LintFinding;
 use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
@@ -295,6 +295,55 @@ fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec
             ])
         })
         .collect()
+}
+
+/// The semantic drive facts consumed by `lint_usd`.
+///
+/// This deliberately calls the same typed USD joint reader that the runtime
+/// projection uses. The linter must report the motor model the loader will
+/// actually install, not re-interpret raw `drive:*` attributes through a
+/// second unit-conversion or defaulting path.
+fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
+    let mut drives = Vec::new();
+    for path in joint_paths {
+        let Some(spec) = crate::read_joint_spec_typed(reader.stage(), path) else {
+            continue;
+        };
+        let Some(drive) = spec.drive else {
+            continue;
+        };
+
+        let (realization, frequency, damping_ratio) = match drive.motor_model() {
+            MotorModel::SpringDamper {
+                frequency,
+                damping_ratio,
+            } => ("spring_damper", frequency, damping_ratio),
+            MotorModel::ForceBased { .. } => ("force_based", 0.0, 0.0),
+            MotorModel::AccelerationBased { .. } => ("acceleration_based", 0.0, 0.0),
+        };
+        let stiffness = drive.stiffness.unwrap_or(0.0);
+        let damping = drive.damping.unwrap_or(0.0);
+        drives.push(H::map([
+            ("path", H::str(path.to_string())),
+            ("joint_type", H::str(spec.joint_type)),
+            ("body0", H::str(spec.body0_path)),
+            ("body1", H::str(spec.body1_path)),
+            ("realization", H::str(realization)),
+            ("stiffness", H::Float(stiffness)),
+            ("damping", H::Float(damping)),
+            (
+                "max_force",
+                drive.max_force.map(H::Float).unwrap_or(H::Unit),
+            ),
+            (
+                "driven_mass",
+                drive.driven_mass.map(H::Float).unwrap_or(H::Unit),
+            ),
+            ("frequency", H::Float(frequency)),
+            ("damping_ratio", H::Float(damping_ratio)),
+        ]));
+    }
+    drives
 }
 
 /// Everything policy needs to judge a stage's physics authoring.
@@ -558,7 +607,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     // type, its parent, applied schemas, and property names. `bodies`/`joints` above are
     // pre-chewed answers to the questions we already know we ask; this is what
     // lets a NEW rule ask a NEW question — "PhysicsMassAPI on a prim inside no
-    // body", "LunCoMotorAPI with no drivenWheel", "a collider outside every
+    // body", "a motor with no shaft binding", "a collider outside every
     // body" — without a Rust change, which is the whole point of putting rules in
     // rhai. Bounded by schema'd prims (hundreds), not by prim count (thousands).
     let mut prims: Vec<H> = Vec::new();
@@ -870,20 +919,34 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     H::map([
         (
             "stage",
-            H::map([(
-                "meters_per_unit_authored",
-                H::Bool(
-                    reader
-                        .stage()
-                        .stage_metadata("metersPerUnit")
-                        .ok()
-                        .flatten()
-                        .is_some(),
+            H::map([
+                (
+                    "meters_per_unit_authored",
+                    H::Bool(
+                        reader
+                            .stage()
+                            .stage_metadata("metersPerUnit")
+                            .ok()
+                            .flatten()
+                            .is_some(),
+                    ),
                 ),
-            )]),
+                ("fixed_hz", H::Float(lunco_core::FIXED_HZ)),
+                (
+                    "physics_substeps",
+                    H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
+                ),
+                (
+                    "substep_dt",
+                    H::Float(
+                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
+                    ),
+                ),
+            ]),
         ),
         ("bodies", H::Array(body_facts)),
         ("joints", H::Array(joints)),
+        ("drives", H::Array(drive_facts(reader, &joint_paths))),
         ("filtered_pairs", H::Array(filtered_pairs)),
         ("collision_groups", H::Array(collision_groups)),
         ("collections", H::Array(collections)),
@@ -896,15 +959,6 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("connector_programs", H::Array(connector_programs)),
         ("telemetry_declarations", H::Array(telemetry_declarations)),
     ])
-}
-
-/// Gather the facts and ask `lint.usd` policy what is wrong with them.
-///
-/// Returns nothing when no policy is registered — an app without scripting lints
-/// nothing rather than falling back to a second, compiled copy of the rules.
-/// There is exactly ONE place a USD physics rule is written.
-pub fn lint_stage(reader: &StageView<'_>) -> Vec<LintFinding> {
-    lunco_lint::run_lint(USD_LINT_DOMAIN, physics_facts(reader))
 }
 
 #[cfg(test)]
@@ -1052,6 +1106,69 @@ mod tests {
             .find(|p| field(p, "path") == &H::str("/Motor"))
             .expect("motor fact");
         assert_eq!(field(motor, "connected"), &H::Array(vec![H::str("p")]));
+    }
+
+    /// Drive facts must describe the motor model the loader will install. A
+    /// massed linear force drive is converted to the implicit SpringDamper path;
+    /// the same authored law without a driven mass remains ForceBased and must
+    /// be visible to the USD policy rather than disappearing into raw prim
+    /// attributes.
+    #[test]
+    fn drive_facts_preserve_the_runtime_motor_realization() {
+        let f = facts(
+            "#usda 1.0\n\
+             ( metersPerUnit = 1 )\n\
+             def Xform \"Rig\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
+             {\n\
+                 float physics:mass = 100.0\n\
+                 def Xform \"Massed\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysicsMassAPI\"] )\n\
+                 {\n\
+                     float physics:mass = 10.0\n\
+                 }\n\
+                 def Xform \"Unmassed\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] ) {}\n\
+                 def PhysicsPrismaticJoint \"Implicit\" ( prepend apiSchemas = [\"PhysicsDriveAPI:linear\"] )\n\
+                 {\n\
+                     rel physics:body0 = </Rig>\n\
+                     rel physics:body1 = </Rig/Massed>\n\
+                     uniform token drive:linear:physics:type = \"force\"\n\
+                     float drive:linear:physics:stiffness = 4000.0\n\
+                     float drive:linear:physics:damping = 2200.0\n\
+                 }\n\
+                 def PhysicsPrismaticJoint \"Conditional\" ( prepend apiSchemas = [\"PhysicsDriveAPI:linear\"] )\n\
+                 {\n\
+                     rel physics:body0 = </Rig>\n\
+                     rel physics:body1 = </Rig/Unmassed>\n\
+                     uniform token drive:linear:physics:type = \"force\"\n\
+                     float drive:linear:physics:stiffness = 4000.0\n\
+                     float drive:linear:physics:damping = 2200.0\n\
+                 }\n\
+             }\n",
+        );
+        let drives = entries(&f, "drives");
+        assert_eq!(
+            drives.len(),
+            2,
+            "both authored drives must be projected: {drives:?}"
+        );
+        let implicit = drives
+            .iter()
+            .find(|drive| field(drive, "path") == &H::str("/Rig/Implicit"))
+            .expect("massed drive fact");
+        assert_eq!(field(implicit, "realization"), &H::str("spring_damper"));
+        let conditional = drives
+            .iter()
+            .find(|drive| field(drive, "path") == &H::str("/Rig/Conditional"))
+            .expect("unmassed drive fact");
+        assert_eq!(field(conditional, "realization"), &H::str("force_based"));
+        let stage = match &f {
+            H::Map(entries) => entries
+                .iter()
+                .find(|(key, _)| key == "stage")
+                .map(|(_, value)| value)
+                .expect("stage facts"),
+            _ => panic!("facts are not a map"),
+        };
+        assert_eq!(field(stage, "physics_substeps"), &H::Int(8));
     }
 
     /// A MOUNTED MECHANISM names a plain Xform, because a component referenced

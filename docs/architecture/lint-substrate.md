@@ -24,7 +24,7 @@ situation; a lint catches it by reading what was written.
 
 | Layer | Where | Why there |
 |---|---|---|
-| **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian::physics_facts`) | Only something holding the composed stage can answer "is this prim inside a body", "does any joint name it", "is there a collider in its subtree". Extracting that is code, and it is unit-tested as code |
+| **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives) | Only something holding the composed stage can answer "is this prim inside a body", "does any joint name it", "is there a collider in its subtree". Each projection owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one USD fact map |
 | **Rules** | rhai policy, `assets/scripting/policy/lint_<domain>.rhai` | A rule that needs a rebuild is a rule nobody writes, tunes, or silences. These are editable against a **running** sim |
 | **Findings** | `lunco_lint::LintReport` | One report, one shape, every domain |
 
@@ -65,28 +65,52 @@ never break the thing it is diagnosing.**
 facts.bodies[]  #{ path, type, kinematic, simulated, collider, subtree_collider,
                    host_body, jointed }
 facts.joints[]  #{ path, type, bodies[], missing[] }
+facts.stage     #{ meters_per_unit_authored, fixed_hz, physics_substeps,
+                   substep_dt }
+facts.drives[]  #{ path, joint_type, body0, body1, realization,
+                   stiffness, damping, max_force, driven_mass,
+                   frequency, damping_ratio }
+facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
+                       target_velocity, stiffness, damping, max_force }
 facts.prims[]   #{ path, type, parent, schemas[] }     ← the GENERIC projection
 ```
 
 `bodies`/`joints` are pre-chewed answers to the questions we already ask.
+`stage` carries the fixed-step contract from `lunco-core`/`lunco-physics`; rules
+must read it rather than hardcoding a substep count. `drives` is semantic output
+from the same typed USD→Avian reader used by runtime projection, so the policy
+does not duplicate USD unit conversion or motor-model selection. A
+`spring_damper` realization is Avian's implicit, unconditionally stable model;
+stiffness-bearing `force_based` and all `acceleration_based` spring realizations
+are conditional models and are rejected by the shipped policy. A positive pure
+ForceBased damper remains allowed because the owning USD→Avian mapping documents
+that case as safe. `gear_drives` is semantic output from the
+`lunco-usd-sim` reader for `PhysxPhysicsGearJoint`; its force and acceleration
+realizations are implicit per substep, so positive coefficients have no guessed
+asset-specific stiffness cap. Invalid values are retained and rejected by
+policy before a run.
 `prims` is the escape hatch that makes the rhai half real: a rule about a schema
 nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
 
-## Nothing lints on load
+## Explicit authoring/preflight only
 
 Linting is something you **run**, not something that runs at you. A check firing
-on every scene load trains its reader to scroll past it and taxes play with an
-opinion about authoring. So:
+on every scene load, every physics tick, or on a background cadence trains its
+reader to scroll past it and taxes play with an opinion about authoring. So:
 
 ```rhai
 cmd("RunLint", #{});             // lints every loaded stage
 query("LintReport");             // { errors, warnings, findings[] }
 ```
 
-…and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`). A scenario that calls
-both on a cadence **is** the realtime linter — no separate mode exists, because
-none is needed.
+…and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`).
+After an authored change, the editor or launcher may issue the command again for
+that selected stage; it is still an explicit lint run. There is no cadence,
+background watcher, per-tick physics monitor, or emergency clamp. `ValidateAsset`
+does the same check for a file. Emergent contact/topology failures still require
+the relevant behavioral test; a static lint must report "conditionally stable"
+or "not certifiable" rather than claim a nonlinear assembled mechanism is safe.
 
 Rules are hot-swappable at that same level:
 
@@ -122,6 +146,19 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `connector-requires-network-scope` | error | a `connectors:*.connect` **wire** authored outside every `CollectionAPI:components` scope — no compiler network owns it, so no `connect()` equation is generated and the pin solves as unconnected. A bare declaration is exempt (below) |
 | `dynamic-body-no-collider` | warn | a simulated, non-kinematic body with no collider in its subtree — it cannot touch the world |
 | `mass-outside-any-body` | warn | `PhysicsMassAPI` on a prim that is not a body and sits inside none — the mass reaches no solver |
+| `conditionally-stable-joint-drive` | error | a stiffness-bearing USD drive resolves to Avian `ForceBased`, or any spring drive resolves to `AccelerationBased`, at the authoritative fixed step; use the implicit `SpringDamper` realization instead of tuning substeps to mask it |
+| `joint-drive-negative-stiffness` | error | a drive has a negative stiffness coefficient that injects energy and cannot be converted to the implicit `SpringDamper` realization |
+| `joint-drive-negative-damping` | error | a drive has negative damping (or an implicit drive would receive a negative damping ratio) and injects energy |
+| `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |
+| `invalid-network-synthesizer` | error | the composed `CollectionAPI:components` members have incompatible domain roles and runtime cannot select an owner |
+
+Network ownership is derived from the same composed role classifier used by the
+runtime domain projection. A collection of `LunCoForceActuatorAPI` members is
+owned by `actuator-wrench`; a collection of `LunCoProgramAPI` members is owned
+by the generated Modelica synthesizer. The linter must not interpret an absent
+selector as the default Modelica owner for a physical actuator collection. A
+mixed or otherwise invalid role set is reported as `invalid-network-synthesizer`
+instead of being assigned a fallback owner.
 
 ### Two rules that were measured firing on the whole fleet
 
@@ -144,12 +181,13 @@ and booms as broken mechanisms; the fact is now "resolves to no body", and
 is the USD spelling of Modelica's `Pin p`, and a catalogue part cannot know
 whether the vehicle composing it will wire that pin —
 `components/mobility/motor.usda` declares its pin unconditionally, and
-`rocker_bogie.usda` wires it only in the `power = "battery"` variant, while every
-rover ships defaulting to `power = "infinite"`, which authors no `Electrical`
-collection at all. Reading the declaration as the fault reported 314 errors, one
-per motor per rover, none of them fixable without either wiring a battery the
-scene deliberately omits or stripping the pin from the part that owns it. The
-facts now carry `connectors` **and** `connected`, and the rule reads the second.
+`rocker_bogie.usda` binds it to the selected power source in each `power` variant;
+the default `power = "infinite"` realization uses an authored ideal source, while
+the finite realization uses the stable battery assembly child. Reading the
+declaration as the fault reported 314 errors, one per motor per rover, none of
+them fixable without either wiring a source the scene deliberately omits or
+stripping the pin from the part that owns it. The facts now carry `connectors`
+**and** `connected`, and the rule reads the second.
 
 The authoring rule underneath all of it: **hierarchy is namespace, a joint is
 attachment.** An internal part is mass + geometry with no body; a part that must

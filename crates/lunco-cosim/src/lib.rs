@@ -99,6 +99,21 @@ fn mark_causal_state_sink<T: Component>(trigger: On<Add, T>, mut commands: Comma
         .try_insert(lunco_core::CausalStateSink);
 }
 
+fn mark_joint_torque_port(
+    trigger: On<Add, avian::JointTorqueActuator>,
+    query: Query<&avian::JointTorqueActuator>,
+    mut commands: Commands,
+) {
+    let Ok(actuator) = query.get(trigger.entity) else {
+        return;
+    };
+    if actuator.port_entity != Entity::PLACEHOLDER {
+        commands
+            .entity(actuator.port_entity)
+            .try_insert(lunco_core::CausalStateSink);
+    }
+}
+
 /// Publish Modelica endpoint transitions before the end-of-frame binding
 /// transaction. This is exclusive so a terminal compiler result is visible in
 /// the same frame; binding itself runs in `PostUpdate`, after every USD, asset,
@@ -166,6 +181,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<PendingForces>()
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
+            .register_type::<avian::JointTorqueActuator>()
             .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
@@ -213,7 +229,8 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<avian3d::prelude::RevoluteJoint>)
             .add_observer(mark_causal_state_sink::<avian3d::prelude::PrismaticJoint>)
             .add_observer(mark_causal_state_sink::<ForceActuator>)
-            .add_observer(mark_causal_state_sink::<TorqueActuator>);
+            .add_observer(mark_causal_state_sink::<TorqueActuator>)
+            .add_observer(mark_joint_torque_port);
         app.add_systems(
             Update,
             sync_model_endpoint_lifecycle
@@ -283,16 +300,21 @@ impl Plugin for CoSimPlugin {
             systems::propagate::propagate_connections
                 .in_set(systems::propagate::CosimSet::Propagate),
         );
+        app.add_systems(
+            lunco_core::RollbackReplay,
+            avian::apply_joint_torque_actuators
+                .after(lunco_core::ControlDacSet)
+                .run_if(resource_exists::<Time<avian3d::prelude::Physics>>),
+        );
 
         app.add_systems(
             FixedUpdate,
             (
                 systems::propagate::propagate_connections
                     .in_set(systems::propagate::CosimSet::Propagate),
-                // The single avian force consumer: drains net force/torque ports
-                // and USD-authored point-force mounts into avian's `Forces`.
-                // Joint motors are driven inline by the `angle` input port's write
-                // closure during propagation, so no separate joint-drive system.
+                // The avian boundary consumers: apply solved joint torques and
+                // drain net force/torque ports plus USD-authored point-force
+                // mounts into Avian's `Forces`.
                 // Additionally gated on `physics_is_live`: this is the one system
                 // here that writes into avian's FORCE ACCUMULATOR, which only the
                 // physics step clears. A physics hold (a frozen cinematic beat)
@@ -312,6 +334,13 @@ impl Plugin for CoSimPlugin {
                 // The role gate rides the force accumulator alone: a pure client
                 // renders host snapshots for replicated bodies, and adding
                 // locally-derived forces to them fights the snapshot stream.
+                avian::apply_joint_torque_actuators
+                    .in_set(systems::apply_forces::CosimSet::ApplyForces)
+                    .before(avian::apply_pending_forces)
+                    .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
+                    .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
+                        !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
+                    }),
                 avian::apply_pending_forces
                     .in_set(systems::apply_forces::CosimSet::ApplyForces)
                     // `resource_exists` FIRST, for the same reason the sensors

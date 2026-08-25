@@ -729,7 +729,7 @@ impl InputBindingsSettings {
             return Some(format!("{} mouse button", self.look_button.to_lowercase()));
         }
         let keys = self.bindings.get(binding)?;
-        (!keys.is_empty()).then(|| key_label(&keys))
+        (!keys.is_empty()).then(|| key_label(keys))
     }
 
     /// Resolve the display label for a semantic intent used by a vessel.

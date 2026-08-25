@@ -18,6 +18,11 @@ use core::time::Duration;
 use lunco_core::ActivePhysicsFrame;
 use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
+// This fixture is a high-resolution numerical reproduction of the nested
+// body/contact mass-frame failure. It is not a second production configuration;
+// production luncosim owns eight substeps through lunco-physics.
+const NESTED_BODY_REPRODUCTION_SUBSTEPS: u32 = 32;
+
 const EDGE: f32 = 2000.0;
 
 /// Production-shaped world shell: root carries `Grid`+`BigSpace` (the doc-45
@@ -988,7 +993,7 @@ fn jointed_surface_assembly_is_invariant_to_rotating_celestial_parent() {
 fn nested_body_strut_contact_preserves_mass_frame() {
     let mut app = make_app_with_usd_collision_hooks();
     app.insert_resource(Gravity(Vector::new(0.0, -1.6248896, 0.0)));
-    app.insert_resource(SubstepCount(32));
+    app.insert_resource(SubstepCount(NESTED_BODY_REPRODUCTION_SUBSTEPS));
     let grid = shell(&mut app);
 
     app.world_mut().spawn((

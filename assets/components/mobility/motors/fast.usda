@@ -18,13 +18,11 @@
 # for the winding rules these numbers obey.
 
 def Xform "MotorClass" (
-    prepend apiSchemas = ["LunCoMotorAPI"]
+    prepend apiSchemas = ["LunCoProgramAPI"]
     kind = "component"
 )
 {
-    float lunco:motor:stallTorque = 0.75
-    float lunco:motor:noLoadSpeed = 4800.0
-    float lunco:motor:continuousTorque = 0.45
-    # FRAME property — same rotor iron as `standard`, so unchanged.
-    float lunco:motor:rotorInertia = 0.00012
+    float inputs:stall_torque = 0.75
+    float inputs:no_load_speed = 4800.0
+    # Assembly inertia is authored on the composed wheel, not duplicated here.
 }

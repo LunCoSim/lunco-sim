@@ -179,7 +179,6 @@ impl Plugin for SandboxUiPlugin {
         app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
-            .add_observer(dataset_provisioning::on_twin_closed)
             .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
         app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
@@ -986,6 +985,22 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                 DatasetState::Processing { kind } => {
                                     ui.label(format!("Processing {kind}…"));
                                 }
+                                DatasetState::Cancelling => {
+                                    ui.label("Stopping…");
+                                }
+                                DatasetState::Cancelled => {
+                                    ui.label(egui::RichText::new("Cancelled").weak());
+                                    if lunco_workbench::icon_text_button(
+                                        ui,
+                                        lunco_workbench::UiIcon::Refresh,
+                                        "Retry",
+                                        "Retry dataset download",
+                                    )
+                                    .clicked()
+                                    {
+                                        requested = Some(DatasetAction::Request(key.clone()));
+                                    }
+                                }
                                 DatasetState::Missing => {
                                     ui.label(egui::RichText::new("not installed").weak());
                                     if lunco_workbench::icon_text_button(
@@ -1084,6 +1099,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, ctx| {
+        let Some(theme) = ctx.resource::<lunco_theme::Theme>() else {
+            ui.label("(theme unavailable)");
+            return;
+        };
+        let error_color = theme.tokens.error;
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(
@@ -1166,12 +1186,28 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     else {
                                         continue;
                                     };
-                                    let path = lunco_networking::scenario_sync::mount_scenario_twin(
+                                    let path = match lunco_networking::scenario_sync::mount_scenario_twin(
                                         &twins,
                                         &entry.scenario_id,
                                         &entry.name,
                                         &scene,
-                                    );
+                                    ) {
+                                        Ok(path) => path,
+                                        Err(error) => {
+                                            ctx.trigger(lunco_core::TelemetryEvent {
+                                                name: "scenario-twin-mount-failed".into(),
+                                                source: 0,
+                                                severity: lunco_core::Severity::Error,
+                                                data: lunco_core::TelemetryValue::String(
+                                                    format!(
+                                                        "could not mount downloaded scenario Twin: {error}"
+                                                    ),
+                                                ),
+                                                timestamp: 0.0,
+                                            });
+                                            continue;
+                                        }
+                                    };
                                     ctx.trigger(lunco_usd::LoadScene {
                                         path,
                                         root_prim: String::new(),
@@ -1216,9 +1252,31 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = lunco_assets::discovery::list_scene_assets(manifest, &roots);
+        let mut assets = match lunco_assets::discovery::list_scene_assets(manifest, &roots) {
+            Ok(assets) => assets,
+            Err(error) => {
+                ui.label(
+                    bevy_egui::egui::RichText::new(format!(
+                        "(Twin registry unavailable: {error})"
+                    ))
+                    .color(error_color),
+                );
+                return;
+            }
+        };
         // Names copied out here so every click can dispatch through `MenuCtx`.
-        let twin_names = roots.names();
+        let twin_names = match roots.names() {
+            Ok(names) => names,
+            Err(error) => {
+                ui.label(
+                    bevy_egui::egui::RichText::new(format!(
+                        "(Twin registry unavailable: {error})"
+                    ))
+                    .color(error_color),
+                );
+                return;
+            }
+        };
 
         // Test scenes are hidden unless the user asks for them: they are rigs
         // `scripts/run_scene_tests.sh` runs for a verdict, and there are more of

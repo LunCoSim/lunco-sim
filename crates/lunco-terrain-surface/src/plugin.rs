@@ -95,7 +95,8 @@ impl Plugin for TerrainSurfacePlugin {
         app.add_systems(
             Update,
             crate::collider_ring::update_physics_support_cache
-                .in_set(TerrainSurfaceSet::PhysicsSupportCache),
+                .in_set(TerrainSurfaceSet::PhysicsSupportCache)
+                .in_set(lunco_physics::PhysicsSupportSet::Consume),
         );
         app.add_systems(
             Update,
@@ -208,7 +209,11 @@ impl Plugin for TerrainSurfacePlugin {
         // owner): lift the
         // assembly so its wheels clear the one-sided heightfield instead of starting
         // embedded (authored chassis-at-surface + wheels-hang-below) and sinking.
-        app.add_systems(Update, crate::collider_ring::settle_grounded_assemblies);
+        app.add_systems(
+            Update,
+            crate::collider_ring::settle_grounded_assemblies
+                .in_set(lunco_physics::PhysicsSupportSet::Consume),
+        );
         // NO automatic overturn recovery. A vessel on its roof stays there until
         // someone recovers it — the Recover tool, or `recover::vessel(id)` from
         // rhai, both landing on the `RecoverVessel` command in `collider_ring`.

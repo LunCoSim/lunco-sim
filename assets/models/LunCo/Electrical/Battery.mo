@@ -10,8 +10,8 @@ model Battery
   parameter Real capacity(unit="Ah") = 208.0 "Total capacity";
   parameter Real soc_init(unit="1") = 0.8 "State of charge at t=0, 0..1";
 
-  Pin p;
-  Real soc(unit="1", start = soc_init) "State of charge, 0..1";
+  Pin p annotation(Placement(transformation(extent={{90,-10},{110,10}})));
+  Real soc(unit="1", start = soc_init, fixed = true, min = 0.0, max = 1.0) "State of charge, 0..1";
   output Real soc_out(unit="1") "State of charge, 0..1";
   output Real soc_percent(unit="%") "State of charge, percent";
   output Real capacity_ah(unit="Ah") "Authored total battery capacity";

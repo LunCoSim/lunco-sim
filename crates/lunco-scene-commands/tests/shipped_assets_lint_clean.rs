@@ -6,7 +6,7 @@
 //! (`nested-body-no-joint`, `assets/scripting/policy/lint_usd.rhai`). A rule with
 //! nothing running it is a comment, so this test runs it over EVERY vessel,
 //! component and scene we ship, through the same `ValidateAsset` entry point a
-//! human gets from `sandbox --validate`.
+//! human gets from `luncosim --validate`.
 //!
 //! It registers the policy itself rather than booting an app: the rules are an
 //! asset, the hook registry is global, and a `cargo test` that needs a window is
@@ -135,6 +135,26 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
+            .any(|e| e.contains("conditionally-stable-joint-drive")
+                && e.contains("/LintSelftest/Leg/Strut_Spring")),
+        "lint_selftest.usda must reject the un-massed conditional drive through the same ValidateAsset path — got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("joint-drive-negative-stiffness")
+                && e.contains("/LintSelftest/Leg/Strut_NegativeStiffness")),
+        "lint_selftest.usda must reject negative stiffness with its dedicated finding — got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("invalid-gear-drive") && e.contains("/LintSelftest/BadGear")),
+        "lint_selftest.usda must reject malformed gear-drive authoring through the same ValidateAsset path — got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
             .any(|e| e.contains("empty-component-network")),
         "lint_selftest.usda must prove empty domain networks are rejected — \
          got {lint_errors:?}"
@@ -181,12 +201,6 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must prove composed boundary aliasing is rejected — \
          got {lint_errors:?}"
     );
-    assert!(
-        lint_errors
-            .iter()
-            .any(|e| e.contains("telemetry-target-required")),
-        "lint_selftest.usda must prove targetless metadata telemetry is rejected — got {lint_errors:?}"
-    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
 
@@ -197,13 +211,78 @@ fn targetless_metadata_telemetry_is_a_usd_lint_error() {
     let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose lint fixture");
     let canonical =
         lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().into_owned());
-    let findings = lunco_usd_avian::lint_stage(&canonical.view());
+    let findings = lunco_scene_commands::lint_command::lint_stage(&canonical.view());
     assert!(
         findings.iter().any(|finding| {
             finding.rule == "telemetry-target-required"
                 && finding.subject == "/LintSelftest/BrokenTelemetry"
         }),
         "targetless metadata telemetry must be visible in the live USD lint findings: {findings:?}"
+    );
+}
+
+#[test]
+fn massed_linear_force_drives_are_not_false_positive_lint_errors() {
+    register_usd_lint_policy();
+    let asset = assets_dir().join("scenes/tests/prismatic_spring.usda");
+    let report = lunco_scene_commands::validate::validate_asset(&asset.to_string_lossy());
+    let conditional: Vec<&String> = report
+        .errors
+        .iter()
+        .filter(|e| e.contains("conditionally-stable-joint-drive"))
+        .collect();
+    assert!(
+        conditional.is_empty(),
+        "massed linear force drives must resolve to the implicit SpringDamper path, not lint errors: {conditional:?}"
+    );
+}
+
+#[test]
+fn documented_pure_force_dampers_are_not_false_positive_lint_errors() {
+    use lunco_hooks::HookValue as H;
+
+    register_usd_lint_policy();
+    let empty = || H::Array(Vec::new());
+    let facts = H::map([
+        (
+            "stage",
+            H::map([
+                ("meters_per_unit_authored", H::Bool(true)),
+                ("fixed_hz", H::Float(60.0)),
+                ("physics_substeps", H::Int(8)),
+                ("substep_dt", H::Float(1.0 / 480.0)),
+            ]),
+        ),
+        ("bodies", empty()),
+        ("joints", empty()),
+        ("prims", empty()),
+        ("collections", empty()),
+        ("filtered_pairs", empty()),
+        ("collision_groups", empty()),
+        ("network_scopes", empty()),
+        ("unsupported_program_prims", empty()),
+        ("connector_programs", empty()),
+        (
+            "drives",
+            H::Array(vec![H::map([
+                ("path", H::str("/Rig/Damper")),
+                ("realization", H::str("force_based")),
+                ("stiffness", H::Float(0.0)),
+                ("damping", H::Float(10.0)),
+                ("damping_ratio", H::Float(0.0)),
+            ])]),
+        ),
+        ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
+    ]);
+
+    let findings = lunco_lint::run_lint("usd", facts);
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.rule != "conditionally-stable-joint-drive"),
+        "the documented positive pure ForceBased damper must not be rejected: {findings:?}"
     );
 }
 
@@ -217,7 +296,7 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("path", H::str("/BrokenNetwork")),
         ("parent", H::str("/")),
         ("members", empty()),
-        ("synthesizer", H::str("")),
+        ("synthesizer", H::str("acausal-network")),
         ("synthesizer_error", H::str("")),
         ("modelica_member_count", H::Int(0)),
         (
@@ -233,7 +312,12 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
     let facts = H::map([
         (
             "stage",
-            H::map([("meters_per_unit_authored", H::Bool(true))]),
+            H::map([
+                ("meters_per_unit_authored", H::Bool(true)),
+                ("fixed_hz", H::Float(60.0)),
+                ("physics_substeps", H::Int(8)),
+                ("substep_dt", H::Float(1.0 / 480.0)),
+            ]),
         ),
         ("bodies", empty()),
         ("joints", empty()),
@@ -250,6 +334,10 @@ fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         ("telemetry_declarations", empty()),
+        ("drives", empty()),
+        ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);
@@ -276,7 +364,12 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
     let facts = H::map([
         (
             "stage",
-            H::map([("meters_per_unit_authored", H::Bool(false))]),
+            H::map([
+                ("meters_per_unit_authored", H::Bool(false)),
+                ("fixed_hz", H::Float(60.0)),
+                ("physics_substeps", H::Int(8)),
+                ("substep_dt", H::Float(1.0 / 480.0)),
+            ]),
         ),
         ("bodies", empty()),
         ("joints", empty()),
@@ -288,6 +381,10 @@ fn omitted_stage_units_are_highlighted_without_rejecting_valid_usd() {
         ("unsupported_program_prims", empty()),
         ("connector_programs", empty()),
         ("telemetry_declarations", empty()),
+        ("drives", empty()),
+        ("gear_drives", empty()),
+        ("wheel_attachments", empty()),
+        ("invalid_wheel_attachments", empty()),
     ]);
 
     let findings = lunco_lint::run_lint("usd", facts);

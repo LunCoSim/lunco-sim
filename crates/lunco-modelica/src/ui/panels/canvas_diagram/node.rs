@@ -36,6 +36,10 @@ pub struct IconNodeData {
     /// `extends` chain. `None` only when the class has literally no
     /// Icon in inheritance — then the visual falls back to a label box.
     pub icon_graphics: Option<crate::annotations::Icon>,
+    /// Shared resolver state. Missing/loading classes render a diagnostic
+    /// card rather than an indistinguishable generic component.
+    pub resolution: crate::index::ClassResolutionState,
+    pub resolution_message: Option<String>,
     /// Decoded `Diagram(graphics={...})` annotation, populated only
     /// for connector classes that author one. When set the renderer
     /// uses this instead of `icon_graphics` — MSL signal connectors
@@ -80,15 +84,15 @@ pub struct IconNodeData {
 ///    across the `extends` chain — the only icon source. Painted via
 ///    [`crate::icon_paint::paint_graphics`] with lyon-tessellated
 ///    fills (EvenOdd, matching OMEdit/Dymola).
-/// 2. A stylised rounded-rectangle fallback with the type label, used
-///    only when the class has no `Icon` annotation anywhere in its
-///    inheritance chain.
+/// 2. An explicit diagnostic card when the resolved class has no `Icon`
+///    annotation anywhere in its inheritance chain. The canvas never invents
+///    a generic component visual: a class must author a standard Modelica icon
+///    or the missing contract is visible and actionable.
 ///
 /// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 pub(super) struct IconNodeVisual {
-    /// Type name ("Resistor", "Capacitor"…) shown under the instance
-    /// label when the class has no Icon at all.
+    /// Type name used in the missing-icon diagnostic.
     pub(super) type_label: String,
     /// Pure-icon class (zero connectors, `.Icons.*` subpackage).
     /// Rendered with a dashed border so users can tell at a glance
@@ -106,6 +110,8 @@ pub(super) struct IconNodeVisual {
     /// classes show their authored graphics instead of falling back
     /// to a generic placeholder.
     pub(super) icon_graphics: Option<crate::annotations::Icon>,
+    pub(super) resolution: crate::index::ClassResolutionState,
+    pub(super) resolution_message: Option<String>,
     /// Conditional component flag — render dimmed.
     pub(super) is_conditional: bool,
     /// Pre-formatted `(parameter_name, value)` pairs for `%paramName`
@@ -141,6 +147,38 @@ pub(super) struct IconNodeVisual {
     pub(super) port_connector_icons: Vec<Option<crate::annotations::Icon>>,
 }
 
+fn painter_rect_diagnostic(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    title: &str,
+    message: &str,
+    accent: egui::Color32,
+    fill: egui::Color32,
+    text: egui::Color32,
+) {
+    painter.rect_filled(rect, 6.0, fill);
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(1.5, accent),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.center().y - 8.0),
+        egui::Align2::CENTER_CENTER,
+        title,
+        egui::FontId::proportional(11.0),
+        accent,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.center().y + 10.0),
+        egui::Align2::CENTER_CENTER,
+        message,
+        egui::FontId::proportional(8.0),
+        text,
+    );
+}
+
 impl NodeVisual for IconNodeVisual {
     fn draw(&self, ctx: &mut DrawCtx, node: &CanvasNode, selected: bool) {
         let r = ctx
@@ -170,6 +208,32 @@ impl NodeVisual for IconNodeVisual {
         let canvas_clip = ctx.ui.clip_rect();
         let clipped_painter = ctx.ui.painter().clone().with_clip_rect(canvas_clip);
         let theme_snap = canvas_theme_from_ctx(ctx.ui.ctx());
+        if !matches!(
+            self.resolution,
+            crate::index::ClassResolutionState::Resolved
+        ) {
+            let (title, color) = match self.resolution {
+                crate::index::ClassResolutionState::Loading => {
+                    ("Loading class", theme_snap.warning_stroke)
+                }
+                crate::index::ClassResolutionState::Missing => {
+                    ("Missing class", theme_snap.error_stroke)
+                }
+                crate::index::ClassResolutionState::Resolved => unreachable!(),
+            };
+            painter_rect_diagnostic(
+                &clipped_painter,
+                rect,
+                title,
+                self.resolution_message
+                    .as_deref()
+                    .unwrap_or("resolver did not provide a diagnostic"),
+                color,
+                theme_snap.card_fill,
+                theme_snap.type_label,
+            );
+            return;
+        }
         // Conditional components (`Component X if cond`) — render at
         // reduced opacity so every primitive (icon shapes, text,
         // port markers) inherits the dimming. Matches OMEdit/Dymola
@@ -187,8 +251,8 @@ impl NodeVisual for IconNodeVisual {
 
         // No always-on card fill. Icons that need a body (Resistor's
         // white rectangle, Inertia's gray cylinder, …) author it
-        // themselves; classes without an Icon at all get the
-        // placeholder card from the `!drew_icon` branch below.
+        // themselves. A resolved class without an Icon is an authoring
+        // error, not an invitation for the canvas to guess a visual.
         // Matches Dymola/OMEdit — they never paint a "competing"
         // card behind authored icons.
 
@@ -265,30 +329,27 @@ impl NodeVisual for IconNodeVisual {
         }
 
         if !drew_icon {
-            // Placeholder for classes with literally no `Icon` in
-            // their extends chain — same shape as OMEdit's "no icon
-            // authored yet" stand-in: rounded card + class name
-            // centred. Once the user (or the indexer) authors an
-            // Icon annotation, the live path above takes over and
-            // we never run this fallback again.
-            painter.rect_filled(rect, 6.0, theme_snap.card_fill);
-            if !self.type_label.is_empty() && rect.height() > 30.0 {
-                painter.text(
-                    egui::pos2(rect.center().x, rect.center().y),
-                    egui::Align2::CENTER_CENTER,
-                    &self.type_label,
-                    egui::FontId::proportional(10.0),
-                    theme_snap.type_label,
-                );
-            }
+            painter_rect_diagnostic(
+                painter,
+                rect,
+                "Icon missing",
+                if self.type_label.is_empty() {
+                    "author a standard Modelica Icon annotation"
+                } else {
+                    &self.type_label
+                },
+                theme_snap.error_stroke,
+                theme_snap.card_fill,
+                theme_snap.type_label,
+            );
         }
 
         // Border policy:
         //   - Selection ring: always drawn (functional feedback).
         //   - Icon-only / expandable connector accents: always drawn
         //     (carry semantic info — "decorative" / "expandable").
-        //   - Placeholder card outline: always drawn (the card has
-        //     no other body and would melt into the canvas otherwise).
+        //   - Missing-icon diagnostic outline: always drawn so the
+        //     invalid visual contract cannot disappear into the canvas.
         //   - Authored-icon hairline: opt-in via the theme snapshot's
         //     `show_authored_icon_border` flag, off by default. The
         //     icon's own primitives carry its bounds; the workbench
@@ -626,9 +687,9 @@ pub(super) fn paint_hover_card(
 
 /// Paint a chain of small bright dots along a polyline that march
 /// from the first to the last vertex at constant screen-pixel speed.
-/// Phase keyed off wall-clock `time` so all wires stay in sync.
-/// Used as the "this connection is alive" overlay during simulation
-/// — Simulink/SPICE-style, no per-edge flow data needed yet.
+/// Phase keyed off wall-clock `time` so all wires stay in sync. The caller
+/// enables this only for a non-zero Modelica `flow` value; this function is
+/// presentation geometry, independent of any particular physical domain.
 pub(super) fn paint_flow_dots(
     painter: &egui::Painter,
     polyline: &[egui::Pos2],
@@ -646,7 +707,14 @@ pub(super) fn paint_flow_dots(
     if total_len < 1.0 {
         return;
     }
-    // Spacing + speed in screen pixels. Tuned iteratively: 64 px
+    // Spacing + speed in screen pixels. Named constants keep the visual
+    // policy explicit and make tuning one edit. The flow source itself is
+    // Modelica metadata/runtime state; these values are only presentation.
+    const FLOW_DOT_SPACING_PX: f32 = 16.0;
+    const FLOW_DOT_SPEED_PX_S: f32 = 36.0;
+    const FLOW_DOT_RADIUS_PX: f32 = 2.6;
+    const FLOW_DOT_ALPHA: u8 = 180;
+    // Tuned iteratively: 64 px
     // looked empty; 28 px read as a dotted wire ("bumpy"); 32 px
     // was OK but still felt sparse on long runs; 22 px was better
     // but on short wire segments (a half-inch fluid line between
@@ -660,28 +728,37 @@ pub(super) fn paint_flow_dots(
     // Spacing/speed scale strictly with canvas zoom so the dots are
     // anchored to *world* distance: at 2× zoom they move twice as
     // fast on screen but cover the same wire length per second.
-    const SPACING_PX: f32 = 16.0;
-    const SPEED_PX_S: f32 = 36.0;
-    let spacing = SPACING_PX * scale;
-    let speed = SPEED_PX_S * scale;
+    let spacing = FLOW_DOT_SPACING_PX * scale;
+    let speed = FLOW_DOT_SPEED_PX_S * scale;
     let phase = ((time as f32) * speed).rem_euclid(spacing);
-    let dot_color =
-        egui::Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), 180);
+    let dot_color = egui::Color32::from_rgba_unmultiplied(
+        base_color.r(),
+        base_color.g(),
+        base_color.b(),
+        FLOW_DOT_ALPHA,
+    );
     let mut s = phase;
+    let mut segment_index = 0usize;
+    let mut segment_start = 0.0_f32;
     while s < total_len {
-        // Walk the polyline to find the segment containing arc-length s.
-        let mut acc = 0.0_f32;
-        for w in polyline.windows(2) {
-            let seg_len = (w[1] - w[0]).length();
-            if s <= acc + seg_len {
-                let t = ((s - acc) / seg_len).clamp(0.0, 1.0);
-                let p = w[0] + (w[1] - w[0]) * t;
-                // Slightly larger radius (was 2.2 × scale) so
-                // the dot is unambiguous at low canvas zoom.
-                painter.circle_filled(p, 2.6 * scale, dot_color);
+        // `s` increases monotonically, so advance the segment cursor once
+        // rather than rescanning the whole polyline for every dot. This is
+        // O(segments + dots), not O(segments × dots), for long routed wires.
+        while segment_index + 1 < polyline.len() {
+            let seg_len = (polyline[segment_index + 1] - polyline[segment_index]).length();
+            if s <= segment_start + seg_len || segment_index + 2 >= polyline.len() {
+                let t = if seg_len > f32::EPSILON {
+                    ((s - segment_start) / seg_len).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let p = polyline[segment_index]
+                    + (polyline[segment_index + 1] - polyline[segment_index]) * t;
+                painter.circle_filled(p, FLOW_DOT_RADIUS_PX * scale, dot_color);
                 break;
             }
-            acc += seg_len;
+            segment_start += seg_len;
+            segment_index += 1;
         }
         s += spacing;
     }

@@ -11,7 +11,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_core::architecture::Port;
 use lunco_core::InputPorts;
-use lunco_hardware::{commanded_motor_torque, MotorActuator};
+use lunco_cosim::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
 
 use crate::{
     contact_plane_basis, longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph,
@@ -30,7 +30,7 @@ pub struct JointedWheelTire {
     pub drive_joint: Entity,
     /// Wheel radius, m.
     pub radius: f64,
-    /// Total axle inertia including reflected rotor inertia, kg m².
+    /// Complete authored tire and drivetrain assembly inertia, kg m².
     pub axle_inertia: f64,
     /// Longitudinal slip stiffness, N/m.
     pub slip_stiffness: f64,
@@ -42,8 +42,6 @@ pub struct JointedWheelTire {
     pub friction_mu: f64,
     /// Axle bearing damping, N m s.
     pub bearing_damping: f64,
-    /// Axle axis in the chassis-local joint frame.
-    pub axle_axis_local: DVec3,
     /// Wheel heading in the chassis-local joint frame before steering.
     pub heading_local: DVec3,
 }
@@ -123,7 +121,7 @@ pub fn apply_jointed_tire_forces(
         )>,
     )>,
     q_tires: Query<(Entity, &JointedWheelTire)>,
-    q_joints: Query<(&MotorActuator, &RevoluteJoint)>,
+    q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     q_ports: Query<&Port>,
     q_inputs: Query<&InputPorts>,
     q_child_of: Query<&ChildOf>,
@@ -155,23 +153,28 @@ pub fn apply_jointed_tire_forces(
             let Some(chassis_state) = body_state(&q_state, joint.body1) else {
                 continue;
             };
-
-            let frame1 = joint.local_basis1().unwrap_or(DQuat::IDENTITY);
-            let axle_world = (chassis_state.rotation * frame1 * tire.axle_axis_local)
-                .try_normalize()
-                .unwrap_or(DVec3::X);
+            let Some(frame1) = joint.local_basis1() else {
+                continue;
+            };
+            let Some(axle_world) = revolute_hinge_axis_world(joint, chassis_state.rotation) else {
+                continue;
+            };
             let heading_world = chassis_state.rotation * frame1 * tire.heading_local;
             let omega = (wheel_state.angular_velocity - chassis_state.angular_velocity)
                 .dot(axle_world)
                 * motor.drive_sign;
-            let throttle = q_ports
-                .get(motor.port_entity)
-                .map(|port| port.value)
-                .unwrap_or(0.0);
+            let Ok(port) = q_ports.get(motor.port_entity) else {
+                continue;
+            };
             let braking =
                 lunco_core::architecture::owning_input_ports(wheel, &q_child_of, &q_inputs)
                     .is_some_and(|inputs| inputs.brake_active);
-            let axle_torque = commanded_motor_torque(motor, throttle, omega, braking);
+            let brake_torque = if braking {
+                bounded_brake_torque(motor.brake_torque, motor.rotational_inertia, omega, full_dt)
+            } else {
+                0.0
+            };
+            let axle_torque = port.value + brake_torque;
 
             let hub = wheel_state.position;
             let other_hub_velocity = |other: Option<Entity>| {

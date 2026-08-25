@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rhai::{Dynamic, Engine, Map, Scope, AST};
+use rhai::{Dynamic, Engine, ImmutableString, Map, Scope, AST};
 
 fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
     let mut engine = Engine::new();
@@ -30,6 +30,21 @@ fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
     engine.register_fn("notify", |_text: String| {});
     engine.register_fn("notify_kind", |_text: String, _kind: String| {});
 
+    // Tutorial copy resolves semantic intents through the controller-owned
+    // settings contract. The production bridge reads the live resource; this
+    // language-only harness supplies the same authored default resource rather
+    // than maintaining a second key table or accepting raw key names.
+    let input_bindings = lunco_controller::InputBindingsSettings::default();
+    engine.register_fn(
+        "input_binding",
+        move |binding: ImmutableString| -> Dynamic {
+            input_bindings
+                .label(binding.as_str())
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        },
+    );
+
     // The lifecycle hooks under test should not need a world query. These
     // stubs keep the test honest about that boundary: if an on_start hook
     // unexpectedly starts depending on scene state, it fails here instead of
@@ -43,6 +58,7 @@ fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
 
 fn combined_source(script: &str) -> String {
     let preludes = lunco_assets::scripting::prelude_files()
+        .expect("active prelude source")
         .into_iter()
         .map(|(_, source)| source)
         .collect::<Vec<_>>()

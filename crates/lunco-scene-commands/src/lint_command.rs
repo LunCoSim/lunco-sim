@@ -9,17 +9,19 @@
 //! everywhere a verb is —
 //!
 //! ```text
-//!   cmd("RunLint", #{})                       // rhai, incl. every tick for a live check
+//!   cmd("RunLint", #{})                       // explicit authoring/preflight check
 //!   {"type":"ExecuteCommand","command":"RunLint","params":{}} // HTTP / MCP
 //! ```
 //!
-//! and a scenario that wants continuous linting simply calls it on a cadence.
+//! There is no cadence, background watcher or per-tick lint monitor. An editor,
+//! launcher or caller explicitly invokes the command again after an authored edit.
 //!
 //! # What it lints
 //!
 //! Every composed stage currently loaded, through the domain's authored rules
-//! (`assets/scripting/policy/lint_usd.rhai`, hook `lint.usd`) over the facts
-//! `lunco_usd_avian::physics_facts` extracts. Rules are rhai: edit and
+//! (`assets/scripting/policy/lint_usd.rhai`, hook `lint.usd`) over the complete
+//! USD facts assembled from the standard-joint and USD-sim projection owners.
+//! Rules are rhai: edit and
 //! `register_hook("lint.usd", "lint_usd", src)` and the NEXT `RunLint` obeys
 //! them, on a running sim, with no rebuild.
 //!
@@ -31,8 +33,32 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::ApiResponse;
 use lunco_core::{on_command, Command};
+use lunco_hooks::HookValue as H;
 use lunco_usd_bevy::{CanonicalStages, UsdStageAsset};
 use serde_json::json;
+
+/// Build the complete USD lint fact map from every owner of a USD simulation
+/// projection. Standard `Physics*Joint` facts come from `lunco-usd-avian`;
+/// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim` reader that owns
+/// that custom projection. The policy sees one map and one authoritative value
+/// for each subject.
+pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
+    let mut facts = lunco_usd_avian::physics_facts(view);
+    lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
+    lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
+    lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
+    facts
+}
+
+/// Run the complete live USD lint pipeline over one composed stage.
+///
+/// This aggregation point owns the cross-domain fact table: standard physics
+/// facts come from `lunco-usd-avian`, while USD-sim owns its gear, wheel, and
+/// synthesizer projections. Callers must use this entry point rather than
+/// linting a partial producer's facts.
+pub fn lint_stage(view: &lunco_usd_bevy::StageView<'_>) -> Vec<lunco_lint::LintFinding> {
+    lunco_lint::run_lint(lunco_usd_avian::USD_LINT_DOMAIN, usd_physics_facts(view))
+}
 
 /// Lint what is loaded now.
 ///
@@ -84,7 +110,7 @@ pub fn on_run_lint(
         let Some(cs) = canonical.get(id) else {
             continue;
         };
-        let found = lunco_usd_avian::lint_stage(&cs.view());
+        let found = lint_stage(&cs.view());
         report.extend_logged(found);
         linted += 1;
     }

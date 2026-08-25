@@ -149,6 +149,14 @@ pub struct ModelicaEngine {
     /// fill the doc's `SyntaxCache`. Lets the native live-edit path
     /// surface clickable parse errors instead of a generic string.
     parse_diags: HashMap<DocumentId, Vec<lunco_doc::Diagnostic>>,
+    /// Bundled source roots currently being parsed by the async loader.
+    pending_library_roots: HashSet<String>,
+    /// Roots completed since the last Bevy adapter drain.
+    completed_library_roots: Vec<String>,
+    /// Bundled roots whose source could not produce any parsed definitions.
+    /// This is terminal for the current engine lifetime so a resolver does not
+    /// spin in `Loading` forever after a malformed packaged asset.
+    failed_library_roots: HashMap<String, String>,
 }
 
 impl Default for ModelicaEngine {
@@ -168,6 +176,9 @@ impl ModelicaEngine {
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
+            pending_library_roots: HashSet::new(),
+            completed_library_roots: Vec::new(),
+            failed_library_roots: HashMap::new(),
         }
     }
 
@@ -381,8 +392,9 @@ impl ModelicaEngine {
     ///
     /// Off-thread-safe: never reads from disk, never spawns a parse.
     /// If `qualified` isn't in the session yet, returns `None` and
-    /// the caller renders a default icon. A subsequent render after
-    /// the class lands picks up the resolved icon.
+    /// the caller preserves an explicit unresolved/loading state. A
+    /// subsequent projection after the class lands picks up the resolved
+    /// authored icon.
     ///
     /// AST-as-source-of-truth: the session IS the AST store;
     /// consulting it is consulting the AST.
@@ -399,6 +411,18 @@ impl ModelicaEngine {
         icon
     }
 
+    /// Read an icon only when the merged-icon memo already contains a result.
+    ///
+    /// This is the UI-side read contract: painting may consult a completed
+    /// background resolution, but it must never start an inheritance walk or
+    /// hold the shared engine mutex while doing so. `None` means either a
+    /// cached negative or that the background resolver has not published a
+    /// result yet; callers may use an icon authored directly on their local
+    /// AST while waiting for the next projection.
+    pub fn cached_icon_for(&mut self, qualified: &str) -> Option<Option<crate::annotations::Icon>> {
+        self.icon_cache.peek(qualified)
+    }
+
     /// Load a library (MSL or third-party) into the session as a
     /// `DurableExternal` source root. Once loaded, every class in
     /// `files` is resolvable through the session's normal queries —
@@ -410,34 +434,137 @@ impl ModelicaEngine {
     /// already-loaded `(uri, source)` pairs (typically decoded from
     /// the `msl_indexer` bincode bundle).
     ///
-    /// Diagnostics from per-file parse failures are returned via the
-    /// session's load report; we surface only the high-level
-    /// "files inserted" count for callers that just want to know if
-    /// it worked.
+    /// The complete set is parsed before installation. A single malformed
+    /// member therefore fails the root as a whole instead of leaving a
+    /// partially-resolved package in the shared engine.
     pub fn load_library_files(
         &mut self,
-        _set_id: &str,
-        _label: &str,
+        set_id: &str,
+        label: &str,
         files: Vec<(String, String)>,
-    ) -> usize {
-        // rumoca main removed `load_source_root_in_memory`. Add files
-        // individually via add_document.
-        let mut count = 0;
-        for (uri, text) in &files {
-            if self.session.add_document(uri, text).is_ok() {
-                // Index any classes for the fast qualified→URI lookup.
-                if let Some(ast) = self.session.parsed_file_query(uri) {
-                    let ast = ast.clone();
-                    self.index_ast_classes(uri, &ast);
-                }
-                count += 1;
+    ) -> Result<usize, String> {
+        self.failed_library_roots.remove(set_id);
+        let mut parsed = Vec::with_capacity(files.len());
+        let mut diagnostics = Vec::new();
+        for (uri, text) in files {
+            match rumoca_phase_parse::parse_to_ast(&text, &uri) {
+                Ok(ast) => parsed.push((uri, ast)),
+                Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
             }
         }
-        // New library classes may resolve previously-missing lookups — and new
-        // library *assets* may resolve previously-missing bitmaps.
+        if !diagnostics.is_empty() {
+            let message = format!(
+                "source root `{set_id}` ({label}) has invalid Modelica members: {}",
+                diagnostics.join("; ")
+            );
+            self.failed_library_roots
+                .insert(set_id.to_string(), message.clone());
+            return Err(message);
+        }
+        let count = parsed.len();
+        if count == 0 {
+            let message = format!("source root `{set_id}` ({label}) has no Modelica files");
+            self.failed_library_roots
+                .insert(set_id.to_string(), message.clone());
+            return Err(message);
+        }
+        Ok(self.load_parsed_library_files(parsed))
+    }
+
+    /// Ensure a bundled Modelica package is available to every source-aware
+    /// reader that shares this engine. The package is discovered by its
+    /// qualified root, so this mechanism is reusable for `LunCo` and future
+    /// shipped libraries without a library-specific resolver branch.
+    pub fn ensure_library_root(&mut self, root: &str) -> bool {
+        if self.has_class(root) || self.pending_library_roots.contains(root) {
+            return true;
+        }
+        if self.failed_library_roots.contains_key(root) {
+            return false;
+        }
+        if !lunco_assets::models::package_roots_live()
+            .iter()
+            .any(|candidate| candidate == root)
+        {
+            return false;
+        }
+        let files = lunco_assets::models::package_files_live(root);
+        if files.is_empty() {
+            return false;
+        }
+        match self.load_library_files(root, &format!("bundled:{root}"), files) {
+            Ok(_) => self.has_class(root),
+            Err(_) => false,
+        }
+    }
+
+    /// Reserve a bundled source root for asynchronous loading. The caller
+    /// performs the package read and parse off the update thread, then calls
+    /// [`Self::finish_library_root_load`].
+    pub fn begin_library_root_load(&mut self, root: &str) -> bool {
+        if self.has_class(root)
+            || self.pending_library_roots.contains(root)
+            || self.failed_library_roots.contains_key(root)
+        {
+            return false;
+        }
+        self.pending_library_roots.insert(root.to_string())
+    }
+
+    /// Install an asynchronously parsed source root and publish one generic
+    /// completion revision. The lock is held only for the pre-parsed session
+    /// insertion; package I/O and rumoca parsing happen before this method.
+    pub fn finish_library_root_load(
+        &mut self,
+        root: &str,
+        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+        diagnostics: Vec<String>,
+    ) -> usize {
+        self.pending_library_roots.remove(root);
+        if !diagnostics.is_empty() {
+            self.failed_library_roots.insert(
+                root.to_string(),
+                format!(
+                    "source root `{root}` has invalid Modelica members: {}",
+                    diagnostics.join("; ")
+                ),
+            );
+            return 0;
+        }
+        let count = self.load_parsed_library_files(files);
+        if count > 0 {
+            self.failed_library_roots.remove(root);
+            self.completed_library_roots.push(root.to_string());
+        } else {
+            self.failed_library_roots.insert(
+                root.to_string(),
+                format!("no Modelica source definitions could be loaded for `{root}`"),
+            );
+        }
+        count
+    }
+
+    /// Return the terminal loading error for a bundled source root, if any.
+    pub fn library_root_failure(&self, root: &str) -> Option<&str> {
+        self.failed_library_roots.get(root).map(String::as_str)
+    }
+
+    fn load_parsed_library_files(
+        &mut self,
+        files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+    ) -> usize {
+        let count = files.len();
+        for (uri, ast) in &files {
+            self.index_ast_classes(uri, ast);
+        }
+        self.session.add_parsed_batch(files);
         self.class_uri_misses.clear();
         crate::icon_memo::invalidate_source_memos();
         count
+    }
+
+    pub fn drain_completed_library_roots(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.completed_library_roots)
     }
 
     /// Inheritance-merged component members for a fully-qualified
@@ -867,7 +994,9 @@ mod tests {
             "lib/Base.mo".to_string(),
             "model Base\n  parameter Real k = 5;\n  Real x;\nend Base;\n".to_string(),
         )];
-        let inserted = engine.load_library_files("test_lib", "in-memory:test", library_files);
+        let inserted = engine
+            .load_library_files("test_lib", "in-memory:test", library_files)
+            .expect("library file should be inserted");
         assert_eq!(inserted, 1, "library file should be inserted");
 
         // A user doc that extends a class from the library — without
@@ -887,6 +1016,72 @@ mod tests {
         );
         assert!(names.contains(&"x"), "library Base.x must be resolved");
         assert!(names.contains(&"y"), "user-doc UserMod.y must be present");
+    }
+
+    #[test]
+    fn ensure_bundled_root_makes_lunco_visual_classes_resolvable() {
+        let mut engine = ModelicaEngine::new();
+        assert!(engine.ensure_library_root("LunCo"));
+        assert!(engine.has_class("LunCo.Electrical.Battery"));
+        assert!(engine.has_class("LunCo.Electrical.Pin"));
+        assert!(
+            engine.icon_for("LunCo.Electrical.Battery").is_some(),
+            "generated native members need their authored inherited icons"
+        );
+    }
+
+    #[test]
+    fn async_library_root_reservation_deduplicates_and_publishes_completion() {
+        let mut engine = ModelicaEngine::new();
+        assert!(engine.begin_library_root_load("LunCo"));
+        assert!(!engine.begin_library_root_load("LunCo"));
+        let files = lunco_assets::models::package_files("LunCo");
+        assert!(!files.is_empty());
+        let parsed = files
+            .into_iter()
+            .map(|(uri, source)| {
+                (
+                    uri.clone(),
+                    rumoca_phase_parse::parse_to_ast(&source, &uri).expect("bundled source parses"),
+                )
+            })
+            .collect();
+        assert!(engine.finish_library_root_load("LunCo", parsed, Vec::new()) > 0);
+        assert_eq!(engine.drain_completed_library_roots(), vec!["LunCo"]);
+        assert!(!engine.begin_library_root_load("LunCo"));
+    }
+
+    #[test]
+    fn failed_async_library_root_is_terminal_and_not_loading_forever() {
+        let mut engine = ModelicaEngine::new();
+        assert!(engine.begin_library_root_load("BrokenRoot"));
+        assert_eq!(
+            engine.finish_library_root_load("BrokenRoot", Vec::new(), Vec::new()),
+            0
+        );
+        assert!(engine
+            .library_root_failure("BrokenRoot")
+            .is_some_and(|message| message.contains("no Modelica source definitions")));
+        assert!(!engine.begin_library_root_load("BrokenRoot"));
+        assert!(!engine.ensure_library_root("BrokenRoot"));
+    }
+
+    #[test]
+    fn async_library_root_parse_diagnostics_are_terminal_and_visible() {
+        let mut engine = ModelicaEngine::new();
+        assert!(engine.begin_library_root_load("BrokenRoot"));
+        assert_eq!(
+            engine.finish_library_root_load(
+                "BrokenRoot",
+                Vec::new(),
+                vec!["Broken.mo: invalid declaration".into()],
+            ),
+            0
+        );
+        assert!(engine
+            .library_root_failure("BrokenRoot")
+            .is_some_and(|message| message.contains("Broken.mo")));
+        assert!(!engine.begin_library_root_load("BrokenRoot"));
     }
 
     #[test]

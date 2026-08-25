@@ -159,7 +159,13 @@ fn resolve_scheme(
     }
     if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
         let relative = lunco_assets::asset_path::relative_path(rel)?;
-        return twins?.resolve_file(name, &relative);
+        return match twins?.resolve_file(name, &relative) {
+            Ok(path) => path,
+            Err(error) => {
+                error!("[scene-files] Twin asset lookup failed for `{reference}`: {error}");
+                None
+            }
+        };
     }
     None
 }
@@ -487,20 +493,26 @@ mod tests {
 
     #[test]
     fn twin_references_resolve_against_the_mounted_root() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let scene = root.path().join("scenes/base.usda");
+        std::fs::create_dir_all(scene.parent().expect("scene parent")).unwrap();
+        std::fs::write(&scene, "#usda 1.0\n").unwrap();
         let twins = TwinRoots::default();
-        let name = twins.register("moonbase", "/twins/moonbase");
+        let name = twins
+            .register("moonbase", root.path())
+            .expect("register root");
         let uri = format!("twin://{name}/scenes/base.usda");
-        assert_eq!(
-            resolve_scheme(&uri, None, Some(&twins)),
-            Some(PathBuf::from("/twins/moonbase/scenes/base.usda"))
-        );
+        assert_eq!(resolve_scheme(&uri, None, Some(&twins)), Some(scene));
     }
 
     #[test]
     fn scheme_references_cannot_escape_their_root() {
         let twins = TwinRoots::default();
         let assets = PathBuf::from("/proj/assets");
-        let name = twins.register("moonbase", "/twins/moonbase");
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let name = twins
+            .register("moonbase", root.path())
+            .expect("register root");
         for reference in [
             "lunco://../outside.usda",
             "lunco://vessels/../../outside.usda",

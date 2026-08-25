@@ -12,30 +12,30 @@ The repo has two, and they are not interchangeable. Pick by what the spring carr
 
 | | **Raycast vehicle suspension** | **Passive prismatic suspension** |
 | --- | --- | --- |
-| Use for | **wheels** on a wheeled vehicle | **struts and legs** — landing gear, dampers, deployables |
-| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with `PhysicsDriveAPI:linear` |
-| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `drive:linear:physics:stiffness` / `:damping` / `:targetPosition` / `:maxForce` |
+| Use for | **raycast wheels** on a reduced vehicle realization | any **physical suspension member** whose load passes through a rigid-body joint: wheels, landing legs, dampers, deployables |
+| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `PhysicsPrismaticJoint` with the standard `PhysicsDriveAPI:linear`; the joint owns its axis, anchors, limits, rotational lock, and force-limited spring-damper |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `drive:linear:physics:targetPosition`, `:targetVelocity`, `:stiffness`, `:damping`, `:maxForce`, `physics:lowerLimit` / `:upperLimit` |
 | Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
-| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | Avian's native prismatic joint drive, after the USD loader converts the authored force law to its implicit spring-damper motor |
+| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | the existing `lunco-usd-avian` standard joint-drive projection and Avian native prismatic solver |
 | Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
 
-Both are legitimate; neither substitutes for the other. A raycast wheel has no
+Both are legitimate realizations of the same authored wheel contract; neither is
+inferred from names or selected by a Rust special case. A raycast wheel has no
 prismatic joint and its suspension force never appears as a joint reaction, so a
-strut's load cannot be read that way. Conversely a wheel driven by a prismatic
-drive loses the raycast model's ground-following behaviour.
+strut's load cannot be read that way. A physical wheel has a rigid carrier and a
+revolute wheel joint, so its load and wheel torque pass through the authored
+rigid-body topology.
 
-Sections 1–5 below specify the **raycast** mechanism. A passive leg is a plain
-`PhysicsPrismaticJoint` with a standard `UsdPhysicsDriveAPI:linear` force drive:
-`physics:lowerLimit` / `:upperLimit` bound the stroke, `physics:localRot0`
-carries a non-cardinal axis (`physics:axis` names only cardinals), and anchors
-are left unauthored so the loader derives them from the transform hierarchy —
-which puts displacement at exactly 0 in the authored rest pose. The drive is
-converted to Avian's native implicit spring-damper motor; the joint owns the
-geometric constraint and the drive owns the authored force law. Active mechanisms
-may use the same standard drive with a commandable target. The worked example is
-`assets/vessels/landers/descent_lander.usda`'s `Leg*_Spring` prims. Anything
-downstream that needs the load reads the joint's derived `force` port, never a
-second copy of the spring law.
+Sections 1–5 below specify the **raycast** mechanism and its shared authoring
+contracts. A passive physical member is a `PhysicsPrismaticJoint` with the
+standard `PhysicsDriveAPI:linear`: `physics:lowerLimit` / `:upperLimit` bound
+the stroke, `physics:localRot0/1` carry the authored frame, and anchors are left
+unauthored when the body transforms already place the joint at zero. The
+existing USD/Avian joint-drive reader consumes the standard force law and the
+joint publishes the resulting reaction through its `force` port. No LunCo
+schema or parallel prismatic material solver is involved.
+`assets/vessels/landers/descent_lander.usda` and the physical rover drivetrain
+use this same boundary.
 
 ### 0.1 A joint-drive strut is only as good as its foot
 
@@ -116,12 +116,15 @@ In the NVIDIA Omniverse / PhysX 5 Vehicle SDK, a wheel assembly is represented b
 3. **`PhysxVehicleSuspensionAPI`**: Defines suspension compliance (`springStrength`, `springDamperRate`, `travelDistance`, `sprungMass`). Note: there is **no `restLength`** on this API — PhysX models travel as `travelDistance` + `sprungMass`. LunCo's raycast model needs a rest length, so it is authored as a LunCo extension (`lunco:suspension:restLength`).
 
 ### LunCo extension APIs
-Three concepts the PhysX vehicle schema does not model live in `luncoSchema` (`crates/lunco-usd/schema/schema.usda`), each its own applied API — one per prim role, because an applied schema's properties join the definition of every prim it is applied to:
+The concepts the PhysX vehicle schema does not model live in `luncoSchema`
+(`crates/lunco-usd/schema/schema.usda`), each as an applied API on its owning
+prim:
 
 | API | Property | Applied to | Why it is not PhysX |
 | --- | --- | --- | --- |
 | `LunCoSuspensionAPI` | `float lunco:suspension:restLength` | suspension prim, beside `PhysxVehicleSuspensionAPI` | PhysX has no `restLength` (`travelDistance` + `sprungMass` instead) |
 | `LunCoSuspensionVisualAPI` | `uniform token lunco:suspensionVisual:role` | a strut's moving visual parts | the PhysX vehicle schema is physics-only |
+| `LunCoMassContributionAPI` | standard `PhysicsMassAPI` values | a physical child represented as a reduced-realization contribution | standard USD does not declare how a realization folds a child mass into a reduced body |
 
 `restLength` is `float` to match the `physxVehicleSuspension:*` attrs it sits beside — and the `travelDistance` it stands in for.
 
@@ -173,7 +176,7 @@ attachment schema permits the direct self-composition. A separate attachment pri
 may instead author the standard `wheel` and `suspension` relationships; neither
 case requires a LunCo-specific index or a Rust-side topology guess.
 
-**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. Motor and gearbox torque/speed live on their own `LunCoMotorAPI`/`LunCoGearboxAPI` parts. `apiSchemas` is a list-op and composes across reference arcs, so all rover wheels get their schemas from the component files. A rover authors values and connections, never a private index or fallback rule.
+**The APIs are owned at the topology boundary.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`, and each vehicle wheel instance applies `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` because it owns the selected wheel, suspension, tire, and attachment index. Motor, gearbox, and shaft equations are authored Modelica components in one containing `CollectionAPI:components` electrical/mechanical network; the wheel consumes only the solved shaft boundary. `apiSchemas` composes across reference arcs, while the vehicle owns the standard attachment contract. A rover authors values and connections, never a private index or fallback rule.
 
 ---
 
@@ -208,13 +211,35 @@ pub struct Suspension {
 
 The loader then resolves a wheel's suspension via `resolve_suspension_params`, a two-step path:
 1. **Canonical (Relationship-based):** Pass 1 (`collect_joint_scan_read`) records every `PhysxVehicleWheelAttachmentAPI` prim's `physxVehicleWheelAttachment:wheel` → `:suspension` binding into a `wheel_attachment_targets` map, keyed by `(stage, wheel path)` — a prim path is unique only within its stage, so the same rover loaded twice repeats `/Rover/Wheel_FL`. When the wheel prim is processed in Pass 2, the resolver follows that binding and reads the suspension attrs off the referenced suspension prim.
-2. **Flat (Fallback):** If no attachment targets this wheel, the attrs are read directly off the wheel prim — this is LunCo's compact composition, where the wheel references the suspension file directly and the attrs compose onto the wheel prim itself.
+2. **Direct self-composition:** If no attachment targets this wheel, the attrs are read directly off the wheel prim. This is LunCo's compact composition, where the wheel references the suspension file directly and the attrs compose onto the wheel prim itself. Both forms are explicit USD topology; the runtime does not select a compatibility path.
 3. **Strict validation (§4):** If neither path yields all three params, the resolver returns `None` and the raycast-wheel branch refuses to spawn (no silent defaults).
+
+The same rule applies to standard `Physics*Joint` projection: a prim that
+declares a joint but has malformed or unresolved body/frame/drive authoring is
+reported as `usd-physics-joint-invalid` and raises the shared physics safety
+hold. It is not silently omitted and therefore cannot become an unconstrained
+mechanism.
 
 **Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd/schema/core/physxSchema.usda` and pinned by the `physx_vehicle_schemas_register_canonical_properties` drift test.
 
+### 3.2.1. Generic support and activation transaction
+
+A raycast wheel has support geometry but no Avian collider. The mobility producer
+publishes the authored probe footprint as `lunco_physics::PhysicsSupportFootprint`;
+terrain consumes that shared contract and does not inspect wheel or drivetrain
+components. The contract is ordered by the shared `PhysicsSupportSet`: `Publish`
+creates the footprint, `Apply` flushes its deferred ECS insertion, and `Consume`
+performs support-cache projection and one-time initial placement. This is a runtime
+transaction, not a per-frame reseat or an overturn recovery mechanism.
+
+Ordinary rigid bodies use their Avian collider bounds directly. Both paths use the
+live spatial support surface for placement: a DEM uses the resident collider ring,
+while a flat authored scene uses its static/kinematic colliders and the local
+gravity axis. Missing support is consumed as an unsupported physical state; it is
+never converted into a permanent activation hold or a guessed world-up placement.
+
 ### 3.3. Physics & Visual Updates (`lunco-mobility`)
-* **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values.
+* **`apply_wheel_suspension`:** Queries `(&mut WheelRaycast, &Suspension, &RayHits, &Transform, &ChildOf)` to solve Hooke's spring-damper equations using the `Suspension` component values. The resulting ground reaction is applied at the authored ray contact point, not at the axle mount, so the reduced realization retains the contact lever arm and load-transfer moment of the physical wheel.
 * **`update_suspension_visuals`:** Queries `(&WheelRaycast, &Suspension, ...)` to scale the spring mesh and translate the piston along the suspension travel axis.
 
 ### 3.4. Live Tuning & Property Updates (`lunco-scene-commands`)
@@ -236,11 +261,17 @@ It **cannot function** without suspension compliance parameters ($k, c, \text{re
 * If a wheel prim is parsed for raycasting (`PhysxVehicleWheelAPI`) but lacks a resolved `PhysxVehicleSuspensionAPI` (neither on the prim nor referenced via relationships), the loader **fails validation loudly**.
 * It logs a compilation error and **refuses to map or spawn the wheel** in the simulation, exposing the asset composition bug immediately.
 
-### 4.2. Rigid Wheels (True Rigid Axles)
+### 4.2. Zero-travel and physical wheel topology
 A wheel with no travel is still authored explicitly — "no suspension" is never
-spelled as "omit the schema", which §4.1 rejects. Two ways to say it:
-* **Raycast, zero travel** — reference `components/mobility/suspensions/rigid.usda`, which applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI` with `restLength = 0` and a stiff, heavily damped spring. The wheel stays on the raycast path; the spring exists only to keep the contact solver quiet. This is what `rucheyok.usda` uses.
-* **Joint-based** — a `PhysicsRevoluteJoint` connecting the wheel body directly to the chassis/axle, with no prismatic joint and no suspension schema. Contact normal forces are then resolved natively from rigid-body collider contacts in `Avian3D`, a true rigid axle with no compliance term.
+spelled as "omit the schema", which §4.1 rejects. Two authored realizations are
+valid:
+* **Raycast, zero travel** — reference `components/mobility/suspensions/rigid.usda`, which applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI` with `restLength = 0` and a stiff, damped spring. The wheel remains on the raycast path.
+* **Physical wheel** — author a rigid suspension carrier with `PhysicsRigidBodyAPI`, connect the chassis to that carrier with a `PhysicsPrismaticJoint` carrying `PhysicsDriveAPI:linear`, and connect the wheel body to the carrier with a `PhysicsRevoluteJoint`. Zero travel is expressed by the prismatic limits and standard drive, not by bypassing the carrier or attaching the wheel directly to the chassis.
+
+The reusable `physical_drivetrain.usda` is this second form. The rover owns the
+carrier placement; the shared drivetrain owns the joint graph; and the reduced
+raycast realization folds the carrier's explicitly applied
+`LunCoMassContributionAPI` into its resolved rigid-body owner.
 
 ---
 

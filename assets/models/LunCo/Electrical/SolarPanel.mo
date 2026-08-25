@@ -20,7 +20,7 @@ model SolarPanel
   input Real panel_normal_y "Panel illuminated-face normal in the electrical assembly frame";
   input Real panel_normal_z "Panel illuminated-face normal in the electrical assembly frame";
 
-  Pin p;
+  Pin p annotation(Placement(transformation(extent={{-110,-10},{-90,10}})));
   output Real power_out(unit="W") "Electrical power delivered to the bus after bus loading";
   output Real available_power_w(unit="W") "Electrical power available from incident sunlight before bus loading";
   output Real cos_incidence "Live clamped cosine of solar incidence, 0..1";

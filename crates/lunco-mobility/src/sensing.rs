@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn contact_pair_uses_body_fallback_and_marks_unregistered_zero() {
+    fn contact_pair_resolves_collider_through_registered_body() {
         let mut world = World::new();
         let rover = world.spawn_empty().id();
         let wheel = world.spawn_empty().id(); // a collider child, not itself registered
@@ -417,8 +417,8 @@ mod tests {
         reg.assign(rover, GlobalEntityId::from_raw(42));
         reg.assign(obstacle, GlobalEntityId::from_raw(7));
 
-        // collider1 is the unregistered wheel, but its body is the registered
-        // rover → resolves to 42 via the body fallback; collider2 = obstacle(7).
+        // collider1 is the unregistered wheel, but its authored physics owner is
+        // the registered rover → the pair is identified as 42:7.
         assert_eq!(
             contact_pair(&reg, wheel, Some(rover), obstacle, None),
             Some("42:7".to_string())

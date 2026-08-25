@@ -414,7 +414,14 @@ impl Plugin for UsdBevyPlugin {
                         )
                         .after(canonical::sync_canonical_stages),
                     retry_awaiting_usd_visuals_after_quality_change
-                        .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+                        .run_if(resource_changed::<lunco_render::RenderingQualitySettings>)
+                        // A quality update can coincide with the asset-loaded
+                        // event that drains the same awaiting queue.  The
+                        // loaded-stage projection is authoritative for that
+                        // frame; let its deferred marker land before the
+                        // quality retry observes the queue, otherwise one
+                        // prim can be instantiated twice.
+                        .after(sync_usd_visuals),
                     // The other half of the same queue: `sync_usd_visuals` drains
                     // prims whose stage arrived, this one drains prims whose stage
                     // never will. Both must exist or the queue has an outcome it
@@ -1748,6 +1755,8 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
                             base_components,
                             (
                                 member.clone(),
@@ -1755,7 +1764,14 @@ fn instantiate_usd_prim_from_stage(
                             ),
                         )
                     } else {
-                        queue_usd_child_spawn(commands, entity, base_components, (member.clone(),))
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
+                            base_components,
+                            (member.clone(),),
+                        )
                     }
                 }
                 None => {
@@ -1763,11 +1779,20 @@ fn instantiate_usd_prim_from_stage(
                         queue_usd_child_spawn(
                             commands,
                             entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
                             base_components,
                             (big_space::grid::propagation::LowPrecisionRoot,),
                         )
                     } else {
-                        queue_usd_child_spawn(commands, entity, base_components, ())
+                        queue_usd_child_spawn(
+                            commands,
+                            entity,
+                            prim_path.stage_handle.clone(),
+                            child_path.to_string(),
+                            base_components,
+                            (),
+                        )
                     }
                 }
             };
@@ -1830,12 +1855,27 @@ fn project_catalog_entry_id(
 fn queue_usd_child_spawn<Base: Bundle, Extra: Bundle>(
     commands: &mut Commands,
     parent: Entity,
+    stage_handle: Handle<UsdStageAsset>,
+    path: String,
     base: Base,
     extra: Extra,
 ) -> Entity {
     let child = commands.spawn_empty().id();
     commands.queue(move |world: &mut World| {
         if world.get_entity(parent).is_err() || !scene_mount_entity_is_live(world, parent) {
+            let _ = world.despawn(child);
+            return;
+        }
+        let duplicate = {
+            let mut q = world.query::<&UsdPrimPath>();
+            q.iter(world)
+                .any(|prim| prim.stage_handle.id() == stage_handle.id() && prim.path == path)
+        };
+        if duplicate {
+            // A composed prim has one live ECS projection.  This is an
+            // identity invariant at the shared projection seam, not a
+            // vehicle or prim-name rule; duplicate arc traversal must not
+            // create a second body, joint, or visual for the same USD path.
             let _ = world.despawn(child);
             return;
         }
@@ -3217,21 +3257,52 @@ pub fn read_primvar_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> 
 }
 
 /// Strict authored twin of [`read_primvar_vec3`].  `Ok(None)` means the
-/// attribute is genuinely omitted; `Err(())` means an authored value has the
-/// wrong USD type, is empty, or contains a non-finite component.  Runtime
-/// material boundaries use this distinction so malformed display data cannot
-/// turn into a white surface.
+/// attribute is genuinely omitted; `Err` means an authored value has the wrong
+/// USD type, is empty, or contains a non-finite component. Runtime material
+/// boundaries use this distinction so malformed display data cannot turn into
+/// a white surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrictAttributeError {
+    /// Prim that owns the malformed authored value.
+    pub path: String,
+    /// Attribute whose authored value failed strict decoding.
+    pub attribute: String,
+}
+
+impl StrictAttributeError {
+    fn new(path: &SdfPath, attribute: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            attribute: attribute.to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Display for StrictAttributeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} has an invalid authored `{}` value",
+            self.path, self.attribute
+        )
+    }
+}
+
+impl std::error::Error for StrictAttributeError {}
+
 pub fn read_primvar_vec3_strict(
     reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<[f64; 3]>, ()> {
+) -> Result<Option<[f64; 3]>, StrictAttributeError> {
     match reader.attr_value(path, attr) {
         Some(value) => primvar_vec3_from(value)
             .filter(|values| values.iter().all(|value| value.is_finite()))
             .map(Some)
-            .ok_or(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+            .ok_or_else(|| StrictAttributeError::new(path, attr)),
+        None if reader.has_authored_attribute(path, attr) => {
+            Err(StrictAttributeError::new(path, attr))
+        }
         None => Ok(None),
     }
 }
@@ -3275,13 +3346,15 @@ pub fn read_primvar_f32_strict(
     reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<f32>, ()> {
+) -> Result<Option<f32>, StrictAttributeError> {
     match reader.attr_value(path, attr) {
         Some(value) => primvar_f32_from(value)
             .filter(|value| value.is_finite())
             .map(Some)
-            .ok_or(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+            .ok_or_else(|| StrictAttributeError::new(path, attr)),
+        None if reader.has_authored_attribute(path, attr) => {
+            Err(StrictAttributeError::new(path, attr))
+        }
         None => Ok(None),
     }
 }
@@ -3293,10 +3366,12 @@ pub fn read_authored_bool_strict(
     reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<bool>, ()> {
+) -> Result<Option<bool>, StrictAttributeError> {
     match reader.boolean(path, attr) {
         Some(value) => Ok(Some(value)),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => {
+            Err(StrictAttributeError::new(path, attr))
+        }
         None => Ok(None),
     }
 }
@@ -5455,9 +5530,7 @@ fn read_shape_dims_raw(
     path: &SdfPath,
     type_name: &str,
 ) -> Option<ShapeDims> {
-    if read_primitive_axis(reader, path, type_name).is_none() {
-        return None;
-    }
+    read_primitive_axis(reader, path, type_name)?;
     let dims = match type_name {
         "Cube" => ShapeDims::Cube {
             size: read_shape_dimension(reader, path, "size", 2.0)?,
@@ -5874,9 +5947,7 @@ fn build_usd_curve_mesh(
                 return None;
             };
             let need = n + order;
-            let Some(knot_end) = knot_cursor.checked_add(need) else {
-                return None;
-            };
+            let knot_end = knot_cursor.checked_add(need)?;
             if knot_end > all_knots.len() {
                 error!(
                     "[usd-bevy] {} has insufficient NurbsCurves knots",

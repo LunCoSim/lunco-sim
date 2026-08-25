@@ -199,9 +199,9 @@ scene loads as a **single root** (the `LoadScene` / `SetActiveStage` path —
 clear-and-replace, one `UsdPrimPath` root under the Grid). Loading another
 scene re-points that single active stage; it never stacks.
 
-On `TwinAuthorityMounted` (`open_usd_docs_on_twin_authority_mounted`,
-`lunco-usd/src/commands.rs`),
-exactly **one** stage resolves per the table above, and the mount is
+On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
+`lunco-usd/src/commands.rs`), exactly **one** stage resolves per the table above,
+after the asset boundary has registered the exact `twin://` authority, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
 `twin://` source, web-ready). If the persisted `runtime_persistence.load`
 setting is on, the `.lunco/runtime` overlay is restored into it; otherwise
@@ -255,7 +255,8 @@ section.
 #### Wheel Type Declaration
 The `lunco:wheelType` attribute on the **chassis prim** determines wheel behavior:
 - `raycast` (default): `WheelRaycast`, `RayCaster`, entity splitting.
-- `physical`: `RigidBody`, `Collider`, `MotorActuator`.
+- `physical`: `RigidBody`, `Collider`, authored USD joints, and the generic
+  Modelica/engine shaft boundary.
 
 #### Entity Layout (Raycast Rover)
 Raycast wheels need identity rotation so `RayCaster` casts straight down. The system splits the USD wheel into:

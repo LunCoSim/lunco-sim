@@ -20,6 +20,8 @@
 # The reduced capacity and panel area are test parameters, not a second power
 # topology: they make one loaded/idle energy cycle observable in seconds while
 # retaining the same battery, panel, bus, and environment-probe components.
+# The capacity remains large enough for the rover to perform the authored
+# patrol before its voltage-dependent motor torque physically collapses.
 #
 # Run after building this worktree's production binary:
 #   target/debug/luncosim test --scene assets/scenes/tests/solar_rover_energy_cycle.usda
@@ -32,7 +34,7 @@ def Xform "SolarRoverTest" (
     {
         over "Battery"
         {
-            float inputs:capacity = 0.02
+            float inputs:capacity = 0.10
             float inputs:soc_init = 0.55
         }
 

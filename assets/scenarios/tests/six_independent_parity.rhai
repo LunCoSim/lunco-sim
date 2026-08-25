@@ -69,16 +69,9 @@
 // ── THE ABSOLUTE CEILING ────────────────────────────────────────────────────
 //
 // This rover composes the same `components/mobility/wheel.usda` as every other,
-// so it obeys the same one authored no-load axle speed: the motor's
-// `lunco:motor:noLoadSpeed` (14400 rad/s) divided by the gearbox
-// `lunco:gearbox:ratio` (1200) = 12 rad/s at the axle, times r = 0.4 m:
-//
-//     v_max = omega_max * r = 12.0 * 0.4 = 4.8 m/s
-//
-// Six driven wheels instead of four changes the available TRACTION, not the
-// no-load speed, so the ceiling is the same number the skid and Ackermann gates
-// assert. That shared anchor is the point: three rovers, three allocations, one
-// speed contract.
+// so it obeys the same authored motor/gearbox/shaft network. Six driven wheels
+// change the available traction, while the same solved boundary remains the
+// contract across the fleet.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -588,7 +581,7 @@ fn verdict(s) {
     // dedicated steering port", and the collapsed shape sweeps ~0 deg — the floor
     // only has to separate those two, which it does with room to spare at a measured
     // 36.49 deg over the 6 s leg. 60 deg was a RATE spec: it encoded how fast this
-    // drivetrain spins its wheels up, so it went red when the shipped powertrain
+    // authored drivetrain spins its wheels up, so it went red when the shipped
     // parameters slowed that down, on a pivot that was otherwise exactly right
     // (0 m travelled, both banks counter-rotating). Keep it well under the measured
     // sweep; the `dist_pivot` cap below is the half that carries the real content.

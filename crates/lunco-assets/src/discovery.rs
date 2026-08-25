@@ -132,30 +132,32 @@ pub fn resolve_asset(
     manifest: &AssetManifest,
     roots: &TwinRoots,
     asset_path: &str,
-) -> Option<AssetFile> {
+) -> Result<Option<AssetFile>, crate::TwinRootsError> {
     if let Some(asset) = list_library_assets(manifest)
         .into_iter()
         .find(|asset| asset.asset_path == asset_path)
     {
-        return Some(asset);
+        return Ok(Some(asset));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (name, rel) = crate::twin_source::parse_twin_uri(asset_path)?;
-        let rel_path = crate::asset_path::relative_path(rel)?;
-        let root = roots.root_of(name)?;
-        let abs_path = root.join(&rel_path);
-        if !abs_path.is_file() {
-            return None;
-        }
-        Some(AssetFile {
+        let Some((name, rel)) = crate::twin_source::parse_twin_uri(asset_path) else {
+            return Ok(None);
+        };
+        let Some(rel_path) = crate::asset_path::relative_path(rel) else {
+            return Ok(None);
+        };
+        let Some(abs_path) = roots.resolve_file(name, &rel_path)? else {
+            return Ok(None);
+        };
+        Ok(Some(AssetFile {
             asset_path: asset_path.to_string(),
             stem: stem_of(rel),
             rel: rel.to_string(),
             abs_path,
             twin: Some(name.to_string()),
-        })
+        }))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -314,7 +316,11 @@ mod wasm_manifest {
 /// read one listing, rather than native walking and web consulting a table that
 /// only native's walk could have produced. Twin roots are walked live (native
 /// only; a Twin's files are not in the shipped bundle).
-pub fn list_assets(manifest: &AssetManifest, roots: &TwinRoots, ext: &str) -> Vec<AssetFile> {
+pub fn list_assets(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+    ext: &str,
+) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
     let mut out = Vec::new();
     let suffix = format!(".{ext}");
 
@@ -337,8 +343,8 @@ pub fn list_assets(manifest: &AssetManifest, roots: &TwinRoots, ext: &str) -> Ve
     // Open Twins → `twin://<name>/<rel>` so the `twin://` reader resolves them.
     // Native only: a Twin lives on disk, and the web has no filesystem to walk.
     #[cfg(not(target_arch = "wasm32"))]
-    for name in roots.names() {
-        if let Some(root) = roots.root_of(&name) {
+    for name in roots.names()? {
+        if let Some(root) = roots.root_of(&name)? {
             walk(&root, &root, ext, &mut |rel| {
                 out.push(AssetFile {
                     asset_path: crate::twin_uri(&name, &rel),
@@ -353,11 +359,14 @@ pub fn list_assets(manifest: &AssetManifest, roots: &TwinRoots, ext: &str) -> Ve
     #[cfg(target_arch = "wasm32")]
     let _ = roots;
 
-    out
+    Ok(out)
 }
 
 /// Convenience: every `*.usda` in the project. Thin wrapper over [`list_assets`].
-pub fn list_usd_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<AssetFile> {
+pub fn list_usd_assets(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
     list_assets(manifest, roots, "usda")
 }
 
@@ -375,20 +384,23 @@ pub fn list_usd_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Asset
 /// every source — the engine library's folder layout imposed on projects that do
 /// not share it. A Twin keeping scenes in `sim/scenes/` had none of them listed:
 /// its own scene could be on screen while the menu said the project had none.
-pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<AssetFile> {
-    let mut out = list_assets(manifest, roots, "usda");
+pub fn list_scene_assets(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+    let mut out = list_assets(manifest, roots, "usda")?;
     // One manifest read per Twin, not per asset.
     let globs: std::collections::HashMap<String, Vec<String>> = roots
-        .names()
+        .names()?
         .into_iter()
         .map(|name| {
-            let g = roots
-                .root_of(&name)
-                .map(|root| scene_globs_of_twin(&root))
-                .unwrap_or_else(default_scene_globs);
-            (name, g)
+            let g = match roots.root_of(&name)? {
+                Some(root) => scene_globs_of_twin(&root)?,
+                None => default_scene_globs(),
+            };
+            Ok((name, g))
         })
-        .collect();
+        .collect::<Result<_, crate::TwinRootsError>>()?;
 
     out.retain(|asset| match &asset.twin {
         Some(name) => globs
@@ -402,7 +414,7 @@ pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Ass
         // itself — it ships the folder.
         None => asset.rel.starts_with("scenes/"),
     });
-    out
+    Ok(out)
 }
 
 fn default_scene_globs() -> Vec<String> {
@@ -412,22 +424,35 @@ fn default_scene_globs() -> Vec<String> {
         .collect()
 }
 
-/// The scene globs a Twin declares, or [`DEFAULT_SCENE_GLOBS`] if it declares
-/// none (or has no readable `twin.toml` — a folder opened as a Twin root need
-/// not have been promoted to one).
+/// The scene globs a Twin declares, or [`DEFAULT_SCENE_GLOBS`] when the Twin
+/// has no `twin.toml`. An unreadable or malformed manifest is an invalid
+/// discovery boundary and is returned to the caller instead of being treated
+/// as an undeclared Twin.
 #[cfg(not(target_arch = "wasm32"))]
-fn scene_globs_of_twin(root: &Path) -> Vec<String> {
-    lunco_twin::TwinManifest::read(&root.join(lunco_twin::MANIFEST_FILENAME))
-        .ok()
-        .and_then(|m| m.usd.and_then(|u| u.scenes))
-        .unwrap_or_else(default_scene_globs)
+fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, crate::TwinRootsError> {
+    let manifest = root.join(lunco_twin::MANIFEST_FILENAME);
+    match lunco_twin::TwinManifest::read(&manifest) {
+        Ok(manifest) => Ok(manifest
+            .usd
+            .and_then(|usd| usd.scenes)
+            .unwrap_or_else(default_scene_globs)),
+        Err(lunco_twin::TwinError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(default_scene_globs())
+        }
+        Err(error) => Err(crate::TwinRootsError::AssetResolution(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot read {}: {error}", manifest.display()),
+        )),
+    }
 }
 
 /// Web has no Twin folders to read a manifest from — Twin roots are a native
 /// concept (see [`list_assets`]), so this is unreachable there.
 #[cfg(target_arch = "wasm32")]
-fn scene_globs_of_twin(_root: &Path) -> Vec<String> {
-    default_scene_globs()
+fn scene_globs_of_twin(_root: &Path) -> Result<Vec<String>, crate::TwinRootsError> {
+    Ok(default_scene_globs())
 }
 
 /// Every catalogued file under `dir`, regardless of extension — the native walk
@@ -537,10 +562,13 @@ mod tests {
             "shaders/regolith.wgsl".into(),
         ]);
         let roots = TwinRoots::default();
-        let usd = list_usd_assets(&m, &roots);
+        let usd = list_usd_assets(&m, &roots).expect("list assets");
         assert_eq!(usd.len(), 1);
         assert_eq!(usd[0].stem, "skid_rover");
         assert_eq!(usd[0].rel, "vessels/rovers/skid_rover.usda");
-        assert_eq!(list_assets(&m, &roots, "wgsl").len(), 1);
+        assert_eq!(
+            list_assets(&m, &roots, "wgsl").expect("list assets").len(),
+            1
+        );
     }
 }

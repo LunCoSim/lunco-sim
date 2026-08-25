@@ -20,11 +20,12 @@ use rhai::{Dynamic, Engine, Scope, AST};
 
 /// A hook implemented by a rhai function.
 ///
-/// Holds its own `Engine` + compiled `AST` and the initial `Scope` produced by
-/// running the script's top-level once (so `const` tables the function reads are
-/// available). Each [`invoke`](ScriptHook::invoke) runs with a **fresh clone** of
-/// that initial scope — no state carries across calls, which is what makes a hook
-/// safe to mark `deterministic` for convergent use (merge).
+/// Holds its own `Engine` + compiled `AST` with literal top-level constants
+/// propagated into callable functions, and the initial `Scope` produced by
+/// running the script's top-level once. Each [`invoke`](ScriptHook::invoke) runs
+/// with a **fresh clone** of that initial scope — no state carries across calls,
+/// which is what makes a hook safe to mark `deterministic` for convergent use
+/// (merge).
 pub struct RhaiHook {
     engine: Engine,
     ast: AST,
@@ -69,8 +70,9 @@ impl RhaiHook {
         // TODO(multiplayer): apply `rhai_limits::apply(&mut engine)` when hook
         // sources can arrive from a peer; RBAC on hook registration is deferred
         // with it. See REVIEW-2026-07-19.md finding #4 / FUZZ-8.
-        let ast = engine.compile(source).map_err(|e| e.to_string())?;
-        // Run top-level statements once to populate consts into the base scope.
+        let ast = compile_with_script_consts(&engine, source).map_err(|e| e.to_string())?;
+        // Run top-level statements once to populate runtime state into the
+        // base scope; literal constants are propagated at compile time above.
         let mut scope = Scope::new();
         engine
             .run_ast_with_scope(&mut scope, &ast)
@@ -82,6 +84,25 @@ impl RhaiHook {
             entry: entry.into(),
         })
     }
+}
+
+/// Compile a hook so its literal top-level `const`s are visible inside its
+/// functions. Rhai functions do not close over script scope, and hook calls
+/// intentionally run with `eval_ast(false)`, so executing the top level alone
+/// cannot make those names resolvable. Recompile with the constants in the
+/// compile scope; this is generic hook machinery, not policy-specific logic.
+fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai::ParseError> {
+    let first = engine.compile(source)?;
+    let mut constants = Scope::new();
+    for (name, is_const, value) in first.iter_literal_variables(true, false) {
+        if is_const {
+            constants.push_constant_dynamic(name.to_string(), value);
+        }
+    }
+    if constants.is_empty() {
+        return Ok(first);
+    }
+    engine.compile_with_scope(&constants, source)
 }
 
 impl ScriptHook for RhaiHook {
@@ -96,7 +117,7 @@ impl ScriptHook for RhaiHook {
             .engine
             .call_fn_with_options(options, &mut scope, &self.ast, &self.entry, dyn_args)
             .map_err(|e| HookError(e.to_string()))?;
-        Ok(dynamic_to_hook(&result))
+        dynamic_to_hook(&result)
     }
 }
 
@@ -145,31 +166,46 @@ fn hook_to_dynamic(v: &HookValue) -> Dynamic {
     }
 }
 
-/// Convert a rhai [`Dynamic`] back into a neutral [`HookValue`]. Unknown/opaque
-/// types degrade to their debug string (matching the reflect-walker's fallback).
-fn dynamic_to_hook(d: &Dynamic) -> HookValue {
+/// Convert a rhai [`Dynamic`] back into a neutral [`HookValue`]. The hook ABI is
+/// deliberately closed: an opaque Rhai value is a policy error, never a debug
+/// string that can accidentally satisfy a downstream schema.
+fn dynamic_to_hook(d: &Dynamic) -> HookResult {
     if d.is_unit() {
-        HookValue::Unit
+        Ok(HookValue::Unit)
     } else if d.is_int() {
-        HookValue::Int(d.as_int().unwrap_or(0))
+        d.as_int()
+            .map(HookValue::Int)
+            .map_err(|error| HookError(format!("failed to read Rhai integer: {error}")))
     } else if d.is_float() {
-        HookValue::Float(d.as_float().unwrap_or(0.0))
+        d.as_float()
+            .map(HookValue::Float)
+            .map_err(|error| HookError(format!("failed to read Rhai float: {error}")))
     } else if d.is_bool() {
-        HookValue::Bool(d.as_bool().unwrap_or(false))
+        d.as_bool()
+            .map(HookValue::Bool)
+            .map_err(|error| HookError(format!("failed to read Rhai bool: {error}")))
     } else if d.is_string() {
-        HookValue::Str(d.clone().into_string().unwrap_or_default())
+        d.clone()
+            .into_string()
+            .map(HookValue::Str)
+            .map_err(|error| HookError(format!("failed to read Rhai string: {error}")))
     } else if d.is_array() {
         let arr = d.clone().cast::<rhai::Array>();
-        HookValue::Array(arr.iter().map(dynamic_to_hook).collect())
+        arr.iter()
+            .map(dynamic_to_hook)
+            .collect::<Result<Vec<_>, _>>()
+            .map(HookValue::Array)
     } else if d.is_map() {
         let map = d.clone().cast::<rhai::Map>();
-        HookValue::Map(
-            map.iter()
-                .map(|(k, v)| (k.to_string(), dynamic_to_hook(v)))
-                .collect(),
-        )
+        map.iter()
+            .map(|(k, v)| dynamic_to_hook(v).map(|value| (k.to_string(), value)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(HookValue::Map)
     } else {
-        HookValue::Str(format!("{d:?}"))
+        Err(HookError(format!(
+            "unsupported Rhai hook return type `{}`",
+            d.type_name()
+        )))
     }
 }
 
@@ -206,6 +242,49 @@ mod tests {
     }
 
     #[test]
+    fn function_reads_a_top_level_constant() {
+        let hook = RhaiHook::compile(
+            "const SCALE = 3; fn scale(value) { value * SCALE }",
+            "scale",
+        )
+        .expect("literal policy constants must be available inside hook functions");
+        let out = hook
+            .invoke(&[HookValue::Int(4)])
+            .expect("the hook call must resolve its constant");
+        assert_eq!(out, HookValue::Int(12));
+    }
+
+    #[test]
+    fn prefixed_top_level_constants_are_collected() {
+        let engine = Engine::new();
+        let ast = engine
+            .compile(
+                "const WRENCH_ALLOCATION_ITERATIONS = 64; \
+                 const WRENCH_ICON_BOX_HALF_WIDTH = 92;",
+            )
+            .unwrap();
+        let names: Vec<_> = ast
+            .iter_literal_variables(true, false)
+            .map(|(name, _, _)| name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            ["WRENCH_ALLOCATION_ITERATIONS", "WRENCH_ICON_BOX_HALF_WIDTH"]
+        );
+    }
+
+    #[test]
+    fn helper_function_reads_a_top_level_constant() {
+        let hook = RhaiHook::compile(
+            "const RADIUS = 10; fn helper() { RADIUS * 1 } fn entry() { helper() }",
+            "entry",
+        )
+        .expect("helper functions must receive the same constant propagation");
+        let out = hook.invoke(&[]).expect("entry must call helper");
+        assert_eq!(out, HookValue::Int(10));
+    }
+
+    #[test]
     fn register_places_hook_in_registry() {
         register_rhai_hook("test.rhai_id", "pick", "fn pick(a, b) { a + b }", true).unwrap();
         let got = lunco_hooks::invoke("test.rhai_id", &[HookValue::Int(1), HookValue::Int(2)]);
@@ -218,5 +297,21 @@ mod tests {
         let err = register_rhai_hook("test.bad", "f", "fn f( { oops", false);
         assert!(err.is_err());
         assert!(lunco_hooks::get("test.bad").is_none());
+    }
+
+    #[test]
+    fn opaque_rhai_values_are_rejected_at_the_hook_boundary() {
+        let hook = RhaiHook::compile("fn emit() { #{value: [1, 2]}[\"value\"] }", "emit")
+            .expect("policy compiles");
+        assert_eq!(
+            hook.invoke(&[]).expect("hook invocation succeeds"),
+            HookValue::Array(vec![HookValue::Int(1), HookValue::Int(2),])
+        );
+
+        let opaque = RhaiHook::compile("fn emit() { 1..3 }", "emit").expect("policy compiles");
+        let error = opaque
+            .invoke(&[])
+            .expect_err("ranges are not part of the hook ABI");
+        assert!(error.0.contains("unsupported Rhai hook return type"));
     }
 }

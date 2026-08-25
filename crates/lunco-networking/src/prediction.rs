@@ -3074,8 +3074,9 @@ mod pose_write_tests {
 ///    crate) crisply in the same frame, instead of interpenetrating and being
 ///    resolved by overlap-pushout alone (the source of the contact buzz).
 ///
-/// Runs the real solver headlessly (no window) with `SubstepCount(16)` to match
-/// the app. Deterministic stepping via [`TimeUpdateStrategy::ManualDuration`] so
+/// Runs the real solver headlessly (no window) with the authoritative
+/// [`lunco_physics::DEFAULT_SUBSTEP_COUNT`] to match the app. Deterministic
+/// stepping via [`TimeUpdateStrategy::ManualDuration`] so
 /// each `app.update()` is exactly one fixed tick. Asserts platform behavior, not
 /// our code — if it ever fails after an avian bump, the velocity-drive needs review.
 #[cfg(test)]
@@ -3102,7 +3103,7 @@ mod avian_kinematic_probe {
             // bevy's `DiagnosticsPlugin` is present.
             .add_plugins(bevy::diagnostic::DiagnosticsPlugin)
             .add_plugins(PhysicsPlugins::default())
-            .insert_resource(SubstepCount(16))
+            .insert_resource(SubstepCount(lunco_physics::DEFAULT_SUBSTEP_COUNT))
             // No gravity — isolate kinematic integration / contact push from fall.
             .insert_resource(Gravity(avian3d::math::Vector::ZERO))
             // Fixed step == H, and advance virtual time by exactly H per update:
@@ -3154,9 +3155,9 @@ mod avian_kinematic_probe {
         let p1 = app.world().entity(e).get::<Position>().unwrap().0;
 
         let expected = v * (H * k as f64);
-        // Tolerance ~1e-6 m: `SubstepCount(16)` splits h into integer-nanosecond
-        // substeps (15625000/12 truncates), losing ~4 ns/tick → ~8 nm/tick of
-        // integrated time. So the advance is v·h modulo that substep rounding —
+        // Tolerance ~1e-6 m: the authoritative substep count splits h into
+        // integer-nanosecond substeps. The advance is therefore v·h modulo
+        // substep-time rounding —
         // exact for our purposes (nanometres over a 60 Hz tick).
         assert!(
             ((p1 - p0) - expected).length() < 1e-6,

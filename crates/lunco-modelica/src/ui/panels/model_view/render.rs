@@ -8,7 +8,7 @@ use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollPolicy
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
-use crate::state::ModelicaDocumentRegistry;
+use crate::state::{is_generated_document, ModelicaDocumentRegistry};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::MODEL_VIEW_KIND;
@@ -223,16 +223,42 @@ impl InstancePanel for ModelViewPanel {
 
         let tab_read_only = crate::state::read_only_for_ctx(ctx, doc);
         if tab_read_only {
+            let generated_document = ctx
+                .resource::<ModelicaDocumentRegistry>()
+                .and_then(|registry| registry.host(doc))
+                .is_some_and(|host| is_generated_document(host.document()));
+            let theme = ctx
+                .resource::<lunco_theme::Theme>()
+                .cloned()
+                .unwrap_or_else(lunco_theme::Theme::dark);
             let mut banner_duplicate_clicked = false;
             egui::Frame::NONE
-                .fill(egui::Color32::from_rgb(60, 48, 20))
+                .fill(theme.tokens.alert_backdrop)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Read-only").color(egui::Color32::from_rgb(220, 200, 120)).size(14.0));
-                        ui.label(egui::RichText::new("Read-only library model — edits won't stick. Duplicate it to your workspace to make changes.").color(egui::Color32::from_rgb(220, 200, 120)).size(12.0));
+                        ui.label(
+                            egui::RichText::new(if generated_document {
+                                "Generated"
+                            } else {
+                                "Read-only"
+                            })
+                            .color(theme.tokens.warning)
+                            .size(14.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(if generated_document {
+                                "Generated from the composed USD network — changes come from the Rhai synthesis policy."
+                            } else {
+                                "Read-only library model — edits won't stick. Duplicate it to your workspace to make changes."
+                            })
+                            .color(theme.tokens.warning)
+                            .size(12.0),
+                        );
                         ui.add_space(ui.available_width() - 170.0);
-                        if ui.button("Duplicate to edit").clicked() { banner_duplicate_clicked = true; }
+                        if ui.button("Duplicate to edit").clicked() {
+                            banner_duplicate_clicked = true;
+                        }
                     });
                 });
             if banner_duplicate_clicked {
@@ -950,54 +976,65 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             return;
         };
         let document = host.document();
+        let Some(ast) = document.strict_ast() else {
+            return;
+        };
         let display = document.origin().display_name();
         let from_path = display.strip_prefix("msl://").map(|s| s.to_string());
-        let short = document
-            .strict_ast()
-            .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
-            .unwrap_or_default();
+        let short = crate::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
+        let Some(class) = crate::ast_extract::find_class_by_short_name(&ast, &short) else {
+            return;
+        };
         let qualified = from_path.unwrap_or_else(|| short.clone());
 
         let mut qpath = qualified.clone();
         if !qpath.contains('.') {
-            if let Some(ast) = document.strict_ast() {
-                let pkg = ast
-                    .within
-                    .as_ref()
-                    .map(|w| {
-                        w.name
-                            .iter()
-                            .map(|t| t.text.as_ref())
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    })
-                    .unwrap_or_default();
-                if !pkg.is_empty() {
-                    qpath = format!("{pkg}.{qpath}");
-                }
+            let pkg = ast
+                .within
+                .as_ref()
+                .map(|w| {
+                    w.name
+                        .iter()
+                        .map(|t| t.text.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
+                .unwrap_or_default();
+            if !pkg.is_empty() {
+                qpath = format!("{pkg}.{qpath}");
             }
         }
 
-        let (icon, params) = match ctx.resource::<crate::engine_resource::ModelicaEngineHandle>() {
-            Some(handle) => {
-                let mut engine = handle.lock();
-                let icon = crate::annotations::extract_icon_via_engine(&qpath, &mut engine);
-                let params: Vec<(String, String)> = engine
-                    .inherited_members_typed(&qpath)
-                    .into_iter()
-                    .filter(|m| {
-                        matches!(
-                            m.variability,
-                            crate::engine::InheritedVariability::Parameter
-                        )
-                    })
-                    .map(|m| (m.name, m.default_value.unwrap_or_default()))
-                    .collect();
-                (icon, params)
-            }
-            _ => (None, Vec::new()),
-        };
-        (qualified, icon, params)
+        // Icon view is a paint path. It may use a completed background merge,
+        // but it must not synchronously walk Modelica inheritance or wait for
+        // the shared engine mutex. Direct parameters and a local Icon are
+        // available from the already-owned AST; the projection task will
+        // repaint the view when the merged standard icon is ready.
+        let icon = ctx
+            .resource::<crate::engine_resource::ModelicaEngineHandle>()
+            .and_then(|handle| handle.try_cached_icon_for(&qpath))
+            .or_else(|| crate::annotations::extract_icon(&class.annotation));
+        let parameters: Vec<(String, String)> = class
+            .components
+            .iter()
+            .filter(|(_, component)| {
+                matches!(
+                    component.variability,
+                    rumoca_compile::parsing::Variability::Parameter(_)
+                )
+            })
+            .map(|(name, component)| {
+                (
+                    name.clone(),
+                    component
+                        .binding
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        (qualified, icon, parameters)
     };
 
     let painter = ui.painter();

@@ -1,7 +1,7 @@
 //! # Unified wheel parameter model
 //!
-//! ONE reader for BOTH wheel kinds. A wheel prim's full dynamics — drivetrain
-//! (peak torque, spin limits, brake), tire (μ, slip stiffness), inertia and
+//! ONE reader for BOTH wheel kinds. A wheel prim's full dynamics — tire
+//! (μ, slip stiffness), inertia and
 //! optional suspension compliance — are read here into a single [`WheelParams`],
 //! regardless of whether the wheel is realised as a raycast wheel
 //! (`lunco_mobility::WheelRaycast`, analytical suspension + contact) or a
@@ -22,25 +22,18 @@
 //! | width | `physxVehicleWheel:width` | yes |
 //! | mass | `physxVehicleWheel:mass` | yes |
 //! | moment of inertia | `physxVehicleWheel:moi` | yes (0 ⇒ derived ½·m·r² from authored mass+radius) |
-//! | peak axle torque | MOTOR `lunco:motor:stallTorque` x gearbox `ratio` x `efficiency` | via motor |
-//! | no-load axle speed | MOTOR `lunco:motor:noLoadSpeed` / gearbox `ratio` | via motor |
+//! | drive torque and shaft speed | authored Modelica mechanical network | via motor/gearbox |
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | lateral stiffness graph | `physxVehicleTire:lateralStiffnessGraph` + `restLoad` | yes |
 //! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
-//! | motor damping | `lunco:wheel:driveDamping` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
 //!
-//! ## One no-load speed for both realizations
-//!
-//! `lunco:motor:noLoadSpeed` reduced by `lunco:gearbox:ratio` is THE no-load axle speed, and both
-//! kinds obey it: the joint wheel's velocity motor targets it
-//! (`MotorActuator::max_omega`), and the raycast wheel rolls its shared tire
-//! drive solve off toward it, so both self-limit at
-//! `ω_max · r`. The former wheel-local speed names are gone; there is no alias
-//! and no fallback.
+//! The mechanical network is the one source of drive torque and shaft speed for
+//! both realizations. The Rust projections only bind that solved boundary to
+//! Avian or the raycast tire; they do not re-derive a motor curve.
 //!
 //! ## Strictness
 //!
@@ -50,15 +43,12 @@
 //! `components/mobility/wheel.usda`, which every wheel composes — one authored
 //! set is what makes "same defaults for both variants" true.
 
-use avian3d::prelude::{
-    AngularMotor, Collider, ColliderDensity, Friction, MotorModel, Position, RevoluteJoint,
-    Rotation,
-};
+use avian3d::prelude::{Collider, ColliderDensity, Friction, Position, RevoluteJoint, Rotation};
 use bevy::asset::AssetId;
-use bevy::log::{error, info, warn};
+use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
-use lunco_hardware::{MotorActuator, SteeringActuator};
+use lunco_hardware::SteeringActuator;
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
@@ -308,18 +298,6 @@ pub struct WheelParams {
     /// `½·m·r²` from the authored mass and radius; the attribute itself is still
     /// required by the standard PhysX wheel schema.
     pub moment_of_inertia: f64,
-    /// Rotor inertia reflected through the gearbox to the axle, kg·m²
-    /// (`J·ratio²`, from the motor behind this wheel). `0` for an undriven
-    /// wheel. At the shipped reductions it dominates the tire's ½·m·r² —
-    /// see [`crate::powertrain::PowertrainParams::reflected_inertia`].
-    pub reflected_inertia: f64,
-    /// Peak axle drive torque, N·m, reduced from the composed motor and gearbox.
-    pub peak_torque: f64,
-    /// No-load axle speed, rad/s, reduced from the composed motor and gearbox.
-    /// This is the top-speed parameter for BOTH realizations: the joint motor
-    /// targets it, the raycast drive force rolls off toward it, so both cap at
-    /// `ω·r`.
-    pub max_rotation_speed: f64,
     /// Bearing + rolling drag, N·m·s (`physxVehicleWheel:dampingRate`). A
     /// physical property of the hub in its own right — REQUIRED, never inferred
     /// from the drive torque.
@@ -339,8 +317,6 @@ pub struct WheelParams {
     pub friction_mu: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,
-    /// Velocity-tracking aggressiveness, 1/s (`lunco:wheel:driveDamping`).
-    pub drive_damping: f64,
     /// Suspension compliance; `None` ⇒ none resolves. A raycast wheel treats
     /// that as a hard asset error, a joint wheel does not need it.
     pub suspension: Option<SuspensionParams>,
@@ -354,22 +330,15 @@ impl WheelParams {
     /// the wheel itself for each. A wheel without an attachment is
     /// under-authored and is rejected.
     ///
-    /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
-    /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
-    /// it, NOT from the wheel. `None` means an undriven wheel (a castor, a trailer wheel):
-    /// zero torque, and legitimate to author.
     pub fn read(
         reader: &lunco_usd_bevy::StageView<'_>,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
         attachment_tire: Option<&SdfPath>,
-        powertrain: Option<&crate::powertrain::PowertrainParams>,
     ) -> Result<WheelParams, Vec<String>> {
         let mut missing = Vec::new();
         let tire = attachment_tire.unwrap_or(wheel);
-        if attachment_tire.is_none() {
-            missing.push("PhysxVehicleTireAPI".to_owned());
-        } else if !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
+        if attachment_tire.is_none() || !reader.has_api_schema(tire, "PhysxVehicleTireAPI") {
             missing.push("PhysxVehicleTireAPI".to_owned());
         }
         let axle_axis = match reader.text(wheel, "axis").as_deref() {
@@ -384,15 +353,6 @@ impl WheelParams {
         let radius = read_required_real(reader, wheel, "physxVehicleWheel:radius", &mut missing);
         let width = read_required_real(reader, wheel, "physxVehicleWheel:width", &mut missing);
         let mass = read_required_real(reader, wheel, "physxVehicleWheel:mass", &mut missing);
-        // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
-        // therefore no torque — that is a castor, not a wheel with a default torque.
-        let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
-        // An undriven wheel has no motor speed cap. A driven wheel's motor
-        // contract rejects a non-positive no-load speed before it reaches this
-        // reader, so zero here is an honest castor value rather than a numeric
-        // substitute for a malformed powertrain.
-        let max_rotation_speed = powertrain.map_or(0.0, |p| p.axle_no_load_speed());
-        let reflected_inertia = powertrain.map_or(0.0, |p| p.reflected_inertia());
         let bearing_damping =
             read_required_real(reader, wheel, "physxVehicleWheel:dampingRate", &mut missing);
         let brake_torque_max = read_required_real(
@@ -424,9 +384,6 @@ impl WheelParams {
         let min_validated_speed =
             read_optional_real(reader, tire, "lunco:tire:minValidatedSpeed", &mut missing);
         let friction_mu = read_required_real(reader, tire, "physics:dynamicFriction", &mut missing);
-        let drive_damping =
-            read_required_real(reader, wheel, "lunco:wheel:driveDamping", &mut missing);
-
         // A zero is an authored, documented solid-cylinder derivation. The
         // standard PhysX wheel attribute itself remains required, so an
         // omitted value is reported with the other missing contract fields.
@@ -460,7 +417,6 @@ impl WheelParams {
             min_validated_speed,
             friction_mu,
             steer_axis,
-            drive_damping,
         );
         validate_wheel_schema_hints(
             reader,
@@ -471,7 +427,6 @@ impl WheelParams {
                 ("physxVehicleWheel:moi", moment_of_inertia),
                 ("physxVehicleWheel:dampingRate", bearing_damping),
                 ("physxVehicleWheel:maxBrakeTorque", brake_torque_max),
-                ("lunco:wheel:driveDamping", drive_damping),
             ],
         );
         validate_wheel_schema_hints(
@@ -490,7 +445,7 @@ impl WheelParams {
 
         // The shipped compact composition applies the attachment, wheel, and
         // suspension APIs to one composed prim. That is an explicit standard
-        // direct-composition form, not a heuristic fallback. Relationship-form
+        // direct-composition form. Relationship-form
         // assets pass the referenced suspension from the stage topology map.
         let direct_suspension = (attachment_suspension.is_none()
             && reader.has_api_schema(wheel, "PhysxVehicleWheelAttachmentAPI")
@@ -521,9 +476,6 @@ impl WheelParams {
             axle_axis,
             mass,
             moment_of_inertia,
-            reflected_inertia,
-            peak_torque,
-            max_rotation_speed,
             bearing_damping,
             brake_torque_max,
             slip_stiffness,
@@ -531,7 +483,6 @@ impl WheelParams {
             min_validated_speed,
             friction_mu,
             steer_axis,
-            drive_damping,
             suspension,
         })
     }
@@ -540,6 +491,7 @@ impl WheelParams {
     pub fn to_wheel_raycast(
         &self,
         drive_port: Entity,
+        speed_port: Entity,
         steer_port: Entity,
         visual_entity: Option<Entity>,
     ) -> WheelRaycast {
@@ -547,6 +499,7 @@ impl WheelParams {
             wheel_radius: self.radius,
             visual_entity,
             drive_port,
+            speed_port,
             steer_port,
             ..Default::default()
         };
@@ -561,9 +514,6 @@ impl WheelParams {
         wheel.wheel_radius = self.radius;
         wheel.mass = self.mass;
         wheel.moment_of_inertia = self.moment_of_inertia;
-        wheel.reflected_inertia = self.reflected_inertia;
-        wheel.drive_torque_max = self.peak_torque;
-        wheel.max_rotation_speed = self.max_rotation_speed;
         wheel.bearing_damping = self.bearing_damping;
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
@@ -585,61 +535,22 @@ impl WheelParams {
         true
     }
 
-    /// The physical wheel's axle motor model. The
-    /// [`lunco_hardware::MotorActuator`] enables it only for a non-zero command
-    /// and writes the live motor/gearbox torque curve every tick.
+    /// Complete axle moment of inertia, kg·m² — authored
+    /// `physxVehicleWheel:moi` when stated, otherwise the solid-disk derivation
+    /// `½·m·r²` from the authored mass and radius. A composed wheel assembly
+    /// authors its tire plus attached drivetrain inertia here because Avian owns
+    /// the wheel's rotational state at the co-simulation boundary.
     ///
-    /// The torque cap is deliberately NOT fixed here. It is the authored motor
-    /// curve `τ(ω) = τ_stall·(1 − ω/ω_noload)`, which depends on this tick's axle
-    /// rate, so the actuator writes `motor.max_torque` every tick; a constant cap
-    /// authored at build time would turn the physical wheel into a speed source
-    /// disconnected from its motor power.
-    ///
-    /// It is built DISABLED, not left at `AngularMotor::new`'s `Scalar::MAX`
-    /// torque. A motor born with unbounded torque and a target velocity of zero is
-    /// an infinitely strong brake, and the physics steps between the joint being
-    /// spawned and the actuator's first write were enough to fire an unbounded
-    /// impulse and throw every body in the rig out of the world
-    /// (`[physics] body left the world`, velocities of ~1e6 m/s). Note that
-    /// `with_max_torque(0.0)` does NOT express "no torque" in avian — zero is a
-    /// sentinel for UNLIMITED, see the warning in `MotorActuator`. Disabled is the
-    /// honest starting point in any case: an axle exerts no torque until something
-    /// commands it, and the actuator enables the motor on the first commanded tick.
-    ///
-    /// `lunco:wheel:driveDamping` is what remains meaningful: with the torque
-    /// capped by the curve the motor is saturated for nearly the whole speed
-    /// range, so the damping only shapes the last approach to no-load, where the
-    /// curve has already fallen to near zero. That is why sweeping it 30 → 150
-    /// produced byte-identical traces — not a broken parameter, a parameter whose
-    /// regime the rover never entered.
-    pub fn drive_motor(&self) -> AngularMotor {
-        AngularMotor::new_disabled(MotorModel::AccelerationBased {
-            stiffness: 0.0,
-            damping: self.drive_damping,
-        })
-        // `0` is Avian's unlimited sentinel, but the motor is disabled until
-        // MotorActuator writes a positive live torque cap in the first command.
-        .with_max_torque(0.0)
-    }
-
-    /// Axle moment of inertia, kg·m² — authored `physxVehicleWheel:moi` when it
-    /// is stated, otherwise the solid-disk derivation `½·m·r²` from the authored
-    /// mass and radius — plus the drivetrain's reflected rotor inertia.
-    ///
-    /// The SAME derivation `WheelRaycast::axle_inertia` applies on the raycast
-    /// side (it cannot be shared as code — `lunco-mobility` does not depend on
-    /// this crate — so it is shared as a rule, and both are fed by this reader).
-    /// The physical wheel's tire term comes from its cylinder collider at
-    /// `wheel_density()`, which is ½·m·r² about the axle by construction; the
-    /// reflected term is stamped on top as an explicit `AngularInertia`
-    /// override at spawn, so both realizations integrate the same total.
+    /// The same authored value applies on the raycast side. The physical wheel's
+    /// collider density still derives its mass independently; it must not replace
+    /// an authored assembly inertia with a collider-only estimate.
     pub fn axle_inertia(&self) -> f64 {
         let tire = if self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
         } else {
             0.5 * self.mass * self.radius * self.radius
         };
-        tire + self.reflected_inertia
+        tire
     }
 
     /// Collider density realising `physxVehicleWheel:mass` on the physical wheel's
@@ -784,7 +695,6 @@ fn validate_wheel_values(
     min_validated_speed: f64,
     friction_mu: f64,
     steer_axis: DVec3,
-    drive_damping: f64,
 ) {
     validate_positive(errors, "physxVehicleWheel:radius", radius);
     validate_positive(errors, "physxVehicleWheel:width", width);
@@ -810,7 +720,6 @@ fn validate_wheel_values(
     validate_positive(errors, "physxVehicleTire:restLoad", rest_load);
     validate_nonnegative(errors, "lunco:tire:minValidatedSpeed", min_validated_speed);
     validate_nonnegative(errors, "physics:dynamicFriction", friction_mu);
-    validate_nonnegative(errors, "lunco:wheel:driveDamping", drive_damping);
     if !(steer_axis.is_finite() && steer_axis.length_squared() > 0.0) {
         errors.push(format!(
             "lunco:wheel:steerAxis must be finite and non-zero, got {steer_axis:?}"
@@ -887,24 +796,24 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
 // catches up — by RE-READING the composed stage, never by accepting values from
 // a side channel. Both funnels call [`resync_wheels_for_stage`] for edits that
 // [`claims_edit`] recognises, INSTEAD of their generic
-// `refresh_prim_subtree`/`reinstantiate_entity` fallback. That fallback is
+// `refresh_prim_subtree`/`reinstantiate_entity` path. That path is
 // actively destructive for wheels: it despawns the wheel's synthesized
 // `Port` children and visual child while `UsdSimProcessed` survives, so
-// the sim params are never re-derived, the `MotorActuator` points at a dead
+// the sim params are never re-derived, the solved joint boundary points at a dead
 // port, and the chassis-owned joint dangles. The resync mutates the spawned
 // components in place — entity ids, joints, `JointCollisionDisabled`, ports and
 // `UsdSimProcessed` are never touched.
 // ---------------------------------------------------------------------------
 
 /// Attribute families [`resync_wheels_for_stage`] claims from the generic
-/// refresh fallback. Prim-scoped where a name is not wheel-specific:
+/// refresh path. Prim-scoped where a name is not wheel-specific:
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
 pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> bool {
     if attr.starts_with("physxVehicleWheel:") {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
-    if attr.starts_with("lunco:wheel:") {
+    if attr == "lunco:wheel:steerAxis" {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
     }
     if attr.starts_with("lunco:suspension:") || attr.starts_with("physxVehicleSuspension:") {
@@ -924,14 +833,6 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
             | "physxVehicleWheelAttachment:index"
     ) {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAttachmentAPI");
-    }
-    // Torque and speed belong to the composed motor/gearbox parts.  A live edit
-    // on either part must re-read every wheel that consumes that powertrain, but
-    // an identically named attribute on an unrelated prim must keep the normal
-    // document refresh path.
-    if attr.starts_with("lunco:motor:") || attr.starts_with("lunco:gearbox:") {
-        return reader.has_api_schema(prim, "LunCoMotorAPI")
-            || reader.has_api_schema(prim, "LunCoGearboxAPI");
     }
     // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
     // place; a subtree refresh of the whole rover root would tear down live
@@ -979,9 +880,9 @@ struct WheelUpdate {
 /// makes the resync a fixed point (double-firing from both funnels is
 /// harmless).
 ///
-/// A wheel whose re-read now FAILS (a half-authored edit removed a required
-/// attr) keeps its old values — never break a running wheel; the collected
-/// missing-attr warning names what to restore.
+/// A wheel whose re-read fails is a terminal authored-state error for the active
+/// scene. The resync raises the shared runtime fault and safety hold after the
+/// stage borrow is released; it never continues with stale wheel parameters.
 pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     // 1. Collect this stage's spawned wheels + vehicle roots (plain data out).
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
@@ -1021,6 +922,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     //    `refresh_domes_live`).
     let mut updates: Vec<WheelUpdate> = Vec::new();
     let mut mixes: Vec<(Entity, Option<lunco_mobility::kernels::DriveMix>)> = Vec::new();
+    let mut failures: Vec<(Option<Entity>, String, String)> = Vec::new();
     {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -1035,10 +937,11 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
             if topology.invalid_wheel_attachments.contains(path) {
-                warn!(
-                    "[wheel resync] {} has malformed or ambiguous wheel attachment topology — keeping the spawned values",
-                    path
-                );
+                failures.push((
+                    Some(*entity),
+                    path.clone(),
+                    "malformed or ambiguous wheel attachment topology".to_owned(),
+                ));
                 continue;
             }
             let susp = topology
@@ -1049,40 +952,25 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .wheel_attachment_tires
                 .get(path)
                 .and_then(|s| SdfPath::new(s).ok());
-            let powertrain = match crate::powertrain::find_for_wheel(&view, &sp) {
-                Ok(powertrain) => powertrain,
-                Err(missing) => {
-                    warn!(
-                        "[wheel resync] {} names an invalid or under-authored motor; powertrain attributes to restore {:?} — keeping the spawned values",
-                        path,
-                        missing
-                    );
-                    continue;
-                }
-            };
-            match WheelParams::read(
-                &view,
-                &sp,
-                susp.as_ref(),
-                tire.as_ref(),
-                powertrain.as_ref(),
-            ) {
+            match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
-                    let (max_steer_angle, ackermann_strength) = match crate::steering_vehicle_of(
-                        &view, path,
-                    ) {
-                        Some(vehicle) => match crate::steering_vehicle_params(&view, &vehicle) {
-                            Ok((max, strength)) => (Some(max), strength),
-                            Err(reason) => {
-                                warn!(
-                                    "[wheel resync] {} has invalid Ackermann steering: {} — keeping the spawned values",
-                                    path, reason
-                                );
-                                continue;
+                    let (max_steer_angle, ackermann_strength) =
+                        match crate::steering_vehicle_of(&view, path) {
+                            Some(vehicle) => {
+                                match crate::steering_vehicle_params(&view, &vehicle) {
+                                    Ok((max, strength)) => (Some(max), strength),
+                                    Err(reason) => {
+                                        failures.push((
+                                            Some(*entity),
+                                            path.clone(),
+                                            format!("invalid Ackermann steering: {reason}"),
+                                        ));
+                                        continue;
+                                    }
+                                }
                             }
-                        },
-                        None => (None, 0.0),
-                    };
+                            None => (None, 0.0),
+                        };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
@@ -1091,16 +979,33 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                         ackermann_strength,
                     });
                 }
-                Err(missing) => warn!(
-                    "[wheel resync] {} now missing required attrs {:?} — keeping \
-                     the spawned values (restore the attrs to re-derive)",
-                    path, missing
-                ),
+                Err(missing) => failures.push((
+                    Some(*entity),
+                    path.clone(),
+                    format!("missing or invalid required attributes: {missing:?}"),
+                )),
             }
         }
         for (e, path) in &vehicles {
             let Ok(sp) = SdfPath::new(path) else { continue };
             mixes.push((*e, crate::derive_drive_mix(&view, &sp, path)));
+        }
+    }
+
+    for (entity, subject, detail) in failures {
+        let first = world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(
+                "usd-wheel-resync-invalid",
+                entity,
+                subject.clone(),
+                detail.clone(),
+            );
+        world
+            .get_resource_or_insert_with(lunco_physics::PhysicsHolds::default)
+            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+        if first {
+            error!("[wheel resync] terminal authored-state failure on {subject}: {detail}");
         }
     }
 
@@ -1160,10 +1065,9 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             tire.min_validated_speed = u.params.min_validated_speed;
             tire.friction_mu = u.params.friction_mu;
             tire.bearing_damping = u.params.bearing_damping;
-            tire.axle_axis_local = u.params.axle_axis;
         }
         // Keep the physical wheel's tensor in lock-step with the composed
-        // standard MOI and motor reflected inertia.  Updating only density
+        // authored assembly MOI. Updating only density
         // would leave an edited `physxVehicleWheel:moi` inert until a scene
         // reload, while the raycast wheel would apply it immediately.
         world.entity_mut(u.entity).insert((
@@ -1189,10 +1093,9 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             };
             world.entity_mut(u.entity).insert(collider);
         }
-        // …and the joint-side numbers, on the synthesized joint whose `body2`
-        // is this wheel. The motor is REBUILT from the one definition
-        // (`drive_motor`) with its live command preserved —
-        // `motor_actuator_system` rewrites `target_velocity` next tick anyway.
+        // …and the joint-side authored steering numbers, on the synthesized
+        // joint whose `body2` is this wheel. Torque remains on the solved
+        // mechanical port and therefore needs no parameter copy here.
         let mut joint_entity: Option<Entity> = None;
         {
             let mut q = world.query::<(Entity, &RevoluteJoint)>();
@@ -1204,16 +1107,9 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             }
         }
         let Some(je) = joint_entity else { continue };
-        if let Some(mut joint) = world.get_mut::<RevoluteJoint>(je) {
-            let target_velocity = joint.motor.target_velocity;
-            let mut motor = u.params.drive_motor();
-            motor.target_velocity = target_velocity;
-            joint.motor = motor;
-        }
-        if let Some(mut motor) = world.get_mut::<MotorActuator>(je) {
-            motor.max_omega = u.params.max_rotation_speed;
-            motor.peak_torque = u.params.peak_torque;
-            motor.brake_torque = u.params.brake_torque_max;
+        if let Some(mut actuator) = world.get_mut::<lunco_cosim::JointTorqueActuator>(je) {
+            actuator.brake_torque = u.params.brake_torque_max;
+            actuator.rotational_inertia = u.params.axle_inertia();
         }
         if let (Some(lock), Some(mut steer)) =
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))
@@ -1266,7 +1162,6 @@ mod tests {
             0.0,
             1.5,
             DVec3::Y,
-            30.0,
         );
         assert!(
             errors.is_empty(),
@@ -1295,7 +1190,6 @@ mod tests {
             -0.1,
             -1.0,
             DVec3::ZERO,
-            -1.0,
         );
         for name in [
             "physxVehicleWheel:radius",
@@ -1310,7 +1204,6 @@ mod tests {
             "physxVehicleTire:restLoad",
             "lunco:tire:minValidatedSpeed",
             "physics:dynamicFriction",
-            "lunco:wheel:driveDamping",
             "lunco:wheel:steerAxis",
         ] {
             assert!(

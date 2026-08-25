@@ -126,6 +126,21 @@ pub fn on_msl_became_ready(
     cache.reconcile_library_roots();
 }
 
+/// Re-project open diagrams after any bundled source root lands in the shared
+/// engine. Generated LunCo classes and MSL use the same resolver path.
+pub fn on_modelica_library_became_ready(
+    trigger: On<crate::engine_resource::ModelicaLibraryBecameReady>,
+    canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+) {
+    if let Some(mut canvas) = canvas {
+        canvas.request_reproject_all();
+        bevy::log::debug!(
+            "[PackageBrowser] source root `{}` ready: reprojected open diagrams",
+            trigger.event().root
+        );
+    }
+}
+
 pub fn handle_package_loading_tasks(mut cache: ResMut<PackageTreeCache>) {
     use futures_lite::future;
 

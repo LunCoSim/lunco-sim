@@ -17,11 +17,9 @@
 # WHY THIS SCENE EXISTS. Raycast and joint wheels are two REALIZATIONS of ONE
 # parameter set. The parity invariant is structural: both realizations read the
 # same authored motor/gearbox reduction and the raycast drive force includes the
-# same torque-speed term as the joint actuator, so both cap at the same axle speed.
-# Both read the single authored motor/gearbox reduction
-# (`lunco:motor:noLoadSpeed` / `lunco:gearbox:ratio`, yielding
-# 12.0 rad/s at the axle): the joint motor targets it, the raycast
-# drive force rolls off toward it. With r = 0.4 m both cap at
+# same authored motor/gearbox/shaft network, so both receive the same solved
+# torque and speed boundary. The operating point is determined by the Modelica
+# equations and wheel/tire load; no realization-specific motor rule is used.
 # omega_max * r = 12 * 0.4 = 4.8 m/s.
 #
 # `scenarios/tests/drivetrain_parity.rhai` (attached below) drives both from ONE tick
@@ -129,7 +127,7 @@ def Xform "DrivetrainParity" (
         }
     )
     {
-        double3 xformOp:translate = (-25.0, 1.0, 120.0)
+        double3 xformOp:translate = (-25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
@@ -145,7 +143,7 @@ def Xform "DrivetrainParity" (
         }
     )
     {
-        double3 xformOp:translate = (25.0, 1.0, 120.0)
+        double3 xformOp:translate = (25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"

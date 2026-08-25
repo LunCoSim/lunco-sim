@@ -40,12 +40,12 @@ By using a single ray per wheel:
 ### Drivetrain ownership
 
 Each moving quantity has one writer. Raycast wheels solve their tyre patch force
-in `lunco-mobility`; jointed wheels receive torque only through
-`lunco-hardware::MotorActuator`; and a rocker-bogie differential projects its
-gear relation inside Avian's substep solver. Co-simulation marks actuator-owned
-joints and does not position-hold them. Never add a second damping or drive
-force path to "calm" a rover: use the high-speed `drivetrain_parity` regression
-to identify the owner that is unstable.
+in `lunco-mobility`; jointed wheels receive the solved scalar torque through the
+generic `lunco_cosim::JointTorqueActuator`; and a rocker-bogie differential
+projects its gear relation inside Avian's substep solver. Co-simulation does not
+position-hold a wheel joint that has a solved torque boundary. Never add a second
+damping or drive-force path to "calm" a rover: use the high-speed
+`drivetrain_parity` regression to identify the owner that is unstable.
 
 ## Usage
 

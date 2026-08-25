@@ -4,7 +4,7 @@
 //! doc's AST collecting every cross-package type referenced (component
 //! types, extends bases, connector port types). A single
 //! [`bevy::tasks::AsyncComputeTaskPool`] task fans out
-//! [`crate::class_cache::peek_or_load_msl_class_blocking`] for each unique
+//! [`crate::class_cache::peek_or_load_class_blocking`] for each unique
 //! qualified name, then primes the engine's icon resolution by calling
 //! [`crate::engine::ModelicaEngine::icon_for`] for each one.
 //!
@@ -14,11 +14,10 @@
 //! class on the chain — drill-in projection finishes in milliseconds
 //! instead of the cold-walk seconds.
 //!
-//! Idempotent and best-effort: re-firing for the same doc is fine
-//! (rumoca's content-hash short-circuits repeated work). Failures
-//! anywhere in the warm task are silent — the projection task's
-//! [`crate::class_cache::MslLookupMode::Cached`] miss path falls back
-//! to default icons, and the next refresh sees the warmed cache.
+//! Idempotent: re-firing for the same doc is fine (rumoca's content-hash
+//! short-circuits repeated work). A warm miss remains an explicit unresolved
+//! class state; the source-root completion event schedules the normal
+//! re-projection that can resolve the authored icon.
 //!
 //! AST-as-source-of-truth: the warmer reads the doc's AST directly
 //! via [`crate::engine::ModelicaEngine::parsed_for_doc`]. No re-parse,
@@ -60,9 +59,9 @@ fn on_document_opened_warm(
     // drill-in into Modelica.Blocks.* the source is the whole
     // 152 kB Blocks/package.mo, and synchronously parsing that on
     // the main thread freezes the workbench for 100+ seconds in
-    // dev. The engine catches up async via `drive_engine_sync`
-    // anyway; an icon paint that misses the warm cache falls
-    // through to `engine.icon_for` which has its own MSL fallback.
+    // dev. The engine catches up async via `drive_engine_sync` anyway; an
+    // icon paint that misses the warm cache remains unresolved until the
+    // normal background projection resolves it.
     // **Wasm: warmer disabled.** `AsyncComputeTaskPool` is the main
     // thread on wasm32-unknown-unknown, so the warm task's
     // `engine.icon_for(ty)` calls — each up to ~1.3 s on a cold MSL
@@ -134,7 +133,7 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
     AsyncComputeTaskPool::get()
         .spawn(async move {
             // **Cache-only warm.** We deliberately do NOT call
-            // `peek_or_load_msl_class_blocking` here — it would parse large
+            // `peek_or_load_class_blocking` here — it would parse large
             // MSL files (200KB+) under the engine mutex, blocking
             // both the projection task and any main-thread query
             // for tens of seconds in dev builds. That regresses the

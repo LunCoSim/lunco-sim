@@ -60,32 +60,32 @@ def Xform "RoverEasy" (
     over "RockerL"
     {
         over "Wheel_FL" (variants = { string tire = "cleated" }) { }
-        over "Motor_FL" { float lunco:motor:stallTorque = 0.9 }
-        over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Motor_FL" { float inputs:stall_torque = 0.9 }
+        over "Gearbox_FL" { float inputs:max_output_torque = 1000.0 }
     }
     over "RockerR"
     {
         over "Wheel_FR" (variants = { string tire = "cleated" }) { }
-        over "Motor_FR" { float lunco:motor:stallTorque = 0.9 }
-        over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Motor_FR" { float inputs:stall_torque = 0.9 }
+        over "Gearbox_FR" { float inputs:max_output_torque = 1000.0 }
     }
     over "BogieL"
     {
         over "Wheel_ML" (variants = { string tire = "cleated" }) { }
         over "Wheel_RL" (variants = { string tire = "cleated" }) { }
-        over "Motor_ML" { float lunco:motor:stallTorque = 0.9 }
-        over "Motor_RL" { float lunco:motor:stallTorque = 0.9 }
-        over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-        over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Motor_ML" { float inputs:stall_torque = 0.9 }
+        over "Motor_RL" { float inputs:stall_torque = 0.9 }
+        over "Gearbox_ML" { float inputs:max_output_torque = 1000.0 }
+        over "Gearbox_RL" { float inputs:max_output_torque = 1000.0 }
     }
     over "BogieR"
     {
         over "Wheel_MR" (variants = { string tire = "cleated" }) { }
         over "Wheel_RR" (variants = { string tire = "cleated" }) { }
-        over "Motor_MR" { float lunco:motor:stallTorque = 0.9 }
-        over "Motor_RR" { float lunco:motor:stallTorque = 0.9 }
-        over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-        over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Motor_MR" { float inputs:stall_torque = 0.9 }
+        over "Motor_RR" { float inputs:stall_torque = 0.9 }
+        over "Gearbox_MR" { float inputs:max_output_torque = 1000.0 }
+        over "Gearbox_RR" { float inputs:max_output_torque = 1000.0 }
     }
 
     # TORQUE COMES FROM THE MOTOR. The axle torque is derived:

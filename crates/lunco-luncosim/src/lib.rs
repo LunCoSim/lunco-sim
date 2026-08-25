@@ -625,7 +625,7 @@ fn build_sim_app_with_profile(
     render_profile: SandboxRenderProfile,
 ) -> App {
     let mut app = App::new();
-    // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
+    // Register every LunCo asset source (lunco:// and twin://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
@@ -968,12 +968,22 @@ fn load_ready_scenario(
     // it exercises URI agreement but never the cache-root mount. It fails
     // silently: a wrong root gives that peer its own `GlobalEntityId`s, so
     // possession and client prediction never bind while the scene still renders.
-    let uri = lunco_networking::scenario_sync::mount_scenario_twin(
+    let uri = match lunco_networking::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
         &m.name,
         scene,
-    );
+    ) {
+        Ok(uri) => uri,
+        Err(error) => {
+            lunco_core::trigger_error(
+                &mut commands,
+                "scenario-twin-mount-failed",
+                format!("could not mount downloaded scenario Twin: {error}"),
+            );
+            return;
+        }
+    };
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene {
         path: uri,
@@ -2607,19 +2617,10 @@ impl Plugin for SandboxCorePlugin {
             // writer actually moved it. Must be added AFTER PhysicsPlugins
             // (it overrides PhysicsTransformConfig).
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
-            // 64 solver substeps (avian default 6): the raked prismatic landing
-            // joints and joint-based rovers need the higher fixed-step resolution
-            // to converge their hard angular constraints under contact load.
-            // Quantified in the headless
-            // `rover_jitter` probe. See `project_physical_rover_suspension`.
-            //
-            // WEB: 16 substeps — the single wasm thread runs the whole solver inline,
-            // so the browser uses a smaller, measured budget while retaining the
-            // hard-joint convergence needed by the authored mechanisms. Native and
-            // server builds use 64 for full contact convergence and peer determinism.
-            .insert_resource(avian3d::prelude::SubstepCount(
-                if cfg!(target_arch = "wasm32") { 16 } else { 64 },
-            ))
+            // `lunco_physics::PhysicsGatePlugin` owns the single solver-resolution
+            // contract and installs eight Avian substeps for every host. Keeping
+            // this choice at the physics owner prevents the GUI, server, and web
+            // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_systems(
@@ -2912,13 +2913,17 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         app.add_systems(Update, bind_terrain_layers);
 
-        // Terrain-streaming progress → status bar: while the wanted tile set is
-        // still baking in, show "streaming terrain N/M" (with the bus's progress
-        // bar) instead of leaving the viewport an unexplained black void on
-        // scene open. Pure derived read of `TerrainStreamStatus`.
+        // Terrain visual progress → status bar: stream residency and optional
+        // derived-map preparation use separate bus sources, so one cannot hide
+        // or complete the other. Pure derived reads of terrain resources.
         // `StatusBus` is initialized by the UI plugin stack, which `--no-ui` skips
         // at RUNTIME while the `ui` cargo feature stays compiled in — so gate on the
         // resource, not the feature, or a headless host panics on param validation.
+        #[cfg(feature = "ui")]
+        app.init_resource::<TerrainStatusMirrorState>().add_systems(
+            lunco_core::SceneTeardown,
+            reset_terrain_status_mirror_on_scene_teardown,
+        );
         #[cfg(feature = "ui")]
         app.add_systems(
             Update,
@@ -3157,6 +3162,13 @@ fn release_ground_activation_hold(
     mut holds: ResMut<lunco_physics::PhysicsHolds>,
     terrain_providers: Query<(), With<lunco_terrain_surface::TerrainColliderRing>>,
     needs_ground_settle: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
+    support_footprints: Query<
+        (),
+        (
+            With<lunco_core::NeedsGroundSettle>,
+            With<lunco_physics::PhysicsSupportFootprint>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     match activation.0 {
@@ -3164,12 +3176,12 @@ fn release_ground_activation_hold(
             activation.0 = 1;
             holds.set(lunco_physics::PhysicsHolds::GROUND_ACTIVATION, true);
         }
-        // `NeedsGroundSettle` is a request to the DEM terrain service. A scene
-        // with only authored/static collision has no such service and therefore
-        // no placement transaction to wait for; its authored pose is the
-        // physical initial condition. Retire the unclaimed requests at this
-        // assembly boundary instead of leaking an impossible world hold.
-        1 if terrain_providers.is_empty() => {
+        // A flat authored/static scene has no DEM provider, but a published
+        // support footprint still owns a one-shot placement transaction. Keep
+        // the activation hold until that generic physics contract consumes its
+        // marker. Only requests with no support contract are unclaimed and may
+        // be retired here.
+        1 if terrain_providers.is_empty() && support_footprints.is_empty() => {
             for entity in &needs_ground_settle {
                 commands
                     .entity(entity)
@@ -3407,28 +3419,85 @@ fn mirror_recording_to_terrain_lockstep(
 #[cfg(feature = "ui")]
 fn report_terrain_stream_status(
     status: Res<lunco_terrain_surface::TerrainStreamStatus>,
+    derived: Res<lunco_terrain_surface::TerrainDerivedStatus>,
     // `Option`: the `ui` FEATURE is compile-time, but `--no-ui` headless is a
     // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
     // is simply not added there, and a bare `ResMut` panics the whole app.
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut mirror: ResMut<TerrainStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
-    // Shared with the screenshot readiness gate's `VISUAL_BUSY_SOURCES` — see the
-    // const's docs for why this must not be a local literal.
-    const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
-    if status.wanted > 0 && status.resident < status.wanted {
-        bus.set_progress(
-            SOURCE,
+    const STREAM_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
+    const DERIVED_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE;
+    let streaming = status.wanted > 0 && status.resident < status.wanted;
+    if streaming && !mirror.streaming {
+        bus.push(
+            STREAM_SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
             format!(
-                "streaming terrain tiles {}/{}",
+                "Terrain streaming started ({}/{})",
+                status.resident, status.wanted
+            ),
+        );
+    }
+    if streaming {
+        bus.set_progress(
+            STREAM_SOURCE,
+            format!(
+                "Streaming terrain tiles {}/{}",
                 status.resident, status.wanted
             ),
             status.resident as u64,
             status.wanted as u64,
         );
     } else {
-        bus.remove_progress(SOURCE);
+        bus.remove_progress(STREAM_SOURCE);
     }
+    mirror.streaming = streaming;
+
+    if derived.active && !mirror.deriving {
+        bus.push(
+            DERIVED_SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
+            format!(
+                "Terrain visual preparation started ({}/{})",
+                derived.ready, derived.total
+            ),
+        );
+    }
+    if derived.active {
+        bus.set_progress(
+            DERIVED_SOURCE,
+            format!(
+                "Preparing terrain visuals {}/{}",
+                derived.ready, derived.total
+            ),
+            derived.ready as u64,
+            derived.total as u64,
+        );
+    } else {
+        bus.remove_progress(DERIVED_SOURCE);
+    }
+    mirror.deriving = derived.active;
+}
+
+#[cfg(feature = "ui")]
+#[derive(Resource, Default)]
+struct TerrainStatusMirrorState {
+    streaming: bool,
+    deriving: bool,
+    generation: Option<(String, lunco_terrain_surface::TerrainGenPhase)>,
+}
+
+#[cfg(feature = "ui")]
+fn reset_terrain_status_mirror_on_scene_teardown(
+    mut mirror: ResMut<TerrainStatusMirrorState>,
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    *mirror = TerrainStatusMirrorState::default();
+    let Some(mut bus) = bus else { return };
+    bus.remove_progress(lunco_workbench::status_bus::TERRAIN_SOURCE);
+    bus.remove_progress(lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE);
 }
 
 /// Mirror the DEM build lifecycle into the workbench status bus. Dataset
@@ -3439,12 +3508,30 @@ fn report_terrain_stream_status(
 #[cfg(feature = "ui")]
 fn report_terrain_generation_status(
     status: Res<lunco_terrain_surface::TerrainGenStatus>,
+    terrains: Query<(), With<lunco_terrain_surface::DemHeightField>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut mirror: ResMut<TerrainStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_BUILD_SOURCE;
     if !status.active {
         bus.remove_progress(SOURCE);
+        if mirror.generation.take().is_some()
+            && !faults.as_deref().is_some_and(|fault| {
+                fault
+                    .first
+                    .as_ref()
+                    .is_some_and(|f| f.kind == lunco_terrain_surface::TERRAIN_BUILD_FAULT_KIND)
+            })
+            && !terrains.is_empty()
+        {
+            bus.push(
+                SOURCE,
+                lunco_workbench::status_bus::StatusLevel::Info,
+                "Terrain ground ready",
+            );
+        }
         return;
     }
 
@@ -3464,6 +3551,20 @@ fn report_terrain_generation_status(
             )
         })
         .unwrap_or((0, 0));
+    let key = (status.site.clone(), status.phase);
+    if mirror.generation.as_ref() != Some(&key) {
+        let site = if status.site.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", status.site)
+        };
+        bus.push(
+            SOURCE,
+            lunco_workbench::status_bus::StatusLevel::Info,
+            format!("{}{}", status.phase.label(), site),
+        );
+        mirror.generation = Some(key);
+    }
     bus.set_progress(
         SOURCE,
         format!("{}{}", status.phase.label(), site),
@@ -4292,8 +4393,9 @@ fn setup_sandbox(world: &mut World) {
 
 /// Native/headless startup-scene load: resolve the enclosing Twin folder for
 /// `scene_path` (walk up to a `twin.toml`), register it as a workspace Twin so it
-/// mounts doc-first, or fall back to a direct [`LoadScene`]. Web skips this — its
-/// autoload hook loads the deployment twin directly (see [`setup_sandbox`]).
+/// mounts doc-first. Invalid or orphaned roots report an error and do not load a
+/// base-only scene. Web skips this — its autoload hook loads the deployment twin
+/// directly (see [`setup_sandbox`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
     // --- Load scene from USD ---
@@ -4332,6 +4434,30 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
                 .unwrap_or_else(|_| scene_file.clone());
             twin.set_default_scene(rel_scene_path);
 
+            // The asset authority owns `twin://` registration. Establish it
+            // before dispatching `TwinAdded`: this startup path admits the Twin
+            // and requests its default scene in one observer transaction, so a
+            // USD observer must never race the asset observer and see an
+            // unmounted root. The event handler repeats the same idempotent
+            // registration for ordinary workspace opens.
+            let authority = match world
+                .resource::<lunco_assets::twin_source::TwinRoots>()
+                .register_twin(&twin)
+            {
+                Ok(authority) => authority,
+                Err(error) => {
+                    error!(
+                        "[luncosim] could not register Twin asset authority for `{}`: {error}",
+                        twin.root.display()
+                    );
+                    return;
+                }
+            };
+            info!(
+                "[luncosim] registered startup Twin asset authority `{authority}` at {}",
+                twin.root.display()
+            );
+
             let twin_id = world
                 .resource_mut::<lunco_workspace::WorkspaceResource>()
                 .add_twin(twin);
@@ -4352,7 +4478,8 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         }
     }
     // `--scene` is doc-backed through the same path as any workspace Twin: the
-    // `TwinAdded` above runs the doc-first mount (`open_usd_docs_on_twin_added` →
+    // The asset-mounted event emitted after `TwinAdded` runs the doc-first
+    // mount (`open_usd_docs_on_twin_asset_mounted` →
     // `drain_pending_twin_docs`), and terrain edits stay on the incremental
     // re-bake — `LiveRebuildExempt` + `edit_confined_to_exempt_subtree` keep a
     // terrain-confined USD edit from ever reloading the scene.

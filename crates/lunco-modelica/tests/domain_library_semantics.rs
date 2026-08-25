@@ -32,6 +32,10 @@ fn battery_discharge_current_reduces_soc() {
         source.contains("p.v = max(0.0, voltage_nom *"),
         "an empty battery must not expose a negative physical bus voltage"
     );
+    assert!(
+        source.contains("soc(unit=\"1\", start = soc_init, fixed = true, min = 0.0, max = 1.0)"),
+        "the authored initial state must be fixed at the requested storage boundary"
+    );
 }
 
 #[test]
@@ -69,18 +73,18 @@ fn electrical_observables_follow_the_physical_power_chain() {
         motor.contains("heat = resistance * winding_current * winding_current;"),
         "motor heat must be winding loss from the solved current"
     );
-    assert!(motor.contains("winding_current = winding_voltage / resistance;"));
-    assert!(motor.contains("requested_demand = max(-1.0, min(1.0, demand));"));
     assert!(
-        motor.contains("available_demand = requested_demand * max(0.0, min(1.0, p.v / v_rated));")
+        motor.contains("winding_current = (winding_voltage - back_emf) / resistance;"),
+        "motor current must include back-EMF from the solved shaft speed"
     );
-    assert!(motor.contains("p.i = abs(winding_current);"));
-    assert!(!motor.contains("LunCo.Mechanics.Flange"));
-    assert!(!motor.contains("shaft.tau"));
-    assert!(!motor.contains("mechanical_power_w"));
     assert!(
-        !motor.contains("efficiency"),
-        "the electrical facet must not declare a parameter with no source reader"
+        motor.contains("output Real shaft_torque")
+            && motor.contains("mechanical_power_w = shaft_torque * shaft_speed;"),
+        "the motor must expose solved torque and mechanical power to the authored domain boundary"
+    );
+    assert!(
+        motor.contains("input Real speed") && motor.contains("shaft_speed = speed;"),
+        "the motor must receive measured shaft speed at the co-simulation boundary"
     );
 }
 

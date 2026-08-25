@@ -67,6 +67,7 @@ required events, and command counts belong in Rhai runtime observers.
 
 | Tutorial | What you build |
 |---|---|
+| [00 — Create your first Twin](00-create-a-twin.md) | Create a small Twin and see how `twin.toml`, USD, Modelica, and Rhai divide ownership. |
 | [01 — Lander → Rover mission](01-lander-rover-mission.md) | A reusable lander *vehicle* that flies itself down on a glowing engine plume, a scene that drops it into a mission, and an autopilot that drives the released rover through a waypoint course until you take over — with model-driven warnings, on-screen narration, and possession as the one source of control authority. |
 | [02 — Author your own controller](02-authoring-a-controller.md) | Build a self-flying vessel from scratch: the control law in Modelica, logic in rhai, sensors + wiring + the `piloted` authority signal in USD — and a pilot who can take over. The layering behind every LunCoSim GNC. |
 | [03 — Cosim: when a Model flies physics](03-cosim.md) | How a Modelica program and the physics engine exchange typed values at declared communication points, how USD connections become `SimConnection`s, and how to verify the live chain over the API. |

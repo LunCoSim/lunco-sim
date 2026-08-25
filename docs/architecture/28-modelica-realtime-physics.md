@@ -113,6 +113,13 @@ the worker so badly that one of three models finished compiling in 30 s of sim
 time, with no error. Solvability is the backend's own lowering to answer and the
 authored domain rules to constrain. A thin substrate does not get an opinion.
 
+The electrical storage boundary follows the same ownership rule. `Battery.mo`
+authors the initial `soc` as a fixed state inside the physical `[0, 1]` storage
+interval. At `soc = 0`, its solved terminal potential is zero; the circuit still
+contains every authored source, including solar generation, and Kirchhoff's laws
+determine whether another source can energize a load. No Rust actuator policy,
+drained-state recovery, or source-disabling branch is part of this contract.
+
 ### The registry is the vocabulary
 
 `SolverChoice` was a closed enum; it is a registry now, and that changes the
@@ -420,7 +427,7 @@ model RoverBattery
   input  Real load_w   = 0;     // electrical load (W), wired from motor draw
   parameter Real capacity_wh = 1000;
   parameter Real v_nominal   = 28;
-  Real soc(start = 1.0);        // 0..1
+  Real soc(start = 1.0, fixed = true, min = 0.0, max = 1.0); // 0..1
   output Real voltage;          // observable → must be `output` (rumoca convention)
 equation
   der(soc) = -load_w / (capacity_wh * 3600);

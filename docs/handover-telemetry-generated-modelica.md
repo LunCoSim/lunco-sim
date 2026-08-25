@@ -38,6 +38,15 @@ continuous equations and state; USD owns the composed topology and authored
 metadata; Rhai owns domain synthesis policy; Rust owns generic projection,
 validation, lifecycle, and runtime mechanisms.
 
+The follow-up UI review also closed the projection-stall path: the generated
+canvas now resolves native icons through the shared Modelica engine, loads
+structured source roots asynchronously, and keeps the UI lock-free at
+contention points. Editable documents persist node movement as standard
+`Placement` annotations; generated documents remain read-only and expose
+`Duplicate to edit` so a user cannot make a non-persistent edit to a USD/Rhai
+projection. Physical-flow animation consumes declared Modelica `flow` metadata
+and live state, not generated electrical names.
+
 The important production rule is that telemetry must preserve the canonical
 USD/model identity while exposing the solver state. Solver spelling is an
 implementation detail and must not become the user-facing channel identity.
@@ -56,6 +65,9 @@ implementation detail and must not become the user-facing channel identity.
   - Current default synthesis policy.
   - Emits Modelica components, ports, `connect(...)` equations, boundary and
     causal equations, icons, diagram graphics, and deterministic layout.
+  - Owns named presentation constants for layout spacing, component extents,
+    icon sizing, and diagram typography; these are policy controls, not hidden
+    Rust/runtime parameters.
   - Each authored motor/component remains a distinct component in the facts and
     generated topology; a policy may partition connected components into units
     without collapsing the source graph into a visual summary.
@@ -66,6 +78,10 @@ implementation detail and must not become the user-facing channel identity.
 - `crates/lunco-scripting/src/lib.rs`
   - Registers the shipped `synth.acausal-network` and
     `synth.actuator-wrench` Rhai hooks at production startup.
+- `crates/lunco-hooks-rhai/src/lib.rs`
+  - Provides the generic hook compiler and propagates literal top-level Rhai
+    constants into policy helper functions; this is shared scripting machinery,
+    not generated-electrical policy in Rust.
 - `crates/lunco-modelica/src/state.rs`
   - Stores the published generated source, URI, network root, and projection
     error state.
@@ -102,6 +118,16 @@ implementation detail and must not become the user-facing channel identity.
   - Publishes Modelica runtime state into the shared signal path.
   - Retains solver/model identity metadata and does not require a plot binding
     for state to be retained.
+- `crates/lunco-modelica/src/engine_resource.rs` and
+  `crates/lunco-modelica/src/class_cache.rs`
+  - Own the shared source-aware engine handle and generic asynchronous package
+    root loading. UI/projection readers do not wait for the engine mutex.
+- `crates/lunco-modelica/src/ui/panels/canvas_diagram/ops.rs`
+  - Maps the generic canvas `NodeMoved` event to `ModelicaOp::SetPlacement`;
+    the document patch/journal path persists the standard Modelica annotation.
+- `crates/lunco-modelica/src/ui/panels/canvas_diagram/edge.rs`
+  - Animates only declared connector `flow` variables, including multiple
+    flow fields, along the actual routed edge polyline.
 - `crates/lunco-api/src/queries.rs` and `crates/lunco-api/src/subscription.rs`
   - Expose channel metadata, history queries, and realtime subscriptions.
 - `crates/lunco-usd-sim/src/cosim.rs`
@@ -161,13 +187,42 @@ generic metadata path.
 
 The generated document must be inspectable as ordinary Modelica:
 
-- declared component classes and instance names;
+- declared component classes and readable, collision-checked instance names;
 - typed ports and public boundary ports;
 - authored/component parameters and constants;
 - executable `connect(...)` equations and causal/boundary equations;
-- standard Modelica icon and diagram annotations;
+- standard Modelica icon and diagram annotations. The canvas does not invent a generic
+  component card when a resolved class has no `Icon`; that is an explicit visual-contract
+  diagnostic and the class must be fixed at its Modelica owner.
 - connection routes and port positions;
 - a stable mapping back to the USD prim for every component and output.
+
+The shipped electrical policy gives the generated unit a standard diagram-level
+power-bus rail and routes each acausal connection through it with ordinary
+Modelica `Line` annotations. The policy chooses the highest-incidence member
+in each connected unit as the visual bus hub; an authored
+`LunCoModelicaTopologyAPI` `storage` role only breaks equal-incidence ties.
+Authored `source` members occupy one branch bank and `load` members the
+opposite bank, while `neutral` members are packed onto the shorter bank. This
+is topology plus typed presentation metadata, not a battery/motor/solar class
+rule, and it avoids the misleading appearance of a solar panel wired directly
+to a motor. Because the Modelica graph is acausal, these roles never assert a
+solver direction; runtime signed `flow` values still determine animation.
+The two banks use disjoint lane ranges around the hub, so a horizontal route
+cannot be mistaken for a direct source-to-load wire. Member coordinates are
+local to their owning unit diagram; root coordinates place the unit instances.
+The policy also uses readable generated unit instances (`power_system` or
+`power_unit_N`); full USD paths remain the identity mapping, not the display
+label.
+
+Electrical activity is covered by the established generic flow animation path
+used by the rocket/lander diagrams. The shipped `Pin` declares `flow Real i`;
+the standard connector projection records that flow variable, and the canvas
+samples live `instance.p.i` values to move directional dots along each
+generated `connect(...)` polyline. The Rhai policy therefore emits ordinary
+Modelica connectors and routes only; Rust does not need a generated-electrical
+animation branch. Non-zero signed current animates, zero current is idle, and
+missing state remains an observable diagnostic.
 
 `GeneratedModelicaSource` is the single published source/diagram record. The
 editor, compiler, runtime telemetry, and API must use that record rather than
@@ -176,11 +231,23 @@ whole projected set and can filter by `network_root`; the source includes the
 network root, generated document URI, component paths, member output aliases,
 units, and layout.
 
+The generated browser row is a topology-aware entry point: a network with one
+unit opens that unit class so the first diagram shows the real member graph;
+multi-unit networks open the generated root wrapper so unit boundaries remain
+visible. The root wrapper is still available through the normal Modelica source
+and class path. Canvas navigation resolves the focused tab, and `FitCanvas`
+consumes its deferred request inside the render pass using the actual widget
+rectangle, so split root/unit tabs cannot silently fit the wrong view.
+
 Policy changes belong in Rhai. The Rust side should only gather composed facts
 once, invoke the selected policy, validate coverage and shape, and publish the
-result. A missing policy, unknown class, malformed output, or incomplete unit
-partition is an explicit projection error. It must not become an empty diagram,
-compiled-schema fallback, guessed class, or legacy alias.
+result. Validation includes rejecting undeclared root/unit causal ports,
+promotions for outputs missing from the loaded member class, and overlapping
+policy placements, so a policy cannot silently widen the USD-authored runtime
+interface or publish an unusable diagram. A missing policy, unknown class,
+malformed output, or incomplete unit partition is an explicit projection error.
+It must not become an empty diagram, compiled-schema fallback, guessed class, or
+legacy alias.
 
 The source-root ownership change in `04e7f4555` is also important for generated
 models: source-root classes are tracked by authored namespace, not by a
@@ -219,7 +286,7 @@ solver session.
 
 ```text
 cargo test -p lunco-usd-sim --test hook_synthesizer -j4
-5 passed, 0 failed, 0 ignored
+15 passed, 0 failed, 0 ignored (baseline before the topology-role edit)
 
 cargo test -p lunco-usd-sim --test domain_projection_reader -j4
 6 passed, 0 failed, 0 ignored
@@ -233,6 +300,9 @@ These tests prove that:
 - a Rhai policy can be the synthesizer;
 - Rhai can replace source emission, unit partition, and layout;
 - malformed policy output is an authoring error;
+- the synthesis result requires explicit `source`, `units`, both layout
+  sections, `source_roots`, and `member_output_aliases` fields;
+- repeated battery and solar members retain distinct Rhai-owned placements;
 - facts describe the complete fixture graph, including classes, connectors,
   constants, and connections;
 - the shipped default policy emits both executable topology and visual
@@ -246,11 +316,26 @@ These tests prove that:
 - actuator force geometry is projected through the registered
   `synth.actuator-wrench` policy.
 
+The policy-specific contracts live in:
+
+- `assets/scripting/tests/test_generated_acausal_policy.rhai`
+- `assets/scripting/tests/test_generated_actuator_policy.rhai`
+
+The acausal policy asset also contains
+`test_topology_roles_put_sources_opposite_loads`, covering the typed
+source/storage/load-bank algorithm. It can be exercised through the live
+`RunRhai` path without rebuilding or restarting native tests.
+
+The Rust test supplies composed facts, registers the same shipped policy used
+in production, and invokes the Rhai contract. Assertions for generated source
+shape, solver ownership, topology, layout, aliases, and presentation stay in
+Rhai so policy changes do not require Rust test rewrites.
+
 ### Modelica parser/compiler checks already verified on this `usd` line
 
 ```text
 cargo test -p lunco-modelica --lib -j4
-262 passed, 3 ignored, 0 failed
+272 passed, 3 ignored, 0 failed
 
 cargo test -p lunco-modelica --test rumoca_chokepoints -j4
 3 passed, 0 failed
@@ -260,19 +345,64 @@ cargo test -p lunco-modelica --test package_member_compile -j4
 
 cargo test -p lunco-modelica --test rumoca_api_coverage -j4
 5 passed, 0 failed
+
+cargo test -p lunco-hooks-rhai -j4
+7 passed, 0 failed, 0 ignored
+
+cargo test -p lunco-scripting --test rhai_test_harness -j4
+4 passed, 0 failed, 0 ignored
+
+cargo test -p lunco-assets --lib -j4
+85 passed, 0 failed, 0 ignored
 ```
 
 Formatting and production compilation were also verified:
 
 ```text
-cargo fmt --all -- --check
-cargo build -p lunco-luncosim --bin luncosim -j4
+cargo fmt --all && git diff --check
+cargo build -p lunco-luncosim --bin luncosim --features ui -j4
 ```
 
-Both completed successfully. The production binary was launched headlessly on
-API port `4113`; `/api/ready` reported `ready=true`, `/api/commands/schema`
-returned the command/query schema, and a typed `ExecuteCommand`/`Exit` request
-terminated the process with exit code 0 and released the port.
+Both completed successfully. The production UI binary was launched on
+API port `4106`; `/api/ready` reported `ready=true`, the actual solar-rover USD
+scene was loaded through the typed command, `GeneratedModelicaSource` returned
+`error=null` with the expected `connect(...)` star topology, and the generated
+unit was opened from the Build perspective and captured through the typed
+`CaptureScreenshot` command. The screenshot was inspected, and a typed
+`ExecuteCommand`/`Exit` request terminated the process and released the port.
+
+The Modelica compiler also has a regression proof for ordinary qualified-name
+lookup: `LunCo.Electrical.Battery` is compiled without manually registering or
+loading `LunCo`. The compiler discovers structured `assets/models/<Root>/`
+packages from their `package.mo` marker, seats the referenced root on the
+unresolved-reference path, and retries through the same standard root-segment
+search-path mechanism used for any package. The synthesis schema requires an
+explicit `source_roots` field, but root prewarming remains optional to class
+discovery; it is not a library-specific workaround.
+
+### Follow-up UI/runtime validation (2026-08-24)
+
+The previous production session exposed a real recursive-lock defect: the
+projection held `ModelicaEngineHandle` while calling a helper that attempted
+to lock the same mutex. That path was removed. The UI/API readers now use
+short `try_lock` reads, and root loading plus icon inheritance resolution run
+on the compute task pool. A cold generated root loaded 77 native Modelica
+documents, and the `PowerSystem` drill-in completed projection in roughly
+24 ms after opening according to the production log.
+
+The production binary was exercised on API port `4108` with the composed
+solar-rover scene. The generated `PowerSystem` document reported live
+`Battery.p.i`, `Motor_*.p.i`, and `YawHead__SolarPanel.p.i` state values, while
+the inspected screenshot showed the authored battery, motor, and solar-panel
+icons and the routed bus topology:
+`target/generated-modelica-powersystem-icons.png`.
+
+The generic canvas movement path is covered in source by
+`SceneEvent::NodeMoved → ModelicaOp::SetPlacement → document patch/journal`.
+The generic flow path now tests source-sign inversion, target-endpoint reads,
+multiple declared flow variables, and the rule that ordinary scalar values do
+not animate a wire. The path performs no per-frame string formatting and
+walks each rendered route linearly.
 
 ## Test seam fixed in this handover
 
@@ -328,8 +458,13 @@ production-session acceptance pass:
    names.
 6. Subscribe through the typed telemetry API and verify samples carry the
    producing entity and simulation time.
-7. Open the generated diagram and telemetry browser. Check ports, wires,
-   component labels, connection routes, and non-empty live values.
+7. Open the generated diagram and telemetry browser. For a single-unit network,
+   confirm the browser opens the unit-level member graph; for a multi-unit
+   network, confirm the root wrapper remains the first view. Check ports, wires,
+   component labels, connection routes, and non-empty live values. For an
+   electrical unit, verify at least one non-zero `Pin.i` edge produces moving
+   dots and that a zero-current edge stays idle. Exercise `FitCanvas` while the
+   drilled-in tab is focused.
 8. Exit through the typed API, verify the process and API port disappear, and
    only then replace the session.
 
@@ -358,3 +493,8 @@ replaced.
 - Keep the production hook registration and direct-test registration aligned:
   a policy-owned synthesizer must have an explicit registered policy in every
   path that invokes it.
+- Keep active native Rhai directories authoritative. Missing packaged asset
+  directories select the compiled-in package, but an existing unreadable or
+  empty editable directory must fail visibly rather than switching sources.
+- Keep Modelica source-root diagnostics terminal for a load attempt: do not
+  install a partial package after any member parse error.

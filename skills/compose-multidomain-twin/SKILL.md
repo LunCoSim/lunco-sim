@@ -233,3 +233,9 @@ environment domain removes absent samples instead of fabricating zeroes or
 retaining stale values. Do not add dummy USD properties or an EarthTracker
 alias to hide a missing declaration. See
 [`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).
+
+For a generated Modelica domain, the complete parsed wrapper output interface—including
+topology-derived member aliases selected by the authored synthesizer—is published before USD
+telemetry declarations are projected. Keep this lifecycle ordering intact: a compile-pending
+wrapper is assembly state, not a missing-port fallback, and live values still come only from
+`SimComponent.outputs`.

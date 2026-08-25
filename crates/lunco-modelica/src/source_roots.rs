@@ -12,15 +12,7 @@
 //!   (`AnnotatedRocketStage`, `Balloon`, etc.). Loaded via
 //!   [`crate::models::get_model`].
 //! - **Workspace files**: user-authored `.mo` files in the active
-//!   workspace tree. Populated by a workspace scanner (PR-C).
-//!
-//! ## What this PR (PR-A) does
-//!
-//! Builds the inventory. No loads, no dep scanning, no gate. Every
-//! entry starts in [`LoadState::NotLoaded`]. Subsequent PRs wire in:
-//!  - PR-B: AST dep scanner + pre-compile gate + per-kind loaders.
-//!  - PR-C: workspace file enumeration.
-//!  - PR-D: status-bus mirror, retire `MslRemotePlugin`.
+//!   workspace tree.
 //!
 //! ## Design intent
 //!
@@ -58,9 +50,7 @@ pub enum LoadState {
 
 /// How to actually fetch + install the source for one root.
 ///
-/// The dispatch in [`crate::source_roots`] PR-B's loader will match
-/// on this enum to pick the right strategy. Kept inert here; only
-/// metadata.
+/// The source-root loader matches on this enum to pick the correct strategy.
 #[derive(Debug, Clone)]
 pub enum SourceRootKind {
     /// On-disk Modelica library (MSL or third-party). Loaded via
@@ -84,13 +74,24 @@ pub enum SourceRootKind {
         /// (e.g. `"AnnotatedRocketStage.mo"`).
         filename: String,
     },
+    /// Structured Modelica package embedded below `assets/models/<root>`.
+    /// The complete package tree is loaded from the asset owner, so package
+    /// members resolve by their authored `within` names like any package on
+    /// a normal Modelica search path.
+    BundledPackage { root: String },
     /// User `.mo` file in the active workspace. Loaded by reading
     /// the file from disk and installing the resulting document.
-    /// Populated by the PR-C workspace scanner.
+    /// Populated when a workspace document contributes a source root.
     WorkspaceFile {
         /// Absolute path on disk.
         path: PathBuf,
     },
+    /// Source already synchronized from an untitled editor document.
+    ///
+    /// This is deliberately distinct from [`SourceRootKind::Bundled`]: an
+    /// untitled document has no embedded filename and must never be sent
+    /// through the bundled-model loader.
+    SessionDocument { id: String },
 }
 
 /// One source root the workbench knows about. Keyed by the
@@ -116,9 +117,10 @@ pub struct SourceRoot {
 ///  - Third-party libraries via
 ///    [`crate::package_tree::scanner::discover_third_party_libs`].
 ///  - Bundled examples via [`crate::models::bundled_models`].
+///  - Structured packages via [`lunco_assets::models::package_roots_live`].
 ///
-/// **Inventory only at this stage** — no loads run until PR-B's
-/// pre-compile gate fires.
+/// Loading remains demand-driven: inventory is cheap, and a root is installed
+/// only when a compile or class lookup actually references it.
 #[derive(Resource, Debug, Default)]
 pub struct SourceRootRegistry {
     /// Map of root id → entry. The dep-scanner looks up qualified-
@@ -199,13 +201,45 @@ impl SourceRootRegistry {
             );
         }
 
+        // Structured packages — keyed by their Modelica root segment. On
+        // native, prefer the live package directory so editor changes are
+        // visible without rebuilding; on wasm, use the embedded package tree.
+        // This is the standard root-segment search-path inventory, not a
+        // library-specific registration.
+        for root_name in lunco_assets::models::package_roots_live() {
+            if roots.contains_key(&root_name) {
+                continue;
+            }
+            let kind = lunco_assets::models_package_root_path(&root_name)
+                .map(|root_dir| SourceRootKind::SystemLibrary {
+                    cache_subdir: format!("models/{root_name}"),
+                    root_dir,
+                })
+                .unwrap_or_else(|| SourceRootKind::BundledPackage {
+                    root: root_name.clone(),
+                });
+            roots.insert(
+                root_name.clone(),
+                SourceRoot {
+                    id: root_name,
+                    kind,
+                    state: LoadState::NotLoaded,
+                },
+            );
+        }
+
         let lib_count = roots
             .values()
             .filter(|r| matches!(r.kind, SourceRootKind::SystemLibrary { .. }))
             .count();
         let bundled_count = roots
             .values()
-            .filter(|r| matches!(r.kind, SourceRootKind::Bundled { .. }))
+            .filter(|r| {
+                matches!(
+                    r.kind,
+                    SourceRootKind::Bundled { .. } | SourceRootKind::BundledPackage { .. }
+                )
+            })
             .count();
         bevy::log::info!(
             "[source-roots] registry built: {} system libraries, {} bundled examples \
@@ -248,13 +282,7 @@ impl SourceRootRegistry {
         }
         let kind = match path {
             Some(p) => SourceRootKind::WorkspaceFile { path: p },
-            None => SourceRootKind::Bundled {
-                // Untitled docs don't have a filename; rumoca only
-                // sees them via engine_resource sync. The `Bundled`
-                // variant is a stand-in marker: never actually
-                // loaded by the gate (state is already Ready).
-                filename: format!("untitled:{id}"),
-            },
+            None => SourceRootKind::SessionDocument { id: id.clone() },
         };
         self.roots.insert(
             id.clone(),
@@ -302,6 +330,15 @@ pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
         .collect()
 }
 
+/// Scan a source document for the Modelica search-path roots it references.
+/// This is the source-side equivalent of `scan_source_root_deps` for compile
+/// entry points that have source text but do not yet own an AST.
+pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<String> {
+    rumoca_phase_parse::parse_to_ast(source, uri)
+        .map(|ast| scan_source_root_deps(&ast))
+        .unwrap_or_default()
+}
+
 /// Collect type-name references from `class`, keeping only qualified
 /// (dotted) names — bare names always resolve within the current
 /// doc's own classes, so they never imply an external source-root
@@ -314,6 +351,17 @@ fn walk_class_qualified_types(class: &ClassDef, out: &mut HashSet<String>) {
             out.insert(name.to_string());
         }
     });
+    for import in &class.imports {
+        use rumoca_compile::parsing::ast::Import;
+        let path = match import {
+            Import::Qualified { path, .. } | Import::Renamed { path, .. } => path.to_string(),
+            Import::Unqualified { path, .. } => path.to_string(),
+            Import::Selective { path, .. } => path.to_string(),
+        };
+        if path.contains('.') {
+            out.insert(path);
+        }
+    }
 }
 
 /// Modelica built-in root segments that never need a source root
@@ -333,23 +381,9 @@ fn is_builtin_root(root: &str) -> bool {
 /// the caller logs and lets compile fall through (rumoca will
 /// surface a `unresolved type reference` diagnostic).
 ///
-/// PR-C strategy: this function publishes the source root's
-/// location to the process-wide handle that
-/// [`ModelicaCompiler::new`] consults via `preload_from_global`.
-/// The handle store is a cheap `OnceLock` write; the **actual
-/// parse cost** is paid inside the worker thread on its first
-/// `ModelicaCompiler::new()` call. From the main thread's
-/// perspective this function is microseconds.
-///
-/// Per-kind dispatch:
-/// - [`SourceRootKind::SystemLibrary`] with `cache_subdir == "msl"`
-///   → installs via [`lunco_assets::msl::install_global_msl_sources`].
-///   The existing `MslRemotePlugin` plumbing handles the rest.
-/// - Other system libraries (third-party) and Bundled / WorkspaceFile
-///   → not yet supported; logs a warning and marks `Failed`. Their
-///   compile path will surface the missing-type error from rumoca
-///   the same way it did before PR-C. Adding support for these is
-///   the work of a follow-up PR.
+/// The per-kind dispatch sends either a disk package or an in-memory package
+/// to the worker. The worker owns parsing and session installation; this
+/// function only changes registry state and queues the operation.
 ///
 /// Source tag used for [`lunco_workbench::status_bus::StatusBus`]
 /// progress entries during source-root loads.
@@ -366,8 +400,8 @@ pub const STATUS_BUS_SOURCE: &str = "source-roots";
 /// `package.mo`/`package.order` the Modelica-standard way).
 ///
 /// Session roots persist across compiles, so once loaded a twin's classes resolve on
-/// both the editor and the cosim compile paths — the same reason the shipped `LunCo`
-/// library is seated once. `Local` tracks what has been sent (`TwinRoots` mutates
+/// both the editor and the cosim compile paths. `Local` tracks what has been sent
+/// (`TwinRoots` mutates
 /// through interior handles and so never triggers `Changed`); a twin with no `models/`
 /// dir is recorded too, so it is not re-probed every frame.
 pub fn load_twin_source_roots(
@@ -378,12 +412,24 @@ pub fn load_twin_source_roots(
     let (Some(twin_roots), Some(channels)) = (twin_roots, channels) else {
         return;
     };
-    for name in twin_roots.names() {
+    let names = match twin_roots.names() {
+        Ok(names) => names,
+        Err(error) => {
+            log::error!("[source-roots] Twin registry unavailable: {error}");
+            return;
+        }
+    };
+    for name in names {
         if seen.contains(&name) {
             continue;
         }
-        let Some(root) = twin_roots.root_of(&name) else {
-            continue;
+        let root = match twin_roots.root_of(&name) {
+            Ok(Some(root)) => root,
+            Ok(None) => continue,
+            Err(error) => {
+                log::error!("[source-roots] Twin `{name}` lookup failed: {error}");
+                return;
+            }
         };
         let models_dir = root.join("models");
         // Record the twin either way: a `models/`-less twin has nothing to load and
@@ -460,6 +506,27 @@ pub fn ensure_loaded(
                 summary,
             )
         }
+        SourceRootKind::BundledPackage { root } => {
+            let files = lunco_assets::models::package_files_live(root);
+            if files.is_empty() {
+                bevy::log::warn!(
+                    "[source-roots] bundled package `{}`: no Modelica files found",
+                    root
+                );
+                entry.state = LoadState::Failed(format!(
+                    "bundled Modelica package `{root}` has no source files"
+                ));
+                return false;
+            }
+            let summary = format!("bundled package {root}, {} files", files.len());
+            (
+                crate::worker::LoadSourceRootPayload::InMemory {
+                    label: format!("bundled:{root}"),
+                    files,
+                },
+                summary,
+            )
+        }
         SourceRootKind::WorkspaceFile { path } => {
             // Through `lunco-storage` (FileStorage native / WebStorage on wasm),
             // not `std::fs`: a workspace dependency can be opened in the web
@@ -491,14 +558,21 @@ pub fn ensure_loaded(
                 summary,
             )
         }
+        SourceRootKind::SessionDocument { id: document_id } => {
+            let message =
+                format!("session document source root `{document_id}` has no standalone loader");
+            bevy::log::error!("[source-roots] {message}");
+            entry.state = LoadState::Failed(message);
+            return false;
+        }
     };
 
     // Dispatch + mark Loading. The worker's COMPILE lane is FIFO
     // (Steps of other live entities may jump ahead, but LoadSourceRoot /
     // Compile / Reset / UpdateParameters never reorder among themselves —
     // see `worker::enqueue_command`), so a Compile sent immediately after
-    // this is guaranteed to see the loaded session. PR-D will add a result
-    // message to transition Loading → Ready based on actual worker progress.
+    // this is guaranteed to see the loaded session. Worker results transition
+    // Loading → Ready or Failed based on the actual load outcome.
     let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
         payload,

@@ -12,7 +12,7 @@ use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::InputPorts;
 
 use crate::wheel_kinematics::{wheel_heading, wheel_hub_pose, wheel_hub_velocity};
-use crate::WheelRaycast;
+use crate::{WheelBodyMount, WheelRaycast};
 
 /// Torque that would exactly arrest a spin of `w` rad/s in one step `dt`
 /// for a wheel of inertia `i` (`τ = I·ω/dt`). The brake applies the negative
@@ -30,26 +30,35 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 ///
 /// **Model** — per wheel we integrate the axle angular velocity `ω` from a torque
 /// balance `I·ω̇ = τ_drive + τ_brake − τ_traction − τ_bearing`. Every coefficient
-/// is read from the USD wheel component (mass, friction, motor curve) — see
+/// is read from the USD wheel component (mass, friction, and tire) — see
 /// `setup_raycast_wheel` — so the spin you see is grounded in the authored data:
 /// - `I = ½·m·r²` — solid-disk inertia from USD `physxVehicleWheel:mass` and radius.
-/// - `τ_drive = throttle · drive_torque_max` — actuator torque (signed for
-///   reverse); `drive_torque_max` comes from the motor power / no-load speed.
+/// - `τ_drive` is the solved physical torque published by the authored
+///   mechanical network; there is no Rust-side motor curve or command clamp.
 /// - **Grounded**: the contact slip `(ω·r − v)` is resisted by tire grip with a
 ///   stiff longitudinal stiffness, capped by the Coulomb limit `μ·N`. Below the
 ///   limit the wheel grips (`ω → v/r`, solved implicitly for unconditional
 ///   stability); above it the tire breaks loose and `ω` runs away from `v/r`
 ///   (visible wheelspin or lock-up skid). This is the standard slip-ratio model.
 /// - **Airborne**: no contact → no traction; `ω` spins up under `τ_drive` and
-///   bleeds off through bearing drag, terminating at the motor's no-load speed.
+///   bleeds off through bearing drag.
 /// - **Braking**: brake torque opposes the spin and, when it beats the available
 ///   traction, locks the tire into a skid while the chassis keeps moving.
 ///
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
-    mut q_wheels: Query<(Entity, &mut WheelRaycast, &Transform, &RayHits, &ChildOf)>,
-    q_ports: Query<&lunco_core::architecture::Port>,
+    mut q_wheels: Query<(
+        Entity,
+        &mut WheelRaycast,
+        &Transform,
+        &RayHits,
+        &WheelBodyMount,
+    )>,
+    mut q_ports: ParamSet<(
+        Query<&lunco_core::architecture::Port>,
+        Query<&mut lunco_core::architecture::Port>,
+    )>,
     q_chassis: Query<
         (
             &LinearVelocity,
@@ -62,18 +71,12 @@ pub(crate) fn update_wheel_spin(
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        // A raycast wheel is carried by the rigid body immediately above it.
-        // That body may be the vessel root or an articulated rocker/bogie link;
-        // mobility must follow the authored body topology rather than assuming
-        // every wheel hangs directly from the actuator owner.
+        // The wheel body owner is resolved from authored topology and carried by
+        // `WheelBodyMount`. A raycast wheel may be nested under a visual or
+        // suspension carrier, so its ECS parent is not a physics ownership edge.
         With<RigidBody>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
-    // The USD-projected motor target for each raycast wheel. The native readback
-    // lives on the authored motor entity, not the wheel proxy, so every motor's
-    // electrical, thermal, and Avian/raycast drivetrain values share one owner.
-    q_targets: Query<&lunco_hardware::MotorReadbackTarget>,
-    mut q_readback: Query<&mut lunco_hardware::MotorReadback>,
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
     // THE FIXED CLOCK BY TYPE, NOT BY PLACEMENT. This integrator is only correct
@@ -93,7 +96,7 @@ pub(crate) fn update_wheel_spin(
         return;
     }
 
-    for (entity, mut wheel, local_tf, hits, parent) in q_wheels.iter_mut() {
+    for (entity, mut wheel, local_tf, hits, mount) in q_wheels.iter_mut() {
         // A ray can report a zero-normal hit when its origin is inside a
         // collider. Suspension rejects that as non-contact; the spin solver
         // must use the same contact selection or it will solve grip against a
@@ -115,85 +118,14 @@ pub(crate) fn update_wheel_spin(
         let c_bearing = wheel.bearing_damping;
         let friction_mu = wheel.friction_mu;
 
-        // Signed throttle: positive drives forward, negative reverses.
-        let throttle = q_ports
-            .get(wheel.drive_port)
-            .map(|p| p.value.clamp(-1.0, 1.0))
-            .unwrap_or(0.0);
-        // THE MOTOR CURVE, ON THE AXLE — [`lunco_hardware::axle_torque`], the one
-        // definition both realizations evaluate. `drive_torque_max` is the STALL
-        // torque (what the motor delivers at ω = 0) and `max_rotation_speed` the
-        // axle no-load speed, both geared down from `lunco:motor:*` through
-        // `PowertrainParams`. The curve bounds this wheel's torque authority, so a
-        // wheel that breaks traction terminates at its no-load speed rather than
-        // accelerating until bearing drag alone balances it.
-        //
-        // The curve is four-quadrant: above `u·ω_max` it returns negative torque
-        // (back-EMF braking), so commanding reverse while still spinning forwards —
-        // or rolling downhill past no-load — has real authority rather than a
-        // released motor.
-        //
-        // ── THROTTLE SETS A SPEED, NOT ONLY A TORQUE ──────────────────────────
-        //
-        // The ceiling below is the torque–speed curve; the TARGET is `u·ω_max`,
-        // because that is what a wheel-hub servo does and what the joint-wheel
-        // realization of this same motor does (`lunco_hardware::MotorActuator`
-        // writes `target_velocity = u·max_omega` with this curve as its
-        // `max_torque`). Treating `u` as a pure torque scale instead let a
-        // part-throttled wheel free-run all the way to the FULL no-load speed:
-        // at `u = 0.4` the raycast wheel accelerated toward 12 rad/s while its
-        // joint twin was held to 4.8 and braked back to it.
-        //
-        // Straight-line driving never saw it — there `u = 1` on every wheel and
-        // the two laws coincide exactly. It only appears under STEER, which is
-        // the one regime where the sides carry different throttles, and it is
-        // half of why `drivetrain_parity`'s heading check was the only one
-        // failing: the raycast rover's inner wheels kept pushing where the
-        // physical rover's were regenerating, so the two got different yaw
-        // moments from the same command.
-        //
-        // Freewheel at zero demand — not a brake — matching the joint motor,
-        // which disables itself rather than commanding a stop.
-        let tau_drive = if throttle.abs() <= f64::EPSILON {
-            0.0
-        } else if wheel.max_rotation_speed > 0.0 {
-            // ONE curve, shared as CODE now rather than as a rule: the identical
-            // authored law the joint wheel's `MotorActuator` evaluates. `spin_velocity`
-            // is already in the demand-positive sense (the servo below targets
-            // `throttle · ω_max` in it), which is the sense the curve is written in.
-            let ceiling = lunco_hardware::axle_torque(
-                wheel.drive_torque_max,
-                wheel.max_rotation_speed,
-                throttle,
-                wheel.spin_velocity,
-            )
-            .abs();
-            // Servo to the commanded speed, held inside the curve — the SAME
-            // shape as the brake below, which servos to zero inside its own
-            // ceiling. One idiom, two ceilings.
-            //
-            // WHAT THE TWO REALIZATIONS SHARE IS THE CURVE, NOT THE SERVO. The
-            // authored torque–speed law and `ω_max` are single-sourced through
-            // `PowertrainParams`, and both kinds clamp to them. How hard a servo
-            // pushes toward the target is the actuator's own business: avian
-            // drives its joint motor with `lunco:wheel:driveDamping`, this one
-            // closes in a step. Neither gain is observable, because the curve
-            // saturates first in every regime the vehicle actually uses — so
-            // reproducing avian's gain here would copy a solver's internals (and
-            // its `dt`-dependence) into this crate for no measurable difference,
-            // and would go stale the moment avian changed its motor model.
-            let w_target = throttle * wheel.max_rotation_speed;
-            (-w_stop_torque(wheel.spin_velocity - w_target, inertia, dt)).clamp(-ceiling, ceiling)
-        } else {
-            // No authored no-load speed: nothing defines a target to servo to, so
-            // the curve degenerates to the plain torque source its stall figure
-            // describes — which is exactly what `axle_torque` returns here.
-            lunco_hardware::axle_torque(
-                wheel.drive_torque_max,
-                wheel.max_rotation_speed,
-                throttle,
-                wheel.spin_velocity,
-            )
+        let Some(tau_drive) = ({
+            let q_read_ports = q_ports.p0();
+            q_read_ports
+                .get(wheel.drive_port)
+                .ok()
+                .map(|port| port.value)
+        }) else {
+            continue;
         };
 
         // Ground speed at the contact patch, split on the wheel's own axes in the
@@ -210,7 +142,7 @@ pub(crate) fn update_wheel_spin(
         let braking = lunco_core::architecture::owning_input_ports(entity, &q_child_of, &q_inputs)
             .map(|c| c.brake_active)
             .unwrap_or(false);
-        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(parent.parent()) {
+        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(mount.body) {
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
             // (host / the owned rover), or the delivered snapshot hint on a
@@ -225,19 +157,19 @@ pub(crate) fn update_wheel_spin(
                 (lin.0, ang.0)
             };
             // Reconstruct the hub in the grid-absolute physics frame from the
-            // chassis body pose + the wheel's chassis-local transform (the wheel
-            // is a `ChildOf` the chassis, so `local_tf` *is* that transform) —
+            // resolved body pose and authored body-local mount —
             // never from `global_tf.translation()`, whose render frame drifted
             // the slip lever once the rover drove off origin (CQ-201).
+            let wheel_local_rotation =
+                mount.local.rotation.as_dquat() * local_tf.rotation.as_dquat();
             let (hub_pos, _) = wheel_hub_pose(
                 GridPos(pos.0),
                 GridRot(rot.0),
-                local_tf.translation.as_dvec3(),
-                local_tf.rotation.as_dquat(),
+                mount.local.translation.as_dvec3(),
+                wheel_local_rotation,
             );
             let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, GridPos(pos.0));
-            let (wheel_forward, wheel_right) =
-                wheel_heading(GridRot(rot.0), local_tf.rotation.as_dquat());
+            let (wheel_forward, wheel_right) = wheel_heading(GridRot(rot.0), wheel_local_rotation);
             // Decompose in the CONTACT plane (the ray-hit normal), not a flat
             // wheel basis — the same basis `apply_wheel_drive` applies the force
             // in, so a leaning or side-sloped wheel splits slip correctly.
@@ -256,14 +188,6 @@ pub(crate) fn update_wheel_spin(
         } else {
             0.0
         };
-
-        // ONE precedence for both realizations: a braked wheel is not also a
-        // driven wheel. The joint motor cannot express "drive plus brake" at all —
-        // a velocity motor holds one target — so summing them here would have made
-        // throttle-and-brake-together mean different things on the two drivetrains,
-        // which is the exact class of divergence the parity scenes exist to catch.
-        let tau_drive = if braking { 0.0 } else { tau_drive };
-
         let on_ground = wheel.last_normal_force >= 1.0 && contact.is_some();
         // This is the shared analytic tire solve. The physical realization gets
         // its normal load and contact point from Avian, then calls this same
@@ -289,41 +213,8 @@ pub(crate) fn update_wheel_spin(
 
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
-
-        #[cfg(feature = "drive-diag")]
-        {
-            if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
-                if dbgport.value.abs() > f64::EPSILON {
-                    let (vlin, vang) = q_chassis
-                        .get(parent.parent())
-                        .map(|(l, a, _, _, _, _, _)| (l.0, a.0))
-                        .unwrap_or((DVec3::ZERO, DVec3::ZERO));
-                    bevy::log::info!(
-                        "[drive-diag] update_wheel_spin: wheel={:?} port={} w={:.3} tau={:.1} f_long={:.1} muN={:.1} chassis_v=({:.3},{:.3},{:.3}) yaw_rate={:.4}",
-                        entity, dbgport.value, w, tau_drive, f_long, friction_mu * wheel.last_normal_force, vlin.x, vlin.y, vlin.z, vang.y
-                    );
-                }
-            }
-        }
-
-        // ── THE SAME READBACK THE JOINTED WHEEL PUBLISHES ─────────────────────
-        // `lunco_hardware::MotorReadback` on the wheel entity: delivered axle
-        // torque (N·m) and axle speed (rad/s), as ports. Both realizations report
-        // it under the same names in the same sense, which is what makes a
-        // parity plot — or one authored `lunco:telemetry` channel on
-        // `components/mobility/wheel.usda` — work for either kind of rover
-        // without knowing which one it got.
-        //
-        // Drive plus brake, because both are the drivetrain acting on the axle;
-        // traction and bearing drag are the ground and the bearing, not the
-        // machine.
-        if let Ok(target) = q_targets.get(entity) {
-            for &motor in &target.0 {
-                if let Ok(mut r) = q_readback.get_mut(motor) {
-                    r.torque = tau_drive + tau_brake;
-                    r.axle_speed = w;
-                }
-            }
+        if let Ok(mut speed_port) = q_ports.p1().get_mut(wheel.speed_port) {
+            speed_port.value = w;
         }
 
         // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────
@@ -431,7 +322,7 @@ pub(crate) fn update_wheel_spin(
 #[cfg(test)]
 mod tests {
     use super::update_wheel_spin;
-    use crate::{Suspension, WheelRaycast};
+    use crate::{Suspension, WheelBodyMount, WheelRaycast};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
@@ -473,7 +364,6 @@ mod tests {
             wheel_radius: 0.5,
             mass: 8.0,
             moment_of_inertia: 0.0,
-            reflected_inertia: 0.0,
             ..default()
         };
         assert_eq!(wheel.axle_inertia(), Some(1.0));
@@ -495,9 +385,12 @@ mod tests {
         // (inertia/dt = 10). One fixed tick per `app.update()`.
         let mut app = app_on_fixed_clock(0.1);
 
-        // Entity with no `Port` → throttle reads 0 (free-rolling, so the spin
-        // is driven purely by ground speed / the lever arm under test).
-        let port = app.world_mut().spawn_empty().id();
+        // A real solved drive endpoint is required even for zero torque. The
+        // projection never substitutes a missing endpoint with a Rust default.
+        let port = app
+            .world_mut()
+            .spawn(lunco_core::architecture::Port { value: 0.0 })
+            .id();
         let chassis = app
             .world_mut()
             .spawn((
@@ -514,6 +407,7 @@ mod tests {
             WheelRaycast {
                 suspension_port: port,
                 drive_port: port,
+                speed_port: port,
                 steer_port: port,
                 steer_axis: DVec3::Y,
                 wheel_radius: 0.5,
@@ -523,9 +417,6 @@ mod tests {
                 spin_velocity: 0.0,
                 mass: 8.0,
                 moment_of_inertia: 1.0, // overrides ½mr² ⇒ inertia = 1.0 (clean)
-                reflected_inertia: 0.0,
-                drive_torque_max: 0.0,
-                max_rotation_speed: 12.0,
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
@@ -545,6 +436,10 @@ mod tests {
                 local_axis: DVec3::Y,
             },
             Transform::from_translation(wheel_local),
+            WheelBodyMount {
+                body: chassis,
+                local: Transform::from_translation(wheel_local),
+            },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
             // One hit ⇒ the wheel is on the ground (the integrator only checks
             // presence, not distance/normal, for the grip path).
@@ -581,23 +476,20 @@ mod tests {
             .spin_velocity
     }
 
-    /// A wheel with nothing to grip must terminate at the MOTOR's no-load speed,
-    /// not at whatever bearing drag happens to balance stall torque.
-    ///
-    /// REGRESSION: `tau_drive` applied the stall torque flat at every ω, so a
-    /// wheel that broke traction ran to `τ_stall / c_bearing` — hundreds of rad/s
-    /// against a real axle limit of 24. Since the drive torque is several times
-    /// the traction limit, that happened on any throttle at all, which is what
-    /// "the wheels spin far too fast" was.
+    /// A free wheel follows the physical solved torque and bearing loss. Its
+    /// speed is not capped by a duplicated Rust no-load-speed rule.
     #[test]
-    fn a_free_spinning_wheel_stops_at_the_motors_no_load_speed() {
-        let max_omega = 24.0;
+    fn a_free_spinning_wheel_follows_solved_torque_and_bearing_loss() {
         // The product's step: 60 Hz fixed, one tick per update.
         let mut app = app_on_fixed_clock(1.0 / 60.0);
 
         let port = app
             .world_mut()
             .spawn(lunco_core::architecture::Port { value: 1.0 })
+            .id();
+        let speed_port = app
+            .world_mut()
+            .spawn(lunco_core::architecture::Port { value: 0.0 })
             .id();
         let chassis = app
             .world_mut()
@@ -617,20 +509,18 @@ mod tests {
                 WheelRaycast {
                     suspension_port: port,
                     drive_port: port,
+                    speed_port,
                     steer_port: port,
                     steer_axis: DVec3::Y,
                     wheel_radius: 0.4,
                     visual_entity: Some(visual),
-                    // AIRBORNE: no normal force, no hit — nothing to push against,
-                    // so only the motor curve and bearing drag bound the spin.
+                    // AIRBORNE: no normal force, no hit — the solved shaft torque
+                    // and authored bearing loss are the only rotational terms.
                     last_normal_force: 0.0,
                     spin_angle: 0.0,
                     spin_velocity: 0.0,
                     mass: 25.0,
                     moment_of_inertia: 0.0,
-                    reflected_inertia: 0.0,
-                    drive_torque_max: 255.0,
-                    max_rotation_speed: max_omega,
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
@@ -650,6 +540,10 @@ mod tests {
                     local_axis: DVec3::Y,
                 },
                 Transform::default(),
+                WheelBodyMount {
+                    body: chassis,
+                    local: Transform::IDENTITY,
+                },
                 GlobalTransform::default(),
                 RayHits(vec![]),
                 ChildOf(chassis),
@@ -657,22 +551,27 @@ mod tests {
             .id();
 
         app.add_systems(FixedUpdate, update_wheel_spin);
-        // Ten seconds of full throttle with nothing to grip.
+        // Ten seconds of full throttle with nothing to grip. Drive the fixed
+        // schedule explicitly so this test owns the exact number of integration
+        // steps rather than depending on the app's outer time accumulator.
         for _ in 0..600 {
-            app.update();
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(Duration::from_secs_f64(1.0 / 60.0));
+            app.world_mut().run_schedule(FixedUpdate);
         }
         let w = app
             .world()
             .get::<WheelRaycast>(wheel)
             .unwrap()
             .spin_velocity;
+        let dt: f64 = 1.0 / 60.0;
+        let inertia: f64 = 0.5 * 25.0 * 0.4 * 0.4;
+        let equilibrium: f64 = 1.0 / 0.45;
+        let expected = equilibrium * (1.0 - (1.0 - 0.45 * dt / inertia).powi(600));
         assert!(
-            w <= max_omega + 1e-6,
-            "a free wheel must not pass its motor's no-load speed: {w} > {max_omega}"
-        );
-        assert!(
-            w > max_omega * 0.9,
-            "…and should actually reach it under full throttle: {w}"
+            (w - expected).abs() < 0.05,
+            "free wheel must follow the torque/bearing integration law: {w} vs {expected}"
         );
     }
 

@@ -6,9 +6,10 @@
 //     register_hook("lint.usd", "lint_usd", my_source)   // from any scenario/REPL
 //     unregister_hook("lint.usd")                        // back to no USD rules
 //
-// so a rule can be written, tried and tightened against a running sim with no
-// rebuild. That is the point of authoring rules here instead of in Rust: a rule
-// you cannot try immediately is a rule nobody writes.
+// so a rule can be written, tried and tightened by an explicit RunLint command
+// against the selected composed stage, with no rebuild. That is the point of
+// authoring rules here instead of in Rust: a rule you cannot try immediately is
+// a rule nobody writes.
 //
 // ── WHAT A RULE MAY SEE ─────────────────────────────────────────────────────
 //
@@ -64,10 +65,37 @@
 //                             modelica_member_count,
 //                             units[], dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
-//                             synthesizer_error,
-//                             ambiguous_boundary_sources[], collection_error }
+//                             ambiguous_boundary_sources[], collection_error,
+//                             synthesizer_error }
 //       scopes applying CollectionAPI:components, including codeless-schema
 //       runtimes whose applied-schema enumeration is incomplete.
+//
+//   facts.stage  #{ meters_per_unit_authored, fixed_hz, physics_substeps,
+//                   substep_dt }
+//       the authoritative fixed-step contract used by the physics owner.
+//
+//   facts.drives[]  #{ path, joint_type, body0, body1, realization,
+//                      stiffness, damping, max_force, driven_mass,
+//                      frequency, damping_ratio }
+//       semantic drive facts produced by the same typed USD→Avian reader as
+//       runtime projection. `realization` is `spring_damper`, `force_based`,
+//       or `acceleration_based`; it is not inferred from the raw schema in
+//       policy.
+//
+//   facts.gear_drives[]  #{ path, valid, realization, ratio, rest_offset,
+//                           target_velocity, stiffness, damping, max_force }
+//       semantic facts produced by the `lunco-usd-sim` gear reader. The
+//       realization is the implicit force/acceleration solve installed by the
+//       mobility owner; invalid authored values are retained so policy can
+//       report them instead of allowing the runtime refusal to be discovered
+//       only in logs.
+//
+//   facts.wheel_attachments[]  #{ path, valid, suspension, tire, index }
+//       standard PhysX wheel-attachment bindings resolved by the same topology
+//       reader as runtime wheel admission. `valid = false` means no unique
+//       direct/relationship-form binding exists.
+//   facts.invalid_wheel_attachments[]  paths of malformed attachment prims or
+//       wheels rejected by that canonical topology reader.
 //
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
@@ -109,6 +137,12 @@ fn schemas_of(facts, path) {
     []
 }
 
+/// Whether a component collection uses the standard generated Modelica owner.
+/// The fact producer resolves omitted selectors to the canonical owner name.
+fn is_modelica_network(scope) {
+    scope.synthesizer == "acausal-network"
+}
+
 fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
@@ -120,18 +154,21 @@ fn lint_usd(facts) {
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
     for f in mass_outside_any_body(facts) { out.push(f); }
+    for f in conditionally_stable_joint_drive(facts) { out.push(f); }
+    for f in invalid_gear_drive(facts) { out.push(f); }
+    for f in invalid_wheel_attachment_topology(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
     for f in empty_component_network(facts) { out.push(f); }
     for f in invalid_component_collection(facts) { out.push(f); }
+    for f in invalid_network_synthesizer(facts) { out.push(f); }
+    for f in telemetry_target_contract(facts) { out.push(f); }
     for f in dangling_network_connector(facts) { out.push(f); }
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
-    for f in invalid_network_synthesizer(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
-    for f in telemetry_target_contract(facts) { out.push(f); }
     out
 }
 
@@ -215,6 +252,105 @@ fn telemetry_target_missing_finding(path) {
         path,
         "Telemetry target relationship resolves to no composed prim; author a target that exists on the composed stage.",
     )
+}
+
+/// Avian's `ForceBased` and `AccelerationBased` spring realizations are
+/// timestep- and effective-mass-dependent. They are not the production
+/// stability contract at the eight-substep fixed step. A force drive with no
+/// authored driven mass is exactly the path that caused the 32-substep native
+/// reproduction fixtures to fail when reduced to eight. Avian's owning mapping
+/// explicitly permits a positive pure ForceBased damper; it has no positional
+/// stiffness to make the spring realization conditional.
+///
+/// The fact producer has already resolved USD units, defaults, and the actual
+/// Avian realization. Rhai only applies the authoring policy here; it does not
+/// re-read USD or reproduce solver mathematics. An implicit `SpringDamper`
+/// realization is intentionally silent because Avian documents that model as
+/// unconditionally stable.
+fn conditionally_stable_joint_drive(facts) {
+    let out = [];
+    for drive in facts.drives {
+        if drive.stiffness == 0.0 && drive.damping == 0.0 { continue; }
+        if drive.stiffness < 0.0 {
+            let m = "has negative stiffness=";
+            m += drive.stiffness;
+            m += " — a negative spring coefficient injects energy and cannot be converted to an implicit SpringDamper. Set stiffness >= 0; adding driven mass does not fix this parameter.";
+            out.push(finding("joint-drive-negative-stiffness", "error", drive.path, m));
+            continue;
+        }
+        if drive.realization == "spring_damper" {
+            if drive.damping_ratio >= 0.0 { continue; }
+            let m = "uses an implicit SpringDamper with a negative damping ratio (";
+            m += drive.damping_ratio;
+            m += ") at the fixed physics step (";
+            m += facts.stage.substep_dt;
+            m += " s) — the authored drive injects energy. Set damping >= 0 so the loader produces a non-negative damping ratio.";
+            out.push(finding("joint-drive-negative-damping", "error", drive.path, m));
+            continue;
+        }
+
+        if drive.damping < 0.0 {
+            let m = "has negative damping=";
+            m += drive.damping;
+            m += " in an explicit motor realization at the fixed physics step (";
+            m += facts.stage.substep_dt;
+            m += " s) — the authored drive injects energy. Set damping >= 0.";
+            out.push(finding("joint-drive-negative-damping", "error", drive.path, m));
+            continue;
+        }
+
+        // The USD→Avian owner documents a positive pure ForceBased damper as
+        // safe. Do not turn that documented semantic into a false positive.
+        if drive.realization == "force_based" && drive.stiffness == 0.0 { continue; }
+
+        let m = "uses Avian's ";
+        m += drive.realization;
+        m += " motor realization with stiffness=";
+        m += drive.stiffness;
+        m += " and damping=";
+        m += drive.damping;
+        m += " at ";
+        m += facts.stage.fixed_hz;
+        m += " Hz / ";
+        m += facts.stage.physics_substeps;
+        m += " substeps (dt=";
+        m += facts.stage.substep_dt;
+        m += " s). This path is conditionally stable and the assembled effective mass/inertia is not certified by the authored facts; it can overshoot, oscillate, or diverge. Use the implicit SpringDamper realization through the authoritative USD→Avian mapping. For a linear force drive, author a valid positive driven mass so that mapping can perform the conversion; adding mass to an angular drive is not a valid substitute for an implicit angular realization. Do not raise substeps to mask this finding.";
+        out.push(finding("conditionally-stable-joint-drive", "error", drive.path, m));
+    }
+    out
+}
+
+/// The custom gear projection has one canonical reader. A malformed ratio,
+/// drive value or drive type means the runtime refuses to install the coupling;
+/// report that authoring error before a run. Positive coefficients are not
+/// rejected here because the mobility owner resolves them implicitly per
+/// substep, so there is no asset-specific stiffness limit to guess in policy.
+fn invalid_gear_drive(facts) {
+    let out = [];
+    for drive in facts.gear_drives {
+        if drive.valid { continue; }
+        let m = "has a malformed PhysxPhysicsGearJoint angular drive or ratio — the canonical USD-sim reader refuses to install this coupling. Author a finite non-zero gearRatio, finite non-negative stiffness/damping/maxForce, and drive:angular:physics:type = force or acceleration.";
+        out.push(finding("invalid-gear-drive", "error", drive.path, m));
+    }
+    out
+}
+
+/// The standard wheel attachment is the one identity that connects a wheel to
+/// its tire, suspension and vehicle index. Runtime admission rejects an absent
+/// or ambiguous binding; report the same canonical result before simulation.
+fn invalid_wheel_attachment_topology(facts) {
+    let out = [];
+    for wheel in facts.wheel_attachments {
+        if wheel.valid { continue; }
+        let m = "has no unique PhysxVehicleWheelAttachmentAPI binding — the runtime refuses to spawn this wheel. Author exactly one direct or relationship-form attachment with a wheel, suspension, tire and non-negative index.";
+        out.push(finding("invalid-wheel-attachment-topology", "error", wheel.path, m));
+    }
+    for path in facts.invalid_wheel_attachments {
+        let m = "is an invalid PhysxVehicleWheelAttachmentAPI topology — the canonical runtime resolver refused this attachment instead of selecting a first or last target. Author one singular wheel, suspension, tire and index relationship.";
+        out.push(finding("invalid-wheel-attachment-topology", "error", path, m));
+    }
+    out
 }
 
 /// A link endpoint must be the single physical phase centre of its assembly.
@@ -339,12 +475,11 @@ fn unsupported_program_prim_type(facts) {
 fn empty_component_network(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        if scope.synthesizer_error != "" { continue; }
         // A non-default synthesizer owns the collection contract.  It may
         // legitimately contain physical USD members rather than Modelica
         // facets (for example the authored actuator-wrench allocator), so the
         // generic acausal-network empty check does not apply.
-        if scope.synthesizer != "" && scope.synthesizer != "acausal-network" { continue; }
+        if !is_modelica_network(scope) { continue; }
         if scope.collection_error != "" || scope.modelica_member_count != 0 { continue; }
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
@@ -369,11 +504,30 @@ fn invalid_component_collection(facts) {
     out
 }
 
+/// The runtime domain projection rejected the collection-owner decision.
+///
+/// This is kept separate from collection membership errors: a standard USD
+/// collection can be valid while its members still mix incompatible domain
+/// roles. The owner is derived from composed role schemas by Rust, so policy
+/// reports the exact runtime error without selecting a fallback domain.
+fn invalid_network_synthesizer(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.synthesizer_error == "" { continue; }
+        let m = "cannot select a domain owner for its CollectionAPI:components scope — ";
+        m += scope.synthesizer_error;
+        m += ". Keep the collection members under one domain owner or author an explicit LunCoDomainSynthesisAPI contract.";
+        out.push(finding("invalid-network-synthesizer", "error", scope.path, m));
+    }
+    out
+}
+
 /// Network members are compiler inputs, so only source-backed Modelica
 /// programs belong in the collection working set.
 fn invalid_network_program_source(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        if !is_modelica_network(scope) { continue; }
         for member in scope.invalid_program_sources {
             let m = "is not a sourceAsset-backed .mo program —";
             m += " set info:implementationSource = sourceAsset and author a Modelica source asset,";
@@ -389,11 +543,10 @@ fn invalid_network_program_source(facts) {
 fn invalid_modelica_causal_cardinality(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        if scope.synthesizer_error != "" { continue; }
         // Boundary cardinality is part of the selected synthesizer's public
         // contract.  Only the default acausal-network synthesizer promises
         // scalar Modelica input/output semantics here.
-        if scope.synthesizer != "" && scope.synthesizer != "acausal-network" { continue; }
+        if !is_modelica_network(scope) { continue; }
         for property in scope.invalid_causal_properties {
             let m = "has invalid causal connection cardinality —";
             m += " a scalar Modelica input accepts at most one source and a network output requires exactly one.";
@@ -403,24 +556,12 @@ fn invalid_modelica_causal_cardinality(facts) {
     out
 }
 
-/// A mixed or unclassified collection has no safe domain owner.
-fn invalid_network_synthesizer(facts) {
-    let out = [];
-    for scope in facts.network_scopes {
-        if scope.synthesizer_error == "" { continue; }
-        let m = "has no unambiguous domain synthesizer — ";
-        m += scope.synthesizer_error;
-        m += ". Use one typed member role per collection or select a registered synthesizer explicitly.";
-        out.push(finding("invalid-network-synthesizer", "error", scope.path, m));
-    }
-    out
-}
-
 /// Once OpenUSD resolves forwarding to the ultimate source, two boundary
 /// properties with that same source cannot be distinguished safely.
 fn ambiguous_modelica_boundary(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        if !is_modelica_network(scope) { continue; }
         for subject in scope.ambiguous_boundary_sources {
             let m = "has multiple network inputs resolving to one composed source —";
             m += " preserve distinct boundary sources or insert an explicit causal Modelica block.";
@@ -435,6 +576,7 @@ fn ambiguous_modelica_boundary(facts) {
 fn dangling_network_connector(facts) {
     let out = [];
     for scope in facts.network_scopes {
+        if !is_modelica_network(scope) { continue; }
         for connector in scope.dangling_connectors {
             let m = "targets a connector outside its CollectionAPI:components working set —";
             m += " include the target component or move the connection into the correct network scope.";

@@ -212,7 +212,14 @@ fn preload_importable_scripts(
     sources: Res<lunco_assets::script_source::ScriptSources>,
     mut seen: Local<std::collections::HashSet<String>>,
 ) {
-    for file in lunco_assets::discovery::list_assets(&manifest, &roots, "rhai") {
+    let files = match lunco_assets::discovery::list_assets(&manifest, &roots, "rhai") {
+        Ok(files) => files,
+        Err(error) => {
+            error!("[rhai] Twin registry unavailable during script discovery: {error}");
+            return;
+        }
+    };
+    for file in files {
         // Load through the ANCHORED uri, not the bare enumerated path. Discovery
         // reports engine-library files relative (`scenarios/lander_subsystems.rhai`), which the
         // `AssetServer` loads from the default source — a different `AssetPath` than

@@ -208,7 +208,13 @@ and will fall out of the vehicle. …
 
 The shipped USD rules: `nested-body-no-joint` (error — **this is the one that
 caught four motors falling off every rover**), `joint-target-not-a-body` (error),
-`dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn). See
+`dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),
+`conditionally-stable-joint-drive` (error), `joint-drive-negative-stiffness`
+(error), `joint-drive-negative-damping` (error), `invalid-gear-drive` (error),
+and `invalid-network-synthesizer` (error). Collection ownership is derived
+from the composed member role schemas by the same runtime classifier; an
+absent selector does not make a physical actuator collection a Modelica
+network. See
 [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body)
 for the authoring rule they enforce and
 [`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md)
@@ -224,14 +230,15 @@ cmd("RunLint", #{});        // lints every loaded stage, same rules, same facts
 query("LintReport");        // { errors, warnings, findings[] }
 ```
 
-or `{"type":"ExecuteCommand","command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load —
-deliberately. A scenario calling that pair on a cadence *is* a live linter, and
+or `{"type":"ExecuteCommand","command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load,
+on a physics tick, or on a background cadence — deliberately. An editor,
+launcher, or caller explicitly repeats the command after an authored change, and
 
 ```rhai
 register_hook("lint.usd", "lint_usd", my_rules);   // next RunLint obeys
 ```
 
-re-shapes the rules on a running sim.
+re-shapes the rules for the next explicit lint run without a rebuild.
 
 ## Where it fits
 

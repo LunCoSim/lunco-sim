@@ -419,8 +419,10 @@ every step until a body leaves the world.
   `mounting/demo_probe.usda` may keep its body.
 - Same answer in every robotics dialect: URDF lumps a fixed-jointed link into its
   parent's inertia, MJCF welds a jointless nested body, and neither has a notion
-  of a link inside a link attached to nothing. Reflected rotor inertia belongs to
-  the joint (`armature`-style), not to a body of its own.
+  of a link inside a link attached to nothing. The complete rotational assembly
+  inertia belongs on the moving body's authored inertia contract; a domain
+  component that produces torque must not create a second hidden body or
+  duplicate shaft state.
 
 ### When two parts that are NOT jointed must not collide
 

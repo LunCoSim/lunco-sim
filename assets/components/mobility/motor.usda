@@ -5,85 +5,26 @@
     metersPerUnit = 1
 )
 
-# A DRIVE MOTOR as a real part: a mass, a housing that collides, a torque curve, a
-# power draw and a waste-heat output. One machine carries as many of these
-# as it has driven wheels, and each is independently commanded, independently sized and
-# independently able to overheat or fail.
-#
-# HOW A VESSEL COMPOSES IT. One reference arc per motor, named for the wheel it turns,
-# with the wheel target and the demand wired on the instance:
-#
-#   def Xform "Motor_FL" (
-#       prepend references = @lunco://components/mobility/motor.usda@</Motor>
-#   )
-#   {
-#       double3 xformOp:translate = (0.8, -0.2, 1.0)
-#       uniform token[] xformOpOrder = ["xformOp:translate"]
-#
-#       # WHICH WHEEL this motor turns. Never a joint: a joint exists only in the
-#       # physical drivetrain, a wheel exists in both realizations. Authored
-#       # unconditionally, OUTSIDE every variant block.
-#       prepend rel lunco:motor:drivenWheel = </Rover/Wheel_FL>
-#
-#       # WHAT it is told to do: -1..1, from the vessel's command surface (the OBC) or
-#       # from a drive law. A parameter is an input with a constant instead of a wire.
-#       float inputs:demand.connect = </Rover/OBC.outputs:drive_left>
-#   }
-#
-# `PhysicsDriveAPI` IS NOT THE MOTOR. It is the motor's OUTPUT COUPLING to the joint:
-# a multiple-apply API on a CONSTRAINT, carrying a target, a damping and a force cap.
-# It cannot hold a mass, an efficiency, a thermal model or a power draw, so it cannot be
-# the part. The motor is this prim; it NAMES its WHEEL. Where that wheel has a joint the
-# loader follows wheel → joint and writes that joint's
-# `drive:angular:physics:targetVelocity` / `:maxForce` from the curve below; where it does
-# not, the raycast wheel consumes the same axle torque and no-load speed directly. Keying
-# on the wheel is what makes raycast/physical parity structural — the powertrain is
-# identical and only the wheel's torque→force step differs.
-# MuJoCo draws the same actuator/constraint line: `<actuator>` is its own element.
-#
-# THE CURVE IS TWO SCALARS. τ(ω) = stallTorque · (1 − ω / noLoadSpeed), clamped at zero —
-# the linear DC/BLDC characteristic, and the whole first-order motor. See `LunCoMotorAPI`
-# in the schema for why a sampled array was rejected. A motor whose real curve is not
-# linear gets a `LunCoProgramAPI` child that computes torque instead.
-#
-#   inputs:demand ──► τ(ω) curve ──► outputs:torque ──► gearbox ──► driven wheel
-#                            └─────► outputs:heat ───► thermal program / radiator
-#
-# THE SHAFT SIDE AND ELECTRICAL FACET LIVE ON THE SAME PART. A vessel's Electrical
-# Scope includes the actual motor path in `CollectionAPI:components`; runtime projection
-# compiles all included facets into one circuit DAE, never one solver per part.
+# A reusable two-domain motor. The electrical pin and measured mechanical speed
+# are authored Modelica inputs; the containing USD network connects its solved
+# torque output to a generic mechanical torque boundary and then to the load.
 def Xform "Motor" (
-    doc = "Reusable driven-wheel motor with mass, torque, power, and thermal telemetry."
+    doc = "Reusable DC motor with electrical and mechanical Modelica boundaries."
     kind = "component"
     prepend apiSchemas = [
         "LunCoCatalogAPI",
         "PhysicsMassAPI",
-        "LunCoMotorAPI",
         "LunCoProgramAPI",
+        "LunCoModelicaTopologyAPI",
     ]
 )
 {
+    uniform token lunco:modelica:topologyRole = "load"
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
-    custom token connectors:p
 
-    # --- Physics ---
-    # NO `PhysicsRigidBodyAPI`, and this is the whole story of a bug that shipped:
-    # this file used to apply it, on the belief that "a motor bolted to a rover is a
-    # child of the chassis body and this is inert". It is not inert. The loader's rule
-    # (`lunco-usd-avian`) is that an APPLIED `PhysicsRigidBodyAPI` makes that prim its
-    # own body — ancestry is not consulted, because nested-body-plus-joint is exactly
-    # how the `physical` drivetrain mounts its wheels. So every mounted motor became a
-    # free dynamic body that no joint held and no collider stopped, and all four fell
-    # out of every rover on the first physics step. Nothing else noticed: the rovers
-    # still drove, still steered, still made their top speed, and only a screenshot of
-    # motors lying on the regolith gave it away. `scenes/tests/parts_attached.usda`
-    # is the gate that now catches it.
-    #
-    # An internal part is not a body. It has mass and it renders; the chassis it is
-    # mounted on is the body, and a part that must move relative to its host says so
-    # with a JOINT — the same rule `gearbox.usda` already follows.
+    # Housing mass is a physical part mass, not a standalone rigid body.
     float physics:mass = 8.0 (
         customData = {
             double min = 0.5
@@ -92,224 +33,29 @@ def Xform "Motor" (
         }
     )
 
-    # --- Motor characteristic (LunCoMotorAPI) ---
-    # SHAFT quantities, before any reduction.
-    #
-    # A MOTOR IS SIZED TO THE TRACTION IT CAN USE. Torque past the friction limit does
-    # not move the vehicle; it spins the wheel. 1.5 N·m here is ~255 N·m at the axle
-    # through the 200:1 harmonic drive at 0.85 efficiency.
-    #
-    # THIS CATALOGUE FIGURE IS A FLOOR, NOT THE FLEET'S TORQUE. Every shipped rocker-bogie
-    # tier overrides it (`variants/rover_*.usda`: awful 0.4, medium 0.5, easy 0.9), so
-    # the difficulty ladder — not this number — sets what a vehicle actually pulls.
-    #
-    # ⚠ THE BOGIE HINGE IS THE TORQUE CEILING. For the six-wheel rocker-bogie
-    # (532 kg authored: 300 chassis + 2×50 rockers + 2×30 bogies + 6×12 wheels):
-    #
-    #   τ_traction = μ·N·r = 0.8 × (532 × 1.62 / 6) × 0.4 m ≈ 46 N·m per wheel (bald)
-    #
-    # A tier's axle torque is sized to ~1.5× ITS OWN cone (bald 46 → 68 N·m, worn 57 →
-    # 85, cleated 103 → 153). Above ~2× the motor reaction on the FREE bogie hinge —
-    # two motors per bogie, reacting directly into it at launch — slams the bogie
-    # into its ±20° stop and lifts the middle wheels (`scenes/tests/wheelie_check.usda`
-    # is the gate). Below ~1× the cone the rover cannot use its own grip. The drive is
-    # a VELOCITY SERVO, so torque authority above what traction can use is only ever
-    # spent reaching the commanded speed, not exceeding it; but the REACTION into the
-    # suspension is the commanded torque, so the hinge, not the tyre, decides the
-    # ceiling. Size any NEW motor against both figures.
-    #
-    # SPEED IS THE PAIR (WINDING, RATIO), AND ONLY THE PAIR. What the vehicle feels is
-    # `noLoadSpeed / ratio` = 24 rad/s at the axle and `stallTorque · ratio · efficiency`
-    # = 170 N·m; any (winding, ratio) with those two products drives identically —
-    # EXCEPT for inertia, which is why the pair is chosen and not just the products.
-    #
-    # ⚠ THE REDUCTION IS THE INERTIA. Reflected rotor inertia is `J · ratio²`, so the
-    # ratio is not a free variable to be traded against the winding: at the 1200:1 this
-    # catalogue used to carry, a 1.2e-4 kg·m² rotor reflected to **173 kg·m²** per axle —
-    # 87× the wheel's own ½mr² ≈ 2 kg·m², about 1080 kg of apparent mass per wheel on a
-    # 532 kg rover. MEASURED consequence: `allocation_spec`'s forward leg covered 9.15 m
-    # where it had always covered 13.8 m, and every rover in the fleet was still
-    # accelerating after eight seconds.
-    #
-    # That 1200:1 was chosen while reflected inertia was ORPHANED — computed and never
-    # applied — together with a 14 400 rad/s winding (≈137 000 rpm, no real machine) to
-    # buy road speed back. When `486ce6b0` made the inertia live, the ratio² term arrived
-    # with it and the pair became untenable. Rebalanced to 200:1 with a 2400 rad/s
-    # winding: both axle products are unchanged to the digit, so the difficulty ladder,
-    # the top speed and every authored tier behave exactly as before, while the reflected
-    # inertia falls to 4.8 kg·m² — the same order as the wheel it drives, which is what a
-    # geared rover should feel.
-    #
-    # Size a NEW motor by holding those two products, not by copying a winding: raising
-    # the winding to buy speed costs ratio² in inertia unless the reduction comes down
-    # with it. The authentic-speed alternative was measured and rejected on usability
-    # (Lunokhod's real 2.0 km/h turned the school's 2.7 km round trip into a multi-hour
-    # wait) — see `motors/lunokhod.usda`, which keeps that slow axle honestly.
-    #
-    # The ceiling is not the cruise: drive force rolls off as `1 − v/v_max` while contact
-    # drag grows with v, so a rover settles well short of it — against a 9.6 m/s rim
-    # ceiling (24 rad/s × 0.4 m). See `rocker_bogie.usda` `Motor_FL` for measured
-    # terminal speeds.
-    #
-    # ── SIZED AGAINST THE FRICTION CONE, NOT AGAINST AMBITION ─────────────────
-    #
-    # `1.5 × 200 × 0.85` = 255 N·m at the axle. A wheel slips when commanded torque
-    # passes `μ·N·r`; on the standard 1100 kg four-wheeler (N ≈ 445 N, r = 0.4)
-    # with the regolith tyre's μ = 1.5 that cone is 267 N·m. The motor therefore
-    # remains below the flat-ground traction limit while retaining enough axle
-    # authority to shear soil laterally during a skid-steer pivot. The former
-    # 1.0 N·m winding (170 N·m axle) was below that steering requirement: it could
-    # drive forward, but stalled the yaw moment before the measured tire law did.
-    #
-    # The `variants/rover_*.usda` tiers override this DOWN (0.4 … 0.9) on purpose:
-    # each tier is sized to ~1.5× its own traction cone, so the ladder is a torque
-    # ladder (easy 153 › medium 85 › awful 68 N·m at the axle) rather than an
-    # over-torqued wall. Untouched here.
-    float lunco:motor:stallTorque = 1.5
-    # FLEET SPEED — A PACING OVERRIDE, KEPT INSIDE WHAT THE TYRE CAN DELIVER.
-    #
-    # 4800 rad/s through the 200:1 gives a 24 rad/s axle — 9.6 m/s of rim ceiling on
-    # the 0.4 m wheel, 2x the 2400 this originally carried (12 rad/s axle, 4.8 m/s
-    # rim). The multi-kilometre traverses still want the pacing help — the usability
-    # argument `motors/lunokhod.usda` makes against authentic speeds — but only as
-    # far as traction can convert it.
-    #
-    # DOWN FROM 24000 (a 10x, 120 rad/s axle, 48 m/s rim), which asked for far more
-    # than the ground can give: the servo targets `throttle · ω_max`, so every
-    # throttled wheel sat permanently in the SATURATED branch of
-    # `lunco_mobility::update_wheel_spin` — the whole surplus went into ω. That is
-    # exactly the "wheels rotate fast but the rover barely moves" report: thrust was
-    # pinned at the friction cone μ·N while the tyre burned the rest as slip, so the
-    # ceiling bought spin, not travel. A ceiling the tyre can approach is worth more
-    # road speed than a ceiling it cannot.
-    #
-    # ⚠ STILL NOT AUTHENTIC HARDWARE. 4800 rad/s is ~46 000 rpm. The mechanical
-    # curve is an Avian drivetrain contract. The Modelica facet is deliberately
-    # the electrical load only; it does not claim a second shaft state or
-    # attempt to couple a free mechanical connector into the electrical island.
-    #
-    # ⚠ THE RIM CEILING IS NOT THE ROAD SPEED. `vessels/rovers/rocker_bogie.usda`
-    # `Motor_FL` holds the measured table (12 rad/s → 2.71 m/s, 19.5 rad/s →
-    # 5.72 m/s) and the standing rule: the response is non-linear and SUPERLINEAR,
-    # so measure it, never derive it.
-    #
-    # ⚠ WATCH FOR TERRAIN TUNNELLING HERE. The physics collider ring streams 15.6 m
-    # tiles around each rover (`terrain-surface/collider_ring.rs`, COLLIDER_DEPTH 9).
-    # A vehicle actually reaching tens of m/s crosses a tile in a fraction of a second
-    # — the regime where a body outruns its ring and drops through the surface. If
-    # rovers start falling through terrain, suspect this number first.
-    #
-    # To revert: 2400.0 = original, 24000.0 = the 10x this replaces. The six instance
-    # overrides in `vessels/rovers/rocker_bogie.usda` restate whatever is chosen here.
-    #
-    # SET AT CONSTANT TORQUE, deliberately. `stallTorque` is untouched, so axle torque
-    # and the whole `variants/rover_*.usda` difficulty ladder are exactly as before —
-    # this is a smaller-ceilinged motor, not a re-wind. `motors/fast.usda` is the
-    # power-conserving alternative (half the torque for twice the speed) and lands on
-    # this same 4800; it is a different trade and is left alone, as are the other
-    # winding classes, so that taxonomy stays coherent.
-    #
-    # Torque FALLS at every non-zero speed relative to the 10x (`τ = stall·(1 −
-    # ω/noLoad)`), so a wheel that was already spinning loses the torque it was
-    # wasting, not torque it was using. Reflected inertia is UNCHANGED: `J · ratio²`,
-    # and the ratio did not move.
-    float lunco:motor:noLoadSpeed = 4800.0
-    # Continuous rating, below stall: what it can hold all day without cooking. 0.9
-    # against a 1.5 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
-    # or the motor is rated to sustain more than it can ever produce.
-    float lunco:motor:continuousTorque = 0.9
-    # The current-controlled electrical facet is a compact 28 V, 500 W drive.
-    # This is the continuous electrical nameplate used by the composed Modelica
-    # network; it keeps the Lunokhod winding's ~500 W mechanical envelope and
-    # the 83 Ah pack in the same operating regime. Larger authored windings must
-    # author a different electrical nameplate at their component boundary.
+    # Modelica parameter boundary. The names match DCMotor.mo exactly; the
+    # generated network reads these authored inputs and no Rust reader mirrors
+    # them.
+    float inputs:stall_torque = 1.5
+    float inputs:no_load_speed = 4800.0
     float inputs:rated_power = 500.0
-    # A small rotor, reflected to the axle multiplied by the ratio SQUARED —
-    # 1.2e-4 × 200² ≈ 4.8 kg·m², the same order as the wheel's own ½mr² ≈ 2 kg·m².
-    # That reflected inertia is a real part of what a geared rover feels, which is why
-    # the ratio is chosen against it and not only against torque — see the winding note.
-    float lunco:motor:rotorInertia = 0.00012
-    # The electrical facet and the mechanical motor curve share this authored
-    # nameplate voltage. `inputs:*` is the generic Modelica parameter boundary;
-    # a second custom voltage property would be a write with no reader.
     float inputs:v_rated = 28.0
-    # Which drive instance on the wheel's joint the output couples to, when the wheel has
-    # one. The wheel target itself is authored per-instance by the vessel — a component
-    # cannot know which wheel it is on.
-    uniform token lunco:motor:driveInstance = "angular"
-
-    # --- Ports ---
-    # Command in. Unwired it is 0 and the motor sits there, which is what an uncommanded
-    # motor does. A drive law, an OBC port, or a script writes it; -1..1, signed.
     float inputs:demand = 0.0
+    float inputs:speed
 
-    # Mechanical output — shaft torque, N·m — for whatever consumes it: a gearbox's
-    # `inputs:torque`, or a telemetry channel.
-    float outputs:torque
-
-    # Winding heat, watts: the solved copper loss in the electrical facet. This is
-    # the port a thermal model or a radiator consumes; nothing in the physics
-    # step reads it.
+    custom token connectors:p
+    float outputs:shaft_torque
+    float outputs:shaft_speed
     float outputs:heat
-
-    # Electrical power drawn by the solved motor model. This is an authored
-    # observable of the electrical DCMotor facet, so generated electrical
-    # islands expose it through their canonical member-output boundary alongside
-    # `heat`.
     float outputs:electrical_power
-    # Instantaneous electrical measurements from the same solved terminal. These
-    # are public component outputs, not values reconstructed by the drivetrain.
     float outputs:terminal_voltage_v
     float outputs:terminal_current_a
-    float outputs:available_demand
+    float outputs:mechanical_power_w
 
-    # --- Telemetry ---
-    # Drive command as a RETAINED channel, so "was this motor actually being
-    # told to pull?" needs no per-vessel authoring: every rover referencing this
-    # component gets it. Authored on the component, not on the six instances in
-    # `rocker_bogie.usda`, because a motor is where a motor's instrumentation
-    # belongs.
-    #
-    # ⚠ IT IS `demand`, NOT `torque`, AND THAT IS NOT A PREFERENCE.
-    # A channel reads a LIVE port. `inputs:demand` is one: the wire from the
-    # chassis's `outputs:drive_*` writes it every tick. `outputs:torque` is
-    # declared below but NOTHING WRITES IT — the delivered torque is computed in
-    # `lunco_hardware::axle_torque` and handed straight to the joint motor, so a
-    # channel pointed at that attribute would have plotted a flat authored zero
-    # forever and looked like a dead drivetrain. Publishing the shaft torque
-    # needs a port backend on the crate that computes it (the rule in
-    # `docs/architecture/telemetry-subsystem.md` §5b: the backend belongs with
-    # the component that owns the value); until that exists, this channel states
-    # what is true.
-    #
-    # The enclosing generated electrical domain admits the authored motor output
-    # ports (`heat`, electrical power, terminal measurements) and presents them
-    # back on this physical Motor prim. Mechanical torque and speed remain the
-    # USD/Avian powertrain contract; solver-only electrical values and wrapper
-    # aliases remain execution data, not a second mechanical owner.
-    #
-    # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
-    # no dimension. The browser renders that as a blank unit cell rather than a
-    # literal "1".
-    # --- Housing: RENDERS ONLY, deliberately no collider ---
-    #
-    # Internal machinery does not collide. A hub motor lives INSIDE the vehicle
-    # envelope, so a collider here does not model anything real — it just fights the
-    # chassis and the wheel for the same space. Eight of these, interpenetrating,
-    # launched the parity rovers at 846 m/s the first time they shipped with
-    # `PhysicsCollisionAPI`.
-    #
-    # What a motor contributes to physics is MASS, via `PhysicsMassAPI` on the part
-    # above. Contacts are for things that touch the world.
-    #
-    # Sized like real hardware rather than like a placeholder: a ~0.09 m radius,
-    # 0.14 m long can is what an 8 kg rover hub motor actually looks like, and it fits
-    # inboard of a 0.4 m wheel instead of swallowing it.
     def Cylinder "Body"
     {
         double radius = 0.09
         double height = 0.14
         color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
     }
-
 }

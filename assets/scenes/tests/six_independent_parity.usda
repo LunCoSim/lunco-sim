@@ -49,10 +49,9 @@
 #   3. pure steer at zero throttle gives `+s` left and `-s` right -> it PIVOTS
 #      on the spot, travelling almost nowhere.
 #
-# and the shared no-load axle speed still caps it: the motor's
-# `lunco:motor:noLoadSpeed` divided by the gearbox `lunco:gearbox:ratio`
-# (14400 / 1200 = 12 rad/s) times r = 0.4 m = 4.8 m/s, exactly as for every
-# other rover, because all of them compose the same `components/mobility/wheel.usda`.
+# and the shared authored motor/gearbox/shaft network determines its operating
+# point, exactly as for every other rover, because all of them compose the same
+# reusable mechanical boundary.
 #
 # ONE ROVER, NOT TWO. There is no second instance because there is no second
 # realization to compare against. The scenario gets its contrast from TIME
@@ -135,7 +134,7 @@ def Xform "SixIndependentParity" (
         prepend references = @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>
     )
     {
-        double3 xformOp:translate = (0.0, 1.0, 120.0)
+        double3 xformOp:translate = (0.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"

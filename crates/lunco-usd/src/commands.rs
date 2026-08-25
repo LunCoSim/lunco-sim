@@ -217,7 +217,7 @@ impl Plugin for UsdCommandsPlugin {
         // Always present (headless too) so the open path can record one without
         // a UI feature gate.
         app.init_resource::<EmptyViewportReason>();
-        app.add_observer(open_usd_docs_on_twin_authority_mounted);
+        app.add_observer(open_usd_docs_on_twin_asset_mounted);
         app.add_observer(execute_admitted_load_scene);
         // Restart document refresh belongs to the admitted transaction, not the
         // raw request. A restart queued behind a load must refresh the document
@@ -312,7 +312,7 @@ impl Plugin for UsdCommandsPlugin {
 /// between higher-level domains and the USD command surface; it carries typed
 /// data all the way through and never parses a command name or JSON payload.
 /// Once the asset boundary has mounted a Twin authority, make the viewport
-/// **reflect the opened Twin/folder**
+/// **reflect the opened Twin/folder**.
 /// — clear-and-replace, so a previously loaded scene never lingers:
 ///
 /// - **Has `[usd] default_scene`** → [`LoadScene`] it (path relative to
@@ -329,10 +329,10 @@ impl Plugin for UsdCommandsPlugin {
 /// `AddReference`. Full resolution rule in
 /// `docs/architecture/21-domain-usd.md` § "Which stage opens".
 ///
-/// Skips child Twins — they raise their own authority-mounted event when the
+/// Skips child Twins — they raise their own `TwinAdded` when the
 /// workspace eagerly opens them, each resolving its own starting scene.
-fn open_usd_docs_on_twin_authority_mounted(
-    trigger: On<lunco_assets::TwinAuthorityMounted>,
+fn open_usd_docs_on_twin_asset_mounted(
+    trigger: On<lunco_assets::TwinAssetMounted>,
     workspace: Res<WorkspaceResource>,
     // Optional because headless hosts may not install the asset pipeline. The
     // authoritative doc-backed mount below is the only production path; the
@@ -345,7 +345,6 @@ fn open_usd_docs_on_twin_authority_mounted(
     mut commands: Commands,
 ) {
     let twin_id = trigger.event().twin;
-    let twin_name = trigger.event().name.clone();
     let Some(twin) = workspace.twin(twin_id) else {
         return;
     };
@@ -354,6 +353,10 @@ fn open_usd_docs_on_twin_authority_mounted(
         .as_ref()
         .and_then(|m| m.usd.as_ref())
         .and_then(|u| u.default_scene.as_deref());
+    // The asset boundary emitted this event only after registering the root.
+    // Use the exact assigned authority from the event; do not rediscover it
+    // through a second lookup whose timing could reintroduce the mount race.
+    let twin_name = trigger.event().name.clone();
     match default_scene {
         Some(scene) => {
             let scene_uri = lunco_assets::twin_uri(&twin_name, scene);
@@ -833,7 +836,9 @@ fn on_restart_scene_refresh_active_document(
     else {
         return;
     };
-    twins.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes()));
+    if let Err(error) = twins.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes())) {
+        warn!("[restart-scene] could not publish the refreshed Twin source: {error}");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -848,7 +853,7 @@ fn on_restart_scene_refresh_active_document(
 //   2. `on_open_file` (this one) — additive **scene import** (Blender's
 //      File → Append): brings the stage into the running 3D scene so
 //      `UsdSimPlugin` can derive native connection paths (the path
-//      `open_usd_docs_on_twin_authority_mounted` relies on).
+//      `open_usd_docs_on_twin_asset_mounted` relies on).
 //
 // `spawn_scene_root_world` loads the stage through the `AssetServer` (by
 // path, no fs), so this half carries no I/O of its own.
@@ -2373,7 +2378,7 @@ mod tests {
     /// Opening a folder with NO `twin.toml` (the "wrong folder" mistake)
     /// must record a diagnostic reason naming that cause, so the viewport
     /// placeholder can tell the user WHY it is empty instead of a generic
-    /// hint. Drives the REAL `open_usd_docs_on_twin_authority_mounted` observer.
+    /// hint. Drives the REAL `open_usd_docs_on_twin_asset_mounted` observer.
     #[test]
     fn folder_with_no_manifest_records_wrong_folder_reason() {
         use lunco_twin::TwinMode;

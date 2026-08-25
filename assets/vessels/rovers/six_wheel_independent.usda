@@ -66,6 +66,89 @@ def Xform "SixWheelIndependent" (
     float outputs:drive_w4 = 0.0
     float outputs:drive_w5 = 0.0
 
+    # --- Power: the independent channels share one authored electrical rail ---
+    # The source and all six motor/mechanical islands are in one collection, so
+    # the solver sees the actual load topology rather than a Rust-side motor
+    # shortcut. A finite source may replace this branch without changing any
+    # actuator or wheel code.
+    def Xform "PowerSource" (
+        prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
+    )
+    {
+    }
+    def Scope "Electrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        float inputs:drive_w0.connect = </SixWheelIndependent.outputs:drive_w0>
+        float inputs:drive_w1.connect = </SixWheelIndependent.outputs:drive_w1>
+        float inputs:drive_w2.connect = </SixWheelIndependent.outputs:drive_w2>
+        float inputs:drive_w3.connect = </SixWheelIndependent.outputs:drive_w3>
+        float inputs:drive_w4.connect = </SixWheelIndependent.outputs:drive_w4>
+        float inputs:drive_w5.connect = </SixWheelIndependent.outputs:drive_w5>
+        float inputs:shaft_speed_L0.connect = </SixWheelIndependent/Wheel_L0.outputs:shaft_speed>
+        float inputs:shaft_speed_L1.connect = </SixWheelIndependent/Wheel_L1.outputs:shaft_speed>
+        float inputs:shaft_speed_L2.connect = </SixWheelIndependent/Wheel_L2.outputs:shaft_speed>
+        float inputs:shaft_speed_R0.connect = </SixWheelIndependent/Wheel_R0.outputs:shaft_speed>
+        float inputs:shaft_speed_R1.connect = </SixWheelIndependent/Wheel_R1.outputs:shaft_speed>
+        float inputs:shaft_speed_R2.connect = </SixWheelIndependent/Wheel_R2.outputs:shaft_speed>
+        float outputs:bus_voltage.connect = </SixWheelIndependent/PowerSource.outputs:terminal_voltage_v>
+        float outputs:bus_current.connect = </SixWheelIndependent/PowerSource.outputs:terminal_current_a>
+        float outputs:bus_power.connect = </SixWheelIndependent/PowerSource.outputs:terminal_power_w>
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </SixWheelIndependent/PowerSource>,
+            </SixWheelIndependent/Motor_L0>,
+                </SixWheelIndependent/TorqueSource_L0>,
+            </SixWheelIndependent/Motor_L1>,
+                </SixWheelIndependent/TorqueSource_L1>,
+            </SixWheelIndependent/Motor_L2>,
+                </SixWheelIndependent/TorqueSource_L2>,
+            </SixWheelIndependent/Motor_R0>,
+                </SixWheelIndependent/TorqueSource_R0>,
+            </SixWheelIndependent/Motor_R1>,
+                </SixWheelIndependent/TorqueSource_R1>,
+            </SixWheelIndependent/Motor_R2>,
+                </SixWheelIndependent/TorqueSource_R2>,
+            </SixWheelIndependent/Gearbox_L0>,
+            </SixWheelIndependent/Gearbox_L1>,
+            </SixWheelIndependent/Gearbox_L2>,
+            </SixWheelIndependent/Gearbox_R0>,
+            </SixWheelIndependent/Gearbox_R1>,
+            </SixWheelIndependent/Gearbox_R2>,
+            </SixWheelIndependent/Shaft_L0>,
+            </SixWheelIndependent/Shaft_L1>,
+            </SixWheelIndependent/Shaft_L2>,
+            </SixWheelIndependent/Shaft_R0>,
+            </SixWheelIndependent/Shaft_R1>,
+            </SixWheelIndependent/Shaft_R2>,
+        ]
+    }
+    over "Motor_L0" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w0>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+    over "Motor_L1" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w1>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+    over "Motor_L2" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w2>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+    over "Motor_R0" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w3>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+    over "Motor_R1" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w4>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+    over "Motor_R2" {
+        float inputs:demand.connect = </SixWheelIndependent/Electrical.inputs:drive_w5>
+        custom token connectors:p.connect = </SixWheelIndependent/PowerSource.connectors:p>
+    }
+
     # G4b — the mix. Left bank (w0,w1,w2) = throttle+steer; right bank (w3,w4,w5)
     # = throttle−steer. Pure throttle drives all six equally; pure steer pivots.
     #
@@ -109,6 +192,7 @@ def Xform "SixWheelIndependent" (
 
     # --- Left bank → drive_w0/w1/w2 -----------------------------------------
     def Cylinder "Wheel_L0" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -118,10 +202,14 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 0
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w0>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_L0.outputs:torque>
     }
 
     def Cylinder "Wheel_L1" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -131,10 +219,14 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 2
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w1>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_L1.outputs:torque>
     }
 
     def Cylinder "Wheel_L2" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -144,11 +236,15 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 4
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w2>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_L2.outputs:torque>
     }
 
     # --- Right bank → drive_w3/w4/w5 ----------------------------------------
     def Cylinder "Wheel_R0" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -158,10 +254,14 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 1
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w3>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_R0.outputs:torque>
     }
 
     def Cylinder "Wheel_R1" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -171,10 +271,14 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 3
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w4>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_R1.outputs:torque>
     }
 
     def Cylinder "Wheel_R2" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
@@ -184,7 +288,10 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int physxVehicleWheelAttachment:index = 5
-        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w5>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </SixWheelIndependent/Shaft_R2.outputs:torque>
     }
 
     # --- Motors + reductions -------------------------------------------------
@@ -194,15 +301,9 @@ def Xform "SixWheelIndependent" (
     # renumbered; the `DriveMix` scope above is still the only place the steer sign
     # per bank is stated.
     #
-    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed = 2400/200 =
-    # 12 rad/s. A weak or hot wheel on this rover is a per-instance
-    # `lunco:motor:stallTorque` override on one of these prims — never a code path.
-    #
-    # Every motor names the WHEEL it turns with `lunco:motor:drivenWheel` — the
-    # relationship IS the binding; the matching names are a convenience, not a signal.
-    # RAYCAST drivetrain: those wheels have no joint, so the raycast wheel consumes the
-    # axle torque and no-load speed directly.
+    # The Modelica motor, gearbox, and shaft solve the electrical and rotational
+    # state once. A weak or hot wheel is an authored Modelica input opinion on
+    # that motor instance, never a Rust code path or a name-based relationship.
     def Xform "Motor_L0" (
         prepend references = @lunco://components/mobility/motor.usda@</Motor>
     )
@@ -210,7 +311,15 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w0>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L0>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L0.outputs:speed_a>
+    }
+
+    def Xform "TorqueSource_L0" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_L0.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_L0.connectors:flange_a>
     }
 
     def Xform "Gearbox_L0" (
@@ -219,7 +328,11 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (-0.6, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_L0.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_L0.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_L0.connectors:flange>
     }
 
     def Xform "Motor_L1" (
@@ -229,7 +342,16 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w1>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L1>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L1.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_L1" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_L1.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_L1.connectors:flange_a>
     }
 
     def Xform "Gearbox_L1" (
@@ -238,7 +360,11 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (-0.6, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_L1.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_L1.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_L1.connectors:flange>
     }
 
     def Xform "Motor_L2" (
@@ -248,7 +374,16 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w2>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L2>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_L2.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_L2" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_L2.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_L2.connectors:flange_a>
     }
 
     def Xform "Gearbox_L2" (
@@ -257,7 +392,11 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (-0.6, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_L2.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_L2.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_L2.connectors:flange>
     }
 
     def Xform "Motor_R0" (
@@ -267,7 +406,16 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w3>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R0>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R0.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_R0" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_R0.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_R0.connectors:flange_a>
     }
 
     def Xform "Gearbox_R0" (
@@ -276,7 +424,11 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (0.6, -0.1, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_R0.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_R0.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_R0.connectors:flange>
     }
 
     def Xform "Motor_R1" (
@@ -286,7 +438,16 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w4>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R1>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R1.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_R1" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_R1.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_R1.connectors:flange_a>
     }
 
     def Xform "Gearbox_R1" (
@@ -295,7 +456,11 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (0.6, -0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_R1.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_R1.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_R1.connectors:flange>
     }
 
     def Xform "Motor_R2" (
@@ -305,7 +470,16 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (0.45, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w5>
-        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R2>
+        float inputs:speed.connect = </SixWheelIndependent/Gearbox_R2.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_R2" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </SixWheelIndependent/Motor_R2.outputs:shaft_torque>
+        custom token connectors:flange.connect = </SixWheelIndependent/Gearbox_R2.connectors:flange_a>
     }
 
     def Xform "Gearbox_R2" (
@@ -314,7 +488,36 @@ def Xform "SixWheelIndependent" (
     {
         double3 xformOp:translate = (0.6, -0.1, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </SixWheelIndependent/Motor_R2.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </SixWheelIndependent/TorqueSource_R2.connectors:flange>
+        custom token connectors:flange_b.connect = </SixWheelIndependent/Shaft_R2.connectors:flange>
+    }
+
+    def Xform "Shaft_L0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L0>
+    }
+    def Xform "Shaft_L1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L1>
+    }
+    def Xform "Shaft_L2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_L2>
+    }
+    def Xform "Shaft_R0" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R0>
+    }
+    def Xform "Shaft_R1" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R1>
+    }
+    def Xform "Shaft_R2" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </SixWheelIndependent/Electrical.inputs:shaft_speed_R2>
     }
 
     # --- Drive law -----------------------------------------------------------

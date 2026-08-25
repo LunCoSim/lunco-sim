@@ -26,39 +26,28 @@ const SOC_RECOVER_MIN = 0.005;
 const MOTION_MIN_M = 0.25;
 const IDLE_DRIVE_TOL = 0.001;
 
-// Boundary outputs keep their authored USD names (`soc`, `solar_power`, and
-// `solar_incidence`). Generated member outputs use the synthesizer's explicit
-// `__member_<escaped-path>_<output>` alias, not a guessed `Member.field` path.
-fn island_port(member, field) {
-    if member == "Battery" && field == "soc_out" { return "soc"; }
-    if member == "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel" && field == "power_out" {
-        return "solar_power";
-    }
-    if member == "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel" && field == "cos_incidence" {
-        return "solar_incidence";
-    }
-    if member == "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL" && field == "electrical_power" {
-        return "__member_SolarRoverTest_x2f_SolarRover_x2f_Motor__FL_electrical_power";
-    }
-    if member == "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL" && field == "terminal_current_a" {
-        return "__member_SolarRoverTest_x2f_SolarRover_x2f_Motor__FL_terminal_current_a";
-    }
-    ()
-}
+// Every observed value is an authored Electrical boundary port. Generated
+// member identifiers are implementation details, not a scenario contract.
+const BATTERY_SOC = "soc";
+const SOLAR_POWER = "solar_power";
+const SOLAR_AVAILABLE_POWER = "solar_available_power";
+const SOLAR_INCIDENCE = "solar_incidence";
+const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
+const MOTOR_TERMINAL_CURRENT = "motor_terminal_current";
 
-fn island_value(elec, member, field) {
-    get(elec, island_port(member, field))
+fn island_value(elec, port) {
+    get(elec, port)
 }
 
 fn have_ports(s) {
-    island_value(s.elec, "Battery", "soc_out") != () &&
-    island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "power_out") != () &&
-    get(s.elec, "solar_available_power") != () &&
+    island_value(s.elec, BATTERY_SOC) != () &&
+    island_value(s.elec, SOLAR_POWER) != () &&
+    island_value(s.elec, SOLAR_AVAILABLE_POWER) != () &&
     get(s.elec, "battery_discharge_power") != () &&
     get(s.elec, "battery_charge_power") != () &&
-    island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "cos_incidence") != () &&
-    island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "electrical_power") != () &&
-    island_value(s.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "terminal_current_a") != () &&
+    island_value(s.elec, SOLAR_INCIDENCE) != () &&
+    island_value(s.elec, MOTOR_ELECTRICAL_POWER) != () &&
+    island_value(s.elec, MOTOR_TERMINAL_CURRENT) != () &&
     get(s.tracker, "yaw") != () && get(s.hinge, "angle") != ()
 }
 
@@ -122,9 +111,9 @@ fn on_tick(me) {
             return;
         }
 
-        this.power_before = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "power_out");
+        this.power_before = island_value(this.elec, SOLAR_POWER);
         this.available_before = get(this.elec, "solar_available_power");
-        this.incidence_before = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "cos_incidence");
+        this.incidence_before = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_before = get(this.tracker, "yaw");
         this.phase = "track_sun";
         this.phase_started = this.t;
@@ -135,11 +124,11 @@ fn on_tick(me) {
 
     if this.phase == "track_sun" {
         if phase_t < TRACK_S { return; }
-        this.power_after_step = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "power_out");
-        this.incidence_after_step = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_YawHead_x2f_SolarPanel", "cos_incidence");
+        this.power_after_step = island_value(this.elec, SOLAR_POWER);
+        this.incidence_after_step = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_after_step = get(this.tracker, "yaw");
         this.hinge_after_step = get(this.hinge, "angle");
-        this.soc_before_drive = island_value(this.elec, "Battery", "soc_out");
+        this.soc_before_drive = island_value(this.elec, BATTERY_SOC);
         this.position_before_drive = world_pos(this.rover);
         cmd("EngageAutopilot", #{ vessel: this.rover });
         this.phase = "drive";
@@ -149,11 +138,11 @@ fn on_tick(me) {
     }
 
     if this.phase == "drive" {
-        let motor = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "electrical_power");
+        let motor = island_value(this.elec, MOTOR_ELECTRICAL_POWER);
         if motor != () && motor > this.peak_motor_power {
             this.peak_motor_power = motor;
         }
-        let current = island_value(this.elec, "SolarRoverTest_x2f_SolarRover_x2f_Motor__FL", "terminal_current_a");
+        let current = island_value(this.elec, MOTOR_TERMINAL_CURRENT);
         if current != () && current > this.peak_motor_current {
             this.peak_motor_current = current;
         }
@@ -162,7 +151,7 @@ fn on_tick(me) {
             this.peak_battery_discharge_power = discharge;
         }
         if phase_t < DRIVE_S { return; }
-        this.soc_after_drive = island_value(this.elec, "Battery", "soc_out");
+        this.soc_after_drive = island_value(this.elec, BATTERY_SOC);
         this.position_after_drive = world_pos(this.rover);
         cmd("DisengageAutopilot", #{ vessel: this.rover });
         this.phase = "charge";
@@ -182,7 +171,7 @@ fn on_tick(me) {
             this.peak_battery_charge_power = charge;
         }
         if phase_t < CHARGE_S { return; }
-        this.soc_after_charge = island_value(this.elec, "Battery", "soc_out");
+        this.soc_after_charge = island_value(this.elec, BATTERY_SOC);
         this.done = true;
         verdict(this);
     }

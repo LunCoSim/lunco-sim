@@ -20,6 +20,80 @@ use std::collections::HashMap;
 
 use crate::visual_diagram::{msl_class_library, VisualDiagram};
 
+fn resolved_engine_class_entry(
+    qualified: &str,
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
+) -> Option<crate::index::ClassEntry> {
+    let (class_def, icon) = crate::engine_resource::global_engine_handle().and_then(|handle| {
+        let mut engine = handle.try_lock()?;
+        let class_def = engine.class_def(qualified)?;
+        // Projection may run while the icon warmer is resolving another
+        // class. Read only a completed icon here; starting an inheritance
+        // walk is separate background work and must not hold up the
+        // topology projection.
+        let icon = engine.cached_icon_for(qualified).flatten();
+        Some((class_def, icon))
+    })?;
+
+    let mut entry = crate::index::ClassEntry {
+        name: qualified.to_string(),
+        kind: crate::index::ClassKind::Model,
+        source_range: None,
+        extends: Vec::new(),
+        description: String::new(),
+        children: Vec::new(),
+        icon,
+        documentation: (None, None),
+        equation_count: 0,
+        partial: false,
+        experiment: None,
+        ports: Vec::new(),
+        parameters: Vec::new(),
+        diagram_graphics: None,
+        icon_text: None,
+        category: "User".to_string(),
+        resolution: crate::index::ClassResolutionState::Resolved,
+        resolution_message: None,
+    };
+
+    // The indexed MSL catalogue is not the source of truth for native or
+    // user-provided libraries. When the shared source-aware engine resolves a
+    // class, project the same AST semantics the local-class path uses: class
+    // kind, inherited connector members, ports, and Diagram graphics. An
+    // empty ClassEntry here is not a valid resolved state because it removes
+    // standard `flow` metadata from every generated edge.
+    use rumoca_compile::parsing::ClassType;
+
+    let class_kind = match (&class_def.class_type, class_def.expandable) {
+        (ClassType::Connector, true) => crate::index::ClassKind::ExpandableConnector,
+        (class_type, _) => crate::index::map_class_type(class_type),
+    };
+    entry.kind = class_kind;
+    entry.partial = class_def.partial;
+    entry.diagram_graphics = crate::annotations::extract_diagram(&class_def.annotation);
+
+    // Port discovery must see inherited members (for example a connector
+    // declared by a base class). Merge those members into an owned AST
+    // snapshot after the engine guard above has been dropped; connector
+    // resolution below legitimately queries the same shared cache.
+    let mut class_with_inherited = class_def.clone();
+    for (name, component) in crate::diagram::collect_inherited_components_with(
+        &class_def,
+        Some(qualified),
+        ast,
+        0,
+        crate::class_cache::ClassLookupMode::Cached,
+    ) {
+        class_with_inherited
+            .components
+            .entry(name)
+            .or_insert(component);
+    }
+    entry.ports = extract_local_class_ports(&class_with_inherited, qualified, ast);
+
+    Some(entry)
+}
+
 // ---------------------------------------------------------------------------
 // Design Tokens — all visual constants live here (Tunability Mandate).
 // ---------------------------------------------------------------------------
@@ -65,45 +139,6 @@ impl Default for DiagramAutoLayoutSettings {
     }
 }
 
-/// Scan component declarations across a `.mo` source.
-///
-/// Returns `(type_name, instance_name)` pairs for every component decl in
-/// every top-level class. Used as the *fallback* when the AST-based
-/// component-graph builder produced an empty graph (rumoca's error
-/// recovery sometimes drops every component of a class on a parse error
-/// elsewhere in the file).
-///
-/// Scanned component with its typed `Placement` annotation
-/// (already extracted at AST-walk time). `placement` is `None`
-/// when the source either authored none or the rumoca-recovery
-/// parse couldn't salvage it.
-struct ScannedComponent {
-    type_name: String,
-    instance_name: String,
-    placement: Option<crate::annotations::Placement>,
-}
-
-/// Walk the doc AST collecting every component declaration across all
-/// top-level classes. Replaces the previous `parse_to_syntax(source)`
-/// re-parse — the projection task already holds the parsed AST, so a
-/// second parse is pure waste. AST-as-source-of-truth: panels read
-/// the AST, never re-parse the source bytes.
-fn scan_component_declarations_from_ast(
-    ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> Vec<ScannedComponent> {
-    let mut out = Vec::new();
-    for (_class_name, class_def) in &ast.classes {
-        for (name, comp) in class_def.iter_components() {
-            out.push(ScannedComponent {
-                type_name: format!("{}", comp.type_name),
-                instance_name: name.to_string(),
-                placement: crate::annotations::extract_placement(&comp.annotation),
-            });
-        }
-    }
-    out
-}
-
 /// Build a lookup of authored `connect(...) annotation(Line(...))` routes.
 /// The shared source projection owns the parser because the Modelica AST does
 /// not retain connect-equation annotations in the current Rumoca API.
@@ -132,60 +167,6 @@ fn canonical_edge_key(
     }
 }
 
-/// Build a `VisualDiagram` from [`ScannedComponent`] entries
-/// (typed `Placement` already extracted at scan time). Used only
-/// when the AST-based projection path returned nothing — i.e.
-/// the strict parse passed but the typed Index walker couldn't
-/// produce a target-class graph. Falls back to grid layout for
-/// components without authored placements.
-fn build_visual_diagram_from_scan(
-    scanned: &[ScannedComponent],
-    layout: &DiagramAutoLayoutSettings,
-) -> VisualDiagram {
-    let mut diagram = VisualDiagram::default();
-    let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
-        msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
-
-    for (idx, comp) in scanned.iter().enumerate() {
-        // Only render components whose type resolves against the MSL
-        // index. Unresolved types stay in the source — the user sees
-        // them in the code editor and the parse-error badge — but
-        // aren't rendered here because we don't have port info for
-        // an unknown type.
-        let Some(def) = msl_lookup_by_path.get(comp.type_name.as_str()).cloned() else {
-            continue;
-        };
-
-        // Placement from the typed annotation captured at scan-time
-        // (no per-instance regex). Modelica's transformation extent
-        // is in MLS coordinate units (Y-up); the canvas uses Y-down,
-        // so flip the centre's Y the same way the main projector does.
-        let pos = match &comp.placement {
-            Some(p) => {
-                let e = &p.transformation.extent;
-                let cx = (e.p1.x + e.p2.x) / 2.0;
-                let cy = (e.p1.y + e.p2.y) / 2.0;
-                egui::Pos2::new(cx as f32, -(cy as f32))
-            }
-            None => {
-                let cols = layout.cols.max(1);
-                let row = idx / cols;
-                let col = idx % cols;
-                egui::Pos2::new(col as f32 * layout.spacing_x, row as f32 * layout.spacing_y)
-            }
-        };
-
-        // `pos` is an egui screen point; the diagram stores positions as bevy
-        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
-        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
-        if let Some(n) = diagram.get_node_mut(node_id) {
-            n.instance_name = comp.instance_name.clone();
-        }
-    }
-    diagram
-}
-
 /// Default cap for the "don't project absurdly huge models" guard.
 /// Catches obvious mistakes (importing a whole MSL subpackage into
 /// a diagram viewer) without getting in the way of real engineering
@@ -200,9 +181,9 @@ fn build_visual_diagram_from_scan(
 /// blank canvas.
 pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 
-/// Build a [`VisualDiagram`] from an already-parsed AST. Returns
-/// `None` if the model has no component instantiations (e.g.
-/// equation-based models like LunCo.Electrical.Battery, SpringMass.mo).
+/// Build a [`VisualDiagram`] from an already-parsed AST. An empty
+/// diagram is valid for equation-only models; structural failures return
+/// an error so the canvas can show the actual cause.
 ///
 /// All callers must source the AST from
 /// [`ModelicaDocument::ast`](crate::document::ModelicaDocument::ast)
@@ -212,7 +193,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// parsed Modelica trees in the workbench.
 ///
 /// `max_nodes` is a guard against accidentally projecting a huge
-/// package (e.g. `Modelica.Units`) into a diagram — returns `None`
+/// package (e.g. `Modelica.Units`) into a diagram — returns an error
 /// if the parsed graph exceeds the cap. See
 /// [`DEFAULT_MAX_DIAGRAM_NODES`] for the conventional value; the
 /// canvas projection reads it from `DiagramProjectionLimits` so
@@ -246,7 +227,7 @@ pub fn import_model_to_diagram_from_ast(
     max_nodes: usize,
     target_class: Option<&str>,
     layout: &DiagramAutoLayoutSettings,
-) -> Option<VisualDiagram> {
+) -> Result<VisualDiagram, String> {
     use crate::diagram::ModelicaComponentBuilder;
     // `Arc::clone` here is a pointer bump, NOT a tree clone.
     // MSL package ASTs are megabytes; a naïve clone would push the
@@ -286,11 +267,22 @@ pub fn import_model_to_diagram_from_ast(
         None if ast_looks_like_package(&ast) => {
             match crate::diagram::resolve_primary_target(&ast) {
                 Some(t) => Some(t),
-                None => return None,
+                None => {
+                    return Err(
+                        "the Modelica source contains no diagrammable class to display".into(),
+                    )
+                }
             }
         }
         None => None,
     };
+    if let Some(target) = resolved_target.as_deref() {
+        if crate::diagram::find_class_by_qualified_name(&ast, target).is_none() {
+            return Err(format!(
+                "target Modelica class '{target}' was not found in the source"
+            ));
+        }
+    }
     let mut builder = ModelicaComponentBuilder::from_ast(std::sync::Arc::clone(&ast));
     if let Some(target) = resolved_target.as_deref() {
         builder = builder.target_class(target);
@@ -301,39 +293,12 @@ pub fn import_model_to_diagram_from_ast(
     // the parsed AST, so source and semantic topology remain separate concerns.
     let waypoint_map = scan_connect_annotations(&ast, source, resolved_target.as_deref());
 
-    // If the AST-based graph has no components, fall back to a
-    // source-text scan before concluding the model is equation-only.
-    //
-    // Why: rumoca's error recovery drops *all* components of a class
-    // when it hits a semantic error like a duplicate name (per
-    // MLS, duplicates are a namespace violation). An OMEdit /
-    // Dymola-style editor must still render what the user wrote so
-    // they can fix the error — returning `None` here leaves them
-    // staring at a blank canvas with no clue *why*.
-    //
-    // The scanner is regex-based and deliberately simple; it catches
-    // the common `<Qualified.Type> <InstanceName>[(mods)] [;/anno];`
-    // shape but doesn't pretend to be a full Modelica parser. When the
-    // AST is healthy (the 99% case), this fallback never runs.
-    //
-    // **Critical**: the scanner reads the WHOLE source, so it has
-    // no notion of class scoping. We only run it when no
-    // `target_class` was specified — drill-in tabs into a specific
-    // class inside a package file MUST NOT trigger this fallback,
-    // or they end up displaying every sibling class's components
-    // jumbled together. Honor the scope the caller asked for.
+    // An empty semantic graph is a valid equation-only class. Do not scan raw
+    // source text here: a scanner cannot obey Modelica class scope and would
+    // create nodes from siblings or malformed declarations. Parser/semantic
+    // diagnostics remain the authoritative failure surface.
     if graph.node_count() == 0 {
-        // A resolved target (explicit drill OR auto-picked package
-        // primary) means the scope is known — don't run the unscoped
-        // whole-source scan, which would jumble in sibling classes.
-        if resolved_target.is_some() {
-            return None;
-        }
-        let scanned = scan_component_declarations_from_ast(&ast);
-        if !scanned.is_empty() {
-            return Some(build_visual_diagram_from_scan(&scanned, layout));
-        }
-        return None;
+        return Ok(VisualDiagram::default());
     }
 
     // Safety: prevent projecting absurdly huge packages (e.g.
@@ -348,13 +313,16 @@ pub fn import_model_to_diagram_from_ast(
             graph.node_count(),
             max_nodes,
         );
-        return None;
+        return Err(format!(
+            "the Modelica diagram has {} component(s), exceeding the limit of {max_nodes}",
+            graph.node_count()
+        ));
     }
 
     // Convert ComponentGraph → VisualDiagram
     let mut diagram = VisualDiagram::default();
 
-    // MSL lookup table — keyed by the fully-qualified Modelica path
+    // Indexed library lookup table — keyed by the fully-qualified Modelica path
     // (e.g. `"Modelica.Blocks.Continuous.Integrator"`).
     //
     // Type resolution follows MLS §5.3: a component's `type_name` is
@@ -373,7 +341,7 @@ pub fn import_model_to_diagram_from_ast(
     // reference doesn't resolve via scope or path, we surface it as
     // unresolved (skipped) rather than guess.
     let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
+    let indexed_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
         msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     // Build the active class's import map so we can resolve
@@ -563,8 +531,8 @@ pub fn import_model_to_diagram_from_ast(
     // they live in the bundled package P. When only this doc is loaded
     // (e.g. after a session restore re-seats just `RocketStageCopy.mo`),
     // package P isn't in the engine session either, so every component
-    // falls through to the placeholder gray box. Parse the bundled package
-    // and register its classes so their authored `Icon` graphics render.
+    // remains unresolved. Parse the bundled package and register its classes
+    // so their authored `Icon` graphics render.
     // Mirrors the compile path's `extra_sources` seeding. No-op for MSL
     // `within` packages (not bundled → `bundled_source_for` returns None)
     // and for top-level scratch docs (no `within`). `register_local_class`
@@ -671,12 +639,11 @@ pub fn import_model_to_diagram_from_ast(
             continue;
         }
 
-        // Extract short name from qualified_name (e.g., "RC_Circuit.R1" → "R1")
-        let short_name = node
-            .qualified_name
-            .split('.')
-            .next_back()
-            .unwrap_or(&node.qualified_name);
+        // `label` is the component identifier authored in the target class.
+        // `qualified_name` is for navigation/diagnostics and may contain
+        // generated or within-qualified segments that are not the instance
+        // name shown in `%name` or used by the AST component map.
+        let short_name = node.label.as_str();
 
         // Scope-aware type lookup:
         //   1. `type_name` looks like a fully-qualified path → match directly.
@@ -693,8 +660,26 @@ pub fn import_model_to_diagram_from_ast(
         };
         let mut component_def: Option<crate::index::ClassEntry> = resolved_path
             .as_deref()
-            .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
+            .and_then(|p| indexed_lookup_by_path.get(p).map(|d| (*d).clone()))
             .or_else(|| local_classes_by_short.get(type_name).cloned());
+        // Bundled/native classes are indexed in the shared source-aware engine,
+        // not in the MSL palette. A fully qualified reference must therefore
+        // consult that same engine before it becomes a diagnostic node; the
+        // async root loader will cause this projection to run again once the
+        // definition arrives.
+        if component_def.is_none() {
+            if let (Some(path), Some(handle)) = (
+                resolved_path.as_deref(),
+                crate::engine_resource::global_engine_handle(),
+            ) {
+                if handle
+                    .try_lock()
+                    .is_some_and(|mut engine| engine.has_class(path))
+                {
+                    component_def = resolved_engine_class_entry(path, &ast);
+                }
+            }
+        }
         // Scope-chain fallback (MLS §5.3): when the type couldn't be
         // resolved as-given, try prepending each enclosing package
         // of the file's `within` clause + each segment of the
@@ -703,8 +688,8 @@ pub fn import_model_to_diagram_from_ast(
         // references (e.g. inside `Modelica/Blocks/Continuous.mo`,
         // PID's components reference `Blocks.Math.Gain` rather than
         // `Modelica.Blocks.Math.Gain`).
+        let mut resolution_candidates: Vec<String> = Vec::new();
         if component_def.is_none() && !type_name.is_empty() {
-            let mut candidates: Vec<String> = Vec::new();
             // MLS §5.3: walk the enclosing class scopes of the target
             // outward. For target `Modelica.Blocks.Examples.PID_Controller`
             // and a short ref `Sources.Sinc`, candidates include
@@ -719,7 +704,7 @@ pub fn import_model_to_diagram_from_ast(
                 // start at its enclosing package.
                 parts.pop();
                 while !parts.is_empty() {
-                    candidates.push(format!("{}.{}", parts.join("."), type_name));
+                    resolution_candidates.push(format!("{}.{}", parts.join("."), type_name));
                     parts.pop();
                 }
             }
@@ -727,39 +712,24 @@ pub fn import_model_to_diagram_from_ast(
                 let mut parts: Vec<String> =
                     within.name.iter().map(|t| t.text.to_string()).collect();
                 while !parts.is_empty() {
-                    candidates.push(format!("{}.{}", parts.join("."), type_name));
+                    resolution_candidates.push(format!("{}.{}", parts.join("."), type_name));
                     parts.pop();
                 }
             }
-            for cand in &candidates {
-                if let Some(def) = msl_lookup_by_path.get(cand.as_str()) {
+            for cand in &resolution_candidates {
+                if let Some(def) = indexed_lookup_by_path.get(cand.as_str()) {
                     component_def = Some((*def).clone());
                     break;
                 }
             }
             if component_def.is_none() {
                 if let Some(handle) = crate::engine_resource::global_engine_handle() {
-                    let mut engine = handle.lock();
-                    for cand in &candidates {
-                        if engine.has_class(cand.as_str()) {
-                            component_def = Some(crate::index::ClassEntry {
-                                name: cand.to_string(),
-                                kind: crate::index::ClassKind::Model,
-                                source_range: None,
-                                extends: Vec::new(),
-                                description: String::new(),
-                                children: Vec::new(),
-                                icon: None,
-                                documentation: (None, None),
-                                equation_count: 0,
-                                partial: false,
-                                experiment: None,
-                                ports: Vec::new(),
-                                parameters: Vec::new(),
-                                diagram_graphics: None,
-                                icon_text: None,
-                                category: "User".to_string(),
-                            });
+                    for cand in &resolution_candidates {
+                        if handle
+                            .try_lock()
+                            .is_some_and(|mut engine| engine.has_class(cand.as_str()))
+                        {
+                            component_def = resolved_engine_class_entry(cand, &ast);
                             break;
                         }
                     }
@@ -767,13 +737,10 @@ pub fn import_model_to_diagram_from_ast(
             }
         }
 
-        // Last-resort placeholder: if every lookup missed, still
-        // render the component as a labelled rectangle. Without this,
-        // user-defined types that don't resolve (e.g. authored in
-        // the same file but with an unusual scope) silently drop out
-        // of the diagram and the user sees a blank canvas. A bare
-        // placeholder is far better — they can see the wiring and
-        // edit the source to fix the type.
+        // An unresolved type remains visible as an explicit diagnostic node.
+        // It is never represented as a fake resolved class: the source
+        // resolver owns the Loading/Missing distinction and the painter makes
+        // that state actionable in the normal diagram.
         //
         // EXCEPT: scalar variables (per MLS §4.5.4) don't belong on
         // the diagram — OMEdit / Dymola hide them. The graph builder
@@ -802,8 +769,35 @@ pub fn import_model_to_diagram_from_ast(
             continue;
         }
         if component_def.is_none() && !type_name.is_empty() {
-            let leaf = type_name.rsplit('.').next().unwrap_or(type_name);
-            let _ = leaf;
+            let availability = resolution_candidates
+                .iter()
+                .map(|candidate| crate::class_cache::class_availability(candidate))
+                .find(|state| matches!(state, crate::class_cache::ClassAvailability::Loading))
+                .unwrap_or_else(|| {
+                    crate::class_cache::class_availability(
+                        resolved_path.as_deref().unwrap_or(type_name),
+                    )
+                });
+            let (resolution, resolution_message) = match availability {
+                crate::class_cache::ClassAvailability::Loading => (
+                    crate::index::ClassResolutionState::Loading,
+                    Some(format!("resolving Modelica class `{type_name}`")),
+                ),
+                crate::class_cache::ClassAvailability::Missing => (
+                    crate::index::ClassResolutionState::Missing,
+                    Some(
+                        crate::class_cache::class_resolution_message(type_name).unwrap_or_else(
+                            || format!("Modelica class `{type_name}` was not found"),
+                        ),
+                    ),
+                ),
+                crate::class_cache::ClassAvailability::Ready => (
+                    crate::index::ClassResolutionState::Missing,
+                    Some(format!(
+                        "Modelica class `{type_name}` is indexed but its definition is unavailable"
+                    )),
+                ),
+            };
             component_def = Some(crate::index::ClassEntry {
                 name: type_name.to_string(),
                 kind: crate::index::ClassKind::Model,
@@ -821,6 +815,8 @@ pub fn import_model_to_diagram_from_ast(
                 diagram_graphics: None,
                 icon_text: None,
                 category: "User".to_string(),
+                resolution,
+                resolution_message,
             });
         }
 
@@ -836,15 +832,20 @@ pub fn import_model_to_diagram_from_ast(
         // resolver-lambda plumbing.
         if let Some(def) = component_def.as_mut() {
             let qualified = def.name.clone();
-            // Engine owns icon resolution + caching. One API,
-            // memoised, never blocks on disk. Returns None when the
-            // class isn't in the session yet (cold MSL); caller
-            // renders a default icon and a later projection picks
-            // up the resolved icon once the async warmer lands the
-            // class.
+            // Engine owns icon resolution + caching. The projection task is
+            // already off the UI thread, so a cache miss may perform the
+            // in-memory inheritance walk here after the source root is
+            // resident. This is the standard Modelica icon path; it avoids
+            // presenting a resolved native class as an "Icon missing" card
+            // merely because the first projection raced source-root loading.
+            // No disk I/O is performed by `icon_for`.
             if let Some(handle) = crate::engine_resource::global_engine_handle() {
-                if let Some(icon) = handle.lock().icon_for(&qualified) {
-                    def.icon = Some(icon);
+                if def.icon.is_none() {
+                    if let Some(mut engine) = handle.try_lock() {
+                        if let Some(icon) = engine.icon_for(&qualified) {
+                            def.icon = Some(icon);
+                        }
+                    }
                 }
             }
         }
@@ -950,8 +951,8 @@ pub fn import_model_to_diagram_from_ast(
         let src_node = &graph.nodes[edge.source.0 as usize];
         let tgt_node = &graph.nodes[edge.target.0 as usize];
 
-        let src_short = src_node.qualified_name.split('.').next_back().unwrap_or("");
-        let tgt_short = tgt_node.qualified_name.split('.').next_back().unwrap_or("");
+        let src_short = src_node.label.as_str();
+        let tgt_short = tgt_node.label.as_str();
 
         // Find matching diagram nodes
         let src_diagram_id = diagram
@@ -1108,11 +1109,7 @@ pub fn import_model_to_diagram_from_ast(
         }
     }
 
-    if diagram.nodes.is_empty() {
-        None
-    } else {
-        Some(diagram)
-    }
+    Ok(diagram)
 }
 
 /// Add a synthesised palette entry for a class found in the open
@@ -1178,7 +1175,7 @@ fn register_local_class(
     // icon with zero graphics is preferable to a missing component
     // (the canvas's default rectangle still names the component).
     let engine_icon = crate::engine_resource::global_engine_handle()
-        .and_then(|handle| handle.lock().icon_for(&class_context));
+        .and_then(|handle| handle.try_cached_icon_for(&class_context));
     let local_icon = crate::annotations::extract_icon(&class_def.annotation);
     let icon = match (engine_icon, local_icon) {
         // Prefer engine result only when it actually has graphics —
@@ -1226,6 +1223,8 @@ fn register_local_class(
             diagram_graphics: crate::annotations::extract_diagram(&class_def.annotation),
             icon_text: None,
             category: "Local".to_string(),
+            resolution: crate::index::ClassResolutionState::Resolved,
+            resolution_message: None,
         },
     );
 }
@@ -1262,7 +1261,7 @@ fn extract_local_class_ports(
                 // stall the AsyncCompute pool for tens of seconds.
                 // Misses fall back to defaults; an async warmer
                 // upgrades visuals on the next projection.
-                crate::class_cache::MslLookupMode::Cached,
+                crate::class_cache::ClassLookupMode::Cached,
             );
         if !causality_is_port && !type_is_connector {
             continue;
@@ -1282,21 +1281,23 @@ fn extract_local_class_ports(
         // renderer needs directly from its AST: wire color
         // (Icon.graphics), causality (variable prefixes or class-
         // level causality), and flow-variable metadata.
-        // Off-thread projection: cache-only. Misses → default icon /
-        // default port glyph. Pre-warmer (separate background task)
-        // populates the cache; subsequent projection upgrades visuals.
-        let msl_mode = crate::class_cache::MslLookupMode::Cached;
+        // Off-thread projection: cache-only. A miss remains explicit
+        // unresolved/loading state; the source-root completion event
+        // schedules a new projection with the authored icon and connector
+        // graphics. No visual is invented here.
+        let lookup_mode = crate::class_cache::ClassLookupMode::Cached;
         let class = crate::diagram::resolve_class_by_scope_pub(
             &sub_type,
             class_qualified_path,
             ast,
-            msl_mode,
+            lookup_mode,
         );
         let (color, kind, flow_vars) = class
             .as_ref()
             .map(|c| {
                 let color = connector_icon_color(c);
-                let (kind, flow_vars) = classify_connector(c, class_qualified_path, ast, msl_mode);
+                let (kind, flow_vars) =
+                    classify_connector(c, class_qualified_path, ast, lookup_mode);
                 (color, kind, flow_vars)
             })
             .unwrap_or_default();
@@ -1333,7 +1334,7 @@ fn classify_connector(
     class: &rumoca_compile::parsing::ast::ClassDef,
     owner_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    msl_mode: crate::class_cache::MslLookupMode,
+    lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> (
     crate::visual_diagram::PortKind,
     Vec<crate::visual_diagram::FlowVarMeta>,
@@ -1386,12 +1387,12 @@ fn classify_connector(
             &base_name,
             owner_qualified_path,
             ast,
-            msl_mode,
+            lookup_mode,
         ) else {
             continue;
         };
         let (base_kind, base_flows) =
-            classify_connector(&base_class, owner_qualified_path, ast, msl_mode);
+            classify_connector(&base_class, owner_qualified_path, ast, lookup_mode);
         for fv in base_flows {
             if !flow_vars.iter().any(|f| f.name == fv.name) {
                 flow_vars.push(fv);
@@ -1618,8 +1619,9 @@ mod composite_slim_slice_tests {
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("AnnotatedRocketStage.RocketStage"),
             &layout,
-        );
-        let n = diagram.as_ref().map(|d| d.nodes.len()).unwrap_or(0);
+        )
+        .expect("rocket stage projection must succeed");
+        let n = diagram.nodes.len();
         assert!(n >= 4, "expected >=4 component nodes, got {n}");
     }
 
@@ -1673,6 +1675,63 @@ end Unit_One;
                 .collect::<Vec<_>>(),
             vec!["input_a", "output_b"]
         );
+    }
+
+    #[test]
+    fn generated_component_labels_and_placements_stay_authored() {
+        let source = r#"
+model GeneratedRoot
+  Unit_One left annotation(Placement(transformation(origin={-120,40}, extent={{-55,-35},{55,35}})));
+  Unit_One right annotation(Placement(transformation(origin={180,-60}, extent={{-55,-35},{55,35}})));
+equation
+  left.input_a = 1.0;
+  right.input_a = left.output_b;
+end GeneratedRoot;
+
+model Unit_One
+  input Real input_a;
+  output Real output_b;
+equation
+  output_b = input_a;
+annotation(
+  Icon(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={Rectangle(extent={{-80,-50},{80,50}})}),
+  Diagram(coordinateSystem(extent={{-100,-100},{100,100}}), graphics={})
+);
+end Unit_One;
+"#;
+        let ast = std::sync::Arc::new(
+            rumoca_phase_parse::parse_to_ast(source, "generated-placement.mo")
+                .expect("generated placement fixture must parse"),
+        );
+        let diagram = import_model_to_diagram_from_ast(
+            ast,
+            source,
+            DEFAULT_MAX_DIAGRAM_NODES,
+            Some("GeneratedRoot"),
+            &DiagramAutoLayoutSettings::default(),
+        )
+        .expect("generated root with two units must project");
+
+        assert_eq!(
+            diagram
+                .nodes
+                .iter()
+                .map(|node| node.instance_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["left", "right"]
+        );
+        let positions = diagram
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.instance_name.as_str(),
+                    node.icon_transform.apply(0.0, 0.0),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(positions.get("left"), Some(&(-120.0, -40.0)));
+        assert_eq!(positions.get("right"), Some(&(180.0, 60.0)));
     }
 
     #[test]

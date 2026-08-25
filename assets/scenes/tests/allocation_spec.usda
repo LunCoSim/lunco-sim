@@ -33,7 +33,7 @@
 # this rig asserts the observable result, not merely the lookup: under full
 # throttle, a rover with an unresolvable kernel does not move.
 #
-# The rovers are spread along X (-100, -25, +25) and drive along -Z, so their
+# The rovers are spread along X (-75, -25, +25) and drive along -Z, so their
 # paths never meet. Geometry, ground, friction and spawn height are copied from
 # `drivetrain_parity.usda` — a rig whose numbers are already known-good — so the
 # only new variable in this scene is the kernel name.
@@ -113,7 +113,7 @@ def Xform "AllocationSpec" (
         }
     )
     {
-        double3 xformOp:translate = (-25.0, 1.0, 120.0)
+        double3 xformOp:translate = (-25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
@@ -142,7 +142,7 @@ def Xform "AllocationSpec" (
     {
         string lunco:driveKernel = "no_such_kernel__failsafe_probe"
 
-        double3 xformOp:translate = (25.0, 1.0, 120.0)
+        double3 xformOp:translate = (25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Chassis"
@@ -185,7 +185,7 @@ def Xform "AllocationSpec" (
         # Far enough out that the arc it sweeps under full throttle never reaches
         # RoverSkid's lane — this control is only honest if the two rovers never
         # touch each other.
-        double3 xformOp:translate = (-100.0, 1.0, 120.0)
+        double3 xformOp:translate = (-75.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         # Child prim NAME is the port name; the factors are the linear

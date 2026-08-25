@@ -1158,7 +1158,7 @@ pub fn on_compile_model(
                 }
             }
         }
-        // PR-B/C: source-root dep scan + lazy load.
+        // Source-root dependency scan + lazy load.
         //
         // Walk the doc's AST to find every qualified type root
         // (`Modelica.X`, `ThermofluidStream.Y`, ...). For each known

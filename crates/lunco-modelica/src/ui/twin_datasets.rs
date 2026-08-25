@@ -3,7 +3,7 @@
 //! The section is a pure projection of the shared [`DatasetRegistry`]. It
 //! does not know URLs, cache paths, processing commands, or domain-specific
 //! asset names. A row emits the same typed request used by Settings, so an
-//! individual Twin resource follows the exact same downloader, watchdog, and
+//! individual Twin resource follows the exact same owned-operation and
 //! processing lifecycle.
 
 use bevy_egui::egui;
@@ -68,13 +68,22 @@ impl BrowserSection for TwinDatasetsSection {
             );
             return;
         };
-        let Some(twin_name) = roots.name_for_root(&twin_root) else {
-            ui.label(
-                egui::RichText::new("Mounting Twin asset resources…")
-                    .weak()
-                    .italics(),
-            );
-            return;
+        let twin_name = match roots.name_for_root(&twin_root) {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                ui.label(
+                    egui::RichText::new("Mounting Twin asset resources…")
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+            Err(error) => {
+                ui.label(egui::RichText::new(format!(
+                    "Twin asset registry unavailable: {error}"
+                )));
+                return;
+            }
         };
 
         let Some(registry) = ctx.resource::<DatasetRegistry>() else {
@@ -169,6 +178,15 @@ impl BrowserSection for TwinDatasetsSection {
                     }
                     DatasetState::Processing { kind } => {
                         ui.label(format!("Preparing locally ({kind})…"));
+                    }
+                    DatasetState::Cancelling => {
+                        ui.label("Stopping…");
+                    }
+                    DatasetState::Cancelled => {
+                        ui.label(egui::RichText::new("Cancelled").weak());
+                        if ui.button("Retry").clicked() {
+                            action = Some(Action::Request(entry.id.clone()));
+                        }
                     }
                     DatasetState::Failed(error) => {
                         ui.colored_label(egui::Color32::LIGHT_RED, format!("Failed: {error}"));

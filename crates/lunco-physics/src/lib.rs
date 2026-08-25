@@ -36,6 +36,7 @@ use avian3d::prelude::{
     AngularVelocity, CustomPositionIntegration, LinearVelocity, Physics, PhysicsTime, Position,
     RigidBody, Rotation,
 };
+use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::time::Duration;
@@ -49,7 +50,15 @@ pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
-pub use support::{PhysicsSupportContact, PhysicsSupportFootprint};
+pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet};
+
+/// Number of Avian solver substeps in one authoritative fixed physics tick.
+///
+/// The fixed tick remains owned by `lunco-core::FIXED_HZ`; this value controls
+/// only the solver resolution inside that tick. It is deliberately one
+/// cross-platform contract: changing solver resolution by target architecture
+/// changes the physical result and cannot be a hidden application fallback.
+pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 
 /// The authored target velocity of a native Avian prismatic drive.
 ///
@@ -420,6 +429,24 @@ impl Plugin for PhysicsGatePlugin {
         pose::register_spatial_query_providers(app);
         app.register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()
+            .configure_sets(
+                Update,
+                (
+                    PhysicsSupportSet::Publish,
+                    PhysicsSupportSet::Apply,
+                    PhysicsSupportSet::Consume,
+                )
+                    .chain(),
+            )
+            // Publishing uses Commands because support footprints are attached to
+            // entities created by other runtime projections. Make that deferred
+            // boundary explicit in the shared contract so consumers always read
+            // the published component in the same Update schedule.
+            .add_systems(Update, ApplyDeferred.in_set(PhysicsSupportSet::Apply))
+            // Physics owns both readiness and the solver-resolution contract.
+            // Avian's resource is the single runtime reader; no app-level
+            // duplicate or target-specific selection is permitted.
+            .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
             .init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsStepRequest>()
             .add_systems(PreUpdate, apply_physics_holds)
@@ -445,6 +472,22 @@ mod tests {
     fn contact_impulse_uses_the_master_interval_once() {
         assert_eq!(contact_force_from_impulse(32.4, 1.0), 16.2);
         assert_eq!(contact_force_from_impulse(0.324, 0.01), 16.2);
+    }
+
+    #[test]
+    fn physics_gate_installs_the_authoritative_eight_substep_contract() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            avian3d::prelude::PhysicsPlugins::default(),
+            PhysicsGatePlugin,
+        ));
+
+        assert_eq!(
+            app.world().resource::<avian3d::prelude::SubstepCount>().0,
+            DEFAULT_SUBSTEP_COUNT
+        );
+        assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
     }
 
     #[test]

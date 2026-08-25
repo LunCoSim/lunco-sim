@@ -42,6 +42,13 @@ is a member of the same generated network; otherwise it resolves the authored
 network boundary source and emits the boundary equation. No fallback value or
 legacy alias was added.
 
+The storage model also fixes its authored initial state (`fixed = true`) and
+declares the physical `[0, 1]` state bounds. This matters at the empty boundary:
+the generated solver must start at exactly the authored zero state, so the
+battery contributes zero terminal potential while all other authored sources
+remain in the electrical island. Drained notification is an observable model
+output; Rust does not stop actuators, restore charge, or disable solar.
+
 **Production evidence:** the composed Summer School twin exposes all four
 authored Battery channels. With autopilot driving, generated Modelica contains
 the motor demand equations; motor demand is about `0.60`, motor electrical

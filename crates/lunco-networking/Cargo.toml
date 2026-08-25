@@ -50,6 +50,9 @@ lunco-api = { path = "../lunco-api", default-features = false }
 # The ONE generic vessel-control command `SetPorts` lives here; the wire declares
 # a channel for it (replacing the old rover drive/brake command pair).
 lunco-cosim = { path = "../lunco-cosim" }
+# Prediction probes use the same solver-resolution owner as luncosim; they must
+# not carry a second hard-coded substep contract.
+lunco-physics = { path = "../lunco-physics" }
 # Wire substrate needs avatar COMPONENTS + commands, never its egui editor UI —
 # `default-features = false` keeps the networked headless server (and this crate)
 # egui/winit-free.

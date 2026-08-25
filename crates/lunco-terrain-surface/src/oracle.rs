@@ -80,25 +80,10 @@ pub struct SurfaceOracle {
     base_key: u64,
 }
 
-/// Content hash of a raster grid: geometry params + every height, version-free
-/// (callers fold their own format version). This folds the multi-million-point
-/// height buffer, so a caller that re-composes an oracle over the SAME base grid
-/// (a live re-stamp) should cache the result and reuse it via
-/// [`SurfaceOracle::new_with_base_key`] rather than paying the fold per edit.
-pub(crate) fn grid_key(grid: &HeightGrid) -> u64 {
-    let mut h = lunco_precompute::Fnv1a::new();
-    h.write_u64(grid.res as u64);
-    h.write_u64(grid.half_extent.to_bits() as u64);
-    for &v in &grid.heights {
-        h.write_u64(v.to_bits());
-    }
-    h.finish()
-}
-
 impl SurfaceOracle {
     /// An oracle that is just the raster base — no analytic layers.
     pub fn bare(base: Arc<HeightGrid>) -> Self {
-        let base_key = grid_key(&base);
+        let base_key = lunco_terrain_bake::grid_content_key(&base);
         Self {
             base,
             modifiers: Vec::new(),
@@ -113,12 +98,13 @@ impl SurfaceOracle {
     ///
     /// [`new_with_base_key`]: SurfaceOracle::new_with_base_key
     pub fn new(base: Arc<HeightGrid>, contributions: Vec<HeightContribution>) -> Self {
-        let base_key = grid_key(&base);
+        let base_key = lunco_terrain_bake::grid_content_key(&base);
         Self::new_with_base_key(base, contributions, base_key)
     }
 
-    /// Like [`new`], but takes the base grid's precomputed [`grid_key`] instead of
-    /// re-folding it. The caller MUST pass `grid_key(&base)` for `base` — a live
+    /// Like [`new`], but takes the base grid's precomputed content key instead of
+    /// re-folding it. The caller MUST pass
+    /// [`lunco_terrain_bake::grid_content_key`] for `base` — a live
     /// re-stamp caches this per retained base grid so brush strokes never re-hash
     /// the multi-million-point raster.
     ///

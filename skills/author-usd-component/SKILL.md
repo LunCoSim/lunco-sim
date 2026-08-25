@@ -417,6 +417,13 @@ Switch at runtime with `SetVariantSelection`. **Every variant must author every
 property the others do** — a variant that only sets what it needs leaves the
 previous variant's opinions standing, so it accumulates rather than switches.
 
+Keep a referenced component with internal relative relationships on the stable
+assembly prim, outside the variant. A variant that disables that realization
+removes the reference with an authored `delete references` opinion; the variant
+that uses it keeps the stable reference. A reference placed only inside a
+variant can lose composed relative relationship targets, so verify the target
+through `StageView::rel_targets` on the composed stage.
+
 **Persistence:** only **doc-backed twin scenes** keep runtime edits. A scene
 opened as a raw file path reloads base bytes and discards every edit on restart.
 A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed as

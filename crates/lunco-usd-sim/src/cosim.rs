@@ -82,7 +82,7 @@ struct UsdTelemetryChannel;
 /// Runtime index for the one-time USD telemetry projection.
 ///
 /// The declaration projector is triggered by scene/projection changes and by
-/// unprojected prims.  Its wrapper-port and domain-member indexes therefore
+/// unprojected prims.  Its wrapper-port index therefore
 /// belong to the projection lifecycle, not to the per-frame query.  Keeping
 /// them here makes the steady state an empty gated system instead of a full
 /// ECS scan and a set of cloned USD-path keys every Update.
@@ -97,8 +97,6 @@ struct UsdTelemetryProjectionIndex {
         ),
         (Entity, String),
     >,
-    network_members_by_stage:
-        HashMap<bevy::asset::AssetId<UsdStageAsset>, std::collections::HashSet<String>>,
     entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
@@ -171,7 +169,6 @@ fn telemetry_projection_needed(
 
 fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
     index.generated_outputs.clear();
-    index.network_members_by_stage.clear();
     index.entities_by_path.clear();
     index.generated_entities_by_path.clear();
     index.diagnostics.clear();
@@ -734,6 +731,7 @@ fn project_usd_telemetry(
         Has<lunco_core::PortSurfaceReady>,
         Has<lunco_core::PortSurfacePending>,
     )>,
+    pending_interface_query: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
     pending_query: Query<
         (
             Entity,
@@ -765,7 +763,6 @@ fn project_usd_telemetry(
     if index.dirty {
         index.diagnostics.clear();
         index.generated_outputs.clear();
-        index.network_members_by_stage.clear();
         index.entities_by_path.clear();
         index.generated_entities_by_path.clear();
         for (entity, prim_path, generated) in &entity_query {
@@ -837,7 +834,7 @@ fn project_usd_telemetry(
         let authored = match read_authored_bool_strict(&view, &path, "lunco:telemetry") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 index.diagnostics.insert(
                     (id, path.as_str().to_owned()),
                     RuntimeDiagnostic {
@@ -970,7 +967,7 @@ fn project_usd_telemetry(
                     match read_authored_bool_strict(&view, &path, "lunco:telemetry:enabled") {
                         Ok(Some(value)) => value,
                         Ok(None) => true,
-                        Err(()) => return Err(()),
+                        Err(_) => return Err(()),
                     };
                 let deadband =
                     match read_authored_telemetry_real(&view, &path, "lunco:telemetry:deadband")? {
@@ -1021,16 +1018,6 @@ fn project_usd_telemetry(
                             // marking it now would permanently cache the wrong
                             // member target and produce a false missing-port
                             // warning during the compile window.
-                            let members = index
-                                .network_members_by_stage
-                                .entry(prim_path.stage_handle.id())
-                                .or_insert_with(|| {
-                                    lunco_usd_bevy::program::modelica_network_member_paths(&view)
-                                });
-                            let known_member = members.contains(&key.2);
-                            if known_member {
-                                continue;
-                            }
                             // A direct binding is valid only when the target
                             // has published its own port surface. A physical
                             // prim that is still waiting for a generated
@@ -1040,7 +1027,12 @@ fn project_usd_telemetry(
                             let direct_surface = target_surface_query
                                 .get(target_entity)
                                 .is_ok_and(|(sim, ready, pending)| !pending && (sim || ready));
-                            if !direct_surface {
+                            // A USD Modelica member has no standalone port
+                            // surface. Leave its declaration unprojected until
+                            // the generated wrapper publishes the topology map;
+                            // otherwise it would bind to the transform/member
+                            // entity and emit a false missing-port warning.
+                            if pending_interface_query.contains(target_entity) || !direct_surface {
                                 continue;
                             }
                             (parameter.target, parameter.source.clone())
@@ -1060,7 +1052,7 @@ fn project_usd_telemetry(
                     parameter,
                 ));
                 if let Some(display_name) = display_name {
-                    channel.insert(lunco_core::markers::Callsign(display_name));
+                    channel.try_insert(lunco_core::markers::Callsign(display_name));
                 }
             } else {
                 index.diagnostics.insert(
@@ -1150,7 +1142,7 @@ fn process_usd_cosim_prim_read(
         let latched = match read_authored_bool_strict(reader, sdf_path, "lunco:event:latched") {
             Ok(Some(value)) => value,
             Ok(None) => false,
-            Err(()) => {
+            Err(_) => {
                 warn!(
                     "[usd-cosim] {}: LunCoEvent has malformed lunco:event:latched",
                     sdf_path
@@ -1457,7 +1449,7 @@ fn process_usd_cosim_prim_read(
                 .try_insert(lunco_cosim::RealtimeSafe);
         }
         Ok(Some(false)) | Ok(None) => {}
-        Err(()) => warn!(
+        Err(_) => warn!(
             "[usd-cosim] program {} has malformed `lunco:program:realtimeSafe`; promise ignored",
             prim_path.path
         ),
@@ -2424,39 +2416,10 @@ fn settle_binding_epoch(
 /// `torque` is a perfectly ordinary live port on a motor, and only structural on a
 /// gearbox.
 ///
-/// **Why this table exists at all.** A USD connection into a structural binding is real
-/// and correct USD; what it is *not* is a value the runtime propagates. Nothing ever
-/// registers a backend for these ports, so materialising them as `SimConnection`s leaves
-/// targets no backend claims. Propagation then reports each one as a genuine dangling
-/// wire — genuine because these prims *do* expose other ports, so `has_port_surface` is
-/// true, which is precisely the discriminator the diagnostic uses to separate "typo'd"
-/// from "still loading". The result is a permanent, self-confirming false fault on
-/// hardware that works.
-///
-/// That failure mode has now cost two separate investigations: it produced the Apollo-15
-/// report's critical misdiagnosis (`torque` read as "the rover's drive authority is
-/// dropped") and, once the never-landed gate started reading faults as a test verdict, it
-/// failed four scenes — `autopilot_hold`, `six_independent_parity`, `six_wheel` and
-/// `lint_selftest` — whose rovers measurably drive.
-///
-/// **The rule for adding a row:** the port must have a named parse-time reader, and that
-/// reader must be cited here. If no code reads it at parse and no backend claims it at
-/// runtime, the wire is dangling for real and belongs in the diagnostic, not in this table.
+/// A USD connection into a structural vehicle binding is real authoring, but the
+/// FSW port registry owns that edge rather than the generic scalar binder. Every
+/// other authored input is handled by the generic runtime endpoint surface.
 const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
-    // `Motor.inputs:demand` is the authored command annotation on a motor
-    // instance. The live axle command is consumed by `MotorActuator` through
-    // the wheel's resolved drive port; the motor prim itself is folded into
-    // `PowertrainParams` by `powertrain::find_for_wheel`. In the infinite-power
-    // variant there is no Modelica island to own this USD edge, so materialising
-    // it as a runtime SimConnection creates a false dangling-wire fault. The
-    // battery variant is handled by domain projection because those motors are
-    // collection members of the generated electrical network.
-    ("demand", "LunCoMotorAPI"),
-    // `Gearbox.inputs:torque ← Motor.outputs:torque`. Read by
-    // `powertrain::find_for_wheel`, which folds `stallTorque × ratio × efficiency`
-    // into a static `WheelParams`. Live axle torque is written every tick by
-    // `MotorActuator`, never through this port.
-    ("torque", "LunCoGearboxAPI"),
     // `Wheel.inputs:drive` / `inputs:steer` when the authored source is a
     // vehicle control surface. Read by `connected_port` in `crate::lib`, which
     // resolves the authored connection to the FSW port NAME the wheel
@@ -2491,6 +2454,11 @@ pub fn rewire_usd_connections(
             // diagnostics quite correctly report no broken edge.
             Added<SimComponent>,
             Added<lunco_core::GlobalEntityId>,
+            // A generic physical surface can be installed after a broader
+            // endpoint marker (for example a rigid body) already exists. The
+            // surface itself is the authoritative transition for its named
+            // ports; do not rely on the earlier marker to trigger a rebuild.
+            Added<lunco_core::PortSurface>,
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
@@ -2510,9 +2478,13 @@ pub fn rewire_usd_connections(
             Has<ModelicaModel>,
             Option<&GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
-            Option<&crate::WheelPortEndpoints>,
+            Option<&lunco_core::PortSurface>,
         ),
-        Or<(With<lunco_core::PortSurfaceReady>, With<SimComponent>)>,
+        Or<(
+            With<lunco_core::PortSurfaceReady>,
+            With<lunco_core::PortSurface>,
+            With<SimComponent>,
+        )>,
     >,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
@@ -2596,6 +2568,12 @@ pub fn rewire_usd_connections(
     let environment_probe_entities: std::collections::HashSet<Entity> = q_all
         .iter()
         .filter_map(|(entity, _, _, _, is_probe, _)| is_probe.then_some(entity))
+        .collect();
+    let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = q_all
+        .iter()
+        .filter_map(|(entity, _, _, _, _, surface)| {
+            surface.cloned().map(|surface| (entity, surface))
+        })
         .collect();
     for (e, p, _, generated, _, _) in q_all.iter() {
         let instance = instance_of(e);
@@ -2948,12 +2926,16 @@ pub fn rewire_usd_connections(
                 // run. Every motor drew no current, so a driving rover's battery
                 // never discharged and its bus was solved as if parked. Silent:
                 // the island compiled, published, and stepped.
-                if !generated_alias_present {
-                    if let Some(port_entity) = q_actuators
-                        .get(start_element)
-                        .ok()
-                        .filter(|_| !start_is_input)
-                        .and_then(|a| a.get(&src_conn))
+                if !generated_alias_present && !start_is_input {
+                    if let Some(port_entity) = port_surfaces
+                        .get(&start_element)
+                        .and_then(|surface| surface.get(&src_conn))
+                        .or_else(|| {
+                            q_actuators
+                                .get(start_element)
+                                .ok()
+                                .and_then(|a| a.get(&src_conn))
+                        })
                     {
                         start_element = port_entity;
                         src_conn = lunco_cosim::PORT_NAME.to_string();
@@ -3006,17 +2988,10 @@ pub fn rewire_usd_connections(
                     continue;
                 }
 
-                let wheel_sink = view.has_api_schema(&sink_sdf, "LunCoWheelAPI");
-                let end = if wheel_sink {
-                    match sink_conn {
-                        "drive" => wheel_endpoints.map(|endpoints| {
-                            (endpoints.p_drive, lunco_cosim::PORT_NAME.to_string())
-                        }),
-                        "steer" => wheel_endpoints.map(|endpoints| {
-                            (endpoints.p_steer, lunco_cosim::PORT_NAME.to_string())
-                        }),
-                        _ => None,
-                    }
+                let end = if let Some(surface) = wheel_endpoints {
+                    surface
+                        .get(sink_conn)
+                        .map(|port| (port, lunco_cosim::PORT_NAME.to_string()))
                 } else {
                     Some(
                         forward
@@ -4791,6 +4766,7 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
         .add_observer(request_binding_epoch::<ModelicaModel>)
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+        .add_observer(crate::domain_projection::on_remove_generated_source)
         .add_observer(request_binding_epoch::<SimComponent>)
         .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
@@ -4938,28 +4914,16 @@ pub(crate) fn install(app: &mut App) {
             .run_if(telemetry_projection_index_changed)
             .in_set(CosimUpdateSet::Projection),
     );
-    // Domain projection must publish the generated wrapper and its
-    // member-output layout before authored telemetry declarations are
-    // attached. Otherwise a member declaration is mistaken for a standalone
-    // port and produces the duplicate/silent channel pair. This system is
-    // gated on actual projection work, so the steady state has no full query.
-    app.add_systems(
-        Update,
-        project_usd_telemetry
-            .after(mark_usd_telemetry_projection_index_dirty)
-            .run_if(telemetry_projection_needed)
-            .in_set(CosimUpdateSet::Projection),
-    );
     app.add_systems(
         Update,
         crate::domain_projection::sync_generated_network_documents
-            .after(project_usd_telemetry)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
         crate::domain_projection::publish_generated_sources
             .after(crate::domain_projection::sync_generated_network_documents)
+            .run_if(crate::domain_projection::generated_sources_need_publish)
             .in_set(CosimUpdateSet::Projection),
     );
 
@@ -4999,6 +4963,15 @@ pub(crate) fn install(app: &mut App) {
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             seed_usd_input_defaults,
             dispatch_loaded_modelica_sources,
+            // The wrapper publishes the generic SimComponent surface and the
+            // authored output contract in this same lifecycle transaction.
+            // Project authored telemetry only after that publication, so the
+            // fixed-step sampler never observes a generated endpoint between
+            // its Modelica identity and its public port surface.
+            project_usd_telemetry
+                .after(wrap_modelica_into_simcomponent)
+                .after(mark_usd_telemetry_projection_index_dirty)
+                .run_if(telemetry_projection_needed),
         )
             // Rewire commands must land before the wrapper query, and the
             // wrapper's component insertion must land before defaults are

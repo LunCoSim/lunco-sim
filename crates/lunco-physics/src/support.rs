@@ -9,6 +9,22 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// Ordering boundary for the shared support-footprint contract.
+///
+/// Physics producers publish their authored support geometry before terrain or
+/// any other spatial consumer decides residency and initial placement. Keeping
+/// this boundary in the physics contract avoids coupling a consumer to a
+/// particular mobility implementation or relying on plugin insertion order.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhysicsSupportSet {
+    /// Runtime physics models publish support geometry for the current world.
+    Publish,
+    /// Apply deferred publisher changes before support consumers inspect them.
+    Apply,
+    /// Terrain and other spatial systems consume the published support contract.
+    Consume,
+}
+
 /// Contact geometry that contributes to a body's terrain-support footprint.
 ///
 /// Offsets are expressed in the owning body's local physics frame. The

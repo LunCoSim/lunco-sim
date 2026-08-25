@@ -4,11 +4,12 @@
 //! Why this lives HERE: `lunco-assets` owns every asset interaction. Every set
 //! is EMBEDDED with `include_dir!` (wasm has no filesystem, and an installed
 //! binary may run without an `assets/` tree beside it), but the PRELUDE is
-//! loaded **from disk at startup** on native when `assets/scripting/prelude/`
-//! exists — edit a helper, restart, no rebuild (policy → script, no Rust
-//! edit). The embedded copy is the always-works fallback and the wasm source
-//! of truth. DROP A `.rhai` in the matching subdir and it's picked up at the
-//! next launch when running from the repo, at the next rebuild everywhere else.
+//! loaded **from disk at startup** on native when the corresponding
+//! `assets/scripting/*/` directory exists — edit a helper or policy, restart,
+//! no Rust rebuild. The embedded copies are the packaged source of truth for
+//! wasm and installed builds without an asset tree. Once a live source
+//! directory is selected, its contents are authoritative and parse failures
+//! are surfaced; consumers do not silently switch to stale embedded policy.
 //!
 //! Three layers, each its own flat directory:
 //!   - `prelude/`  — always-on helpers, merged into one flat namespace.
@@ -23,8 +24,8 @@ static PRELUDE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/sc
 static TOOLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/tools");
 /// Example scenarios — used by docs / the parse test / the catalog.
 static EXAMPLES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/examples");
-/// Built-in rhai POLICY snippets (RBAC/authorization/control-authority) registered
-/// as `lunco_hooks` at startup — the `policy→rhai` decision surface.
+/// Built-in rhai POLICY snippets registered as `lunco_hooks` at startup — the
+/// `policy→rhai` decision surface.
 static POLICY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/policy");
 /// Bundled runtime scenarios — the guidance/mission scripts a scene loads at
 /// startup (e.g. lander auto-land). Distinct from `examples/`: these are shipped
@@ -44,22 +45,21 @@ fn rhai_files(dir: &'static Dir<'static>) -> Vec<(&'static str, &'static str)> {
     files
 }
 
-/// Prelude topic files as `(stem, source)`. Native: read from
+/// Prelude topic files as `(stem, source)`. Native checkouts read
 /// `assets/scripting/prelude/*.rhai` at call time (each engine build — i.e. app
-/// start), so prelude edits need only a restart; when the directory is absent
-/// or empty (installed build, odd CWD) the embedded copy serves. wasm: always
-/// embedded. Once a native disk directory is selected, its contents are the
-/// active authored source; consumers report parse errors instead of silently
-/// switching to stale embedded helpers.
-pub fn prelude_files() -> Vec<(String, String)> {
+/// start), so prelude edits need only a restart. Packaged builds and wasm use
+/// the compiled-in source because no editable asset directory is part of the
+/// runtime. A present native directory is authoritative: unreadable, empty,
+/// or malformed source is an error, not a switch to another generation.
+pub fn prelude_files() -> Result<Vec<(String, String)>, String> {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(files) = disk_rhai_files(&crate::assets_dir().join("scripting/prelude")) {
-        return files;
+    if let Some(files) = disk_rhai_files(&crate::assets_dir().join("scripting/prelude"))? {
+        return Ok(files);
     }
-    embedded_prelude_files()
+    Ok(embedded_prelude_files())
 }
 
-/// The compiled-in prelude (the fallback + wasm source of truth).
+/// The compiled-in prelude used by packaged and wasm builds.
 pub fn embedded_prelude_files() -> Vec<(String, String)> {
     rhai_files(&PRELUDE)
         .into_iter()
@@ -68,29 +68,52 @@ pub fn embedded_prelude_files() -> Vec<(String, String)> {
 }
 
 /// Every top-level `*.rhai` in the on-disk `dir`, sorted by stem (the same
-/// deterministic order [`rhai_files`] gives the embedded sets). `None` when the
-/// directory is missing, unreadable, or holds no `.rhai` — callers fall back to
-/// the embedded copy rather than silently running with an empty prelude.
+/// deterministic order [`rhai_files`] gives the embedded sets). `None` means
+/// that the directory is not present, which selects the packaged source. Any
+/// other filesystem condition is an error so a broken editable policy cannot
+/// be hidden by another source set.
 #[cfg(not(target_arch = "wasm32"))]
-fn disk_rhai_files(dir: &std::path::Path) -> Option<Vec<(String, String)>> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut files: Vec<(String, String)> = entries
-        .filter_map(|e| {
-            let p = e.ok()?.path();
-            if p.extension().and_then(|x| x.to_str()) != Some("rhai") {
-                return None;
-            }
-            Some((
-                p.file_stem()?.to_str()?.to_string(),
-                std::fs::read_to_string(&p).ok()?,
-            ))
-        })
-        .collect();
+fn disk_rhai_files(dir: &std::path::Path) -> Result<Option<Vec<(String, String)>>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot read Rhai asset directory {}: {error}",
+                dir.display()
+            ));
+        }
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| {
+                format!(
+                    "cannot enumerate Rhai asset directory {}: {error}",
+                    dir.display()
+                )
+            })?
+            .path();
+        if path.extension().and_then(|x| x.to_str()) != Some("rhai") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| format!("Rhai asset filename is not valid UTF-8: {}", path.display()))?
+            .to_string();
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read Rhai asset {}: {error}", path.display()))?;
+        files.push((stem, source));
+    }
     if files.is_empty() {
-        return None;
+        return Err(format!(
+            "Rhai asset directory {} contains no .rhai files",
+            dir.display()
+        ));
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    Some(files)
+    Ok(Some(files))
 }
 
 /// Built-in tool libraries (`assets/scripting/tools/*.rhai`) as `(stem, source)`.
@@ -127,6 +150,29 @@ pub fn policies() -> Vec<(&'static str, &'static str)> {
     rhai_files(&POLICY)
 }
 
+/// Compiled-in policy snippets as owned strings.
+pub fn embedded_policy_files() -> Vec<(String, String)> {
+    policies()
+        .into_iter()
+        .map(|(stem, source)| (stem.to_string(), source.to_string()))
+        .collect()
+}
+
+/// Active policy snippets for native startup.
+///
+/// A repository checkout reads the editable policy files so changing Rhai does
+/// not require a Rust rebuild. If no live policy directory exists, packaged
+/// builds use the compiled-in source. A present live directory remains the
+/// authoritative source; registration reports its parse errors instead of
+/// replacing it with stale embedded code.
+pub fn policy_files() -> Result<Vec<(String, String)>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(files) = disk_rhai_files(&crate::assets_dir().join("scripting/policy"))? {
+        return Ok(files);
+    }
+    Ok(embedded_policy_files())
+}
+
 /// One built-in policy's source by file stem (e.g. `"control_authority"`).
 pub fn policy(stem: &str) -> Option<&'static str> {
     POLICY
@@ -151,11 +197,14 @@ mod tests {
             sorted.sort_by_key(|(s, _)| *s);
             assert_eq!(files, sorted, "{label} not sorted by stem");
         }
-        // Prelude: both the embedded fallback and the (possibly disk-loaded)
-        // active set must be non-empty and stem-sorted.
+        // Both the embedded packaged source and the active source set must be
+        // non-empty and stem-sorted.
         for (label, files) in [
             ("prelude-embedded", embedded_prelude_files()),
-            ("prelude-active", prelude_files()),
+            (
+                "prelude-active",
+                prelude_files().expect("active prelude source"),
+            ),
         ] {
             assert!(!files.is_empty(), "{label} empty");
             let mut sorted = files.clone();
@@ -172,5 +221,29 @@ mod tests {
         // The lander auto-land guidance scenario must be present and enumerable.
         assert!(scenario("lander_subsystems").is_some());
         assert!(scenario("nope").is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn editable_rhai_directory_selection_is_explicit() {
+        let root = tempfile::tempdir().expect("temporary Rhai directory");
+        assert!(disk_rhai_files(root.path().join("missing").as_path())
+            .expect("missing directory is a packaged-source decision")
+            .is_none());
+
+        let empty = root.path().join("empty");
+        std::fs::create_dir(&empty).expect("empty Rhai directory");
+        let error = disk_rhai_files(&empty).expect_err("empty editable source is invalid");
+        assert!(error.contains("contains no .rhai files"), "{error}");
+
+        std::fs::write(empty.join("policy.rhai"), "fn policy() { true }")
+            .expect("editable Rhai source");
+        let files = disk_rhai_files(&empty)
+            .expect("editable Rhai source is readable")
+            .expect("directory is present");
+        assert_eq!(
+            files,
+            [("policy".to_string(), "fn policy() { true }".to_string())]
+        );
     }
 }

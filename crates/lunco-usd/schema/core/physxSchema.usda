@@ -467,9 +467,8 @@ class "PhysxVehicleEngineAPI" (
             double min = 0
             double max = 600
             string unit = "rad/s"
-            string userDocBrief = """No-load axle speed, rad/s. THE top-speed parameter, obeyed by BOTH of
-    LunCo's wheel realizations: the joint wheel's velocity motor targets it, and the
-    raycast wheel's drive force rolls off linearly toward it, so both cap at ω·r."""
+            string userDocBrief = """Authored rotational source speed, rad/s. The motor, reduction,
+    wheel inertia, and tire load solve the operating speed for both wheel realizations."""
         }
         displayName = "Max Rotation Speed"
     )

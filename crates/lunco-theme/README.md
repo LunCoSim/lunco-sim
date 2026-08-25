@@ -30,6 +30,11 @@ downstream crates**.
 - **`ThemePlugin`** — registers `Theme` as a `Resource` (default = `dark`).
   Auto-added by `lunco-workbench`; add it yourself for headless-UI tests.
 
+`Theme::revision()` is the invalidation contract for consumers that cache
+derived UI state. It advances when the active mode or an override changes;
+workbench panels reuse one derived `egui::Visuals` snapshot until that
+revision moves.
+
 `lunco_theme::ThemePlugin`, `Theme`, and `ThemeMode` are re-exported from
 `lunco_ui::prelude`, so most call sites import from there.
 

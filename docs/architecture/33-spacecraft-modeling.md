@@ -186,9 +186,12 @@ joint, so this is a Rust **soft holonomic coupling**.
   Textbook differential behaviour.
 
 **Gotchas (both real, both cost a debugging loop):**
-- **Stability:** the explicit penalty needs `stiffness < I/dt²` *and* damped rockers,
-  else it rings/diverges (a first try at `k=4e5` on `I≈60`, `dt≈1/64` tripped avian's
-  collider-AABB assert). Author rocker `physics:diagonalInertia` (G2) so `I` is sane.
+- **Stability:** the gear drive is solved implicitly at each authoritative physics
+  substep, so it does not impose an asset-specific `stiffness < I/dt²` limit. Keep
+  stiffness and damping finite and non-negative, author rocker
+  `physics:diagonalInertia` (G2) so the physical response is well-defined, and
+  run the USD linter before play; malformed gear authoring is an error rather
+  than a runtime fallback.
 - **Redundant rigs hide the effect:** a passive two-rocker rover where each rocker is
   pinned by its own two ground feet already self-levels — the coupling has nothing to
   do, so an A/B shows no difference. Demonstrating the differential needs a rig where
@@ -198,26 +201,26 @@ joint, so this is a Rust **soft holonomic coupling**.
 ### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
 Every tuning knob of a dynamic vehicle is a USD attribute, read by **one strict
 reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realizations
-(the analytical `WheelRaycast` and the joint-motor physical wheel).
+(the analytical `WheelRaycast` and the jointed physical wheel).
 
 - **Required, not defaulted.** Each attribute the reader wants is mandatory; a
   missing one is collected and returned as a missing-attribute error, so an
   under-authored wheel FAILS instead of quietly inheriting a number nobody wrote.
   There are no wheel defaults in Rust — `WheelRaycast::default()` is all zeros and
   exists only as the struct-update base the reader immediately overwrites.
-- **One no-load speed for both realizations.** The motor's
-  `lunco:motor:noLoadSpeed` divided by the gearbox's `lunco:gearbox:ratio`
-  (12 rad/s at the shipped axle) is THE top-speed parameter. The joint wheel's
-  velocity motor targets it; the raycast wheel's drive force rolls off linearly toward it
-  (`drive_force_mag`), so **both cap at `ω_max · r`**. The old
-  wheel-local speed attributes are deleted — there is one motor/gearbox reduction.
+- **One authored network for both realizations.** `DCMotor.mo`, `GearRatio.mo`,
+  and `AvianShaft.mo` solve the electrical and rotational state once. `AvianShaft` receives the
+  measured wheel speed, `GearRatio` derives the motor-side speed through its authored reduction,
+  and both the physical wheel and raycast wheel consume the resulting shaft torque; no Rust motor
+  curve or copied speed clamp exists.
 - **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
   physical property of the hub in its own right; the old derivation from the drive
   torque is deleted.
 - **Also read:** `physxVehicleWheel:radius` / `:width` / `:mass` / `:moi` /
-  `:maxBrakeTorque`, the composed motor/gearbox torque reduction,
+  `:maxBrakeTorque`, and the authored motor/gearbox/shaft network,
   `physxVehicleTire:longitudinalStiffness`, `physics:dynamicFriction`,
-  `lunco:wheel:driveDamping` / `:steerAxis`.
+  `lunco:wheel:steerAxis`; drive torque and shaft speed are solved by the
+  authored motor/gearbox/shaft network.
 - **The one non-required number is a derivation, not a default:**
   `physxVehicleWheel:moi` unauthored (or 0) means "solid cylinder", i.e. `½·m·r²`
   computed downstream from the authored mass and radius. Nothing is invented.
@@ -251,10 +254,17 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   on the joint's port overrides the target per tick. The port pair is the runtime
   face of `PhysxJointStateAPI:{linear,angular} physics:position` (out) +
   `PhysicsDriveAPI` `targetPosition` (in).
-- **`physics:stiffness`/`physics:damping` are mapped** to `MotorModel::ForceBased`
-  (or `AccelerationBased`, per `physics:type`) with the same SI coefficients — a
-  rename, not a conversion, so an authored spring IS the spring the solver
-  integrates. A drive with neither coefficient is a positioner, not a spring, and
+- **`physics:stiffness`/`physics:damping` retain their authored SI law**
+  (`force = k * positionError + c * velocityError`), while the runtime chooses a
+  stable realization. A force-type linear drive with positive authored mass is
+  converted to Avian's implicit `MotorModel::SpringDamper` using the equivalent
+  frequency and damping ratio; this is a numerical realization change, not a
+  second spring or a changed physical coefficient. Acceleration drives map to
+  `AccelerationBased` because their response is intentionally mass-normalized.
+  Standard `Physics*Joint` angular drives and force drives without a usable
+  linear mass remain explicit and are rejected by the USD linter when their
+  coefficients are conditionally unstable. A drive with neither coefficient is
+  a positioner, not a spring, and
   keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
   throughout. Wheels are unaffected: their revolute joints
   are built in `lunco-mobility`, not the authored-joint path, so the G6

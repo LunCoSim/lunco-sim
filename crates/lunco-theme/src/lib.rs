@@ -581,6 +581,8 @@ pub struct Theme {
     pub rounding: RoundingScale,
     /// Generic registry for domain-specific theme overrides.
     pub overrides: HashMap<(u64, u64), egui::Color32>,
+    /// Monotonic revision for consumers that cache derived egui state.
+    revision: u64,
 }
 
 /// Color-mapping rules for Modelica icon primitives.
@@ -829,6 +831,7 @@ impl Theme {
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
             overrides: HashMap::new(),
+            revision: 1,
         }
     }
 
@@ -849,6 +852,7 @@ impl Theme {
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
             overrides: HashMap::new(),
+            revision: 1,
         }
     }
 
@@ -862,7 +866,14 @@ impl Theme {
 
     /// Register a theme override.
     pub fn register_override(&mut self, domain: &str, token: &str, color: egui::Color32) {
-        self.overrides.insert(theme_key(domain, token), color);
+        if self.overrides.insert(theme_key(domain, token), color) != Some(color) {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Revision of the active theme and all derived token overrides.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Toggle between Dark and Light mode.
@@ -890,6 +901,7 @@ impl Theme {
         };
         // Preserve overrides
         new_theme.overrides = self.overrides.clone();
+        new_theme.revision = self.revision.wrapping_add(1);
         *self = new_theme;
     }
 
@@ -1052,4 +1064,25 @@ fn install_fallback_fonts_once(
         fonts::install_fallback_fonts(ctx);
     }
     done.0 = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_revision_changes_only_when_derived_visuals_can_change() {
+        let mut theme = Theme::dark();
+        let initial = theme.revision();
+
+        theme.register_override("test", "accent", egui::Color32::WHITE);
+        assert!(theme.revision() > initial);
+        let changed = theme.revision();
+
+        theme.register_override("test", "accent", egui::Color32::WHITE);
+        assert_eq!(theme.revision(), changed);
+
+        theme.set_mode(ThemeMode::Light);
+        assert!(theme.revision() > changed);
+    }
 }

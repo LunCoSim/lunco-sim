@@ -22,6 +22,39 @@ use super::node::IconNodeData;
 use super::port::{port_fallback_offset_for_size, port_kind_str, resolve_port_icons};
 use super::si_unit_suffix;
 
+/// Resolve the root instance that owns a drilled class in a generated
+/// Modelica document. The solver publishes a drilled unit's values in root
+/// scope (`power_system.Battery.p.i`), while the unit diagram addresses the
+/// same connector as `Battery.p.i`.
+///
+/// The projection task already owns the AST, so this stays off the per-frame
+/// snapshot path. Live painting consumes the resolved instance name only.
+pub(super) fn target_unit_instance(
+    ast: &rumoca_compile::parsing::ast::StoredDefinition,
+    root_model_name: &str,
+    target: Option<&str>,
+) -> Option<String> {
+    let target = target.filter(|target| !target.is_empty() && *target != root_model_name)?;
+    let root = crate::diagram::find_class_by_qualified_name(ast, root_model_name)?;
+    let target_leaf = target.rsplit('.').next().unwrap_or(target);
+    let candidates: Vec<String> = root
+        .components
+        .iter()
+        .filter_map(|(name, component)| {
+            let type_name = component.type_name.to_string();
+            let type_leaf = type_name.rsplit('.').next().unwrap_or(&type_name);
+            (type_name == target || type_leaf == target_leaf).then(|| name.clone())
+        })
+        .collect();
+    (candidates.len() == 1).then(|| candidates[0].clone())
+}
+
+/// Result of one complete off-thread AST-to-canvas projection.
+pub struct ProjectedScene {
+    pub scene: Scene,
+    pub target_unit_instance: Option<String>,
+}
+
 /// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
 /// matching edges to `diagram`. Skips equations whose components
 /// aren't in the diagram (missing nodes stay visually missing) or
@@ -288,6 +321,8 @@ pub(super) fn project_scene(
                 icon_only: crate::ui::class_display::is_icon_only_class(&node.component_def.name),
                 expandable_connector: node.component_def.is_expandable_connector(),
                 icon_graphics: node.component_def.icon.clone(),
+                resolution: node.component_def.resolution,
+                resolution_message: node.component_def.resolution_message.clone(),
                 diagram_graphics: if matches!(
                     node.component_def.kind,
                     crate::index::ClassKind::Connector
@@ -510,6 +545,23 @@ pub(super) fn project_scene(
                 _ => Vec::new(),
             }
         };
+        // A valid Modelica connection normally has the same connector type
+        // at both ends, but aliases and inherited connector definitions can
+        // expose the flow declaration on only one resolved endpoint. Keep
+        // the edge metadata general by taking the union instead of silently
+        // making the source endpoint authoritative.
+        let mut flow_vars = src_port_def
+            .as_ref()
+            .map(|p| p.flow_vars.clone())
+            .unwrap_or_default();
+        if let Some(target) = tgt_port_def.as_ref() {
+            for flow in &target.flow_vars {
+                if !flow_vars.iter().any(|existing| existing.name == flow.name) {
+                    flow_vars.push(flow.clone());
+                }
+            }
+        }
+
         scene.insert_edge(CanvasEdge {
             id: eid,
             from: PortRef {
@@ -547,10 +599,7 @@ pub(super) fn project_scene(
                     .as_ref()
                     .map(|p| p.kind)
                     .unwrap_or(crate::visual_diagram::PortKind::Acausal),
-                flow_vars: src_port_def
-                    .as_ref()
-                    .map(|p| p.flow_vars.clone())
-                    .unwrap_or_default(),
+                flow_vars,
                 smooth_bezier: edge.smooth_bezier,
                 // Modelica default thickness is 0.25; we expose it as
                 // a multiplier on the renderer's base stroke width so
@@ -565,40 +614,6 @@ pub(super) fn project_scene(
             }),
             origin: None,
         });
-        // ── DIAG: per-projection record of what flow_vars resolved
-        // for each edge. Lets us correlate "edge X had empty
-        // flow_vars on first projection but populated after re-
-        // projection on node move" with port-resolution behaviour.
-        let src_path_dbg = src_node
-            .map(|n| format!("{}.{}", n.instance_name, edge.source_port))
-            .unwrap_or_default();
-        let tgt_path_dbg = tgt_node
-            .map(|n| format!("{}.{}", n.instance_name, edge.target_port))
-            .unwrap_or_default();
-        let src_port_ports: Vec<String> = src_node
-            .map(|n| {
-                n.component_def
-                    .ports
-                    .iter()
-                    .map(|p| p.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let resolved_flow_vars: Vec<String> = src_port_def
-            .as_ref()
-            .map(|p| p.flow_vars.iter().map(|f| f.name.clone()).collect())
-            .unwrap_or_default();
-        // Per-edge diagnostic — `debug!`, not `info!`, so it doesn't spam the
-        // browser console on every projection. Console I/O is a real cost on
-        // wasm and this fires once per edge × every reproject. `RUST_LOG=debug`
-        // brings it back.
-        bevy::log::debug!(
-            "[proj-diag] edge {src_path_dbg} -> {tgt_path_dbg} \
-             src_port_def_found={} src_node_ports={src_port_ports:?} \
-             flow_vars={resolved_flow_vars:?} connector_type={:?}",
-            src_port_def.is_some(),
-            connector_type,
-        );
     }
 
     (scene, id_map)
@@ -722,10 +737,65 @@ pub struct ProjectionTask {
     /// [`lunco_workbench::tracked_task::spawn_tracked_cancellable`], so a
     /// `StatusBus` `BusyHandle` lives inside the future and clears the
     /// bus entry on completion, panic, supersede, or drop.
-    pub task: lunco_workbench::tracked_task::TrackedTask<Scene>,
+    pub task: lunco_workbench::tracked_task::TrackedTask<Result<ProjectedScene, String>>,
     /// Projection-relevant source hash captured at spawn time.
     /// Stashed onto `CanvasDocState::last_seen_source_hash` when the
     /// task completes — used by the next gen-bump check to skip
     /// reprojection on no-op edits (whitespace, comments).
     pub source_hash: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_unit_instance;
+
+    fn fixture() -> rumoca_compile::parsing::ast::StoredDefinition {
+        rumoca_phase_parse::parse_to_ast(
+            r#"
+model Root
+  Unit_One left;
+  Unit_Two right;
+end Root;
+
+model Unit_One
+  Real value;
+end Unit_One;
+
+model Unit_Two
+  Real value;
+end Unit_Two;
+"#,
+            "projection-scope.mo",
+        )
+        .expect("projection scope fixture must parse")
+    }
+
+    #[test]
+    fn drilled_unit_scope_is_resolved_without_ui_reads() {
+        let ast = fixture();
+        assert_eq!(
+            target_unit_instance(&ast, "Root", Some("Unit_One")),
+            Some("left".to_string())
+        );
+        assert_eq!(target_unit_instance(&ast, "Root", Some("Root")), None);
+    }
+
+    #[test]
+    fn repeated_unit_types_are_not_guessed() {
+        let ast = rumoca_phase_parse::parse_to_ast(
+            r#"
+model Root
+  Unit_One left;
+  Unit_One right;
+end Root;
+
+model Unit_One
+  Real value;
+end Unit_One;
+"#,
+            "projection-scope-repeated.mo",
+        )
+        .expect("repeated projection scope fixture must parse");
+        assert_eq!(target_unit_instance(&ast, "Root", Some("Unit_One")), None);
+    }
 }

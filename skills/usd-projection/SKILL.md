@@ -133,7 +133,7 @@ the right behaviour is for it to visibly do nothing.
      authored value silently reads `None` through the f64 path.
    - Asset paths: `read_token` (it coerces `String`/`Token`/`AssetPath`), then
      `resolve_texture_path` to make it relative to the stage layer. Downloaded
-     assets are `cached_textures://…` (declared in a crate's `Assets.toml`).
+     assets are `lunco://textures/…` (declared in a crate's `Assets.toml`).
 2. **Dispatch it.** Prim types are a `match` on `reader.type_name(&path)` inside
    `instantiate_usd_prim_from_stage`. There is no registry to add to.
 3. **Project it.** Insert components. Keep render-bound types out of

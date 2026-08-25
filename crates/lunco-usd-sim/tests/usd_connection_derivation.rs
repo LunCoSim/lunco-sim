@@ -473,8 +473,84 @@ fn lander_actuator_projection_uses_all_authored_force_geometry() {
     };
     assert_eq!(plan.component_paths.len(), 12);
     assert_eq!(plan.outputs.len(), 12);
+    assert!(plan.source_roots.contains("LunCo"));
     assert!(plan.source.contains("LunCo.Actuation.WrenchAllocator"));
     assert!(!plan.source.contains("RcsValveAllocator"));
+    assert!(plan.source.contains("Diagram(coordinateSystem"));
+    assert!(plan.source.contains("Placement(transformation"));
+    assert!(!plan.source.contains("\\n"));
+}
+
+#[test]
+fn battery_rover_composes_authored_wheel_drive_connections() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/battery_empty_actuator.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose battery_empty_actuator.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    for (parent, wheel, shaft) in [
+        ("RockerL", "Wheel_FL", "Shaft_FL"),
+        ("RockerR", "Wheel_FR", "Shaft_FR"),
+        ("BogieL", "Wheel_ML", "Shaft_ML"),
+        ("BogieL", "Wheel_RL", "Shaft_RL"),
+        ("BogieR", "Wheel_MR", "Shaft_MR"),
+        ("BogieR", "Wheel_RR", "Shaft_RR"),
+    ] {
+        let wheel_path =
+            SdfPath::new(&format!("/BatteryEmptyActuator/Rover/{parent}/{wheel}")).unwrap();
+        assert_eq!(
+            view.connections(&wheel_path, "inputs:drive"),
+            [format!(
+                "/BatteryEmptyActuator/Rover/{parent}/{shaft}.outputs:torque"
+            )],
+            "the composed wheel must retain its authored shaft drive connection"
+        );
+    }
+}
+
+#[test]
+fn battery_telemetry_target_is_a_modelica_network_member() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/battery_empty_actuator.usda");
+    let stage =
+        lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose battery_empty_actuator.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
+    assert!(
+        members.contains("/BatteryEmptyActuator/Rover/Battery"),
+        "the composed battery must remain owned by the generated electrical network"
+    );
+
+    let declaration = SdfPath::new("/BatteryEmptyActuator/Rover/Battery/DischargePowerTelemetry")
+        .expect("telemetry declaration path");
+    assert_eq!(
+        view.rel_targets(&declaration, "lunco:telemetry:target"),
+        vec![SdfPath::new("/BatteryEmptyActuator/Rover/Battery").unwrap()],
+        "the authored telemetry declaration must target the composed battery prim"
+    );
+}
+
+#[test]
+fn infinite_power_variant_does_not_publish_battery_telemetry() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/tests/wheelie_check.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose wheelie_check.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+
+    let members = lunco_usd_bevy::program::modelica_network_member_paths(&view);
+    assert!(
+        !members.iter().any(|path| path.ends_with("/Battery")),
+        "the infinite power realization must not include a battery member"
+    );
+    assert!(
+        view.value::<bool>(
+            &SdfPath::new("/WheelieCheck/Rover/Battery").unwrap(),
+            "active"
+        ) == Some(false),
+        "the infinite power realization must deactivate the authored battery component"
+    );
 }
 
 #[test]

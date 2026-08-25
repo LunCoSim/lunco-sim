@@ -42,15 +42,12 @@
 //!
 //! Crucially, the motor is touched **only when a wire targets `angle`** — the
 //! write closure runs solely from the propagation master. An un-wired revolute
-//! joint (e.g. a rover wheel driven by `lunco_hardware::MotorActuator`'s velocity
-//! motor) is left entirely alone, so the two never fight over `joint.motor`.
+//! joint (e.g. a rover wheel driven by the solved mechanical torque boundary)
+//! is left entirely alone, so the two never fight over `joint.motor`.
 
-use avian3d::dynamics::solver::joint_damping;
-use avian3d::dynamics::solver::schedule::SubstepSolverSystems;
-use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, MotorModel, Position,
-    PrismaticJoint, RevoluteJoint, RigidBodyDisabled, Rotation, SubstepSchedule,
+    PrismaticJoint, RevoluteJoint, Rotation,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -80,223 +77,6 @@ pub const JOINT_VELOCITY_PORT: &str = "velocity";
 /// right here — inventing a `lunco:*` USD attribute to match would not be.
 pub const JOINT_FORCE_PORT: &str = "force";
 
-/// A passive, crushable suspension attached to a prismatic joint.
-///
-/// This component supplies the passive material state that an ordinary actuator
-/// drive does not have: its unloaded reference can only move toward compression
-/// after the authored yield load is exceeded. The material therefore returns an
-/// elastic stroke but never returns plastic impact crush.
-///
-/// USD projection creates this component only for a prim applying
-/// `LunCoPrismaticSuspensionAPI`; there is no name-based or scene-specific
-/// classification here. The prismatic joint remains responsible for its
-/// geometric constraints, hard stroke, and rotational lock. A velocity-level
-/// constitutive solve supplies the axial force inside every Avian substep. This
-/// is not an external-force pass or a second geometric constraint: it is the
-/// spring-damper impulse on the joint's one allowed coordinate.
-#[derive(Component, Clone, Copy, Debug, Reflect)]
-#[reflect(Component, Debug)]
-pub struct PassivePrismaticSuspension {
-    /// Zero-load joint displacement (m), using the joint's signed axis.
-    pub rest_position: f64,
-    /// Permanent unloaded displacement after yielding (m). This can only move
-    /// from `rest_position` toward compression.
-    pub plastic_position: f64,
-    /// Compression stiffness (N/m).
-    pub spring_k: f64,
-    /// Compression/rebound damping coefficient (N·s/m).
-    pub damping_c: f64,
-    /// Elastic limit (N). Compression beyond this load advances the permanent
-    /// unloaded reference.
-    pub yield_force: f64,
-    /// Upper bound on the material's axial reaction magnitude (N).
-    pub max_force: f64,
-    /// Last axial reaction produced by the substep material solve (N).
-    pub reaction_force: f64,
-}
-
-/// Return the irreversible unloaded reference of a one-dimensional
-/// elastic-perfectly-plastic material after observing `current_position`.
-///
-/// Compression is negative in the prismatic convention. The reference follows
-/// only enough to keep the elastic strain at `yield_force / spring_k`; it can
-/// never move back toward extension. This is material state, not a body pose or
-/// a post-contact stabilizer.
-fn plastic_reference_after_compression(
-    current_position: f64,
-    plastic_position: f64,
-    rest_position: f64,
-    spring_k: f64,
-    yield_force: f64,
-) -> f64 {
-    let yield_deflection = yield_force / spring_k;
-    plastic_position
-        .min(rest_position)
-        .min(current_position + yield_deflection)
-}
-/// Impulse for one implicit-Euler Kelvin-Voigt step.
-///
-/// `position_error` is `rest - displacement`, `velocity` is the measured rate
-/// of displacement, and `inverse_mass` is the full generalized inverse mass at
-/// both anchors. Solving spring and damper together avoids explicit stiff-spring
-/// instability without changing the authored `k` or `c`.
-fn passive_prismatic_impulse(
-    position_error: f64,
-    velocity: f64,
-    spring_k: f64,
-    damping_c: f64,
-    inverse_mass: f64,
-    dt: f64,
-    max_force: f64,
-) -> f64 {
-    if !position_error.is_finite()
-        || !velocity.is_finite()
-        || !spring_k.is_finite()
-        || !damping_c.is_finite()
-        || !inverse_mass.is_finite()
-        || !dt.is_finite()
-        || spring_k < 0.0
-        || damping_c < 0.0
-        || inverse_mass <= 0.0
-        || dt <= 0.0
-    {
-        return 0.0;
-    }
-    let implicit_damping = damping_c + spring_k * dt;
-    let impulse = dt * (spring_k * position_error - implicit_damping * velocity)
-        / (1.0 + dt * implicit_damping * inverse_mass);
-    if max_force.is_finite() && max_force > 0.0 {
-        impulse.clamp(-max_force * dt, max_force * dt)
-    } else {
-        impulse
-    }
-}
-
-/// Solve every typed passive suspension on its actual prismatic coordinate.
-///
-/// Avian 0.7's prismatic motor computes position at the anchors but computes
-/// velocity from body-centre linear velocity only. That is not the derivative
-/// of the joint coordinate for long or raked struts. This material solve uses
-/// the two anchor velocities, including `omega x r`, and applies the matching
-/// generalized impulse inside each native solver substep. The ordinary
-/// [`PrismaticJoint`] remains the sole geometric constraint.
-fn solve_passive_prismatic_material(
-    mut constraints: Query<(&PrismaticJoint, &mut PassivePrismaticSuspension)>,
-    frames: Query<(&Position, &Rotation, &ComputedCenterOfMass)>,
-    bodies: Query<(&mut SolverBody, &SolverBodyInertia), Without<RigidBodyDisabled>>,
-    time: Res<Time>,
-) {
-    let dt = time.delta_secs_f64();
-    for (joint, mut suspension) in &mut constraints {
-        let Ok([(position1, rotation1, com1), (position2, rotation2, com2)]) =
-            frames.get_many([joint.body1, joint.body2])
-        else {
-            continue;
-        };
-
-        // Static and sleeping bodies intentionally have no SolverBody. Match
-        // Avian's native constraint machinery: represent such an endpoint with
-        // zero velocity and zero inverse mass instead of skipping the joint.
-        let mut dummy_body1 = SolverBody::DUMMY;
-        let mut dummy_body2 = SolverBody::DUMMY;
-        let (mut body1, mut inertia1) = (&mut dummy_body1, &SolverBodyInertia::DUMMY);
-        let (mut body2, mut inertia2) = (&mut dummy_body2, &SolverBodyInertia::DUMMY);
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body1) } {
-            body1 = body.into_inner();
-            inertia1 = inertia;
-        }
-        if let Ok((body, inertia)) = unsafe { bodies.get_unchecked(joint.body2) } {
-            body2 = body.into_inner();
-            inertia2 = inertia;
-        }
-
-        let current_rotation1 = body1.delta_rotation.0 * rotation1.0;
-        let current_rotation2 = body2.delta_rotation.0 * rotation2.0;
-        let local_anchor1 = joint.local_anchor1().unwrap_or(DVec3::ZERO);
-        let local_anchor2 = joint.local_anchor2().unwrap_or(DVec3::ZERO);
-        let r1 = current_rotation1 * (local_anchor1 - com1.0);
-        let r2 = current_rotation2 * (local_anchor2 - com2.0);
-        let axis = (body1.delta_rotation.0 * slider_axis_world_from_rotation(rotation1.0, joint))
-            .normalize_or_zero();
-        if axis == DVec3::ZERO {
-            continue;
-        }
-
-        let center_difference =
-            (position2.0 - position1.0) + (rotation2.0 * com2.0 - rotation1.0 * com1.0);
-        let separation =
-            (body2.delta_position - body1.delta_position) + (r2 - r1) + center_difference;
-        let displacement = separation.dot(axis);
-        let velocity = (body2.velocity_at_point(r2) - body1.velocity_at_point(r1)).dot(axis);
-
-        let plastic_position = plastic_reference_after_compression(
-            displacement,
-            suspension.plastic_position,
-            suspension.rest_position,
-            suspension.spring_k,
-            suspension.yield_force,
-        );
-        if plastic_position < suspension.plastic_position {
-            suspension.plastic_position = plastic_position;
-        }
-
-        let mut inv_mass1 = inertia1.effective_inv_mass();
-        let mut inv_mass2 = inertia2.effective_inv_mass();
-        let mut inv_inertia1 = inertia1.effective_inv_angular_inertia();
-        let mut inv_inertia2 = inertia2.effective_inv_angular_inertia();
-        match (inertia1.dominance() - inertia2.dominance()).cmp(&0) {
-            core::cmp::Ordering::Greater => {
-                inv_mass1 = DVec3::ZERO;
-                inv_inertia1 *= 0.0;
-            }
-            core::cmp::Ordering::Less => {
-                inv_mass2 = DVec3::ZERO;
-                inv_inertia2 *= 0.0;
-            }
-            core::cmp::Ordering::Equal => {}
-        }
-        let r1_cross_axis = r1.cross(axis);
-        let r2_cross_axis = r2.cross(axis);
-        let generalized_inverse_mass = axis.dot(inv_mass1 * axis)
-            + r1_cross_axis.dot(inv_inertia1 * r1_cross_axis)
-            + axis.dot(inv_mass2 * axis)
-            + r2_cross_axis.dot(inv_inertia2 * r2_cross_axis);
-        if !generalized_inverse_mass.is_finite() || generalized_inverse_mass <= f64::EPSILON {
-            // Both endpoints are static or sleeping. Preserve the converged
-            // reaction from the final active substep for force telemetry.
-            continue;
-        }
-        let impulse_magnitude = passive_prismatic_impulse(
-            suspension.plastic_position - displacement,
-            velocity,
-            suspension.spring_k,
-            suspension.damping_c,
-            generalized_inverse_mass,
-            dt,
-            suspension.max_force,
-        );
-        suspension.reaction_force = impulse_magnitude / dt;
-        if impulse_magnitude == 0.0 {
-            continue;
-        }
-        let impulse = axis * impulse_magnitude;
-        body1.linear_velocity -= inv_mass1 * impulse;
-        body1.angular_velocity -= inv_inertia1 * r1.cross(impulse);
-        body2.linear_velocity += inv_mass2 * impulse;
-        body2.angular_velocity += inv_inertia2 * r2.cross(impulse);
-    }
-}
-
-/// Install the passive material as a velocity-level constraint in every Avian
-/// substep, after the native geometric constraints have projected velocity.
-pub fn install_passive_prismatic_solver(app: &mut App) {
-    app.add_systems(
-        SubstepSchedule,
-        solve_passive_prismatic_material
-            .in_set(SubstepSolverSystems::Damping)
-            .after(joint_damping::<avian3d::prelude::DistanceJoint>),
-    );
-}
 /// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
 /// Generous so the joint holds its target against gravity for the structures we
 /// drive (masts, panels); tune per-joint later if needed. A USD-authored
@@ -351,7 +131,7 @@ fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<RevoluteJoint>(entity)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    let axis = j.hinge_axis.as_vec3();
+    let axis = j.local_hinge_axis1()?.as_vec3();
     Some(twist_angle(dquat_to_quat(r1.0), dquat_to_quat(r2.0), axis) as f64)
 }
 
@@ -574,16 +354,17 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
 /// via position control — same enable-on-write, finite-guard, and default-fill
 /// contract as [`write_motor_angle`].
 fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bool {
-    let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
-        return false;
-    };
-    if !value.is_finite() {
-        return true;
+    {
+        let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
+            return false;
+        };
+        if !value.is_finite() {
+            return true;
+        }
+        j.motor.enabled = true;
+        j.motor.target_position = value;
+        j.motor.target_velocity = 0.0;
     }
-    j.motor.enabled = true;
-    j.motor.target_position = value;
-    j.motor.target_velocity = 0.0;
-    drop(j);
     if let Some(mut target) = world.get_mut::<PrismaticDriveTargetVelocity>(entity) {
         target.0 = 0.0;
     }

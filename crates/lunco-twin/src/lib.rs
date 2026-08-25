@@ -224,7 +224,7 @@ impl TwinMode {
                 if !is_safe_child_path(Path::new(default_scene)) {
                     return Err(TwinError::PathOutsideRoot {
                         path: scene_path,
-                        root: twin.root.clone(),
+                        root: twin.root,
                     });
                 }
             }
@@ -239,7 +239,7 @@ impl TwinMode {
                 if !is_safe_child_path(rel) {
                     return Err(TwinError::PathOutsideRoot {
                         path: twin.root.join(rel),
-                        root: twin.root.clone(),
+                        root: twin.root,
                     });
                 }
                 let child_root = twin.root.join(rel);
@@ -260,7 +260,7 @@ impl TwinMode {
                 if !canonical_child.starts_with(&canonical_self) {
                     return Err(TwinError::PathOutsideRoot {
                         path: child_root,
-                        root: twin.root.clone(),
+                        root: twin.root,
                     });
                 }
                 if visited.contains(&canonical_child) {

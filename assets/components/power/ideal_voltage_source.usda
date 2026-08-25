@@ -10,9 +10,10 @@
 # CollectionAPI network. The network, not Rust, decides which loads receive it.
 def Xform "IdealVoltageSource" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProgramAPI", "LunCoModelicaTopologyAPI"]
 )
 {
+    uniform token lunco:modelica:topologyRole = "source"
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/IdealVoltageSource.mo@
 

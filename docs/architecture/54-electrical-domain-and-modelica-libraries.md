@@ -83,6 +83,13 @@ remaining constrained to the same composed members and public boundary. The gene
 source exists only at runtime; USD remains the authored source of assembly truth and
 Modelica remains the equation language.
 
+The generated wrapper publishes its complete parsed output interface through the shared
+`DeclaredOutputPorts` contract before the solver returns its first sample. That interface includes
+the topology-derived member aliases selected by the authored synthesizer, so a USD telemetry
+declaration on a member can bind during compilation without depending on a solver-name heuristic
+or a second channel path. Live values still come only from `SimComponent.outputs`; no zero is
+fabricated for an unsolved output.
+
 ```usd
 def Xform "Battery" (
     prepend references = @lunco://components/power/battery.usda@</Battery>
@@ -138,6 +145,53 @@ instances that its equations actually execute. The workbench reads these annotat
 the `connect()` equations from the same generated AST, so opening the root shows the
 runtime unit topology and drilling into a unit shows its real member topology. This is
 inspection of the executable projection, not a second visual-only network.
+
+For the shipped electrical policy, the unit diagram also includes a labelled
+power-bus rail. Every generated `connect(...)` carries a standard Modelica
+`Line` route through that rail, including the horizontal icon stubs and rail
+crossing, so a panel-to-load edge is visibly a branch of the common bus rather
+than a direct solar-to-motor wire. The policy derives the visual hub from graph
+incidence and lays the remaining members into deterministic branch lanes; no
+component class is special-cased. Member coordinates are local to each owning
+unit diagram, while unit coordinates belong to the generated root diagram. The
+diagram extent is derived from actual member positions, which keeps larger
+twins such as the eight-motor Summer Space School rover legible. These are Rhai
+presentation decisions, not Rust-owned electrical knowledge.
+
+The same `flow Real i` supplies the live energy-flow cue in the diagram. The
+standard Modelica connector resolver records `Pin.i`, and the existing canvas
+edge renderer reads the corresponding live node-state values to animate
+directional dots along the authored `connect(...)` route. This is the same
+generic mechanism used by the rocket/lander `FluidPort` diagrams; no electrical
+special case or second visual graph is needed. A zero current intentionally
+looks idle, and a missing flow state is an explicit diagnostic rather than an
+invented animation.
+
+The generated document has normal workbench provenance but no authored lifetime:
+its `generated/` origin is classified from the document registry, not from a
+copied UI list. The browser shows the root boundary separately from promoted
+member telemetry and can expand each unit to the composed member path, source
+asset, and Modelica class. Source-root loading is asynchronous, so a cold LunCo
+library displays an explicit loading diagnostic and reprojects when the shared
+engine announces completion; an unknown class is an explicit error card. When
+the USD network disappears, its generated document and metadata are retired,
+while authored `.mo` documents remain open.
+
+The Rhai result must explicitly return `member_output_aliases`, even when the
+policy promotes no member outputs. It chooses which declared member outputs
+become root telemetry and what aliases they use. The result must also include
+`units`, both layout sections, and `source_roots`; Rust validates those fields
+and the returned AST against the composed facts, but does not emit or infer the
+visual schema. `source_roots` is dependency metadata for generated classes that
+are not USD members; standard Modelica root-segment discovery remains the class
+resolver's source of truth, and the shared engine loads roots asynchronously
+before the canvas resolves their authored icons and ports.
+
+Each returned unit may set its `instance` independently of its generated class
+`name`. The facts provide the deterministic default, while the policy owns any
+custom naming; Rust only validates that instances are valid, unique, and do not
+collide with the generated root interface before using those exact names for
+runtime signal provenance.
 
 ## 2a. Authoring a device model: the four rules that are not obvious
 
@@ -212,19 +266,27 @@ set. It says that the quantity may be projected through an authored Scope bounda
 
 Runtime callers read the stable boundary name (`get(thermal, "motor_temp_left")`,
 `ReadPorts` name `soc`). They do not address generated child instances or their
-internal member paths. The generated source/API still uses an injective spelling for
-those internal instances; this is diagnostic metadata rather than another write or
+internal member paths. The generated source/API uses a readable, deterministic spelling
+for those internal instances; this is diagnostic metadata rather than another write or
 wiring surface:
 
-| in the prim path | in generated-source instance name |
+| member path suffix | in generated-source instance name |
 |---|---|
-| `/` | `_x2f_` |
-| `_` | `__` (doubled) |
-| any other non-alphanumeric | `_x<hex>_` |
+| one segment below the network | that segment, Modelica-escaped |
+| two or more segments | escaped parent + `__` + escaped leaf |
+| same readable suffix used twice | projection error; the author must disambiguate the USD member paths |
 
-So `/Rover/RockerL/Motor_FL` is emitted as `Rover_x2f_RockerL_x2f_Motor__FL` — **two**
-underscores in `Motor__FL`. This spelling is useful when inspecting generated source,
-but it is intentionally not a public runtime port name.
+So `/Rover/RockerL/Motor_FL` is emitted as `RockerL__Motor_FL`. The full USD path remains
+the authoritative identity in the generated-source mapping; the shorter spelling keeps
+icons, equations, and diagnostics readable without introducing a collision fallback.
+
+The workbench exposes this generated source as a read-only Modelica document,
+not as a poster. Its root diagram shows generated units, and drilling into a
+unit shows the native LunCo members and their authored icons. The class cache
+loads a bundled package root through `lunco_assets::models::package_files` and
+the shared `ModelicaEngine`; this keeps LunCo visual resolution on the same
+source/AST path as every other Modelica class without making the generated
+policy or UI depend on MSL.
 
 The network's own authored `outputs:soc` is the runtime contract — `get(elec, "soc")`
 reads the value forwarded from the child unit.
@@ -266,23 +328,24 @@ future OpenModelica/SystemModeler can read it unchanged. Leaning on the language
 is cheaper and more durable than inventing a loader.
 
 The trap that made this a real bug: a USD program compiles through `cosim.rs` →
-`Compile { extra_sources: [] }`, a path that seats **no** library. So `import
-LunCo.Electrical` resolves via the CLI but not, without help, at sim time. Two mechanisms
-close that, **both using rumoca built-ins** — the choice to reuse them rather than
-hand-gather files is deliberate: the built-ins already do standard package parsing
-(`package.mo`/`package.order`, `within` resolution), and reimplementing that is how bugs
-like a non-recursive file scan creep in.
+`Compile { extra_sources: [] }`, a path that seats **no** library search path. So
+`import LunCo.Electrical` resolves via the CLI but not, without help, at sim time.
+The application now builds one generic inventory of structured package roots under
+`assets/models/` and uses the root segment of the unresolved qualified name as the
+Modelica search-path key. `LunCo` is therefore ordinary package data; there is no
+library-specific installer or root-name branch.
 
-- **The shipped library loads demand-driven in the compiler.**
-  `ModelicaCompiler::ensure_lunco_installed()` seats the embedded package (via
-  `load_source_root_in_memory`) inside `compile_loaded`'s unresolved-reference retry.
-  **Why in the compiler, not at startup?** Because that one location is on *both* the
-  editor and cosim compile paths, so neither needs its own copy of the logic — and because
-  it mirrors the existing demand-driven MSL gate exactly, so there is one install pattern,
-  not two. **Why demand-driven and cheapest-first?** MSL is 316 MB; `LunCo` is a handful of
-  embedded docs. Any unresolved reference earns the cheap `LunCo` install, but MSL is
-  reached for only if refs are *still* unresolved afterward — otherwise every EPS model
-  (which references `LunCo`, never MSL) would drag MSL in for nothing.
+- **Bundled packages load demand-driven in the compiler.** On an unresolved
+  `ER002`/`ER003`, the compiler seats the discovered structured package roots through
+  the same source-root path used by other libraries, then retries. MSL remains a
+  separate, larger demand-driven root and is installed only if the reference remains
+  unresolved. This preserves lazy startup without making a particular library a Rust
+  special case.
+- **The editor uses the same root-segment rule.** A cold qualified class requests its
+  package root from the shared engine asynchronously; the canvas shows Loading and
+  reprojects when that root is ready. Generated `source_roots` are dependency metadata
+  and can prewarm roots, but class discovery does not depend on a generated document
+  or on the string `LunCo`.
 - **A twin's own `.mo`** (`<twin>/models`) loads via `source_roots::load_twin_source_roots`,
   a `lunco-modelica` system watching `TwinRoots`; on mount it sends `LoadSourceRoot { Disk }`
   (rumoca's `load_source_root_tolerant`). **Why in `lunco-modelica`, not at the USD twin-mount
@@ -293,5 +356,7 @@ like a non-recursive file scan creep in.
 
 **Gotcha worth its own line:** `lunco_assets::models::model_files()` is top-level only
 (`MODELS_DIR.files()`), so a package under a subdirectory is embedded but invisible to it.
-Use `package_files(pkg)`, which recurses. This is exactly the bug that made the runtime
-blind to `LunCo/Electrical/*.mo` even though `include_dir!` had baked them in.
+Use `package_files_live(pkg)` in the native runtime, which prefers the editable
+filesystem tree and recurses; `package_files(pkg)` is the embedded/portable
+snapshot API. This is exactly the bug that made the runtime blind to
+`LunCo/Electrical/*.mo` even though `include_dir!` had baked them in.

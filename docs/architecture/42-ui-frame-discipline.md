@@ -103,7 +103,10 @@ The same ownership rule applies to the measured presentation paths:
 - **USD telemetry projection** keeps its generated-wrapper port map and
   domain-member index in a projection-owned resource. The projector is
   scheduled only while an unprojected prim or a changed generated wrapper
-  exists; steady frames do not rebuild maps or clone authored path keys.
+  exists, and runs after Wiring has published that wrapper's
+  `DeclaredOutputPorts`. Steady frames do not rebuild maps or clone authored
+  path keys, and compile-time wrapper publication cannot be mistaken for a
+  missing telemetry port.
 - **Graphs** retain the history-to-plot point buffer in the visualization
   owner, keyed by the history fingerprint. A plot host may clone points at the
   `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
@@ -150,7 +153,7 @@ Three regressions/assumptions keep recurring; prefer the by-design fix:
   `run_if(Without<Marker>)` system — the latter re-scans the whole scene every
   frame if any code path forgets to insert the marker. If you must poll, mark
   **every** examined entity, including on `else { continue }` exits.
-- **Do not blame diagnostics plugins for physics solver spikes.** Spikes (e.g., ~30 ms) during physics steps are not caused by logging or profiling plugins like `PhysicsTotalDiagnosticsPlugin`, whose overhead is microscopic (measured in microseconds). The cost is driven by the physics solver configuration itself (e.g., `SubstepCount(16)` × solver iterations). Gating or removing the diagnostics plugin merely hides the measurement without resolving the actual cost.
+- **Do not blame diagnostics plugins for physics solver spikes.** Spikes during physics steps are not caused by logging or profiling plugins like `PhysicsTotalDiagnosticsPlugin`, whose overhead is microscopic (measured in microseconds). The cost is driven by the authoritative physics solver configuration (`lunco_physics::DEFAULT_SUBSTEP_COUNT` × solver iterations). Gating or removing the diagnostics plugin merely hides the measurement without resolving the actual cost.
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.

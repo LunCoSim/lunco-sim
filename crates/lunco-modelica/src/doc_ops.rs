@@ -348,7 +348,7 @@ pub fn apply_ops_as(
                 let qualified = decl.type_name.clone();
                 bevy::tasks::AsyncComputeTaskPool::get()
                     .spawn(async move {
-                        let _ = crate::class_cache::peek_or_load_msl_class_blocking(&qualified);
+                        let _ = crate::class_cache::peek_or_load_class_blocking(&qualified);
                     })
                     .detach();
             }

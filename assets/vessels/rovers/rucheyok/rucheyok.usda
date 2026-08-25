@@ -128,6 +128,10 @@ def Xform "Rucheyok" (
     {
         float inputs:drive_left.connect = </Rucheyok.outputs:drive_left>
         float inputs:drive_right.connect = </Rucheyok.outputs:drive_right>
+        float inputs:shaft_speed_FL.connect = </Rucheyok/Wheel_FL.outputs:shaft_speed>
+        float inputs:shaft_speed_FR.connect = </Rucheyok/Wheel_FR.outputs:shaft_speed>
+        float inputs:shaft_speed_RL.connect = </Rucheyok/Wheel_RL.outputs:shaft_speed>
+        float inputs:shaft_speed_RR.connect = </Rucheyok/Wheel_RR.outputs:shaft_speed>
         float outputs:soc.connect = </Rucheyok/Battery.outputs:soc_out>
         float outputs:battery_drained.connect = </Rucheyok/Battery.outputs:drained>
         float outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
@@ -137,24 +141,24 @@ def Xform "Rucheyok" (
             </Rucheyok/Battery>,
             </Rucheyok/SolarPanel>,
             </Rucheyok/Motor_FL>,
+                </Rucheyok/TorqueSource_FL>,
             </Rucheyok/Motor_FR>,
+                </Rucheyok/TorqueSource_FR>,
             </Rucheyok/Motor_RL>,
+                </Rucheyok/TorqueSource_RL>,
             </Rucheyok/Motor_RR>,
+                </Rucheyok/TorqueSource_RR>,
+            </Rucheyok/Gearbox_FL>,
+            </Rucheyok/Gearbox_FR>,
+            </Rucheyok/Gearbox_RL>,
+            </Rucheyok/Gearbox_RR>,
+            </Rucheyok/Shaft_FL>,
+            </Rucheyok/Shaft_FR>,
+            </Rucheyok/Shaft_RL>,
+            </Rucheyok/Shaft_RR>,
         ]
     }
 
-    over "Wheel_FL" {
-        float inputs:drive.connect = </Rucheyok/Motor_FL.outputs:available_demand>
-    }
-    over "Wheel_FR" {
-        float inputs:drive.connect = </Rucheyok/Motor_FR.outputs:available_demand>
-    }
-    over "Wheel_RL" {
-        float inputs:drive.connect = </Rucheyok/Motor_RL.outputs:available_demand>
-    }
-    over "Wheel_RR" {
-        float inputs:drive.connect = </Rucheyok/Motor_RR.outputs:available_demand>
-    }
     def LunCoEvent "BatteryDrained" {
         float inputs:trigger.connect = </Rucheyok/Electrical.outputs:battery_drained>
         uniform token lunco:event:name = "battery_drained"
@@ -165,6 +169,7 @@ def Xform "Rucheyok" (
 
     # --- Wheels (from component) ---
     def Cylinder "Wheel_FL" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
@@ -179,7 +184,10 @@ def Xform "Rucheyok" (
         color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
         int physxVehicleWheelAttachment:index = 0
-        float inputs:drive.connect = </Rucheyok.outputs:drive_left>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </Rucheyok/Shaft_FL.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -189,6 +197,7 @@ def Xform "Rucheyok" (
     }
 
     def Cylinder "Wheel_FR" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
@@ -203,7 +212,10 @@ def Xform "Rucheyok" (
         color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
         int physxVehicleWheelAttachment:index = 1
-        float inputs:drive.connect = </Rucheyok.outputs:drive_right>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </Rucheyok/Shaft_FR.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -213,6 +225,7 @@ def Xform "Rucheyok" (
     }
 
     def Cylinder "Wheel_RL" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
@@ -227,7 +240,10 @@ def Xform "Rucheyok" (
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
         int physxVehicleWheelAttachment:index = 2
-        float inputs:drive.connect = </Rucheyok.outputs:drive_left>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </Rucheyok/Shaft_RL.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -237,6 +253,7 @@ def Xform "Rucheyok" (
     }
 
     def Cylinder "Wheel_RR" (
+        prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
@@ -251,7 +268,10 @@ def Xform "Rucheyok" (
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
         int physxVehicleWheelAttachment:index = 3
-        float inputs:drive.connect = </Rucheyok.outputs:drive_right>
+        # Complete axle inertia for the authored motor, reduction, and tire assembly.
+        # The 6.8 kg.m2 value is the composed USD mechanical contract.
+        float physxVehicleWheel:moi = 6.8
+        float inputs:drive.connect = </Rucheyok/Shaft_RR.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -261,26 +281,12 @@ def Xform "Rucheyok" (
     }
 
     # --- Hub motors + reductions ---------------------------------------------
-    # The four hub motors the `Electrical` circuit above budgets for
-    # (`inputs:rated_power = 500` W each) are real USD parts: a mass, a housing,
-    # a torque curve, and a native powertrain contract. Their generated
-    # electrical facets expose bus draw, heat, and `available_demand`; the
-    # shaft torque, wheel speed, reduction, and contact mechanics remain in the
-    # USD/Avian owner.
-    #
-    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
-    # 2400/200 = 12 rad/s. NOTE this rover is authored at roughly 5× the fleet's
-    # scale (2.0 m wheels on a 15×20 m deck), so that same 12 rad/s is a much higher
-    # ground speed here than on the 0.4 m-wheeled rovers — a consequence of the
-    # asset's geometry, not of the drivetrain, and left as-is rather than silently
-    # re-geared.
-    #
-    # Skid rover (`PhysxVehicleTankDifferentialAPI`), raycast wheels, no joints: the
-    # even/left wheels take `drive_left` and the odd/right wheels `drive_right`, and
-    # each motor names the WHEEL it turns with `lunco:motor:drivenWheel`. No joint
-    # exists here, so the raycast wheel consumes the axle torque and no-load speed
-    # directly — the same binding a physical rover authors.
+    # The four hub motors the `Electrical` circuit above already budgets for
+    # (`inputs:rated_power = 500` W each) are real Modelica parts. Their solved
+    # electrical state, solved torque, reduction, shaft speed, and heat all
+    # belong to the same authored network as the battery and solar source. The
+    # larger wheel radius changes vehicle speed through the solved shaft state;
+    # no realization-specific speed rule is needed.
     def Xform "Motor_FL" (
         prepend references = @lunco://components/mobility/motor.usda@</Motor>
     )
@@ -289,7 +295,15 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FL>
+        float inputs:speed.connect = </Rucheyok/Gearbox_FL.outputs:speed_a>
+    }
+
+    def Xform "TorqueSource_FL" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </Rucheyok/Motor_FL.outputs:shaft_torque>
+        custom token connectors:flange.connect = </Rucheyok/Gearbox_FL.connectors:flange_a>
     }
 
     def Xform "Gearbox_FL" (
@@ -298,7 +312,11 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (-6.0, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </Rucheyok/Motor_FL.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </Rucheyok/TorqueSource_FL.connectors:flange>
+        custom token connectors:flange_b.connect = </Rucheyok/Shaft_FL.connectors:flange>
     }
 
     def Xform "Motor_FR" (
@@ -309,7 +327,16 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FR>
+        float inputs:speed.connect = </Rucheyok/Gearbox_FR.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_FR" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </Rucheyok/Motor_FR.outputs:shaft_torque>
+        custom token connectors:flange.connect = </Rucheyok/Gearbox_FR.connectors:flange_a>
     }
 
     def Xform "Gearbox_FR" (
@@ -318,7 +345,11 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (6.0, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </Rucheyok/Motor_FR.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </Rucheyok/TorqueSource_FR.connectors:flange>
+        custom token connectors:flange_b.connect = </Rucheyok/Shaft_FR.connectors:flange>
     }
 
     def Xform "Motor_RL" (
@@ -329,7 +360,16 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_left>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RL>
+        float inputs:speed.connect = </Rucheyok/Gearbox_RL.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_RL" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </Rucheyok/Motor_RL.outputs:shaft_torque>
+        custom token connectors:flange.connect = </Rucheyok/Gearbox_RL.connectors:flange_a>
     }
 
     def Xform "Gearbox_RL" (
@@ -338,7 +378,11 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (-6.0, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </Rucheyok/Motor_RL.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </Rucheyok/TorqueSource_RL.connectors:flange>
+        custom token connectors:flange_b.connect = </Rucheyok/Shaft_RL.connectors:flange>
     }
 
     def Xform "Motor_RR" (
@@ -349,7 +393,16 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float inputs:demand.connect = </Rucheyok.outputs:drive_right>
         custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
-        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RR>
+        float inputs:speed.connect = </Rucheyok/Gearbox_RR.outputs:speed_a>
+    }
+
+
+    def Xform "TorqueSource_RR" (
+        prepend references = @lunco://components/mobility/torque.usda@</Torque>
+    )
+    {
+        float inputs:tau_ref.connect = </Rucheyok/Motor_RR.outputs:shaft_torque>
+        custom token connectors:flange.connect = </Rucheyok/Gearbox_RR.connectors:flange_a>
     }
 
     def Xform "Gearbox_RR" (
@@ -358,6 +411,27 @@ def Xform "Rucheyok" (
     {
         double3 xformOp:translate = (6.0, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float inputs:torque.connect = </Rucheyok/Motor_RR.outputs:torque>
+        float inputs:ratio = 200.0
+        float inputs:eta = 0.85
+        float inputs:max_output_torque = 400.0
+        custom token connectors:flange_a.connect = </Rucheyok/TorqueSource_RR.connectors:flange>
+        custom token connectors:flange_b.connect = </Rucheyok/Shaft_RR.connectors:flange>
+    }
+
+    def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FL>
+    }
+    def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_FR>
+    }
+    def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RL>
+    }
+    def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+    {
+        float inputs:speed.connect = </Rucheyok/Electrical.inputs:shaft_speed_RR>
     }
 }

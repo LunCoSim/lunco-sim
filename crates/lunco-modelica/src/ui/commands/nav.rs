@@ -76,6 +76,28 @@ pub struct PanCanvas {
     pub y: f32,
 }
 
+/// Resolve a document-scoped canvas command to the tab the user is looking
+/// at. A document can have a root tab and several drilled-in class tabs, so a
+/// HashMap's arbitrary first tab is not a valid UI target. The dock focus is
+/// authoritative when it belongs to this document; the primary tab is the
+/// deterministic fallback used before a dock exists.
+pub(crate) fn visible_tab_for_doc(
+    world: &World,
+    doc: DocumentId,
+) -> Option<crate::model_tabs_types::TabId> {
+    let active_instance = world
+        .get_resource::<lunco_workbench::WorkbenchLayout>()
+        .and_then(|layout| layout.active_tab_instance());
+    let tabs = world.get_resource::<crate::model_tabs::ModelTabs>()?;
+    if active_instance
+        .and_then(|instance| tabs.get(instance).map(|tab| (instance, tab)))
+        .is_some_and(|(_, tab)| tab.doc == doc)
+    {
+        return active_instance;
+    }
+    tabs.primary_tab_for(doc)
+}
+
 // ─── Observers ───────────────────────────────────────────────────────────────
 
 #[on_command(FocusDocumentByName)]
@@ -119,7 +141,6 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
         }) else {
             return;
         };
-        use crate::model_tabs::ModelTabs;
         use crate::model_tabs_types::ModelViewMode;
         let new_mode = match mode_str.as_str() {
             "text" => ModelViewMode::Text,
@@ -133,11 +154,12 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
                 return;
             }
         };
-        if let Some(mut tabs) = world.get_resource_mut::<ModelTabs>() {
-            if let Some(tab_id) = tabs.any_for_doc(doc) {
-                if let Some(state) = tabs.get_mut(tab_id) {
-                    state.view_mode = new_mode;
-                }
+        let Some(tab_id) = visible_tab_for_doc(world, doc) else {
+            return;
+        };
+        if let Some(mut tabs) = world.get_resource_mut::<crate::model_tabs::ModelTabs>() {
+            if let Some(state) = tabs.get_mut(tab_id) {
+                state.view_mode = new_mode;
             }
         }
     });
@@ -154,13 +176,14 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
             Some(raw)
         };
         let Some(doc) = doc else { return };
+        let Some(tab_id) = visible_tab_for_doc(world, doc) else {
+            return;
+        };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let Some(docstate) = state.get_mut_for_doc(doc) else {
-            return;
-        };
+        let docstate = state.get_mut_for_tab(tab_id, doc);
         if zoom <= 0.0 {
             if let Some(bounds) = docstate.canvas.scene.bounds() {
                 let sr = super::approx_screen_rect();
@@ -191,13 +214,14 @@ pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
             Some(raw)
         };
         let Some(doc) = doc else { return };
+        let Some(tab_id) = visible_tab_for_doc(world, doc) else {
+            return;
+        };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let Some(docstate) = state.get_mut_for_doc(doc) else {
-            return;
-        };
+        let docstate = state.get_mut_for_tab(tab_id, doc);
         let target = docstate
             .canvas
             .scene
@@ -230,13 +254,14 @@ pub fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
             Some(raw)
         };
         let Some(doc) = doc else { return };
+        let Some(tab_id) = visible_tab_for_doc(world, doc) else {
+            return;
+        };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        if let Some(docstate) = state.get_mut_for_doc(doc) {
-            docstate.pending_fit = true;
-        }
+        state.get_mut_for_tab(tab_id, doc).pending_fit = true;
     });
 }
 
@@ -250,13 +275,14 @@ pub fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
             Some(ev.doc)
         };
         let Some(doc) = doc else { return };
+        let Some(tab_id) = visible_tab_for_doc(world, doc) else {
+            return;
+        };
         use crate::ui::panels::canvas_diagram::CanvasDiagramState;
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let Some(docstate) = state.get_mut_for_doc(doc) else {
-            return;
-        };
+        let docstate = state.get_mut_for_tab(tab_id, doc);
         let z = docstate.canvas.viewport.zoom;
         docstate
             .canvas

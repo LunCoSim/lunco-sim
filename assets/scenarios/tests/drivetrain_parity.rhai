@@ -11,10 +11,9 @@
 // authored motor/gearbox reduction, and the raycast drive force includes the
 // same torque-speed term as the joint actuator. Both therefore cap at the same
 // axle speed for a rover built from the same file.
-// Both read the single authored motor/gearbox reduction
-// (`lunco:motor:noLoadSpeed` / `lunco:gearbox:ratio`, yielding 12.0 rad/s at the
-// axle): the joint motor targets it,
-// the raycast drive force rolls off toward it. With r = 0.4 m both must cap at
+// Both read the single authored motor/gearbox/shaft network. The Modelica
+// equations and wheel/tire load determine the operating point for both
+// realizations; no separate Rust motor rule exists.
 //
 //     v_max = omega_max * r = 12.0 * 0.4 = 4.8 m/s
 //
@@ -68,15 +67,19 @@
 ///
 /// The physical rover keeps its wheels as four SEPARATE bodies, so its chassis
 /// body alone is not the vehicle: mass and centre of mass are aggregated over
-/// chassis + wheels. That aggregate is exactly what `fold_proxy_wheel_mass`
-/// folds onto the raycast chassis, whose wheels are kinematic proxies avian
-/// never weighs. Comparing chassis to chassis would compare 1100 kg against
-/// 1000 kg and prove nothing.
+/// chassis + suspension carriers + wheels. That aggregate is exactly what
+/// `fold_raycast_wheel_mass` folds onto the raycast chassis, whose reduced
+/// children are not Avian bodies. Comparing chassis to chassis would compare
+/// the full assembly against its root only and prove nothing.
+///
+/// The carrier is a physical child in the full realization and an explicit
+/// `LunCoMassContributionAPI` in the reduced realization, so both must be
+/// included here.
 ///
 /// `mount_y` is the authored wheel mount — one number for both realizations now
-/// that the wheel prim means the axle either way, which is the property under
-/// test. A physical wheel body's own centre sits at its prim origin, so its
-/// height in the rover frame IS the mount.
+/// that the carrier is the authored axle frame in both realizations, which is
+/// the property under test. The physical child centres sit at their authored
+/// carrier origin, so their height in the rover frame IS the mount.
 fn mass_props(rc, ph, mount_y) {
     let m_ch = get(ph, "mass");
     let com_ch = get(ph, "com_y");
@@ -85,12 +88,17 @@ fn mass_props(rc, ph, mount_y) {
 
     let m_w = 0.0;
     let n = 0;
-    for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-        let e = find("/DrivetrainParity/RoverPhysical/" + w);
-        if e < 0 { continue; }
-        let mw = get(e, "mass");
-        if mw == () { continue; }
-        m_w += mw;
+    for w in ["FL", "FR", "RL", "RR"] {
+        let carrier = find("/DrivetrainParity/RoverPhysical/Suspension_" + w);
+        let wheel = find("/DrivetrainParity/RoverPhysical/Suspension_" + w + "/Wheel_" + w);
+        if carrier >= 0 {
+            let mc = get(carrier, "mass");
+            if mc != () { m_w += mc; }
+        }
+        if wheel >= 0 {
+            let mw = get(wheel, "mass");
+            if mw != () { m_w += mw; }
+        }
         n += 1;
     }
 
@@ -99,7 +107,7 @@ fn mass_props(rc, ph, mount_y) {
     if total > 0.0 { com_ph = (m_ch * com_ch + m_w * mount_y) / total; }
 
     // A missing port reads `()`. Coerce to 0.0 rather than carrying a unit into
-    // the arithmetic: 0 kg against 1100 kg fails loudly, which is what a rover
+    // the arithmetic: 0 kg against the full assembly fails loudly, which is what a rover
     // that never published its mass properties deserves.
     let m_rc = get(rc, "mass");
     let com_rc = get(rc, "com_y");
@@ -179,7 +187,6 @@ fn on_start(me) {
     // the bodies are alive (avian publishes `Computed*` a few ticks after load).
     this.mount_y = -0.65;
     this.mp = ();
-
     print("[parity] ── drivetrain parity test ─────────────────────────────");
     print("[parity] raycast rover gid=" + this.rc + "  physical rover gid=" + this.ph);
     print("[parity] contract: omega_max=" + this.omega_max + " rad/s * r=" + this.wheel_r +
@@ -208,7 +215,7 @@ fn on_tick(me) {
     let t = this.t;
 
     // Sample the mass properties once, mid-settle: late enough that avian has
-    // published `Computed*` and `fold_proxy_wheel_mass` has run, early enough
+    // published `Computed*` and `fold_raycast_wheel_mass` has run, early enough
     // that the run is still standing still and nothing has been driven.
     if this.mp == () && t > 1.0 {
         this.mp = mass_props(this.rc, this.ph, this.mount_y);

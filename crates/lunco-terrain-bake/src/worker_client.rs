@@ -31,6 +31,7 @@ pub struct WorkerReply {
     pub site: String,
     pub native_res: usize,
     pub res: usize,
+    pub grid_key: u64,
     pub grid: Result<HeightGrid, String>,
 }
 
@@ -122,6 +123,7 @@ fn ensure_pool() -> Result<(), JsValue> {
                                 site: String::new(),
                                 native_res: 0,
                                 res: 0,
+                                grid_key: 0,
                                 grid: Err("dem worker crashed".to_string()),
                             })
                         });
@@ -189,6 +191,7 @@ fn handle_reply(data: JsValue) {
                             site: header.site.clone(),
                             native_res: header.native_res,
                             res: header.res,
+                            grid_key: header.grid_key,
                             grid: Err(format!("worker grid res {} is impossible", header.res)),
                         })
                     });
@@ -226,6 +229,7 @@ fn handle_reply(data: JsValue) {
             site: header.site,
             native_res: header.native_res,
             res: header.res,
+            grid_key: header.grid_key,
             grid,
         })
     });

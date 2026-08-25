@@ -939,7 +939,7 @@ pub fn mount_scenario_twin(
     scenario_id: &[u8; 16],
     name: &str,
     rel: &str,
-) -> String {
+) -> Result<String, lunco_assets::twin_source::TwinRootsError> {
     // `TwinRoots::register` is `#[must_use]`: it returns the name actually
     // assigned, which may be suffixed (`name-2`, …) if `name` already maps to a
     // different root. The `root_of` guard means we only call `register` when
@@ -949,11 +949,11 @@ pub fn mount_scenario_twin(
     // wrong resolves the load against the wrong root and every prim on this peer
     // derives a different `GlobalEntityId` (possession / client prediction then
     // silently never bind).
-    let assigned = match twins.root_of(name) {
+    let assigned = match twins.root_of(name)? {
         Some(_) => name.to_string(),
-        None => twins.register(name, scenario_cache_root(scenario_id)),
+        None => twins.register(name, scenario_cache_root(scenario_id))?,
     };
-    lunco_assets::twin_uri(&assigned, rel)
+    Ok(lunco_assets::twin_uri(&assigned, rel))
 }
 
 /// The storage handle for a scenario asset's cache location. A

@@ -57,8 +57,14 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     lunco_assets::datasets::DatasetState::Processing { kind } => {
                         serde_json::json!({ "kind": "processing", "process": kind })
                     }
+                    lunco_assets::datasets::DatasetState::Cancelling => {
+                        serde_json::json!({ "kind": "cancelling" })
+                    }
                     lunco_assets::datasets::DatasetState::Installed => {
                         serde_json::json!({ "kind": "installed" })
+                    }
+                    lunco_assets::datasets::DatasetState::Cancelled => {
+                        serde_json::json!({ "kind": "cancelled" })
                     }
                     lunco_assets::datasets::DatasetState::Failed(error) => {
                         serde_json::json!({ "kind": "failed", "error": error })

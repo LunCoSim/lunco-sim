@@ -9,10 +9,14 @@ model AvianShaft
   extends LunCo.Icons.Mechanics;
   input Real speed(unit="rad/s") "Measured Avian shaft speed";
   Flange flange;
+  Real phi(start = 0.0, fixed = true) "Boundary shaft angle, rad";
+  Real w(start = 0.0) "Boundary shaft angular velocity, rad/s";
   output Real torque(unit="N.m") "Torque delivered to the Avian shaft";
   output Real speed_rad_s(unit="rad/s") "Boundary shaft speed";
 equation
-  der(flange.phi) = speed;
-  torque = flange.tau;
+  flange.phi = phi;
+  w = der(phi);
+  w = speed;
+  flange.tau = torque;
   speed_rad_s = speed;
 end AvianShaft;

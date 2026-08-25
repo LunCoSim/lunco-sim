@@ -67,24 +67,111 @@ The Modelica runtime is **rumoca**, our fork:
 ### 2a. Generated network schemas
 
 An authored USD `CollectionAPI:components` network is projected through one
-generic reader. Rust supplies the composed facts — component identities and
+generic reader. Runtime domain ownership is derived first from the composed
+member role schemas: `LunCoForceActuatorAPI` selects the actuator-wrench
+projection, while `LunCoProgramAPI` selects the generated Modelica path. Rust
+supplies the composed facts — component identities and
 classes, constants, causal links, acausal connections, boundary ports, member
-outputs, and deterministic default placements — and validates the result. It
+outputs, and deterministic fact coordinates — and validates the result. It
 does not classify components as battery, motor, solar, thermal, fluid, or any
 other domain.
 
 The shipped source and visual Modelica schema is the Rhai policy
 `assets/scripting/policy/synth_acausal_network.rhai`, registered as
 `synth.acausal-network`. `LunCoDomainSynthesisAPI`/`LunCoPolicy` can select or
-replace that seam without a Rust rebuild. The policy returns the Modelica
-source, composite-unit partition, and diagram layout; the Rust projector only
-checks that those outputs cover the composed USD graph and then sends the
-exact returned source to the compiler. A missing or invalid policy is an
-explicit projection error, never a compiled-schema fallback.
+replace that seam without a Rust rebuild. The policy must return the complete
+synthesis result: `source`, `units`, `layout.units`, `layout.members`,
+`source_roots`, and `member_output_aliases`. The Rust projector only validates
+that those outputs cover the composed USD graph and then sends the exact
+returned source to the compiler. A missing or invalid policy is an explicit
+projection error, never a compiled-schema fallback.
 
 `GeneratedModelicaSource` exposes the same source, member mapping, topology
 units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth.
+
+Each policy unit carries both its Modelica class name and its root instance
+name. The shipped facts include a deterministic instance default, but a Rhai
+policy may replace it; Rust validates identifier/collision/uniqueness rules and
+uses the returned name for telemetry mapping. This keeps naming policy out of
+the Rust projector without allowing an invalid runtime address.
+
+The generated visual contract is deliberately ordinary Modelica. The root
+`Icon` is a compact identity mark; its `Diagram` contains placed generated
+unit instances. Each unit has its own compact `Icon` and a `Diagram` containing
+the native LunCo member instances that its equations execute. Member classes
+bring their authored icons and connector placements through the normal class
+resolver. Rust supplies only generic source-aware package loading and the
+metadata needed by the browser (boundary interface versus promoted member
+telemetry); Rhai owns the hierarchy, annotation graphics, and policy-side
+layout so visual changes do not require a Rust rebuild.
+
+The shipped electrical presentation uses readable policy-owned unit class and
+instance names (`PowerSystem`/`PowerUnit_N` and `power_system`/`power_unit_N`),
+a dedicated power-bus rail, and standard `Line` waypoints on every generated acausal
+connection. Each route includes the icon-to-rail stubs and rail crossing, so a
+panel is not visually mistaken for a direct motor connection. The rail is drawn
+in the unit `Diagram`; it is not a second graph
+or an inferred runtime connection. The policy chooses the highest-incidence
+member in each connected unit as the visual bus hub, with an authored
+`LunCoModelicaTopologyAPI` `storage` role breaking equal-incidence ties. It
+places authored `source` members on one bank and `load` members on the opposite
+bank, then packs `neutral` members onto the shorter bank. This is a generic
+presentation contract, not a battery/motor/solar class rule: Modelica's
+acausal `flow` direction remains runtime data and can reverse. The member
+source and load banks use disjoint lane ranges around the hub, so a horizontal
+route cannot be mistaken for a direct source-to-load wire. Coordinates are
+local to their owning unit diagram. As the member count grows,
+the policy expands the diagram extents with the same source/AST path, so
+`FitCanvas` can show the complete topology without a Rust layout branch.
+
+Electrical activity uses the same generic canvas flow animation as the rocket
+and lander fluid diagrams. `LunCo.Electrical.Pin.i` is an authored Modelica
+`flow Real`; the normal connector resolver exposes that declaration as
+`FlowVarMeta`, and the canvas samples the live node-state key on each rendered
+edge to move directional dots. The generated policy only emits ordinary
+`Pin`/`connect(...)` source and standard `Line` annotations; it does not add a
+generated-electrical animation path. Zero or unavailable current is shown as
+an idle wire, while a non-zero signed current determines dot direction.
+
+The policy boundary is validated as a contract, not merely parsed. Rust strictly
+parses the returned source, requires the requested root class and its authored
+boundary inputs/outputs, requires every policy unit boundary declaration and
+every native member in the unit that owns it, and rejects native members
+declared directly on the root.
+The `member_output_aliases` result is policy-owned and must be returned even
+when it is an empty array. The policy may omit or rename known member outputs,
+but unknown members, outputs, duplicate aliases, missing layout entries,
+missing unit coverage, and missing root declarations are projection errors.
+This is a generic AST check, so changing synthesis policy does not require a
+Rust emitter branch.
+
+Generated documents are ephemeral runtime views. Their registry origin is
+`Bundled { filename: "generated/<model>.mo" }`, which is the canonical
+generated classifier used by the API and UI. The document is linked to the
+network entity while that projection exists; when the source component is
+removed, the network stops being owned by the synthesizer, or the entity is
+despawned, the generated document and browser metadata are retired. Authored
+Modelica documents keep the ordinary entity-removal behavior and are never
+deleted by this path.
+
+Generated source roots use the ordinary Modelica search-path contract. The
+shared `ModelicaEngineHandle` discovers a structured package root by its
+qualified-name first segment and loads it asynchronously; `source_roots` may
+prewarm a policy dependency but is not a library-specific resolver. UI and
+projection code never waits on the engine mutex: cache misses remain explicit
+loading/unresolved states, the worker installs the parsed root, and the
+standard completion event reprojects the same source/AST canvas.
+
+The browser opens generated roots through the normal Modelica document/diagram
+route and exposes the boundary interface, units, member source assets, and
+promoted telemetry in an expandable topology inspector. Bundled class roots
+declared by the synthesis policy load asynchronously through the shared engine;
+the policy result exposes `source_roots` so non-member generated components
+such as the force allocator use the same path. Until completion, the diagram
+renders a visible `Loading class` diagnostic; a genuinely absent class renders
+`Missing class` with the resolver message. A generic placeholder is not a
+successful resolution state.
 
 ## 3. Runtime architecture — background worker
 
@@ -632,9 +719,11 @@ Each frame:
    the panel resets the change-stream cursor so the next sync does a
    clean rebuild.
 2. **Document → scene projection** — if `doc.generation() !=
-   last_seen_gen`, re-parse the source and rebuild the canvas scene
-   (synchronous — parse of a typical Modelica model is
-   sub-millisecond).
+   last_seen_gen`, parse and project the source on the compute task pool.
+   The UI thread only takes short cache/read locks; a root or inheritance
+   miss stays in an explicit loading state and is retried from the generic
+   source-root completion event. No Modelica parse or inheritance walk is
+   allowed to block canvas painting.
 3. **Canvas render** — user interaction happens in `lunco-canvas`; it
    owns pan/zoom/selection/drag state between frames.
 4. **User action → op emission** —
@@ -642,7 +731,9 @@ Each frame:
    - Right-click Delete → `RemoveComponent`
    - Wire draw/disconnect → frame-to-frame wire-set diff →
      `AddConnection` / `RemoveConnection`
-   - Drag-to-move → frame-to-frame position diff → `SetPlacement`
+   - Drag-to-move → one `NodeMoved` event on release → `SetPlacement`
+     with the live icon extent preserved; authored wire waypoints move with
+     their node, while generated routes are recomputed from topology.
 5. **Apply + echo suppression** — pending ops are applied to the
    `DocumentHost`, `last_seen_gen` is advanced past our own
    generations so step 2 doesn't rebuild in response to edits we
@@ -655,12 +746,24 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
 
 ### 9.2 Visual details
 
-- MSL palette on the left (right-click menu adds components)
-- Custom component body rendering — zigzag for resistor, parallel
-  plates for capacitor, blue circles for electrical pins
-- Small port dots rather than labeled rectangles
-- Dot-grid background
-- Borderless node frames to reduce chrome
+- Resolved classes render their authored Modelica `Icon` graphics, including
+  inherited standard-library graphics; an unresolved class is an explicit
+  diagnostic state, not an invented component card.
+- Connector graphics, color, causality, placement, and `flow` metadata come
+  from the resolved connector AST. The renderer is not a battery/motor/solar
+  palette.
+- A live non-zero declared `flow` value animates directional dots on the
+  actual routed polyline. Multiple flow variables are supported; the first
+  active declared flow is selected, and a missing/non-flow scalar stays idle.
+  The animation walk is O(route segments + dots) and allocates no strings in
+  the per-frame lookup path.
+- The scene is editable only when the document is editable. Dragging an
+  authored document writes the standard Modelica `Placement` annotation.
+  Generated documents remain read-only because USD plus Rhai is their source
+  of truth; the banner's `Duplicate to edit` action creates the normal
+  workspace document before a user moves nodes.
+- Dot-grid background, pan/zoom, selection, port hit targets, and routed
+  wire handles come from the generic `lunco-canvas` substrate.
 
 ### 9.3 Why our own canvas
 
@@ -929,7 +1032,7 @@ twin-journal doc; not in scope here.
 
 | Panel | Current | Notes |
 |-------|---------|-------|
-| **Diagram** | ✅ Working, generic rectangles, Dymola-style shapes in progress | `canvas_diagram/`, on `lunco-canvas` |
+| **Diagram** | ✅ Working, authored Modelica icons, routed connections, editable placements | `canvas_diagram/`, on `lunco-canvas` |
 | **Code Editor** | ✅ Working | 423 LOC, plain egui TextEdit |
 | **MSL Palette** | ✅ Working | ~20 MSL components |
 | **Library Browser** | ✅ Working | File tree of `.mo` files |
@@ -955,16 +1058,11 @@ is tracked separately on the canvas crate.
 
 ### P1 — Degrading workflow
 
-- **No icon annotation rendering** for MSL components beyond hardcoded
-  shapes. Plan: hardcode shapes for common types first; parse annotations
-  later.
 - **No initial conditions in VisualDiagram** — `ParamDef` only stores a
   single value, not `start`, `fixed`, `min`, `max`.
 - **No Modelica class hierarchy** in the visual editor — only flat models.
   Subsystems/packages are planned.
 - **No simulation configuration UI** — hardcoded solver + tolerances.
-- **Orthogonal wire routing** — current bezier wires work, Dymola-style
-  orthogonal paths are "nice to have."
 
 ### P2 / P3 — Polish
 
@@ -983,7 +1081,7 @@ Feature parity snapshot:
 |---------|--------|----------|
 | Package browser | ✅ | ✅ |
 | Library browser | ✅ | ✅ |
-| Diagram canvas | ✅ custom icons | ✅ generic rects (Dymola-style in progress) |
+| Diagram canvas | ✅ custom icons | ✅ authored Modelica icons + routed wires |
 | Text view | ✅ | ✅ |
 | Parameter dialog | ✅ | ✅ (Telemetry + selected-component Inspector) |
 | Plot variables | ✅ | ✅ (`egui_plot`) |
