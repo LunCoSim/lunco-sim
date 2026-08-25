@@ -1,11 +1,11 @@
-//! End-to-end physics test: does the Modelica balloon actually fly up?
+//! End-to-end physics control test for the Modelica balloon.
 //!
-//! Stronger assertion than `balloon_cosim_test`. That test verifies the
-//! cosim *signal chain* (Modelica → SimComponent → AvianSim.inputs) but
-//! deliberately skips `PhysicsPlugins`, so motion is never integrated.
-//! This file *does* run Avian's solver headlessly so we can assert that
-//! `Position.y` actually increases — which is what the user observes
-//! (or doesn't, hence the bug).
+//! The positive Earth-atmosphere outcome is owned by the production
+//! `modelica_balloon_earth` scene and its Rhai verdict. This Rust file retains
+//! the flat-gravity control because it deliberately exercises a different
+//! environmental boundary that the positive scene does not cover: buoyancy
+//! must still beat the authored 9.81 m/s² gravity while the body remains above
+//! the ground. The exact signal-chain contracts remain in `balloon_cosim_test`.
 //!
 //! Setup mirrors `luncosim`:
 //!   - `Gravity::ZERO` — Modelica's `netForce` already excludes weight.
@@ -189,124 +189,6 @@ fn sync_inputs_to_modelica(
 }
 
 // ─── The test ───────────────────────────────────────────────────────────────
-
-#[test]
-fn balloon_flies_up_under_buoyancy() {
-    let mut app = App::new();
-
-    app.add_plugins((
-        MinimalPlugins,
-        TransformPlugin,
-        bevy::asset::AssetPlugin::default(),
-        bevy::mesh::MeshPlugin,
-        PhysicsPlugins::default(),
-    ))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-        1.0 / 60.0,
-    )))
-    .insert_resource(Gravity::ZERO)
-    .insert_resource(Time::<Fixed>::from_hz(60.0));
-
-    app.add_plugins((CoSimPlugin, ModelicaCorePlugin));
-    add_force_y_witness(&mut app);
-
-    app.add_systems(
-        Update,
-        (
-            compile_balloon_model,
-            setup_balloon_wires,
-            sync_modelica_outputs,
-            sync_inputs_to_modelica,
-        ),
-    );
-
-    app.finish();
-
-    let initial_y = 5.0_f64;
-    let balloon = app
-        .world_mut()
-        .spawn((
-            Name::new("Test Balloon"),
-            Transform::from_xyz(0.0, initial_y as f32, 0.0),
-            RigidBody::Dynamic,
-            Collider::sphere(1.0),
-            Mass(4.5),
-            BalloonModelMarker,
-        ))
-        .id();
-
-    // Wait for Modelica compile + setup_balloon_wires.
-    let mut compiled = false;
-    for i in 0..600 {
-        app.update();
-        if app.world().get::<SimComponent>(balloon).is_some() {
-            eprintln!("test: SimComponent ready after {} ticks", i + 1);
-            compiled = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(
-        compiled,
-        "balloon never received SimComponent — Modelica compile failed?"
-    );
-
-    // Snapshot starting Y, then run physics for ~2 simulated seconds (120 ticks).
-    let start_y = app
-        .world()
-        .get::<Position>(balloon)
-        .map(|p| p.0.y)
-        .unwrap_or(initial_y);
-    eprintln!("test: starting Position.y = {start_y}");
-
-    let mut max_force_y = 0.0_f64;
-    let mut max_velocity_y = 0.0_f64;
-    for _ in 0..240 {
-        app.update();
-        std::thread::sleep(Duration::from_millis(2));
-
-        // force_y is a single-owner port written into AvianSim.inputs and
-        // drained by apply_sim_forces each tick; `capture_force_y` witnesses the
-        // running max between the two (the value is monotonic, so reading it
-        // each iteration is fine).
-        max_force_y = app.world().resource::<ForceYWitness>().0;
-        if let Some(v) = app.world().get::<LinearVelocity>(balloon) {
-            if v.0.y.abs() > max_velocity_y.abs() {
-                max_velocity_y = v.0.y;
-            }
-        }
-    }
-
-    let end_y = app
-        .world()
-        .get::<Position>(balloon)
-        .map(|p| p.0.y)
-        .unwrap_or(start_y);
-    let netforce = app
-        .world()
-        .get::<SimComponent>(balloon)
-        .and_then(|c| c.outputs.get("netForce").copied())
-        .unwrap_or(f64::NAN);
-
-    eprintln!("test: ending Position.y = {end_y}");
-    eprintln!("test: max Modelica netForce = {netforce}");
-    eprintln!("test: max force_y propagated = {max_force_y}");
-    eprintln!("test: max LinearVelocity.y = {max_velocity_y}");
-
-    assert!(
-        netforce.is_finite() && netforce > 0.0,
-        "Modelica netForce should be positive (buoyancy) but was {netforce}"
-    );
-    assert!(
-        max_force_y.abs() > 0.1,
-        "force_y never propagated through SimConnection — wires broken?"
-    );
-    assert!(
-        end_y > start_y + 0.1,
-        "balloon did not move upward: start={start_y} end={end_y} (Δ={:.4} m)",
-        end_y - start_y
-    );
-}
 
 /// Production-mirroring test: real flat gravity (4.5 kg × 9.81 = 44.1 N down)
 /// fights Modelica buoyancy (~48 N up). Net force is small but positive,

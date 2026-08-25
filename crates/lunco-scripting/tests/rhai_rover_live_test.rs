@@ -280,32 +280,6 @@ fn tick(app: &mut App) {
 }
 
 #[test]
-fn rhai_scenario_drives_real_rover() {
-    // The shipped declarative mission — first waypoint is far from the origin,
-    // so the rover should be commanded to drive forward toward it.
-    let source =
-        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
-    let (mut app, _rover) = setup(source);
-
-    tick(&mut app);
-
-    let drives = &app.world().resource::<DriveLog>().0;
-    assert!(
-        !drives.is_empty(),
-        "native task should have issued a SetPorts drive command"
-    );
-    let (forward, steer) = drives[0];
-    assert!(
-        forward > 0.0,
-        "rover should be driven forward toward the first waypoint, got forward={forward}"
-    );
-    assert!(
-        steer.is_finite() && steer.abs() <= 1.0,
-        "steer must be a finite, clamped value, got {steer}"
-    );
-}
-
-#[test]
 fn rhai_task_arrives_brakes_and_emits() {
     // Single objective placed AT the rover's position → arrived immediately →
     // brake + OBJECTIVE_COMPLETE + PLAN_COMPLETE, no forward drive.
@@ -374,9 +348,19 @@ fn run_scenario_command_attaches_and_runs() {
     );
 
     tick(&mut app);
+    let drives = &app.world().resource::<DriveLog>().0;
     assert!(
-        !app.world().resource::<DriveLog>().0.is_empty(),
+        !drives.is_empty(),
         "attached scenario should drive the rover on the next tick"
+    );
+    let (forward, steer) = drives[0];
+    assert!(
+        forward > 0.0,
+        "the generic command path must preserve a forward setpoint, got {forward}"
+    );
+    assert!(
+        steer.is_finite() && steer.abs() <= 1.0,
+        "the generic command path must preserve a finite clamped steer, got {steer}"
     );
 
     // Hot-reload: re-running RunScenario bumps the doc generation in place.
@@ -1193,7 +1177,7 @@ fn run_stored_timeline_unknown_name_errors() {
 fn client_role_gates_script_execution() {
     use lunco_core::NetworkRole;
     // The shipped mission drives toward its first (far) waypoint on tick 1 — a
-    // reliable "did the script run?" probe (cf. rhai_scenario_drives_real_rover).
+    // reliable "did the script run?" probe through the generic SetPorts bridge.
     let src =
         lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
 

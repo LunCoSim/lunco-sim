@@ -65,9 +65,13 @@ fn every_test_scene_carries_a_scenario() {
         if src.contains(NOT_HEADLESS_TESTABLE) {
             continue;
         }
-        // A verdict needs a scenario to emit it, and a scenario reaches the scene
-        // through `LunCoProgramAPI`. Both, so that neither half can rot alone.
-        if !src.contains("lunco:scenario") || !src.contains("LunCoProgramAPI") {
+        // A verdict needs a test scenario to emit it, and a scenario reaches the
+        // scene through `LunCoProgramAPI`. Check the actual asset edge rather
+        // than a legacy marker that can remain present while the edge is absent.
+        let has_test_scenario = src
+            .lines()
+            .any(|line| line.contains("info:sourceAsset = @lunco://scenarios/tests/"));
+        if !has_test_scenario || !src.contains("LunCoProgramAPI") {
             silent.push(stem.clone());
         }
     }
@@ -87,6 +91,54 @@ fn every_test_scene_carries_a_scenario() {
          scene that cannot fail is not a test.",
         silent.len(),
         silent.join("\n  ")
+    );
+}
+
+/// The marker/API check above proves that a scene intends to run a scenario. It
+/// does not prove that the USD asset edge resolves: a misspelled `.rhai` URI
+/// still contains both strings and would only become a no-verdict runtime
+/// failure. Keep this contract at the scene-test owner, and mirror its cheap
+/// path check in `scripts/run_scene_tests.sh` so `--no-build` catches the same
+/// authoring error before launching the production binary.
+#[test]
+fn every_headless_test_scene_references_an_existing_test_scenario() {
+    let dir = assets_dir().join("scenes/tests");
+    let scenario_dir = assets_dir().join("scenarios/tests");
+    let mut missing = Vec::new();
+
+    for (stem, path) in usda_files(&dir) {
+        let source = std::fs::read_to_string(&path).expect("read scene");
+        if source.contains(NOT_HEADLESS_TESTABLE) {
+            continue;
+        }
+
+        let refs: Vec<String> = source
+            .lines()
+            .filter_map(|line| {
+                let rest = line
+                    .split_once("info:sourceAsset = @lunco://scenarios/tests/")?
+                    .1;
+                let name = rest.split('@').next()?;
+                (!name.is_empty()).then(|| name.to_string())
+            })
+            .collect();
+
+        if refs.is_empty() {
+            missing.push(format!("{stem}: no scenarios/tests sourceAsset"));
+            continue;
+        }
+
+        for scenario in refs {
+            if !scenario_dir.join(&scenario).is_file() {
+                missing.push(format!("{stem}: missing scenarios/tests/{scenario}"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "headless scene→scenario asset edges do not resolve:\n  {}",
+        missing.join("\n  ")
     );
 }
 

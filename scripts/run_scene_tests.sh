@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# run_scene_tests.sh — build the production luncosim runner ONCE, then run every
-# authored scene test: deterministic headless Rhai tests plus the GPU-backed
+# run_scene_tests.sh — run every authored scene test with the production
+# luncosim runner: deterministic headless Rhai tests plus the GPU-backed
 # render tests declared with lunco:notHeadlessTestable.
 #
 # Each headless scene is an authored USD file whose attached Rhai scenario ends
@@ -13,6 +13,8 @@
 #
 #   ./scripts/run_scene_tests.sh              # all scenes
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
+#   ./scripts/run_scene_tests.sh --no-build   # reuse target/debug/luncosim
+#   ./scripts/run_scene_tests.sh --bin /path/to/luncosim --no-build
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
 # Exits non-zero if ANY scene fails, produces no verdict, or hangs past
@@ -52,6 +54,8 @@ STRESS=0
 STRESS_THREADS=0     # 0 = leave bevy's default multi-threaded pool alone
 STRESS_JITTER=0.4    # +/- 40% dt, i.e. frame times from 10 ms to 23 ms at 60 Hz
 STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
+BUILD=1
+BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 
 # ── Per-scene wall-clock bound ──────────────────────────────────────────────
 #
@@ -61,6 +65,104 @@ STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 # slower machine with `SCENE_TIMEOUT=900 ./scripts/run_scene_tests.sh`.
 SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
 SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
+
+# ── Arguments ───────────────────────────────────────────────────────────────
+#
+# The default is convenient for a clean checkout. `--no-build` is the important
+# authoring path: after a Rust build has produced the production binary, edits
+# to USD/Rhai rerun against that exact binary and do not compile or restart the
+# core. A binary override is explicit so a caller cannot accidentally validate
+# a stale executable from another worktree.
+FILTER=""
+while (($# > 0)); do
+    case "$1" in
+        --stress)
+            STRESS=1
+            shift
+            ;;
+        --no-build)
+            BUILD=0
+            shift
+            ;;
+        --build)
+            BUILD=1
+            shift
+            ;;
+        --bin)
+            if (($# < 2)); then
+                echo "--bin needs an executable path" >&2
+                exit 2
+            fi
+            BIN="$2"
+            shift 2
+            ;;
+        --bin=*)
+            BIN="${1#--bin=}"
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        --*)
+            echo "unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "$FILTER" ]]; then
+                echo "only one scene substring filter is supported" >&2
+                exit 2
+            fi
+            FILTER="$1"
+            shift
+            ;;
+    esac
+done
+
+# ── Scene → scenario graph preflight ────────────────────────────────────────
+#
+# `crates/lunco-scene-commands` owns the source-level contract. This small
+# no-build mirror is deliberately kept in the runner because `--no-build` must
+# catch a missing authored scenario before it launches the binary. It checks
+# the actual asset edge, not merely the presence of a marker/API string.
+check_scenario_graph() {
+    local errors=0
+    local scene ref
+    local -a scenes refs
+
+    mapfile -t scenes < <(find assets/scenes/tests -maxdepth 1 -type f -name '*.usda' -print | sort)
+    for scene in "${scenes[@]}"; do
+        if grep -q "lunco:notHeadlessTestable" "$scene"; then
+            continue
+        fi
+
+        mapfile -t refs < <(
+            sed -nE 's/.*info:sourceAsset = @lunco:\/\/(scenarios\/tests\/[^@]+\.rhai)@.*/\1/p' "$scene" \
+                | sort -u
+        )
+        if [[ ${#refs[@]} -eq 0 ]]; then
+            echo "SCENARIO GRAPH: $scene has no scenarios/tests/*.rhai sourceAsset" >&2
+            errors=1
+            continue
+        fi
+
+        for ref in "${refs[@]}"; do
+            if [[ ! -f "assets/$ref" ]]; then
+                echo "SCENARIO GRAPH: $scene references missing assets/$ref" >&2
+                errors=1
+            fi
+        done
+    done
+
+    if ((errors)); then
+        echo "SCENARIO GRAPH FAILED — repair authored scene→scenario edges before running" >&2
+        return 1
+    fi
+}
+
+if ! check_scenario_graph; then
+    exit 2
+fi
 
 # ── The scene list ──────────────────────────────────────────────────────────
 #
@@ -95,20 +197,6 @@ for s in "${SKIPPED[@]}"; do
     echo "==> QUEUE $(basename "$s" .usda) — GPU render assertion"
 done
 
-# Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
-# positional is the substring filter.
-FILTER=""
-for arg in "$@"; do
-    case "$arg" in
-        --stress) STRESS=1 ;;
-        -h|--help)
-            sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-            exit 0
-            ;;
-        *) [[ -z "$FILTER" ]] && FILTER="$arg" ;;
-    esac
-done
-
 if [[ -n "$FILTER" ]]; then
     filtered=()
     for s in "${SCENES[@]}"; do
@@ -121,20 +209,22 @@ if [[ -n "$FILTER" ]]; then
     fi
 fi
 
-# ── Build ONCE ──────────────────────────────────────────────────────────────
+# ── Build once, or reuse the production binary ─────────────────────────────
 #
-# Use the repository target/ and regular sccache; this is
-# the ONLY cargo invocation in the script — the runs below execute the built
-# binary directly. Two concurrent cargo processes would contend for the same
-# target-dir lock and serialise anyway, so the scene runs are sequential too.
-BIN="target/debug/luncosim"
-echo "==> building luncosim test runner (one cargo invocation, -j 4)"
-if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
-    echo "BUILD FAILED — no scenes run" >&2
-    exit 2
+# With BUILD=1 this is the ONLY cargo invocation in the script; the runs below
+# execute the built binary directly. With BUILD=0 there is no Cargo access at
+# all, which is the fast script/scene iteration path.
+if ((BUILD)); then
+    echo "==> building luncosim test runner (one cargo invocation, -j 4)"
+    if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
+        echo "BUILD FAILED — no scenes run" >&2
+        exit 2
+    fi
+else
+    echo "==> reusing production luncosim binary (--no-build): $BIN"
 fi
 if [[ ! -x "$BIN" ]]; then
-    echo "build reported success but $BIN is missing" >&2
+    echo "production binary is missing or not executable: $BIN" >&2
     exit 2
 fi
 
@@ -263,7 +353,7 @@ if [[ $STRESS -eq 1 ]]; then
     echo "============================================================"
     echo "stress logs: $LOG_DIR/*.stress.log"
     echo "reproduce any stress failure verbatim:"
-    echo "  $BIN --scene <SCENE> --threads $STRESS_THREADS --jitter $STRESS_JITTER --seed $STRESS_SEED"
+    echo "  $BIN test --scene <SCENE> --threads $STRESS_THREADS --jitter $STRESS_JITTER --seed $STRESS_SEED"
     echo "(note: --threads $STRESS_THREADS is multi-threaded and therefore NOT bit-reproducible;"
     echo " re-run with --threads 1 --jitter $STRESS_JITTER to isolate dt-sensitivity alone.)"
 fi
