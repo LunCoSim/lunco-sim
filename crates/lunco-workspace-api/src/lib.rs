@@ -31,7 +31,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
         "ListOpenDocuments"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let Some(ws) = world.get_resource::<WorkspaceResource>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
@@ -69,7 +69,7 @@ impl ApiQueryProvider for ListRecentFilesProvider {
         "ListRecentFiles"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let Some(ws) = world.get_resource::<WorkspaceResource>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
@@ -111,7 +111,7 @@ impl ApiQueryProvider for ListTwinProvider {
         "ListTwin"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = params
             .get("limit")

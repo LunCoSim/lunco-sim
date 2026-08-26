@@ -1439,9 +1439,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This command is owned by the UI-free Modelica core, so the same reflected
  command is available to headless API hosts, the workbench, Rhai, and any
- future transport. Its deferred result reports whether the exclusive
- port/model write succeeded; invalid document or input state is returned as a
- `409 CommandRejected` instead of being logged and acknowledged.
+ future transport. Its observer queues the exclusive port/model write using
+ the same helper as the canvas path and reports the actual apply result.
 
 - *defined in:* `crates/lunco-modelica/src/model_commands.rs`
 
@@ -3228,5 +3227,5 @@ actually call, with the fields the deserializer actually accepts. See the
 
 <!-- 191 commands from the runtime schema; scanned 674 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

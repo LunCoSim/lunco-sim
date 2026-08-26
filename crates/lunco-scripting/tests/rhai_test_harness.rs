@@ -207,10 +207,7 @@ fn rhai_lint_rejects_production_tick_and_allows_test_tick() {
         finding["rule"].clone().into_string().unwrap(),
         "production-rhai-on-tick"
     );
-    assert_eq!(
-        finding["severity"].clone().into_string().unwrap(),
-        "error"
-    );
+    assert_eq!(finding["severity"].clone().into_string().unwrap(), "error");
 
     let test = r#"
         let facts = #{
