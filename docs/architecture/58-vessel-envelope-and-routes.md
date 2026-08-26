@@ -170,8 +170,8 @@ physics frame, not the camera-path preview's screen-space presentation.
 `rebuild_waypoint_route_projection` is change-gated. The autopilot-owned
 `AuthoredRouteMetadata` read derives target identity, loop policy, and smoothness
 from the mission XML once; the editor then uses the exact `TargetBindings` map
-(runtime patrols use their explicit runtime binding), resolves positions in the
-active physics grid, and publishes one atomic snapshot.
+(runtime patrols use their explicit `RuntimeWaypointBinding` marker roots), resolves
+positions in the active physics grid, and publishes one atomic snapshot.
 Malformed or empty authored XML is an explicit unresolved route; it never falls
 back to an older derived runtime spec.
 `project_waypoint_markers_to_surface` is a separate change-gated owner for the

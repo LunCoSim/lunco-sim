@@ -32,7 +32,7 @@ fn on_tick(me) {
     if !this.spawn_issued && this.elapsed >= 1.0 {
         let result = cmd("SpawnEntity", #{
             entry_id: "ackermann_rover",
-            position: [0.0, 0.0, 0.0],
+            position: [0.0, 1.0, 0.0],
         });
         if !result.ok {
             if this.elapsed <= 10.0 { return; }
@@ -45,9 +45,16 @@ fn on_tick(me) {
     }
 
     if this.rover < 0 {
-        // Runtime spawns are mounted as top-level scene children. Their catalog
-        // display name is the root Name; descendants retain USD prim paths.
-        this.rover = find("Ackermann Rover");
+        // Runtime spawns are mounted as top-level scene children. Resolve the
+        // stable catalog identity instead of guessing a display Name: a
+        // document-backed spawn receives a unique authored prim path and its
+        // human label is not the identity contract.
+        for entity in list_entities() {
+            if entity.catalog_id == "ackermann_rover" {
+                this.rover = entity.id;
+                break;
+            }
+        }
         if this.rover < 0 {
             if this.elapsed > 10.0 {
                 this.done = true;
@@ -60,9 +67,10 @@ fn on_tick(me) {
     if !this.waypoint_issued {
         let result = cmd("AddRuntimeWaypoint", #{
             target: this.rover,
-            // Ground-level marker origin; the visible marker is also the
-            // overlap Sensor, so its authored radius is shared by both.
-            position: [0.0, 0.0, 0.0],
+            // Put the sensor ahead of the spawn point. Spawning it on top of
+            // the rover would be initial penetration, not a CollisionStart
+            // enter event, and would leave this acceptance test unproven.
+            position: [0.0, 0.0, 8.0],
         });
         if !result.ok {
             this.done = true;

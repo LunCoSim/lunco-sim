@@ -513,6 +513,7 @@ impl Plugin for SandboxEditUiPlugin {
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
             .init_resource::<checkpoint_click::WaypointPlacement>()
             .init_resource::<checkpoint_click::RouteVisualProjection>()
+            .init_resource::<checkpoint_click::RouteProjectionRebuildRequested>()
             // An armed placement names the vessel whose route it edits, and a
             // context menu names the waypoint it opened on. Both are entities of
             // the scene being unloaded — carried across a reload they leave the
@@ -577,10 +578,14 @@ impl Plugin for SandboxEditUiPlugin {
                     // Route interpretation and terrain projection are a
                     // change-driven producer. The mesh and marker consumers
                     // run only when this snapshot changes.
+                    checkpoint_click::arm_route_projection_rebuild
+                        .before(checkpoint_click::project_waypoint_markers_to_surface)
+                        .before(checkpoint_click::rebuild_waypoint_route_projection),
                     checkpoint_click::project_waypoint_markers_to_surface
-                        .run_if(checkpoint_click::route_projection_needs_rebuild),
+                        .run_if(checkpoint_click::route_projection_rebuild_is_pending),
                     checkpoint_click::rebuild_waypoint_route_projection
-                        .run_if(checkpoint_click::route_projection_needs_rebuild),
+                        .after(checkpoint_click::project_waypoint_markers_to_surface)
+                        .run_if(checkpoint_click::route_projection_rebuild_is_pending),
                     checkpoint_click::sync_route_visual_meshes
                         .after(checkpoint_click::rebuild_waypoint_route_projection)
                         .run_if(resource_changed::<checkpoint_click::RouteVisualProjection>),

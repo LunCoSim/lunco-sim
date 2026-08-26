@@ -1018,6 +1018,18 @@ fn route_execution(
         .unwrap_or_default()
 }
 
+/// Return runtime marker roots in patrol order. A runtime route is only a
+/// presentable route once every live waypoint has its explicit binding; using a
+/// partial list would put labels and the ribbon on different target indices.
+fn ordered_runtime_marker_entities(
+    vessel: Entity,
+    count: usize,
+    runtime_markers: &std::collections::HashMap<(Entity, usize), Entity>,
+) -> Option<Vec<Entity>> {
+    (0..count)
+        .map(|index| runtime_markers.get(&(vessel, index)).copied())
+        .collect()
+}
 /// One resolved waypoint in the derived route view. The key remains the
 /// authored target identity; the position is only a cache of the current ECS
 /// projection and is never written back to USD or to the mission XML.
@@ -1047,6 +1059,21 @@ pub(crate) struct RouteVisualProjection {
     pub surface: Option<(Entity, u64)>,
     pub revision: u64,
     pub routes: std::collections::HashMap<Entity, RouteVisualRoute>,
+}
+
+/// Shared work ticket for the two route producers. It is deliberately a
+/// resource rather than a duplicated run condition: `RemovedComponents` has a
+/// reader cursor, so evaluating the same condition twice can consume a removal
+/// before the snapshot producer sees it.
+#[derive(Resource)]
+pub(crate) struct RouteProjectionRebuildRequested {
+    pub pending: bool,
+}
+
+impl Default for RouteProjectionRebuildRequested {
+    fn default() -> Self {
+        Self { pending: true }
+    }
 }
 
 /// Single egui overlay that draws waypoint labels (numbers) from the cached route
@@ -1807,11 +1834,13 @@ fn route_geometry(
     project_route_to_surface(&path, surface, surface_present)
 }
 
-/// Expensive route work is armed by source changes only. In the steady state
-/// this gate performs only Bevy change detection; it never parses XML or samples
-/// terrain. The first pass is explicit so an already-mounted scene is projected.
-pub(crate) fn route_projection_needs_rebuild(
-    mut first: Local<bool>,
+/// Arm one shared route rebuild ticket from authoritative source changes. In the
+/// steady state this performs only Bevy change detection; it never parses XML or
+/// samples terrain. The ticket is consumed by the snapshot producer after marker
+/// projection has run, so both producers observe the same change, including a
+/// removed behavior component.
+pub(crate) fn arm_route_projection_rebuild(
+    mut request: ResMut<RouteProjectionRebuildRequested>,
     q_route_inputs: Query<
         (),
         Or<(
@@ -1846,17 +1875,23 @@ pub(crate) fn route_projection_needs_rebuild(
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalAvatar>,
-) -> bool {
-    let initial = !*first;
-    *first = true;
-    initial
-        || !q_route_inputs.is_empty()
+) {
+    if !q_route_inputs.is_empty()
         || !q_route_poses.is_empty()
         || !q_surface.is_empty()
         || removed_xml.read().next().is_some()
         || active_frame.is_changed()
         || selected.is_changed()
         || local_avatar.is_changed()
+    {
+        request.pending = true;
+    }
+}
+
+pub(crate) fn route_projection_rebuild_is_pending(
+    request: Res<RouteProjectionRebuildRequested>,
+) -> bool {
+    request.pending
 }
 
 /// Project authored waypoint roots onto the active analytic surface.
@@ -1945,13 +1980,16 @@ pub(crate) fn rebuild_waypoint_route_projection(
         Option<&lunco_autopilot::AutopilotBehavior>,
         Option<&lunco_autopilot::AutopilotExecutionState>,
     )>,
+    q_runtime_markers: Query<(Entity, &RuntimeWaypointBinding)>,
     q_parents: Query<&ChildOf>,
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
+    mut request: ResMut<RouteProjectionRebuildRequested>,
     mut projection: ResMut<RouteVisualProjection>,
 ) {
+    request.pending = false;
     let frame_entity = active_frame.0;
     let Ok(_grid) = q_grids.get(frame_entity) else {
         projection.frame = Some(frame_entity);
@@ -1973,6 +2011,10 @@ pub(crate) fn rebuild_waypoint_route_projection(
         &q_parents,
         &vessel_entities,
     );
+    let runtime_markers: std::collections::HashMap<(Entity, usize), Entity> = q_runtime_markers
+        .iter()
+        .map(|(entity, binding)| ((binding.vessel, binding.index), entity))
+        .collect();
     let mut routes = std::collections::HashMap::new();
 
     for (vessel, xml, spec, bindings, reached) in q_vessels.iter() {
@@ -2019,16 +2061,38 @@ pub(crate) fn rebuild_waypoint_route_projection(
             let Some(waypoints) = spec.patrol_waypoints() else {
                 continue;
             };
-            let points = waypoints
+            // Runtime waypoint roots are the presentation projection of the same
+            // live route. Resolve their current active-frame poses instead of
+            // reusing the original command Y coordinate: terrain edits move the
+            // marker root, and labels must remain attached to that marker while
+            // the ribbon is rebuilt from the same points.
+            let Some(runtime_entities) =
+                ordered_runtime_marker_entities(vessel, waypoints.len(), &runtime_markers)
+            else {
+                continue;
+            };
+            let Some(points) = runtime_entities
                 .iter()
-                .map(|waypoint| DVec3::new(waypoint.pos[0], waypoint.pos[1], waypoint.pos[2]))
-                .collect::<Vec<_>>();
+                .map(|entity| {
+                    lunco_core::coords::grid_relative_pose(
+                        *entity,
+                        frame_entity,
+                        &q_parents,
+                        &q_grids,
+                        &q_spatial,
+                    )
+                    .map(|(position, _)| position)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
             (
-                (0..points.len()).map(runtime_waypoint_key).collect(),
+                (0..waypoints.len()).map(runtime_waypoint_key).collect(),
                 points,
                 false,
                 runtime_route_loops(spec),
-                vec![None; waypoints.len()],
+                runtime_entities.into_iter().map(Some).collect::<Vec<_>>(),
             )
         } else {
             continue;
@@ -2161,10 +2225,14 @@ pub(crate) fn sync_route_visual_meshes(
         (Entity, u64, Handle<Mesh>, Entity),
     > = std::collections::HashMap::new();
     for (entity, path, mesh, parent) in q_paths.iter() {
-        existing.insert(
-            (path.vessel, path.part),
-            (entity, path.signature, mesh.0.clone(), parent.parent()),
-        );
+        let key = (path.vessel, path.part);
+        let value = (entity, path.signature, mesh.0.clone(), parent.parent());
+        // There should be one path per vessel/part. If a prior failed asset
+        // replacement left duplicates behind, retire the older one now instead
+        // of letting a HashMap silently orphan it from future reconciliation.
+        if let Some((stale, ..)) = existing.insert(key, value) {
+            commands.entity(stale).try_despawn();
+        }
     }
     for (&vessel, route) in &projection.routes {
         for part in [PathPart::Future, PathPart::Remaining] {
@@ -2185,11 +2253,12 @@ pub(crate) fn sync_route_visual_meshes(
                 if old_signature == signature && parent == frame_entity {
                     continue;
                 }
+                let Some(new_mesh) = build_ribbon_mesh(points, points[0]) else {
+                    commands.entity(entity).try_despawn();
+                    continue;
+                };
                 if parent == frame_entity {
-                    if let (Some(mut mesh), Some(new_mesh)) = (
-                        meshes.get_mut(&handle),
-                        build_ribbon_mesh(points, points[0]),
-                    ) {
+                    if let Some(mut mesh) = meshes.get_mut(&handle) {
                         *mesh = new_mesh;
                         let (cell, local) = grid.translation_to_grid(points[0]);
                         commands.entity(entity).try_insert((
@@ -2204,9 +2273,26 @@ pub(crate) fn sync_route_visual_meshes(
                         ));
                         continue;
                     }
-                } else {
-                    commands.entity(entity).try_despawn();
                 }
+                // The asset may have been removed during a reload, or the path
+                // may be attached to an obsolete frame. In either case the old
+                // entity must not survive beside the replacement.
+                commands.entity(entity).try_despawn();
+                let (cell, local) = grid.translation_to_grid(points[0]);
+                commands.spawn((
+                    Mesh3d(meshes.add(new_mesh)),
+                    route_look(part, route.focused),
+                    cell,
+                    Transform::from_translation(local),
+                    GlobalTransform::default(),
+                    ChildOf(frame_entity),
+                    WaypointPathMesh {
+                        vessel,
+                        signature,
+                        part,
+                    },
+                ));
+                continue;
             }
             let Some(mesh) = build_ribbon_mesh(points, points[0]) else {
                 continue;
@@ -2349,9 +2435,9 @@ pub(crate) fn sync_waypoint_marker_visuals(
 #[cfg(test)]
 mod tests {
     use super::{
-        has_authored_movement_route, resample_polyline, route_ribbon_points, route_visual_state,
-        runtime_route_loops, select_ground_point, BehaviorXml, ReachedWaypoints,
-        WAYPOINT_MARKER_ASSET,
+        has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
+        route_ribbon_points, route_visual_state, runtime_route_loops, select_ground_point,
+        BehaviorXml, ReachedWaypoints, WAYPOINT_MARKER_ASSET,
     };
     use bevy::math::DVec3;
     use bevy::prelude::{Entity, LinearRgba};
@@ -2416,6 +2502,28 @@ mod tests {
         let current = AutopilotBehaviorSpec::new(BehaviorSpec::Brake);
         let err = append_runtime_patrol(Some(&current), None, [1.0, 0.0, 1.0]).unwrap_err();
         assert!(err.contains("non-patrol"));
+    }
+
+    #[test]
+    fn runtime_route_requires_complete_marker_bindings_in_order() {
+        let vessel = Entity::from_bits(10);
+        let first = Entity::from_bits(11);
+        let second = Entity::from_bits(12);
+        let mut markers = std::collections::HashMap::new();
+        markers.insert((vessel, 0), first);
+        markers.insert((vessel, 1), second);
+
+        assert_eq!(
+            ordered_runtime_marker_entities(vessel, 2, &markers),
+            Some(vec![first, second])
+        );
+
+        markers.remove(&(vessel, 1));
+        assert_eq!(
+            ordered_runtime_marker_entities(vessel, 2, &markers),
+            None,
+            "a partial binding set must not produce mismatched route labels"
+        );
     }
 
     #[test]
