@@ -28,6 +28,7 @@
 #   Leg/Strut_Spring  a force drive with no authored driven mass → conditionally-stable-joint-drive
 #                The same coefficients on the production massed path are converted to
 #                Avian's implicit SpringDamper and must stay silent.
+#   MissingEpoch a celestial-time opt-in with no explicit epoch → epoch-api-missing-time
 #   Leg/Strut_NegativeStiffness  a negative spring coefficient → joint-drive-negative-stiffness
 #                Driven mass cannot make a negative stiffness physically valid.
 #   BadGear      malformed PhysxPhysicsGearJoint drive values → invalid-gear-drive
@@ -52,6 +53,32 @@ def Xform "LintSelftest" (
 )
 {
     uniform bool lunco:spawnable = false
+
+    # THE TIME CONTRACT FAULT. Opting into the celestial clock without choosing
+    # an epoch leaves the runtime's safe compatibility default in charge. The
+    # fixed-light tutorials intentionally do the opposite: they omit this API
+    # and the solar-system payload entirely.
+    def Scope "MissingEpoch" (
+        prepend apiSchemas = ["LunCoEpochAPI"]
+    )
+    {
+    }
+
+    # THE CONTROL. An explicit epoch on the opt-in is valid and must remain
+    # silent, even in the same stage as the negative fixture above.
+    def Scope "AuthoredEpoch" (
+        prepend apiSchemas = ["LunCoEpochAPI"]
+    )
+    {
+        double lunco:time:epochJd = 2461395.5
+    }
+
+    def Scope "ZeroEpoch" (
+        prepend apiSchemas = ["LunCoEpochAPI"]
+    )
+    {
+        double lunco:time:epochJd = 0.0
+    }
 
     over "Sun"
     {

@@ -48,6 +48,11 @@ it with this one.
 - Tutorial controls use the controller-owned `input_bindings` settings through
   Rhai `input_binding(...)`/`input_hint(...)`; progression uses semantic commands
   or authoritative state, never raw physical key names.
+- Tutorial scene payloads must choose their lighting/time contract in USD:
+  fixed authored `DistantLight` with no celestial opt-in, or an explicit
+  `LunCoEpochAPI`/`lunco:time:epochJd` plus the celestial payload. The authored
+  `epoch-api-missing-time` lint rejects implicit orbital time; do not repair it
+  in a script or with a runtime timing workaround.
 
 ## Change review and documentation
 

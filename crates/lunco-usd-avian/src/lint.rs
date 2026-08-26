@@ -34,6 +34,8 @@
 //!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
 //!   telemetry_declarations: [ #{ path, targets[], target_exists,
 //!                                direct_surface, source_valid } ],
+//!   prims: [ #{ path, type, parent, schemas[], attributes[],
+//!                connected_attributes[], epoch_jd } ],
 //! }
 //! ```
 //!
@@ -897,6 +899,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .iter()
             .filter(|name| !reader.connections(p, name).is_empty())
             .cloned();
+        let epoch_jd = reader
+            .value::<f64>(p, "lunco:time:epochJd")
+            .map(H::Float)
+            .unwrap_or(H::Unit);
         prims.push(H::map([
             ("path", H::str(p.to_string())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
@@ -913,6 +919,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "connected_attributes",
                 H::Array(connected_attributes.map(H::str).collect()),
             ),
+            ("epoch_jd", epoch_jd),
         ]));
     }
 
@@ -1010,6 +1017,13 @@ mod tests {
             .unwrap_or_else(|| panic!("no body fact for {path}"))
     }
 
+    fn prim<'a>(facts: &'a [H], path: &str) -> &'a H {
+        facts
+            .iter()
+            .find(|p| field(p, "path") == &H::str(path))
+            .unwrap_or_else(|| panic!("no prim fact for {path}"))
+    }
+
     const ROVER_WITH_LOOSE_MOTOR: &str = "#usda 1.0\n\
         def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n\
         {\n\
@@ -1033,6 +1047,28 @@ mod tests {
         assert_eq!(field(motor, "host_body"), &H::str("/Rover"));
         assert_eq!(field(motor, "jointed"), &H::Bool(false));
         assert_eq!(field(motor, "subtree_collider"), &H::Bool(false));
+    }
+
+    #[test]
+    fn generic_prim_facts_preserve_authored_epoch_values() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Scope \"AuthoredEpoch\" ( prepend apiSchemas = [\"LunCoEpochAPI\"] )\n\
+             { double lunco:time:epochJd = 2461395.5 }\n\
+             def Scope \"ZeroEpoch\" ( prepend apiSchemas = [\"LunCoEpochAPI\"] )\n\
+             { double lunco:time:epochJd = 0.0 }\n\
+             def Scope \"MissingEpoch\" ( prepend apiSchemas = [\"LunCoEpochAPI\"] ) {}\n",
+        );
+        let prims = entries(&f, "prims");
+        assert_eq!(
+            field(prim(&prims, "/AuthoredEpoch"), "epoch_jd"),
+            &H::Float(2461395.5)
+        );
+        assert_eq!(
+            field(prim(&prims, "/ZeroEpoch"), "epoch_jd"),
+            &H::Float(0.0)
+        );
+        assert_eq!(field(prim(&prims, "/MissingEpoch"), "epoch_jd"), &H::Unit);
     }
 
     #[test]

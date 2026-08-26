@@ -26,6 +26,7 @@ one directly when doing that kind of task by hand.
 | [**author-usd-component**](author-usd-component/SKILL.md) | Model a reusable `.usda` asset from scratch — geometry, material, physics, parameters, spawn catalog |
 | [**build-vehicle**](build-vehicle/SKILL.md) | Assemble a rover/vehicle from the mobility component library — wheels, tires, suspensions, chassis, variant axes, drive laws, live tuning |
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
+| [**update-documents**](update-documents/SKILL.md) | Update canonical docs, agent guidance, and skills without duplicating retired contracts |
 | [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid, a vehicle flies apart, or a part falls off it |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |
 | [**authoring-vessel-controllers**](authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot with manual handoff |
@@ -89,6 +90,12 @@ one directly when doing that kind of task by hand.
   `assets/scenarios/tests/*.rhai` and run them through production
   `luncosim test`; keep Rust tests generic to the scripting/lifecycle seam so
   editing a tutorial does not require rebuilding the core.
+- **Tutorial world/time contract → USD** — choose fixed `DistantLight`, explicit
+  ephemeris (`LunCoEpochAPI` plus authored `lunco:time:epochJd`), an existing
+  world, or no payload. Do not leave orbital time implicit; the authored
+  `epoch-api-missing-time` lint catches an epoch API without its field. See
+  [`build-usd-scene`](build-usd-scene/SKILL.md) and
+  [`assets/tutorials/README.md`](../assets/tutorials/README.md).
 - **USD is the source of truth; the ECS is a projection of it.** An edit that
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).
