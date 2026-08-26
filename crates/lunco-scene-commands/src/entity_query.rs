@@ -125,6 +125,33 @@ mod tests {
     use super::*;
     use big_space::prelude::{CellCoord, Grid};
 
+    fn query_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<ApiEntityRegistry>();
+        app.init_resource::<ApiQueryRegistry>();
+
+        // Immutable QueryState construction cannot register component types on
+        // demand. A production host registers these through its plugins; this
+        // minimal fixture must establish the same component vocabulary before
+        // the provider is invoked.
+        let world = app.world_mut();
+        world.register_component::<Name>();
+        world.register_component::<lunco_core::ControlBinding>();
+        world.register_component::<lunco_core::CelestialBody>();
+        world.register_component::<Transform>();
+        world.register_component::<CatalogEntryId>();
+        world.register_component::<UsdPrimKind>();
+        world.register_component::<UsdPrimPath>();
+        world.register_component::<ChildOf>();
+        world.register_component::<CellCoord>();
+        world.register_component::<Grid>();
+        world.register_component::<avian3d::prelude::RigidBody>();
+        world.register_component::<avian3d::prelude::Position>();
+        world.register_component::<avian3d::prelude::Rotation>();
+        world.register_component::<lunco_physics::PhysicsPoseSeeded>();
+        app
+    }
+
     /// The round-trip contract: what `QueryEntity` reports is what `MoveEntity`
     /// takes. Pinned at a NON-zero cell, because in cell 0 the render frame, the
     /// cell-local `Transform` and the grid-absolute position are all equal and any
@@ -133,9 +160,7 @@ mod tests {
     #[test]
     fn reports_active_physics_position_not_the_render_frame() {
         const EDGE: f32 = 2000.0;
-        let mut app = App::new();
-        app.init_resource::<ApiEntityRegistry>();
-        app.init_resource::<ApiQueryRegistry>();
+        let mut app = query_test_app();
 
         let grid = app
             .world_mut()
@@ -166,8 +191,7 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(prim, gid);
 
-        let response =
-            QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 42 }));
+        let response = QueryEntityProvider.execute(app.world(), &serde_json::json!({ "id": 42 }));
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response
@@ -190,8 +214,7 @@ mod tests {
 
     #[test]
     fn reports_rotation_in_the_same_active_physics_frame_as_position() {
-        let mut app = App::new();
-        app.init_resource::<ApiEntityRegistry>();
+        let mut app = query_test_app();
 
         let grid_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let grid = app
@@ -221,7 +244,7 @@ mod tests {
 
         let ApiResponse::Ok {
             data: Some(data), ..
-        } = QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 43 }))
+        } = QueryEntityProvider.execute(app.world(), &serde_json::json!({ "id": 43 }))
         else {
             panic!("expected successful query");
         };
@@ -241,8 +264,7 @@ mod tests {
 
     #[test]
     fn stationary_surface_pose_does_not_follow_rotating_celestial_ancestors() {
-        let mut app = App::new();
-        app.init_resource::<ApiEntityRegistry>();
+        let mut app = query_test_app();
         let root = app
             .world_mut()
             .spawn((
@@ -286,7 +308,7 @@ mod tests {
         let read = |app: &mut App| {
             let ApiResponse::Ok {
                 data: Some(data), ..
-            } = QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 44 }))
+            } = QueryEntityProvider.execute(app.world(), &serde_json::json!({ "id": 44 }))
             else {
                 panic!("expected successful query");
             };
@@ -314,10 +336,8 @@ mod tests {
     /// A missing entity is an error, not a silent (0,0,0).
     #[test]
     fn unknown_entity_is_an_error() {
-        let mut app = App::new();
-        app.init_resource::<ApiEntityRegistry>();
-        let response =
-            QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 7 }));
+        let app = query_test_app();
+        let response = QueryEntityProvider.execute(app.world(), &serde_json::json!({ "id": 7 }));
         assert!(matches!(response, ApiResponse::Error { .. }));
     }
 }
