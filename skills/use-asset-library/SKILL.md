@@ -282,6 +282,9 @@ of the same build. Add or change the `bundle` field on the authoritative
 `Assets.toml` entry, then rebuild; do not add a second shell list. The staging
 command validates the declared raw/processed artifact before copying it, so a
 missing or incomplete asset fails the build instead of becoming a browser 404.
+Bundle-qualified keys are for log identity; temporary download files use an
+opaque process/attempt name, so adding a grouped asset never creates a
+platform-dependent cache subdirectory.
 
 ## Validate before you run
 
