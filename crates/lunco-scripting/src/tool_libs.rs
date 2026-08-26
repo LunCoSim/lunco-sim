@@ -301,7 +301,7 @@ impl ApiQueryProvider for ListToolLibrariesProvider {
         "ListToolLibraries"
     }
 
-    fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
         let libs: Vec<serde_json::Value> = lunco_tools::index()
             .into_iter()
             .map(|i| {
@@ -324,7 +324,7 @@ impl ApiQueryProvider for GetToolLibraryProvider {
         "GetToolLibrary"
     }
 
-    fn execute(&self, _world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,

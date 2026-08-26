@@ -1875,7 +1875,7 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
     }
     fn execute(
         &self,
-        world: &mut World,
+        world: &World,
         _params: &serde_json::Value,
     ) -> lunco_api::schema::ApiResponse {
         let state = world.resource::<OfflineRecordingState>();

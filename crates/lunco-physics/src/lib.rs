@@ -47,9 +47,9 @@ pub mod readiness;
 pub mod spatial;
 pub mod support;
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
-pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery};
+pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
-pub use spatial::GridSpatialQuery;
+pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet};
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.

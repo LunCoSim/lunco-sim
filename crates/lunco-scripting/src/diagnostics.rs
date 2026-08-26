@@ -33,7 +33,7 @@ impl ApiQueryProvider for ScriptStatusProvider {
         "ScriptStatus"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(gid) = params.get("target").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -79,7 +79,7 @@ impl ApiQueryProvider for ScriptInspectProvider {
         "ScriptInspect"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(gid) = params.get("target").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,

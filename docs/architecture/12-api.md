@@ -198,7 +198,7 @@ pub struct Foo { pub doc: u64 }   // use DocumentId
 
 ## Command Execution (Side Effects)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. For a static, documented catalog (descriptions + field types, generated from that same runtime schema), see [`../commands-reference.md`](../commands-reference.md).
+Commands are typed — each domain crate defines its own command structs. The API discovers marked reflected commands automatically. Use `GET /api/commands/schema` to see the full list of available commands and their parameters; each command reports whether its Rust type registered `Default`, which is the authoritative omitted-field contract. For a static, documented catalog (descriptions + field types, generated from that same runtime schema), see [`../commands-reference.md`](../commands-reference.md).
 
 ### Common Commands
 
@@ -413,6 +413,7 @@ value (the wasm/JS bridge, which has no status line, reads `error_code`):
 |---|---|
 | `400` | `CommandNotFound` — no such command, or it is hidden from the API. |
 | `404` | `EntityNotFound` — the `api_id` does not resolve. |
+| `409` | `CommandRejected` — the command is valid, but the current simulation state cannot apply it. |
 | `422` | `DeserializationError` — the command exists, but the `params` don't fit it (unknown field, wrong type, missing required field). Checked **synchronously**, before the command is accepted: a typo'd param is an error, never a `200 OK`. |
 | `500` | `InternalError`. |
 
@@ -482,9 +483,9 @@ There are **two response shapes** behind `POST /api/commands`:
    crates register implementations of `ApiQueryProvider` against the
    `ApiQueryRegistry`; the executor checks the reflected command namespace
    first and only uses the query registry when no reflected command has that
-   name. It runs the provider deferred via `commands.queue` so it has
-   `&mut World` access, and returns the resulting `ApiResponse::Ok { data }`
-   to the transport.
+   name. HTTP invokes the provider deferred via `commands.queue` with immutable
+   `&World` access; in-process scripting invokes the same read provider directly.
+   Both return the resulting `ApiResponse::Ok { data }` to their transport.
 
 The wire format is identical for both — `{"type":"ExecuteCommand","command":"...","params":{...}}` —
 so callers don't need to know which path their command takes. The

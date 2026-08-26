@@ -45,10 +45,13 @@ timing in user policy.
 Every task node has an explicit `kind` discriminator; missing/unknown kinds and
 fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).
 
-The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
-`world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /
-`list_entities` / `emit` / `sim_tick` / `dt` / `elapsed_seconds`. Everything
-ergonomic (navigation, sensing, sequencing, selection) is **policy** authored in
+The host exposes a minimal generic bridge — `cmd` / `query` / `get` / `set` /
+`get_setting` / `set_setting` / `world_pos` / `world_forward` / `find` / `name` /
+`parent` / `children` / `list_entities` / `emit` / `sim_tick` / `dt` /
+`elapsed_seconds`. Reflection and the canonical co-simulation port registry
+provide the generic state surface; `ScriptingCatalog` reports the live command,
+query, reflection, prelude, hook, and tool contracts. Everything ergonomic
+(navigation, sensing, sequencing, selection) is **policy** authored in
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 

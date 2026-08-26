@@ -19,7 +19,7 @@
 //! The command uses the canonical API envelope:
 //! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
-use bevy::ecs::system::SystemState;
+use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
@@ -35,7 +35,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         "QueryEntity"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(raw) = params.get("id").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -52,31 +52,33 @@ impl ApiQueryProvider for QueryEntityProvider {
             );
         };
 
-        let mut state: SystemState<(
-            Query<(
-                Option<&Name>,
-                Has<lunco_core::ControlBinding>,
-                Option<&lunco_core::CelestialBody>,
-                Option<&Transform>,
-                Option<&CatalogEntryId>,
-                Option<&UsdPrimKind>,
-                Option<&UsdPrimPath>,
-            )>,
-            lunco_physics::SimulationPoseQuery,
-        )> = SystemState::new(world);
-        let Ok((q_meta, poses)) = state.get(world) else {
+        let Some(mut q_meta) = QueryState::<(
+            Option<&Name>,
+            Has<lunco_core::ControlBinding>,
+            Option<&lunco_core::CelestialBody>,
+            Option<&Transform>,
+            Option<&CatalogEntryId>,
+            Option<&UsdPrimKind>,
+            Option<&UsdPrimPath>,
+        )>::try_new(world) else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 "QueryEntity: world state unavailable".to_string(),
             );
         };
+        let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryEntity: active physics frame unavailable".to_string(),
+            );
+        };
 
         let (name, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) = q_meta
-            .get(entity)
+            .get(world, entity)
             .unwrap_or((None, false, None, None, None, None, None));
         let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
 
-        let Some((pos, rot)) = poses.pose(entity) else {
+        let Some((pos, rot)) = poses.pose(world, entity) else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 format!("QueryEntity: entity {raw} is not connected to the active physics frame"),

@@ -134,7 +134,7 @@ impl ApiQueryProvider for LintReportQuery {
         "LintReport"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let report = world.get_resource::<lunco_lint::LintReport>();
         let findings: Vec<serde_json::Value> = report
             .map(|r| {
@@ -173,7 +173,7 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
         "RuntimeDiagnostics"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let findings = world
             .get_resource::<lunco_core::RuntimeDiagnostics>()
             .map(|diagnostics| {

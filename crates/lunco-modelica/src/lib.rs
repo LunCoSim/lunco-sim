@@ -34,6 +34,8 @@
 
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
+#[cfg(feature = "lunco-api")]
+use lunco_api::executor::DeferredCommandAppExt;
 use lunco_assets::msl_dir;
 use rumoca_compile::{Session, SessionConfig};
 #[cfg(not(target_arch = "wasm32"))]
@@ -1648,6 +1650,8 @@ impl Plugin for ModelicaCorePlugin {
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
         model_commands::register_all_commands(app);
+        #[cfg(feature = "lunco-api")]
+        app.register_deferred_command::<model_commands::SetModelInput>();
         app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
         app.world_mut()
             .resource_mut::<lunco_core::session::CommandPolicyRegistry>()

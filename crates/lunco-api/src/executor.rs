@@ -1,6 +1,6 @@
 //! API request executor — processes `ApiRequest` and produces `ApiResponse`.
 //!
-//! Uses Bevy's `AppTypeRegistry` to discover all typed commands (`Event + Reflect`)
+//! Uses Bevy's `AppTypeRegistry` to discover all marked typed commands
 //! for schema discovery. Commands are triggered as `ApiCommandEvent` which carries
 //! the command name and JSON params.
 //!
@@ -9,7 +9,7 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use crate::{
-    discovery::{discover_commands, discover_queries, is_api_command},
+    discovery::{discover_commands, discover_queries, find_api_command, ApiCommandLookupError},
     queries::{ApiQueryRegistry, ApiVisibility},
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
@@ -163,6 +163,13 @@ pub fn validate_command_params(
     Ok(())
 }
 
+fn record_rejected_command(world: &mut World, id: u64, message: String) {
+    world.resource_mut::<lunco_core::CommandResults>().insert(
+        id,
+        lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(message)),
+    );
+}
+
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
 ///
 /// This system listens for all API-triggered commands and uses reflection to
@@ -176,13 +183,20 @@ pub fn api_command_dispatcher(
     let event = trigger.event();
     let type_reg = type_registry.read();
 
-    // 1. Find type registration by short name (e.g. "SetPorts")
-    let Some(registration) = type_reg.get_with_short_type_path(&event.command) else {
-        warn!(
-            "[lunco-api] Command '{}' not found in type registry",
-            event.command
-        );
-        return;
+    // 1. Resolve through the marker boundary. This observer is also reachable
+    // in-process, so it must not turn an arbitrary reflected event into a
+    // command merely because a caller constructed `ApiCommandEvent` by hand.
+    let registration = match find_api_command(&type_reg, &event.command, None) {
+        Ok(registration) => registration,
+        Err(error) => {
+            let message = error.message(&event.command);
+            warn!("[lunco-api] {message}");
+            let id = event.id;
+            commands.queue(move |world: &mut World| {
+                record_rejected_command(world, id, message);
+            });
+            return;
+        }
     };
 
     // 2. Resolve IDs: recursively find fields that should be Entities and look them up in the registry
@@ -217,8 +231,21 @@ pub fn api_command_dispatcher(
                 let registry = world.resource::<AppTypeRegistry>().clone();
                 let type_reg = registry.read();
 
-                let Some(registration) = type_reg.get_with_short_type_path(&cmd_name) else { return };
-                let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else { return };
+                let registration = match find_api_command(&type_reg, &cmd_name, None) {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        let message = error.message(&cmd_name);
+                        warn!("[lunco-api] {message}");
+                        record_rejected_command(world, cmd_id, message);
+                        return;
+                    }
+                };
+                let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else {
+                    let message = format!("Command '{cmd_name}' has no reflected event registration");
+                    warn!("[lunco-api] {message}");
+                    record_rejected_command(world, cmd_id, message);
+                    return;
+                };
 
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
@@ -227,10 +254,7 @@ pub fn api_command_dispatcher(
                     Err(e) => {
                         let msg = format!("command '{cmd_name}': invalid params: {e}");
                         warn!("[lunco-api] {msg}; dropped");
-                        world.resource_mut::<lunco_core::CommandResults>().insert(
-                            cmd_id,
-                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
-                        );
+                        record_rejected_command(world, cmd_id, msg);
                         return;
                     }
                 };
@@ -252,10 +276,7 @@ pub fn api_command_dispatcher(
                         warn!("[lunco-api] {msg}; dropped");
                         // Record a terminal internal outcome for scripts and
                         // in-process result handlers.
-                        world.resource_mut::<lunco_core::CommandResults>().insert(
-                            cmd_id,
-                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
-                        );
+                        record_rejected_command(world, cmd_id, msg);
                         return;
                     }
                     // Scope the active request id around the trigger so a
@@ -284,10 +305,7 @@ pub fn api_command_dispatcher(
             warn!("[lunco-api] {msg}; dropped");
             let cmd_id = event.id;
             commands.queue(move |world: &mut World| {
-                world.resource_mut::<lunco_core::CommandResults>().insert(
-                    cmd_id,
-                    lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
-                );
+                record_rejected_command(world, cmd_id, msg);
             });
         }
     }
@@ -573,16 +591,26 @@ fn execute_request(
             // Reflected commands own the public mutation namespace. The read
             // provider namespace is consulted only when no reflected command
             // owns the name, so a future command cannot be silently shadowed
-            // by a provider registered earlier.
-            let registration = type_registry.get_with_short_type_path(command);
-            let is_public_command = registration
-                .map(|r| is_api_command(r, Some(visibility)))
-                .unwrap_or(false);
+            // by a provider registered earlier. Ambiguous reflected names are
+            // hard failures, never query fallbacks.
+            let registration = match find_api_command(type_registry, command, Some(visibility)) {
+                Ok(registration) => Some(registration),
+                Err(ApiCommandLookupError::NotFound)
+                | Err(ApiCommandLookupError::NotApiCommand) => None,
+                Err(error @ ApiCommandLookupError::Ambiguous)
+                | Err(error @ ApiCommandLookupError::Hidden) => {
+                    return Some(ApiResponse::error(
+                        ApiErrorCode::CommandNotFound,
+                        error.message(command),
+                    ));
+                }
+            };
+            let is_public_command = registration.is_some();
 
             // Query registry — read-only endpoints that return data. Domain
             // crates register providers via `ApiQueryRegistry::register`. The
-            // provider runs deferred via `commands.queue` so it can take
-            // `&mut World`; the response is fired back via `ApiResponseEvent`
+            // provider runs deferred via `commands.queue`; the response is
+            // fired back via `ApiResponseEvent`
             // when the queue flushes.
             if !is_public_command {
                 if let Some(provider) = query_registry.get(command) {

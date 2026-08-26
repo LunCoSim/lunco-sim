@@ -1754,9 +1754,8 @@ pub fn reconcile_owned_prediction(
                 );
                 tf.translation = new_pos;
                 tf.rotation = new_rot;
-                // TODO(multiplayer): deferred — singleplayer focus for now, RBAC
-                // disabled for ease of debugging. This seats absolute f64 `Position`
-                // from a cell-relative f32 pose (the owned compare ignores `s.cell`)
+                // TODO(multiplayer): this seats absolute f64 `Position` from a
+                // cell-relative f32 pose (the owned compare ignores `s.cell`)
                 // — wrong at any non-zero cell (e.g. moonbase). Revisit before
                 // multiplayer hardening (REVIEW-2026-07-19.md PRED-1).
                 if let Some(mut p) = pos {

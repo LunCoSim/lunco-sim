@@ -109,10 +109,10 @@ The kernel marches `lunco_terrain_core::los_hit` over each DEM's `SurfaceOracle`
 read through a plain `Query<(&GlobalTransform, &DemHeightField)>` — a **read-only
 component access**, which is the whole point:
 
-> An earlier version called the `TerrainRaycast` *query provider*, which needs
-> `&mut World` and therefore made `update_links` an EXCLUSIVE system. That inserted a
-> command-flush sync point that interleaved with twin/terrain despawns and corrupted
-> avian's island bookkeeping. **Do not reintroduce an exclusive link system.**
+> The `TerrainRaycast` API provider has an immutable `&World` contract, and the
+> link kernel itself reads through a normal read-only component query. Neither
+> path requires an exclusive link system or an API-side command flush. **Do not
+> reintroduce an exclusive link system.**
 
 Endpoints are marched in `SolarFramePose::local`, which *is* the terrain oracle frame
 (see `pose.rs`). The march is capped to the terrain footprint (`±half_extent`): terrain

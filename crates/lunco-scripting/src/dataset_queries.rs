@@ -20,7 +20,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
         "ListDatasets"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let filter = match params.get("scope") {
             None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::String(scope)) => Some(scope.as_str()),

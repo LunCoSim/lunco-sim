@@ -14,9 +14,9 @@ pub struct ApiResponseEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// The `ApiErrorCode` behind `error` (400 CommandNotFound, 404
-    /// EntityNotFound, 422 DeserializationError, 500 InternalError). The HTTP
-    /// transport also maps it to the status line; the wasm/JS bridge has no
-    /// status line, so it reads the code from here.
+    /// EntityNotFound, 409 CommandRejected, 422 DeserializationError, 500
+    /// InternalError). The HTTP transport also maps it to the status line; the
+    /// wasm/JS bridge has no status line, so it reads the code from here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<u16>,
 }

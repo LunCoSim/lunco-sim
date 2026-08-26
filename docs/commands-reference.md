@@ -1417,8 +1417,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This command is owned by the UI-free Modelica core, so the same reflected
  command is available to headless API hosts, the workbench, Rhai, and any
- future transport. Its observer queues the exclusive port/model write using
- the same helper as the canvas path.
+ future transport. Its deferred result reports whether the exclusive
+ port/model write succeeded; invalid document or input state is returned as a
+ `409 CommandRejected` instead of being logged and acknowledged.
 
 - *defined in:* `crates/lunco-modelica/src/model_commands.rs`
 

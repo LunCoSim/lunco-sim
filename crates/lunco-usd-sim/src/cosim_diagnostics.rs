@@ -34,7 +34,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
         "GetBrokenConnections"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let diag = world.get_resource::<CosimDiagnostics>();
         let runtime_fault = world
             .get_resource::<lunco_core::RuntimeFaults>()

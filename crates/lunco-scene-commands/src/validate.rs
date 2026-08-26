@@ -669,7 +669,7 @@ impl ApiQueryProvider for ValidateAssetProvider {
         "ValidateAsset"
     }
 
-    fn execute(&self, _world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,

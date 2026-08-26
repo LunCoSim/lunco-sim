@@ -13,12 +13,64 @@
 //! presentation state.
 
 use avian3d::prelude::{Position, RigidBody, Rotation};
+use bevy::ecs::query::QueryState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::coords::{ActiveFramePoseQuery, GridPos, GridRot};
+use lunco_core::coords::{pose_in_grid, ActiveFramePoseQuery, GridPos, GridRot};
+
+/// Read-only query state for API and other non-system callers.
+///
+/// Bevy's [`SystemState`] is initialized from `&mut World`, which is correct
+/// for systems but incompatible with the API query contract. This state uses
+/// Bevy's immutable-world [`QueryState::try_new`] path and shares the
+/// canonical [`pose_in_grid`] conversion with [`SimulationPoseQuery`].
+pub struct SimulationPoseReadState {
+    bodies: QueryState<(), With<RigidBody>>,
+    physics: QueryState<
+        (&'static Position, &'static Rotation),
+        (With<RigidBody>, With<PhysicsPoseSeeded>),
+    >,
+    parents: QueryState<&'static ChildOf>,
+    grids: QueryState<&'static Grid>,
+    spatial: QueryState<(Option<&'static CellCoord>, &'static Transform)>,
+}
+
+impl SimulationPoseReadState {
+    /// Build the query state without requiring mutable access to the world.
+    pub fn try_new(world: &World) -> Option<Self> {
+        Some(Self {
+            bodies: QueryState::try_new(world)?,
+            physics: QueryState::try_new(world)?,
+            parents: QueryState::try_new(world)?,
+            grids: QueryState::try_new(world)?,
+            spatial: QueryState::try_new(world)?,
+        })
+    }
+
+    /// Resolve one entity in the active physics frame.
+    pub fn pose(&mut self, world: &World, entity: Entity) -> Option<(GridPos, GridRot)> {
+        let frame = world.get_resource::<lunco_core::ActivePhysicsFrame>()?.0;
+        if self.bodies.get(world, entity).is_ok() {
+            let (position, rotation) = self.physics.get(world, entity).ok()?;
+            return Some((GridPos(position.0), GridRot(rotation.0)));
+        }
+
+        let parents = self.parents.query(world);
+        let grids = self.grids.query(world);
+        let spatial = self.spatial.query(world);
+        pose_in_grid(entity, frame, &parents, &grids, &spatial)
+            .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
+    }
+
+    /// Resolve only an entity's active-frame position.
+    pub fn position(&mut self, world: &World, entity: Entity) -> Option<GridPos> {
+        self.pose(world, entity).map(|(position, _)| position)
+    }
+}
 
 /// The BigSpace/Avian bridge has initialized this body's f64 physics pose.
 ///
@@ -82,7 +134,7 @@ impl ApiQueryProvider for NearestProvider {
         "Nearest"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(point) = parse_point(params, "point") else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -92,15 +144,18 @@ impl ApiQueryProvider for NearestProvider {
         let max = params.get("max").and_then(serde_json::Value::as_f64);
         let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
         let entities = world.resource::<ApiEntityRegistry>().entities();
-        let mut state: bevy::ecs::system::SystemState<SimulationPoseQuery> =
-            bevy::ecs::system::SystemState::new(world);
-        let poses = state.get(world).expect("simulation pose query validates");
+        let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "Nearest: simulation pose query is unavailable".to_string(),
+            );
+        };
         let mut best: Option<(u64, f64, bevy::math::DVec3)> = None;
         for (gid, entity) in entities {
             if exclude == Some(gid.get()) {
                 continue;
             }
-            let Some(position) = poses.position(entity) else {
+            let Some(position) = poses.position(world, entity) else {
                 continue;
             };
             let distance = position.0.distance(point);
@@ -130,7 +185,7 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
         "EntitiesInRadius"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(point) = parse_point(params, "point") else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -143,14 +198,17 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
             .unwrap_or(0.0);
         let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
         let entities = world.resource::<ApiEntityRegistry>().entities();
-        let mut state: bevy::ecs::system::SystemState<SimulationPoseQuery> =
-            bevy::ecs::system::SystemState::new(world);
-        let poses = state.get(world).expect("simulation pose query validates");
+        let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "EntitiesInRadius: simulation pose query is unavailable".to_string(),
+            );
+        };
         let ids: Vec<u64> = entities
             .into_iter()
             .filter(|(gid, _)| exclude != Some(gid.get()))
             .filter_map(|(gid, entity)| {
-                (poses.position(entity)?.0.distance(point) <= radius).then_some(gid.get())
+                (poses.position(world, entity)?.0.distance(point) <= radius).then_some(gid.get())
             })
             .collect();
         ApiResponse::ok(serde_json::json!({ "count": ids.len(), "ids": ids }))

@@ -13,8 +13,8 @@
 //!
 //! Instead, domain crates register an [`ApiQueryProvider`] at startup.
 //! When an `ExecuteCommand` request arrives whose `command` matches a
-//! registered provider name, the executor calls the provider with
-//! `&mut World` access and returns its `ApiResponse` to the transport.
+//! registered provider name, the executor calls the provider with immutable
+//! `&World` access and returns its `ApiResponse` to the transport.
 //! Reflect-registered commands are the mutation and operation channel. Query
 //! providers are deliberately read-only; this keeps one authoritative command
 //! contract for every state change.
@@ -24,11 +24,12 @@
 //! - **Returns data**, unlike ordinary Reflect Event commands which return an
 //!   acknowledgement. Use this trait when the caller needs a structured
 //!   response.
-//! - **Has `&mut World` access** — providers can read any resource and
-//!   run any query they need.
-//! - **Runs deferred** via `Commands::queue`, so providers execute on a
-//!   later command flush, not synchronously inside the observer. This
-//!   matches how `CaptureScreenshot` already works.
+//! - **Has `&World` access** — providers can read any resource and run any
+//!   query they need, while the type system prevents a read provider from
+//!   mutating simulation state.
+//! - **Runs read-only**. The HTTP executor invokes providers from a deferred
+//!   command queue so the response can be correlated with the request; the
+//!   in-process scripting bridge may invoke the same provider directly.
 //!
 //! ## Example
 //!
@@ -36,7 +37,7 @@
 //! struct ListBundledProvider;
 //! impl ApiQueryProvider for ListBundledProvider {
 //!     fn name(&self) -> &'static str { "ListBundled" }
-//!     fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+//!     fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
 //!         let bundled = lunco_modelica::bundled_models();
 //!         ApiResponse::ok(serde_json::json!({ "bundled": bundled }))
 //!     }
@@ -68,11 +69,11 @@ pub trait ApiQueryProvider: Send + Sync + 'static {
     /// [`ApiResponse::Error`] is the right move when params don't
     /// validate or required state is missing.
     ///
-    /// Providers MUST NOT block for long — the caller is waiting on a
-    /// deferred HTTP response. Cap any blocking work at a few hundred
-    /// milliseconds and prefer returning a "not ready yet" response over
-    /// blocking on a background task.
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse;
+    /// Providers MUST NOT block for long. The HTTP caller is waiting on a
+    /// deferred response, while in-process callers run the provider directly.
+    /// Cap any blocking work at a few hundred milliseconds and prefer returning
+    /// a "not ready yet" response over blocking on a background task.
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse;
 }
 
 /// Registry of named read-only providers. Domain crates push impls here at
@@ -101,8 +102,7 @@ impl ApiQueryRegistry {
     }
 
     /// Look up a provider by name. Returns an `Arc` so the caller can
-    /// drop the registry borrow before invoking `execute` (which needs
-    /// `&mut World`).
+    /// drop the registry borrow before invoking `execute`.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ApiQueryProvider>> {
         self.providers.get(name).cloned()
     }
@@ -136,7 +136,7 @@ impl ApiQueryProvider for ReadPortsProvider {
         "ReadPorts"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(api_id) = params.get("api_id").and_then(|v| {
             v.as_u64()
                 .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -199,7 +199,7 @@ impl ApiQueryProvider for ReadinessProvider {
         "GetReadiness"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         use lunco_readiness::{ReadinessRegistry, ReadinessState, Subject};
         let registry = world.get_resource::<ReadinessRegistry>();
         let fault = world
@@ -263,7 +263,7 @@ impl ApiQueryProvider for ReadExposuresProvider {
         "ReadExposures"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let surface_filter = match params.get("surface") {
             None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::String(name)) => Some(name.as_str()),

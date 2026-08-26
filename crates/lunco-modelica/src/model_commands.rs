@@ -6,7 +6,14 @@
 //! observer also live here, so every host uses the same API command path.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+#[cfg(feature = "lunco-api")]
+use lunco_api::{
+    executor::{ApiResponseEvent, PendingApiRequest},
+    schema::{ApiErrorCode, ApiResponse},
+};
+use lunco_core::{
+    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
+};
 use lunco_doc::DocumentId;
 
 use crate::state::ModelicaDocumentRegistry;
@@ -16,7 +23,7 @@ use crate::state::ModelicaDocumentRegistry;
 /// This command is owned by the UI-free Modelica core, so the same reflected
 /// command is available to headless API hosts, the workbench, Rhai, and any
 /// future transport. Its observer queues the exclusive port/model write using
-/// the same helper as the canvas path.
+/// the same helper as the canvas path and reports the actual apply result.
 #[Command(default)]
 pub struct SetModelInput {
     /// Document id; zero selects the documented active-document default.
@@ -27,15 +34,84 @@ pub struct SetModelInput {
     pub value: f64,
 }
 
+#[cfg(feature = "lunco-api")]
 #[on_command(SetModelInput)]
-fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
+fn on_set_model_input(
+    trigger: On<SetModelInput>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+    pending: Option<Res<PendingApiRequest>>,
+) {
     let cmd = trigger.event();
     let doc = cmd.doc;
     let name = cmd.name.clone();
     let value = cmd.value;
+    let command_id = active_id.get();
+    let correlation_id = pending
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        if let Err(error) = apply_set_model_input(world, doc, &name, value) {
-            bevy::log::warn!("[SetModelInput] {}", error.message());
+        let result =
+            apply_set_model_input(world, doc, &name, value).map_err(|error| error.message());
+        if let Some(command_id) = command_id {
+            let outcome = result.clone().map(|applied_doc| {
+                let mut ack = Ack::new(OpId::new());
+                ack.assigned = serde_json::json!({
+                    "doc": applied_doc.raw(),
+                    "name": name,
+                    "value": value,
+                });
+                ack
+            });
+            world
+                .resource_mut::<CommandResults>()
+                .record(command_id, outcome);
+        }
+        if let Some(correlation_id) = correlation_id {
+            let response = match result {
+                Ok(applied_doc) => ApiResponse::ok(serde_json::json!({
+                    "doc": applied_doc.raw(),
+                    "name": name,
+                    "value": value,
+                })),
+                Err(error) => ApiResponse::error(ApiErrorCode::CommandRejected, error),
+            };
+            world.commands().trigger(ApiResponseEvent {
+                response,
+                correlation_id,
+            });
+        }
+    });
+}
+
+#[cfg(not(feature = "lunco-api"))]
+#[on_command(SetModelInput)]
+fn on_set_model_input(
+    trigger: On<SetModelInput>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+) {
+    let cmd = trigger.event();
+    let doc = cmd.doc;
+    let name = cmd.name.clone();
+    let value = cmd.value;
+    let command_id = active_id.get();
+    commands.queue(move |world: &mut World| {
+        let result =
+            apply_set_model_input(world, doc, &name, value).map_err(|error| error.message());
+        if let Some(command_id) = command_id {
+            let outcome = result.map(|applied_doc| {
+                let mut ack = Ack::new(OpId::new());
+                ack.assigned = serde_json::json!({
+                    "doc": applied_doc.raw(),
+                    "name": name,
+                    "value": value,
+                });
+                ack
+            });
+            world
+                .resource_mut::<CommandResults>()
+                .record(command_id, outcome);
         }
     });
 }
@@ -98,7 +174,7 @@ impl SetModelInputError {
 }
 
 /// Push a runtime input value into a compiled model's stepper. `doc_raw`
-/// unassigned ⇒ fall back to the workspace's active document.
+/// unassigned selects the workspace's active document.
 pub fn apply_set_model_input(
     world: &mut World,
     doc_raw: DocumentId,
@@ -106,7 +182,8 @@ pub fn apply_set_model_input(
     value: f64,
 ) -> Result<DocumentId, SetModelInputError> {
     let doc = if doc_raw.is_unassigned() {
-        // Active-document fallback (UI-free: reads the workspace resource).
+        // The documented active-document default (UI-free: reads the workspace
+        // resource).
         world
             .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
@@ -128,9 +205,9 @@ pub fn apply_set_model_input(
     // the co-sim sync (`sync_modelica_inputs`) copies into `ModelicaModel.inputs`
     // every tick. A *direct* `ModelicaModel.inputs` write would be clobbered
     // within one frame on any co-sim'd entity (wired lander, rover, …). Bare
-    // workbench / batch models have no registered port, so `write_port` returns
-    // false and we fall through to the direct write below (which also owns the
-    // friendly `UnknownInput` validation for the no-cosim case).
+    // workbench / batch models have no registered port, so their authoritative
+    // input owner is the direct `ModelicaModel.inputs` state below (which also
+    // owns the friendly `UnknownInput` validation for the no-cosim case).
     if let Some(registry) = world
         .get_resource::<lunco_core::ports::PortRegistry>()
         .cloned()

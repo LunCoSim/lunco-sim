@@ -40,8 +40,9 @@ use std::{
     collections::HashSet,
 };
 
-use lunco_api::executor::{authz_target_gid, ApiCommandEvent};
-use lunco_api::queries::ApiQueryRegistry;
+use lunco_api::discovery::find_api_command;
+use lunco_api::executor::{authz_target_gid, validate_command_params, ApiCommandEvent};
+use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
@@ -423,9 +424,9 @@ pub fn enforce_script_authority(
     op: &str,
     target_gid: Option<u64>,
 ) -> Result<(), String> {
-    // TODO(multiplayer): script authority/RBAC enforcement deferred — current focus
-    // is singleplayer and RBAC is disabled for ease of debugging. Revisit before
-    // multiplayer hardening (see REVIEW-2026-07-19.md #2).
+    // Remote script authority is bound to the launching session and uses the
+    // same role/ownership/policy lattice as networked command dispatch. Local
+    // host launches intentionally have no remote session to authorize.
     let Some(session) = script_authority() else {
         return Ok(());
     };
@@ -521,6 +522,40 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         {
             return serde_json::json!({ "id": id, "ok": true });
         }
+
+        // Rhai is an in-process transport, but it still uses the same public
+        // typed-command contract as HTTP/MCP. Resolve the marker, visibility,
+        // ambiguity, and reflected parameter schema before any client or RBAC
+        // policy can run. The dispatcher repeats the marker check because
+        // `ApiCommandEvent` is also an internal event that callers can trigger
+        // directly.
+        let type_registry = world.resource::<AppTypeRegistry>().clone();
+        let type_reg = type_registry.read();
+        let visibility = world.get_resource::<ApiVisibility>();
+        let registration = match find_api_command(&type_reg, name, visibility) {
+            Ok(registration) => registration,
+            Err(error) => {
+                return serde_json::json!({
+                    "id": id,
+                    "ok": false,
+                    "error": error.message(name),
+                });
+            }
+        };
+        let Some(entity_registry) = world.get_resource::<ApiEntityRegistry>() else {
+            return serde_json::json!({
+                "id": id,
+                "ok": false,
+                "error": "API entity registry is unavailable",
+            });
+        };
+        if let Err(error) =
+            validate_command_params(name, &params, registration, &type_reg, entity_registry)
+        {
+            return serde_json::json!({ "id": id, "ok": false, "error": error });
+        }
+        drop(type_reg);
+
         // Client-scoped scenario on a predicting client: allow ONLY the
         // client-local surface (HUD / notifications / camera). Anything else is
         // an authoritative mutation the host owns — running it here would
@@ -601,8 +636,8 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         // §3.4: a script launched by a remote session must not exceed that
         // session's authority. When an authority is set (remote launch),
         // re-authorize through the SAME gate the networked command path uses; an
-        // unset authority (local / host-trusted launch) stays ungated (and skips
-        // the schema lookup on this per-tick hot path).
+        // unset authority (local / host-trusted launch) stays ungated after the
+        // shared public-command schema gate above.
         if script_authority().is_some() {
             let target_gid = command_target_gid(world, name, &params);
             if let Err(error) = enforce_script_authority(world, name, target_gid) {
@@ -652,27 +687,45 @@ fn command_result_json(id: u64, outcome: Option<&CommandOutcome>) -> serde_json:
 
 // ── Verbs: query ────────────────────────────────────────────────────────────
 
-/// Invoke a registered `ApiQueryProvider` by name; `None` if missing/errored.
-pub fn query_raw(name: &str, params: serde_json::Value) -> Option<serde_json::Value> {
+/// Invoke a registered `ApiQueryProvider` by name.
+///
+/// `Ok(None)` is a successful provider response with no data. Missing providers
+/// and provider errors are `Err`, so callers can distinguish an empty answer
+/// from a broken or unavailable query surface.
+pub fn query_raw(
+    name: &str,
+    params: serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
     with_world(|world| {
         let provider = world
             .get_resource::<ApiQueryRegistry>()
-            .and_then(|reg| reg.get(name))?;
+            .and_then(|reg| reg.get(name))
+            .ok_or_else(|| format!("query '{name}' is not registered"))?;
         match provider.execute(world, &params) {
-            ApiResponse::Ok {
-                data: Some(data), ..
-            } => Some(data),
-            _ => None,
+            ApiResponse::Ok { data } => Ok(data),
+            ApiResponse::Error { code, message } => {
+                Err(format!("query '{name}' failed ({code}): {message}"))
+            }
+            _ => Err(format!(
+                "query '{name}' returned an unsupported response kind"
+            )),
         }
     })
-    .flatten()
+    .ok_or_else(|| "no world in scope".to_string())?
 }
 
-/// `query` as a native value (`unit` if missing/errored).
+/// `query` as a native value. Successful data remains the provider's native
+/// value; a successful no-data response is unit. Errors become an explicit
+/// `#{ ok: false, error: "..." }` value so a script can branch without losing
+/// the provider's diagnostic.
 pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B::Value {
     match query_raw(name, params) {
-        Some(data) => build_from_json(b, &data),
-        None => b.unit(),
+        Ok(Some(data)) => build_from_json(b, &data),
+        Ok(None) => b.unit(),
+        Err(error) => b.map(vec![
+            ("ok".to_string(), b.bool(false)),
+            ("error".to_string(), b.string(&error)),
+        ]),
     }
 }
 
@@ -685,9 +738,9 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B
 // `force_*`, `quat_*`, …), joint angles, and hardware ports by the SAME path the
 // simulation uses — language-neutral, so rhai and python share it.
 
-/// Read a co-sim port value on entity `gid`. `None` if no such port — which is
-/// what lets the scripting `get` verb fall back here only after generic
-/// reflection misses.
+/// Read a co-sim port value on entity `gid`. `None` means the canonical
+/// co-simulation namespace has no port with that name. The scripting `get` verb
+/// consults it after the generic reflected component namespace.
 pub fn read_port(gid: u64, name: &str) -> Option<f64> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
@@ -1443,8 +1496,21 @@ mod tests {
     /// a local/host launch (`None` authority) stays ungated.
     #[test]
     fn scripted_cmd_gated_by_authority() {
+        #[lunco_core::Command(default)]
+        struct ScriptOpenCommand {}
+
+        #[lunco_core::Command(default)]
+        struct ScriptOwnedCommand {
+            #[authz_target]
+            target: u64,
+        }
+
         let mut world = World::new();
-        world.init_resource::<AppTypeRegistry>();
+        let type_registry = AppTypeRegistry::default();
+        type_registry.write().register::<ScriptOpenCommand>();
+        type_registry.write().register::<ScriptOwnedCommand>();
+        world.insert_resource(type_registry);
+        world.init_resource::<ApiEntityRegistry>();
         world.init_resource::<SessionRegistry>();
         world.init_resource::<SessionRbac>();
         world.init_resource::<CommandPolicyRegistry>();
@@ -1465,9 +1531,10 @@ mod tests {
         let _scope = WorldScope::enter(&mut world);
 
         // (1) Local/host launch → ungated. No observer is registered for the
-        // command, so it dispatches as a fire-and-forget no-op and reports ok.
+        // valid command, so it dispatches as a fire-and-forget no-op and reports
+        // ok; command resolution itself still succeeds.
         set_script_authority(None);
-        let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
+        let r = cmd_raw("ScriptOwnedCommand", serde_json::json!({ "target": 1 }));
         assert_eq!(
             r["ok"],
             serde_json::json!(true),
@@ -1477,7 +1544,7 @@ mod tests {
         // (2) Authenticated Observer + an OPEN command (not in the policy base)
         // → allowed.
         set_script_authority(Some(SessionId(7)));
-        let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
+        let r = cmd_raw("ScriptOpenCommand", serde_json::json!({}));
         assert_eq!(
             r["ok"],
             serde_json::json!(true),
@@ -1487,7 +1554,10 @@ mod tests {
         // (3) Same Observer + an OWNED_CONTROL command on a target it does NOT
         // own → demands Operator → rejected BEFORE dispatch.
         set_script_authority(Some(SessionId(7)));
-        let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
+        world
+            .resource_mut::<CommandPolicyRegistry>()
+            .register("ScriptOwnedCommand", CommandPolicy::OWNED_CONTROL);
+        let r = cmd_raw("ScriptOwnedCommand", serde_json::json!({ "target": 1 }));
         assert_eq!(
             r["ok"],
             serde_json::json!(false),
@@ -1497,12 +1567,41 @@ mod tests {
 
         // (4) Unknown / unauthenticated session → denied even for an OPEN command.
         set_script_authority(Some(SessionId(999)));
-        let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
+        let r = cmd_raw("ScriptOpenCommand", serde_json::json!({}));
         assert_eq!(
             r["ok"],
             serde_json::json!(false),
             "unknown session denied even for OPEN"
         );
+    }
+
+    #[test]
+    fn scripted_cmd_rejects_unknown_internal_and_hidden_events() {
+        #[lunco_core::Command(default)]
+        struct HiddenCommand {}
+
+        #[derive(Event, Reflect, Clone, Debug)]
+        #[reflect(Event)]
+        struct InternalEvent;
+
+        let mut world = World::new();
+        let type_registry = AppTypeRegistry::default();
+        type_registry.write().register::<HiddenCommand>();
+        type_registry.write().register::<InternalEvent>();
+        world.insert_resource(type_registry);
+        world.init_resource::<ApiEntityRegistry>();
+        world.init_resource::<ApiVisibility>();
+        world.init_resource::<CommandResults>();
+        world.resource_mut::<ApiVisibility>().hide("HiddenCommand");
+
+        let _scope = WorldScope::enter(&mut world);
+        set_script_authority(None);
+
+        for name in ["MissingCommand", "InternalEvent", "HiddenCommand"] {
+            let result = cmd_raw(name, serde_json::json!({}));
+            assert_eq!(result["ok"], serde_json::json!(false), "{name}: {result}");
+            assert!(result["error"].is_string(), "{name}: {result}");
+        }
     }
 
     /// The structural verbs (`add`/`remove`/`despawn`) route through the SAME
@@ -1574,7 +1673,7 @@ mod tests {
                 "ReadProbe"
             }
 
-            fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+            fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
                 ApiResponse::ok(serde_json::json!({ "value": 7 }))
             }
         }
@@ -1586,9 +1685,12 @@ mod tests {
         let _scope = WorldScope::enter(&mut world);
 
         assert_eq!(
-            query_raw("ReadProbe", serde_json::json!({})).expect("read provider result")["value"],
+            query_raw("ReadProbe", serde_json::json!({}))
+                .expect("read provider execution")
+                .expect("read provider result")["value"],
             7
         );
-        assert!(query_raw("MissingProbe", serde_json::json!({})).is_none());
+        let error = query_raw("MissingProbe", serde_json::json!({})).expect_err("missing query");
+        assert!(error.contains("not registered"), "{error}");
     }
 }

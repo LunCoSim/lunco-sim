@@ -265,7 +265,7 @@ impl ApiQueryProvider for ListTimelinesProvider {
         "ListTimelines"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let names = world
             .get_resource::<TimelineStore>()
             .map(TimelineStore::names)
@@ -281,7 +281,7 @@ impl ApiQueryProvider for GetTimelineProvider {
         "GetTimeline"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,

@@ -67,9 +67,9 @@ impl RhaiHook {
         //
         // `rhai_limits` lives in this crate and is re-exported as
         // `lunco_scripting::rhai_limits`, so re-enabling is one line here.
-        // TODO(multiplayer): apply `rhai_limits::apply(&mut engine)` when hook
-        // sources can arrive from a peer; RBAC on hook registration is deferred
-        // with it. See REVIEW-2026-07-19.md finding #4 / FUZZ-8.
+        // Hook sources are local authored inputs in this path. A remote source
+        // must enter through the authenticated session boundary before it can
+        // be compiled or registered as a hook.
         let ast = compile_with_script_consts(&engine, source).map_err(|e| e.to_string())?;
         // Run top-level statements once to populate runtime state into the
         // base scope; literal constants are propagated at compile time above.

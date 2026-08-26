@@ -132,9 +132,10 @@ Every public mutation now uses the existing command/port substrate:
 
 - `SetModelInput` is a reflected Modelica command owned by the UI-free core;
   its shared helper writes through `PortRegistry` whenever the entity exposes
-  a cosimulation port.
-- `SetPorts` / wires / rhai `set(id,name,v)` → `PortRegistry::write_port` →
-  `SimComponent.inputs`.
+  a cosimulation port, and its deferred response reports the actual apply result.
+- `SetPorts` / wires / the scalar-port form of Rhai `set(id,name,v)` →
+  `PortRegistry::write_port` → `SimComponent.inputs`. Rhai `set` also owns the
+  separate host-local reflected component/resource tuning surface.
 
 `sync_modelica_inputs` copies `SimComponent.inputs → ModelicaModel.inputs` **every
 tick**, so a direct `SetModelInput` write is **clobbered** within one frame on any
@@ -145,16 +146,18 @@ registered rhai verb — is dead.)
 The `PortRegistry` remains the single write surface for cosim entities:
 
 1. `apply_set_model_input` is **port-first**: if the entity exposes a
-   writable port of that name (`PortRegistry::write_port` succeeds) use it; else
-   fall back to the direct `ModelicaModel.inputs` write (bare workbench / batch
-   models with no `SimComponent`).
-2. rhai `set()` already routes through `write_port` — **no second input API**
-   for correctness. (Only fix the *content* of the embedded scene script:
-   `set_input(me,…)` → `set(me,…)`.)
-3. Net: `SetModelInput`, `SetPorts`, rhai `set()`, Python, and wires all converge
-   on `SimComponent.inputs` for cosim'd entities → the cosim value *is* the value
-   everyone sees → no clobber, one source of truth. The MCP `set_input` tool
-   keeps its ergonomic name + input-name validation but now actually sticks.
+   writable port of that name (`PortRegistry::write_port` succeeds), use the
+   shared port surface. A bare workbench/batch model without a `SimComponent`
+   uses its own `ModelicaModel.inputs` state, which is the authoritative input
+   owner for that non-co-simulation mode.
+2. Rhai `set()` uses the same `PortRegistry` for scalar co-simulation names and
+   has no second input API. Its reflected component/resource path is explicitly
+   host-local tuning, not a competing authoritative input channel.
+3. Net: `SetModelInput`, `SetPorts`, scalar-port Rhai `set()`, Python, and wires
+   all converge on `SimComponent.inputs` for co-simulated entities → the cosim
+   value *is* the value everyone sees → no clobber, one source of truth. The
+   MCP `set_input` tool keeps its ergonomic name + input-name validation but now
+   actually sticks.
 
 This keeps the cosim propagation core untouched (per "don't rewrite the core") and
 matches the existing "one canonical form" principle.

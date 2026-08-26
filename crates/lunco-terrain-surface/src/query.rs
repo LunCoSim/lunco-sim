@@ -26,6 +26,7 @@
 
 use std::sync::Arc;
 
+use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -74,7 +75,7 @@ impl ApiQueryProvider for TerrainHeightProvider {
         "TerrainHeight"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let (Some(x), Some(z)) = (
             params.get("x").and_then(serde_json::Value::as_f64),
             params.get("z").and_then(serde_json::Value::as_f64),
@@ -90,7 +91,12 @@ impl ApiQueryProvider for TerrainHeightProvider {
 
         // Snapshot the DEM terrains, releasing the world borrow before the
         // registry read. The oracle is shared via `Arc`.
-        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainHeight: DEM query is unavailable".to_string(),
+            );
+        };
         let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
             q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
 
@@ -167,7 +173,7 @@ impl ApiQueryProvider for TerrainFieldProvider {
         "TerrainField"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let field_id = params
             .get("field")
             .and_then(serde_json::Value::as_str)
@@ -209,7 +215,12 @@ impl ApiQueryProvider for TerrainFieldProvider {
         let center = GridPos(DVec3::new(x, 0.0, z));
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
-        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainField: DEM query is unavailable".to_string(),
+            );
+        };
         let terrains: Vec<Arc<SurfaceOracle>> = q.iter(world).map(|(_, hf)| hf.0.clone()).collect();
 
         // First terrain whose footprint covers the region centre wins. The DEM
@@ -294,7 +305,7 @@ impl ApiQueryProvider for TerrainRaycastProvider {
         "TerrainRaycast"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(origin) = parse_point(params.get("origin")) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -330,7 +341,12 @@ impl ApiQueryProvider for TerrainRaycastProvider {
             );
         };
 
-        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "TerrainRaycast: DEM query is unavailable".to_string(),
+            );
+        };
         let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
             q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
 
@@ -391,7 +407,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         "TerrainLodStatus"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let Some(status) = world.get_resource::<TerrainStreamStatus>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
