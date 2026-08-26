@@ -9,6 +9,8 @@
 //! simulator that refuses to compile outside a checkout would be worse than one whose
 //! log says `unknown`.
 
+use std::path::Path;
+
 mod build_identity {
     include!("../../scripts/build_identity.rs");
 }
@@ -16,38 +18,50 @@ mod build_identity {
 fn main() {
     let project_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let icon_rgba = out_dir.join("luncosim-icon.rgba");
-    write_window_icon(&project_dir, &icon_rgba);
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let icon_ico = out_dir.join("luncosim.ico");
-        write_windows_ico(&project_dir, &icon_ico);
-        embed_windows_icon(&icon_ico);
-    }
-    build_identity::stamp();
-}
-
-fn write_window_icon(project_dir: &std::path::Path, icon_rgba: &std::path::Path) {
-    let icon_name = match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
-        Ok("windows") => "lcs-night-win.svg",
-        Ok("macos") => "lcs-night-mac.svg",
-        _ => "lcs-night-linux.svg",
-    };
-    let icon_svg = project_dir.join("../../assets/icons/svg").join(icon_name);
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let icon_svg = project_dir
+        .join("../../assets/icons/svg")
+        .join(platform_icon_name(&target_os));
     println!("cargo:rerun-if-changed={}", icon_svg.display());
+    println!("cargo:rerun-if-env-changed=LUNCOSIM_ICON_OUTPUT_DIR");
+    println!("cargo:rerun-if-env-changed=LUNCOSIM_ICON_OUTPUT_STAMP");
 
     let svg = std::fs::read(&icon_svg).unwrap_or_else(|error| {
         panic!(
-            "failed to read LunCoSim window icon {}: {error}",
+            "failed to read LunCoSim icon source {}: {error}",
             icon_svg.display()
         )
     });
     let tree = usvg::Tree::from_data(&svg, &usvg::Options::default()).unwrap_or_else(|error| {
         panic!(
-            "failed to parse LunCoSim window icon {}: {error}",
+            "failed to parse LunCoSim icon source {}: {error}",
             icon_svg.display()
         )
     });
-    let pixmap = render_icon(&tree, 64);
+
+    let icon_rgba = out_dir.join("luncosim-icon.rgba");
+    write_window_icon(&tree, &icon_rgba);
+    if target_os == "windows" {
+        let icon_ico = out_dir.join("luncosim.ico");
+        write_windows_ico(&tree, &icon_ico);
+        embed_windows_icon(&icon_ico);
+    }
+    if let Some(icon_output_dir) = std::env::var_os("LUNCOSIM_ICON_OUTPUT_DIR") {
+        write_package_icons(&tree, &target_os, Path::new(&icon_output_dir));
+    }
+    build_identity::stamp();
+}
+
+fn platform_icon_name(target_os: &str) -> &'static str {
+    match target_os {
+        "windows" => "lcs-night-win.svg",
+        "macos" => "lcs-night-mac.svg",
+        _ => "lcs-night-linux.svg",
+    }
+}
+
+fn write_window_icon(tree: &usvg::Tree, icon_rgba: &Path) {
+    let pixmap = render_icon(tree, 64);
     std::fs::write(icon_rgba, pixmap.data()).unwrap_or_else(|error| {
         panic!(
             "failed to write rendered LunCoSim window icon {}: {error}",
@@ -68,31 +82,15 @@ fn render_icon(tree: &usvg::Tree, size: u32) -> resvg::tiny_skia::Pixmap {
     pixmap
 }
 
-fn write_windows_ico(project_dir: &std::path::Path, destination: &std::path::Path) {
+fn write_windows_ico(tree: &usvg::Tree, destination: &Path) {
     use image::codecs::ico::{IcoEncoder, IcoFrame};
     use image::ExtendedColorType;
-
-    let icon_svg = project_dir
-        .join("../../assets/icons/svg")
-        .join("lcs-night-win.svg");
-    let svg = std::fs::read(&icon_svg).unwrap_or_else(|error| {
-        panic!(
-            "failed to read LunCoSim executable icon {}: {error}",
-            icon_svg.display()
-        )
-    });
-    let tree = usvg::Tree::from_data(&svg, &usvg::Options::default()).unwrap_or_else(|error| {
-        panic!(
-            "failed to parse LunCoSim executable icon {}: {error}",
-            icon_svg.display()
-        )
-    });
 
     let sizes = [16_u32, 24, 32, 48, 64, 128, 256];
     let frames: Vec<IcoFrame<'static>> = sizes
         .into_iter()
         .map(|size| {
-            let pixmap = render_icon(&tree, size);
+            let pixmap = render_icon(tree, size);
             IcoFrame::as_png(pixmap.data(), size, size, ExtendedColorType::Rgba8)
                 .unwrap_or_else(|error| panic!("failed to encode {size}px LunCoSim icon: {error}"))
         })
@@ -106,6 +104,79 @@ fn write_windows_ico(project_dir: &std::path::Path, destination: &std::path::Pat
     IcoEncoder::new(&mut file)
         .encode_images(&frames)
         .unwrap_or_else(|error| panic!("failed to encode LunCoSim executable icon: {error}"));
+}
+
+fn write_package_icons(tree: &usvg::Tree, target_os: &str, output_dir: &Path) {
+    std::fs::create_dir_all(output_dir).unwrap_or_else(|error| {
+        panic!(
+            "failed to create LunCoSim package icon directory {}: {error}",
+            output_dir.display()
+        )
+    });
+
+    match target_os {
+        "windows" => write_windows_ico(tree, &output_dir.join("luncosim.ico")),
+        "macos" => write_macos_iconset(tree, &output_dir.join("macos/luncosim.iconset")),
+        _ => write_linux_icons(tree, &output_dir.join("linux")),
+    }
+}
+
+fn write_macos_iconset(tree: &usvg::Tree, iconset_dir: &Path) {
+    for size in [16_u32, 32, 128, 256, 512] {
+        write_png(
+            tree,
+            size,
+            &iconset_dir.join(format!("icon_{size}x{size}.png")),
+        );
+        write_png(
+            tree,
+            size * 2,
+            &iconset_dir.join(format!("icon_{size}x{size}@2x.png")),
+        );
+    }
+}
+
+fn write_linux_icons(tree: &usvg::Tree, linux_dir: &Path) {
+    let sizes = [16_u32, 24, 32, 48, 64, 128, 256];
+    for size in sizes {
+        let pixmap = render_icon(tree, size);
+        let png = pixmap
+            .encode_png()
+            .unwrap_or_else(|error| panic!("failed to encode {size}px LunCoSim PNG: {error}"));
+        let destination = linux_dir
+            .join("hicolor")
+            .join(format!("{size}x{size}"))
+            .join("apps/luncosim.png");
+        write_bytes(&png, &destination);
+        if size == 256 {
+            write_bytes(&png, &linux_dir.join("luncosim.png"));
+        }
+    }
+}
+
+fn write_png(tree: &usvg::Tree, size: u32, destination: &Path) {
+    let pixmap = render_icon(tree, size);
+    let png = pixmap
+        .encode_png()
+        .unwrap_or_else(|error| panic!("failed to encode {size}px LunCoSim PNG: {error}"));
+    write_bytes(&png, destination);
+}
+
+fn write_bytes(bytes: &[u8], destination: &Path) {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+            panic!(
+                "failed to create LunCoSim icon directory {}: {error}",
+                parent.display()
+            )
+        });
+    }
+    std::fs::write(destination, bytes).unwrap_or_else(|error| {
+        panic!(
+            "failed to write LunCoSim package icon {}: {error}",
+            destination.display()
+        )
+    });
 }
 
 #[cfg(windows)]

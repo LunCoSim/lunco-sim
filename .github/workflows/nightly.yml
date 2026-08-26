@@ -216,7 +216,9 @@ jobs:
       # ── Build + package LunCoSim (native arch) ──────────────────────────
       # --velopack turns the complete staged directory into an installer,
       # update package, and channel feed. docs/ + AGENTS.md + all assets are
-      # therefore part of the package's authoritative file set.
+      # therefore part of the package's authoritative file set. The native
+      # icon is generated from assets/icons/svg by build_native.sh and passed
+      # to Velopack for executable, installer, and AppImage branding.
       # Cache download runs automatically before staging (unless
       # --skip-download), so the .cache/ subdirs are populated in-place.
       - name: Build LunCoSim (desktop)

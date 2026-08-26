@@ -101,11 +101,13 @@ assets cannot give a Windows PE executable its file icon.
 
 **Implementation:** all scanned UI control glyphs were replaced with the shared
 vector `UiIcon` vocabulary, including Mission Control, Celestial time, busy
-cancellation, and Modelica experiment controls. The executable build script
-renders the canonical SVG and embeds the Windows ICO resource; Linux/macOS
-launcher artwork is generated from the same SVG family. Linux source checks
-and the UI compile pass; a Windows PE/package inspection is still required for
-platform acceptance.
+cancellation, and Modelica experiment controls. The Rust build script renders
+the canonical per-platform SVG and emits the package-native outputs: an
+embedded Windows ICO/PE resource, a macOS iconset for `iconutil`, and Linux
+hicolor PNGs. `build_native.sh` passes the resulting `.ico`, `.icns`, or `.png`
+to Velopack, so the main executable and the generated installer/AppImage use
+the same source artwork. A fresh GitHub Actions package and platform-native
+inspection remain required for acceptance.
 
 ### APP-06 — Lunokhod 2 terrain path needs runtime lifecycle proof
 
@@ -282,10 +284,10 @@ Groups 1 and 2 are implemented and committed. The latest Group 1 HUD commit is
 telemetry, overlay ordering, typed tutorial navigation), `9ecc142e6` (generic
 authored-domain boundary equations), `926798c88`, and `506a0c95c` (vector UI
 controls and glyph cleanup). Group 3 is implemented in the engine checkout and
-Twin with focused and production headless verification. Remaining acceptance is
-limited to the platform-native Windows icon inspection and any additional
-cross-platform window captures; existing unrelated Twin changes remain
-untouched.
+Twin with focused and production headless verification. Remaining acceptance
+includes a fresh GitHub Actions package and platform-native inspection of the
+Windows PE/installer, macOS app bundle, and Linux AppImage; existing unrelated
+Twin changes remain untouched.
 
 ## Verification addendum — 2026-08-26
 
@@ -330,6 +332,7 @@ and must be committed/owned separately.
 Focused verification after the merge: autopilot 28/28, editor 49/49, scene
 commands 54/54, terrain surface 102/102, and workbench camera-capture 2/2.
 The production UI build, `cargo fmt --all -- --check`, and `git diff --check`
-also pass. Remaining limits are the same platform-native Windows icon
-inspection and untested cross-platform window captures; generic authored camera
-track capture remains outside this Twin-specific runtime proof.
+also pass. The icon packaging cutover now has source-level contract coverage;
+the post-change GitHub Actions package and platform-native icon inspections
+remain open, as do untested cross-platform window captures. Generic authored
+camera track capture remains outside this Twin-specific runtime proof.
