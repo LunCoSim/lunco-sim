@@ -168,8 +168,10 @@ progress, and `sync_route_visual_meshes`; it is real 3D geometry in the active
 physics frame, not the camera-path preview's screen-space presentation.
 
 `rebuild_waypoint_route_projection` is change-gated. It reads authored XML through
-the exact `TargetBindings` map (runtime patrols use their explicit runtime binding),
-resolves positions in the active physics grid, and publishes one atomic snapshot.
+the exact `TargetBindings` map, while runtime patrols resolve each target through
+its explicit `RuntimeWaypointBinding` marker root. Both forms resolve positions in
+the active physics grid and publish one atomic snapshot, so labels and ribbons share
+the marker's current terrain-projected pose.
 `project_waypoint_markers_to_surface` is a separate change-gated owner for the
 runtime marker root, so the dome and arrival sensor remain on the same surface
 without coupling marker transforms to mesh reconciliation. Meshes and marker looks
