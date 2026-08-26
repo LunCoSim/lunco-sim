@@ -1,11 +1,11 @@
 ---
 name: nightly-changelog
-description: Generate a traceable LunCoSim nightly changelist and GitHub release notes from the commits after the latest timestamped nightly tag. Use when preparing a nightly build, documenting changes and bug fixes since the previous nightly, updating docs/releases Markdown, or wiring changelists into .github/workflows/nightly.yml. Preserve dirty worktrees and do not edit Rust source.
+description: Generate concise LunCoSim nightly GitHub release notes with platform downloads, installation guidance, an AI-agent mission prompt, and a changelog link. Use when preparing a nightly build, updating docs/releases Markdown, or wiring release notes into .github/workflows/nightly.yml. Preserve dirty worktrees and do not edit Rust source.
 ---
 
 # Nightly Changelog
 
-Create one auditable changelist from a published nightly tag to the exact commit being built. Keep the committed Markdown snapshot in `docs/releases/` and use the generator in this skill for future GitHub release notes.
+Create short, human-facing notes for the exact commit being built. Keep the committed Markdown snapshot in `docs/releases/` and use the generator in this skill for future GitHub Release bodies.
 
 ## Workflow
 
@@ -28,15 +28,14 @@ Create one auditable changelist from a published nightly tag to the exact commit
      --from-ref latest \
      --to-ref HEAD \
      --release-date 2026-08-02 \
-     --release-tag nightly-20260802T000000Z \
      --output docs/releases/nightly-20260802.md
    ```
 
-   The script groups non-merge commits by their conventional type, links every item to GitHub, records the exact source range, and includes install instructions suitable for a GitHub Release. It does not inspect or modify source files.
+   The default format emits the standalone changelog with all non-merge changes since the previous nightly. The `release-notes` format emits only platform download/install instructions, a brief autoupdater availability note, a prompt for an AI agent to use the installed documentation, skills, and examples to build a mission, and a changelog link. It does not inspect or modify source files.
 
-4. Review the generated list against `git log <base>..<target>`. Keep commit wording factual. Add a short hand-written highlights section only when it is supported by the linked commits; do not claim runtime validation from commit subjects.
+4. Review the standalone changelog for the complete previous-nightly change range. Review release notes separately for correct installer names, concise wording, the brief autoupdater note, and a working changelog link. Do not add updater mechanics or claim runtime validation to the GitHub release body.
 
-5. Add or update the release workflow only in `.github/workflows/nightly.yml`. The release job must fetch timestamped tags, generate notes from the exact `github.sha`, and publish those notes with the artifacts. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
+5. Add or update the release workflow only in `.github/workflows/nightly.yml`. The release job must fetch timestamped tags, generate the GitHub body with `--format release-notes` from the exact `github.sha`, and publish those notes with the artifacts. Keep the detailed changelog output in its separate `docs/releases/` snapshot; never pass that output as the GitHub release body. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
 
 6. Validate without Rust edits:
 
@@ -52,10 +51,12 @@ Create one auditable changelist from a published nightly tag to the exact commit
 ## Output Contract
 
 - Store committed snapshots at `docs/releases/nightly-YYYYMMDD.md`.
-- State the previous nightly tag, target commit, source range, and generated commit count.
-- Group changes under `Features`, `Bug fixes`, `Performance & architecture`, `Tests & verification`, and `Docs, assets & tooling`.
-- Omit merge commits from item lists to avoid duplicate release notes; retain the merge-inclusive range in the compare link.
-- Keep local uncommitted work out of the release range and explicitly identify it as unshipped.
-- Separate generated change evidence from runtime/API/Actions verification.
+- Generate changelog snapshots with the default format; generate GitHub release bodies with `--format release-notes`.
+- Include exactly the four supported human installer names.
+- Mention that the built-in autoupdater can download the latest nightly build.
+- Include the short mission-building prompt for the user's favorite AI agent.
+- Include all non-merge changes since the previous timestamped nightly in the standalone changelog.
+- Link the exact source range from the release body without copying its changes into that body.
+- Keep updater feeds, updater mechanics, verification claims, and worktree details out of the human-facing release body.
 
 The generator is intentionally dependency-free beyond Python 3 and Git. Keep the logic deterministic so a rerun over the same refs produces the same changelist.

@@ -6,9 +6,11 @@ ROOT = Path(__file__).parents[2]
 
 
 class NightlyReleaseContractTests(unittest.TestCase):
-    def test_human_and_updater_releases_have_separate_immutable_versions(self) -> None:
+    def test_human_release_keeps_updater_details_out_of_release_notes(self) -> None:
         workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
 
+        self.assertIn("- cron: '0 22 * * *'", workflow)
+        self.assertNotIn("- cron: '0 2 * * *'", workflow)
         self.assertIn("LunCoSim/lunco-sim-updates", workflow)
         self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
         self.assertIn("--draft", workflow)
@@ -29,11 +31,21 @@ class NightlyReleaseContractTests(unittest.TestCase):
             updates_release_edit : updates_release_edit + 260
         ]
         self.assertIn("--latest=false", updates_release_block)
-        self.assertIn("LunCoSim-Linux-x86_64.AppImage", workflow)
-        self.assertIn("Windows x86_64", workflow)
-        self.assertIn("macOS", workflow)
-        self.assertIn("Download update", workflow)
-        self.assertIn("Install and restart", workflow)
+        release_notes_start = workflow.index(
+            "python3 skills/nightly-changelog/scripts/generate_changelog.py"
+        )
+        release_notes_end = workflow.index(
+            "# Check for an existing immutable traceability tag", release_notes_start
+        )
+        release_notes_block = workflow[release_notes_start:release_notes_end]
+        self.assertNotIn("Download update", release_notes_block)
+        self.assertNotIn("Install and restart", release_notes_block)
+        self.assertNotIn("Settings → Updates", release_notes_block)
+        self.assertNotIn("Velopack update", release_notes_block)
+        self.assertNotIn("cat >> release_notes.md", release_notes_block)
+        self.assertIn("--format release-notes", release_notes_block)
+        self.assertNotIn("Changes since previous nightly", release_notes_block)
+        self.assertIn("--output release_notes.md", release_notes_block)
         self.assertNotIn("nightly-updates", workflow)
         self.assertNotIn("--clobber", workflow)
 

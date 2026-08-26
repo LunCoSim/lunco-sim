@@ -9,7 +9,7 @@
 # feeds and packages are published under the same immutable version tag in
 # `LunCoSim/lunco-sim-updates`.
 #
-# Trigger: every night at 02:00 UTC, or manually from the Actions tab.
+# Trigger: every night at 22:00 UTC, or manually from the Actions tab.
 #   https://github.com/LunCoSim/lunco-sim/actions/workflows/nightly.yml
 #
 # Each OS job downloads the cache assets LunCoSim needs, builds it, and
@@ -22,7 +22,7 @@ name: Nightly Builds
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       make_release:
@@ -308,30 +308,9 @@ jobs:
             --from-ref latest \
             --to-ref "${{ github.sha }}" \
             --release-date "$RELEASE_DATE" \
-            --release-tag "$RELEASE_TAG" \
+            --format release-notes \
             --repo-url "$REPO_URL" \
             --output release_notes.md
-
-          cat >> release_notes.md <<'EOF'
-
-          ### Updating the desktop installers
-
-          Download exactly one installer matching your platform:
-          `LunCoSim-Windows-x86_64-Setup.exe`,
-          `LunCoSim-macOS-Apple-Silicon.pkg`,
-          `LunCoSim-macOS-Intel.pkg`, or
-          `LunCoSim-Linux-x86_64.AppImage`. LunCoSim checks the matching update
-          feed once at startup. When a new version is available, the red
-          clickable status-bar notice offers **Download update** and reports
-          its percentage; click **Install and restart** when ready. The
-          same actions are available in **Settings → Updates**. Launch Windows
-          from its installed shortcut, macOS from the installed `.app`, and
-          Linux from the same writable AppImage. Source builds and ordinary
-          source archives do not participate in this update flow.
-
-          See the [repository README](${{ github.server_url }}/${{ github.repository }}) for source builds and
-          [report issues](${{ github.server_url }}/${{ github.repository }}/issues) for problems.
-          EOF
 
           # Check for an existing immutable traceability tag before asking the
           # Release API to create it. A rerun must use a new release tag rather

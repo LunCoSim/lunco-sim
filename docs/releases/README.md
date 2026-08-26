@@ -11,6 +11,9 @@ uncommitted work is deliberately excluded.
 - Previous: [Nightly 2026-08-02](nightly-20260802.md) — `nightly-20260731T115555Z..4b46c0877224960e60652023f26005c72436c2d0`
 
 Future snapshots are generated with
-`skills/nightly-changelog/scripts/generate_changelog.py`. The manual nightly
-workflow uses the same generator for the GitHub Release body, so the published
-release notes and the repository record follow one format.
+`skills/nightly-changelog/scripts/generate_changelog.py`. Each generated note
+keeps the GitHub Release body short: download/install guidance, an AI-agent
+mission prompt, and a link to the separate changelog. The changelog file lists
+all changes since the previous nightly. The nightly workflow uses the
+`release-notes` format, so this change list is not embedded in the GitHub
+Release page.
