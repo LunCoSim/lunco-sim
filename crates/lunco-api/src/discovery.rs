@@ -3,10 +3,36 @@
 use crate::queries::{ApiQueryRegistry, ApiVisibility};
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 use bevy::prelude::*;
-use bevy::reflect::{TypeInfo, TypeRegistry};
+use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
+
+/// True when a type registration is an externally callable LunCo command.
+///
+/// This is the predicate shared by discovery and dispatch. Keeping it here
+/// prevents the executor from accepting an arbitrary reflected event that is
+/// not part of the public command surface.
+pub fn is_api_command(registration: &TypeRegistration, visibility: Option<&ApiVisibility>) -> bool {
+    let info = registration.type_info();
+    let is_marked_command = matches!(
+        info,
+        TypeInfo::Struct(struct_info)
+            if struct_info
+                .get_attribute::<lunco_core::ApiCommandMarker>()
+                .is_some()
+    );
+    if !is_marked_command
+        || registration
+            .data::<bevy::ecs::reflect::ReflectEvent>()
+            .is_none()
+    {
+        return false;
+    }
+    let short_name = info.type_path_table().short_path();
+    !visibility.is_some_and(|v| v.is_hidden(short_name))
+}
 
 /// Discover LunCo commands from the type registry.
-/// Filters to only types from `lunco_*` crates that have `ReflectEvent`.
+/// Filters to only types emitted by the `#[Command]` macro that have
+/// `ReflectEvent`.
 /// Hidden commands (per [`ApiVisibility`]) are filtered out — they remain
 /// reflectable and dispatchable inside the app, but external API
 /// consumers see them as if they did not exist.
@@ -16,31 +42,18 @@ pub fn discover_commands(
     type_registry: &TypeRegistry,
     visibility: Option<&ApiVisibility>,
 ) -> Vec<CommandSchema> {
-    type_registry
+    let mut commands: Vec<CommandSchema> = type_registry
         .iter()
         .filter_map(|reg| {
             let info = reg.type_info();
-            if !matches!(info, TypeInfo::Struct(_)) {
+            if !is_api_command(reg, visibility) {
                 return None;
             }
-            reg.data::<bevy::ecs::reflect::ReflectEvent>()?;
             let struct_info = match info {
                 TypeInfo::Struct(s) => s,
                 _ => return None,
             };
             let short_name = info.type_path_table().short_path().to_string();
-            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") {
-                return None;
-            }
-            let full_path = info.type_path_table().path();
-            if !full_path.contains("lunco_") {
-                return None;
-            }
-            // Visibility filter — last gate before the command becomes
-            // part of the externally-advertised schema.
-            if visibility.is_some_and(|v| v.is_hidden(&short_name)) {
-                return None;
-            }
             let fields: Vec<FieldSchema> = struct_info
                 .iter()
                 .map(|f: &bevy::reflect::NamedField| FieldSchema {
@@ -53,7 +66,9 @@ pub fn discover_commands(
                 fields,
             })
         })
-        .collect()
+        .collect();
+    commands.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    commands
 }
 
 /// Discover data-returning query providers registered by the runtime.
@@ -90,6 +105,15 @@ impl Plugin for ApiDiscoveryPlugin {
 mod tests {
     use super::*;
 
+    #[lunco_core::Command(default)]
+    struct PluginCommand {
+        value: u32,
+    }
+
+    #[derive(Event, Reflect, Clone, Debug)]
+    #[reflect(Event)]
+    struct ReflectedEvent;
+
     #[test]
     fn test_discovery_runs() {
         let mut app = App::new();
@@ -97,5 +121,22 @@ mod tests {
         let schema = discover_schema(app.world());
         // Schema should not crash; may be empty
         let _ = schema;
+    }
+
+    #[test]
+    fn command_marker_is_the_authoritative_api_boundary() {
+        let mut registry = TypeRegistry::new();
+        registry.register::<PluginCommand>();
+        registry.register::<ReflectedEvent>();
+
+        let commands = discover_commands(&registry, None);
+
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["PluginCommand"]
+        );
     }
 }

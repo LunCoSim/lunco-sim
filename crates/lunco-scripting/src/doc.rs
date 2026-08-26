@@ -40,7 +40,7 @@ pub struct ScriptDocument {
     /// (always-compiled) module needs no `serde_json` dep.
     pub params: String,
     /// Canonical asset id this script was loaded from (`twin://ep1/main.rhai`),
-    /// or `None` when the source is not file-backed (inline USD `lunco:script`,
+    /// or `None` when the source is not file-backed (inline USD `info:sourceCode`,
     /// a `RunScenario` string, a generated timeline executor).
     ///
     /// This is the script's LOCATION, which is a different thing from

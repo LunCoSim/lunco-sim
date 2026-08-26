@@ -214,6 +214,7 @@ impl Plugin for UsdBevyPlugin {
             .init_asset::<UsdSourceText>()
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
+            .register_type::<lunco_core::UsdPrimKind>()
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
             .register_type::<camera_track::CameraTrack>()
@@ -1046,6 +1047,7 @@ fn instantiate_usd_prim_from_stage(
         let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
             return;
         };
+        project_usd_prim_kind(reader, &sdf_path, entity, commands);
 
         // M1 identity (Ph1). Two regimes:
         //
@@ -1841,6 +1843,22 @@ fn project_catalog_entry_id(
         commands
             .entity(entity)
             .try_insert(lunco_core::CatalogEntryId(entry_id));
+    }
+}
+
+/// Project the standard USD kind token used for identity/category reporting.
+/// This read stays on the composed stage and follows references and variants
+/// exactly like the visual projection.
+fn project_usd_prim_kind(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    entity: Entity,
+    commands: &mut Commands,
+) {
+    if let Some(kind) = reader.kind(path).filter(|kind| !kind.is_empty()) {
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::UsdPrimKind(kind));
     }
 }
 
@@ -3962,6 +3980,14 @@ fn attach_programs(
     {
         programs.push(owner.clone());
     }
+    if programs.len() > 1 {
+        warn!(
+            "[usd] {} has {} executable LunCoProgramAPI children; one program per owner is the current runtime contract, so none was attached",
+            owner.as_str(),
+            programs.len()
+        );
+        return;
+    }
     for child in programs {
         // A program that NAMES its implementation rather than supplying it.
         //
@@ -4042,6 +4068,8 @@ fn attach_programs(
             commands
                 .entity(entity)
                 .try_insert(lunco_core::ScriptParams(params));
+        } else {
+            commands.entity(entity).remove::<lunco_core::ScriptParams>();
         }
 
         // Remember WHICH program this scenario came from. The script runs for the

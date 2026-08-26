@@ -47,7 +47,8 @@ that enum and the maintained `lunco-behavior` node constructors.
 
 Production scripts return a tree from `fn task(me)`. The native kernel owns the
 cursor, dwell timestamps, event delivery, and terminal status. A production
-script does not implement a fixed-tick `on_tick` loop. `fn mission(me)` is a
+script normally does not implement a fixed-tick `on_tick` loop. An exceptional
+`on_tick` may observe or apply discrete fixed-step policy, while `fn mission(me)` is a
 separate objective/checkpoint policy and may run beside the task.
 
 ```rhai

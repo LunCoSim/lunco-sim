@@ -156,7 +156,7 @@ prim applies `LunCoProgramAPI` in place — see
 
 ## Decision 2 — the PortRegistry is the ONE input-write path
 
-`SetModelInput`, `SetPort`, rhai `set(id,name,v)`, Python, and wires **all
+`SetModelInput`, `SetPorts`, rhai `set(id,name,v)`, Python, and wires **all
 converge** on `SimComponent.inputs` for a cosim'd entity — the cosim value *is* the
 value everyone reads. `sync_modelica_inputs` copies `SimComponent.inputs →
 ModelicaModel.inputs` every tick, so a **direct `ModelicaModel.inputs` write is

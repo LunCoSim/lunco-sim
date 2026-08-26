@@ -2672,6 +2672,7 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
     fn name(&self) -> &'static str {
         "GeneratedModelicaSource"
     }
+
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let wanted = params
             .get("network_root")
@@ -4072,7 +4073,7 @@ mod tests {
             .expect("battery synthesis unit");
         let solver_name = format!(
             "{}.{}.soc_out",
-            unit_instance_identifier(battery_unit.name.as_str(), 0),
+            battery_unit.instance,
             instance_identifier("/Rig/Electrical", "/Rig/Battery").unwrap(),
         );
         let internal = layout
@@ -4098,11 +4099,7 @@ mod tests {
             .iter()
             .find(|unit| unit.component_paths.iter().any(|path| path == "/Rig/Motor"))
             .expect("motor synthesis unit");
-        let motor_solver_name = format!(
-            "{}.{}",
-            unit_instance_identifier(motor_unit.name.as_str(), 0),
-            motor_alias
-        );
+        let motor_solver_name = format!("{}.{}", motor_unit.instance, motor_alias);
         assert_eq!(
             layout.exposure(&motor_solver_name),
             lunco_signal::SignalExposure::Public,

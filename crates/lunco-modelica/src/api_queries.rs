@@ -38,8 +38,9 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentDiagnostics;
 
 /// Plugin that registers the [`ApiQueryProvider`]s exposed by
-/// `lunco-modelica`. Wired into [`crate::ui::ModelicaUiPlugin`] when
-/// the `lunco-api` feature is on.
+/// `lunco-modelica`. Wired into [`crate::ModelicaCorePlugin`] when the
+/// `lunco-api` feature is on, so headless and UI hosts expose the same
+/// providers.
 pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
@@ -68,8 +69,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
         registry.register(FindModelProvider);
-        registry.register(SetModelInputProvider);
-        registry.register(CopyShareLinkProvider);
+        registry.register(GetShareLinkProvider);
     }
 }
 
@@ -1184,20 +1184,20 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
     }
 }
 
-// ─── CopyShareLink ────────────────────────────────────────────────────
+// ─── GetShareLink ────────────────────────────────────────────────────
 //
-// The UI verb (File ▸ Copy Share Link) copies the link to the clipboard
-// via the `CopyShareLink` command observer in `crate::model_share`. Over
-// HTTP there's no clipboard, so the same name is served here as a query
-// that RETURNS the link. Optional `doc` param; defaults to the active
-// document. Shares the wire format + URL builder with the UI path
-// (`crate::model_share::share_url`), so the two can't drift.
+// `CopyShareLink` is the interactive command: it copies the active model's
+// URL to the clipboard. The API's read operation has its own name so the
+// command and query namespaces cannot collide; it returns the URL without
+// requiring a clipboard. Optional `doc` param; defaults to the active
+// document. Both paths share the wire format + URL builder
+// (`crate::model_share::share_url`), so they can't drift.
 
-struct CopyShareLinkProvider;
+struct GetShareLinkProvider;
 
-impl ApiQueryProvider for CopyShareLinkProvider {
+impl ApiQueryProvider for GetShareLinkProvider {
     fn name(&self) -> &'static str {
-        "CopyShareLink"
+        "GetShareLink"
     }
 
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
@@ -1206,7 +1206,7 @@ impl ApiQueryProvider for CopyShareLinkProvider {
         let Some(doc_id) = doc_id else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
-                "CopyShareLink: no `doc` given and no active document".to_string(),
+                "GetShareLink: no `doc` given and no active document".to_string(),
             );
         };
         let registry = world.resource::<ModelicaDocumentRegistry>();
@@ -1710,64 +1710,6 @@ fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
         return Some(0.3);
     }
     None
-}
-
-// ─── SetModelInput (spec 033 P2 — error-reporting variant) ─────────────
-//
-// Wraps the same `apply_set_model_input` mutation the
-// `SetModelInput` Reflect-event observer uses, but returns a
-// structured `{ok, error?}` payload instead of fire-and-forget. The
-// executor's provider check runs before reflect dispatch, so an API
-// caller hitting `command="SetModelInput"` lands here; in-process
-// triggers (GUI panels, tests) keep going through the Reflect event.
-// Both paths converge on the shared mutation helper, so they can't
-// drift.
-
-struct SetModelInputProvider;
-
-impl ApiQueryProvider for SetModelInputProvider {
-    fn name(&self) -> &'static str {
-        "SetModelInput"
-    }
-
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        // Wire-format mirror of the Reflect event:
-        // `{ doc: u64, name: String, value: f64 }`. `doc == 0` means
-        // "active document" — same convention the event uses. We
-        // accept it as `u64` over the wire and wrap into the typed
-        // `DocumentId` immediately so the rest of the call site
-        // doesn't think in raw integers.
-        let doc = lunco_doc::DocumentId(params.get("doc").and_then(|v| v.as_u64()).unwrap_or(0));
-        let Some(name) = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-        else {
-            return err_missing_field("name");
-        };
-        let Some(value) = params.get("value").and_then(|v| v.as_f64()) else {
-            return err_missing_field("value");
-        };
-
-        match crate::model_commands::apply_set_model_input(world, doc, &name, value) {
-            Ok(resolved_doc) => ApiResponse::ok(serde_json::json!({
-                "ok": true,
-                "doc": resolved_doc.raw(),
-                "name": name,
-                "value": value,
-            })),
-            Err(e) => {
-                use crate::model_commands::SetModelInputError;
-                let code = match e {
-                    SetModelInputError::NoActiveDocument
-                    | SetModelInputError::NoLinkedEntity { .. }
-                    | SetModelInputError::EntityMissingModel { .. } => ApiErrorCode::EntityNotFound,
-                    SetModelInputError::UnknownInput { .. } => ApiErrorCode::DeserializationError,
-                };
-                ApiResponse::error(code, e.message())
-            }
-        }
-    }
 }
 
 // ─── Provider helpers ──────────────────────────────────────────────────

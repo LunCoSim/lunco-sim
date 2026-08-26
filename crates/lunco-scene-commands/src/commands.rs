@@ -3400,6 +3400,9 @@ impl Plugin for SpawnCommandPlugin {
         // The READ verb for the same entities. Registered here so any binary with
         // the scene verbs answers `QueryEntity` too — the headless server included.
         crate::entity_query::register(app);
+        // SpawnEntity consumes an entry id from this catalog; expose the exact
+        // discovered catalog to scripting and API clients from its owner.
+        crate::catalog::register_query(app);
         // The AUTHORED read beside the spawned one: composed USD attributes, so
         // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
         crate::usd_prim_query::register(app);

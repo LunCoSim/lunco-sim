@@ -4,7 +4,7 @@
 //! [`decode`](crate::model_share::decode) /
 //! [`share_url`](crate::model_share::share_url)) are egui-free core in
 //! [`crate::model_share`] — the headless HTTP API reuses them via the
-//! `CopyShareLink` query provider. What lives here is the *interactive* half:
+//! `GetShareLink` query provider. What lives here is the *interactive* half:
 //! the clipboard command observer and the wasm boot-time loader, both of which
 //! touch UI surfaces (console, the `CreateNewScratchModel` command) and a
 //! workbench event. A `--no-ui` server doesn't install this.
@@ -49,9 +49,8 @@ fn active_share_url(world: &mut World) -> Option<String> {
 }
 
 /// `CopyShareLink` handler: copy the active model's share URL to the OS /
-/// browser clipboard. The HTTP API exposes the same verb as a query that
-/// *returns* the URL instead (see `api_queries::CopyShareLinkProvider`),
-/// since a headless server has no clipboard.
+/// browser clipboard. The HTTP API exposes the read-only `GetShareLink` query
+/// that *returns* the URL instead, since a headless server has no clipboard.
 #[on_command(CopyShareLink)]
 fn on_copy_share_link(trigger: On<CopyShareLink>, mut commands: Commands) {
     commands.queue(|world: &mut World| {

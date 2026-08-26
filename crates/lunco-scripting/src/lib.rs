@@ -326,7 +326,7 @@ impl Plugin for LunCoScriptingPlugin {
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
         }
-        // `.rhai` source asset loader — backs `lunco:scriptPath` (file-referenced
+        // `.rhai` source asset loader — backs `info:sourceAsset` (file-referenced
         // scenarios). It belongs to the Rhai feature because its discovery and
         // import registry are owned by `lunco-assets`.
         #[cfg(feature = "rhai")]
@@ -494,13 +494,13 @@ impl Plugin for LunCoScriptingPlugin {
             app.add_systems(
                 PreUpdate,
                 (
-                    // File-referenced scenarios (lunco:scriptPath): load the .rhai
+                    // File-referenced scenarios (`info:sourceAsset`): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
                     // Runs before attach so the loaded source attaches in this
                     // pre-fixed-step boundary once the asset is ready.
                     commands::resolve_embedded_scenario_paths,
                     // USD-embedded scenarios: attach any the loader stamped with
-                    // EmbeddedScenarioSource (lunco:script on the prim) so scene-
+                    // EmbeddedScenarioSource (`info:sourceCode` on the prim) so scene-
                     // authored scenarios run on spawn.
                     commands::attach_embedded_scenarios,
                 )

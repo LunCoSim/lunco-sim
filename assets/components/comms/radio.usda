@@ -33,7 +33,7 @@
 #         float inputs:tx_power_w = 20000.0
 #     }
 #
-# They are inputs rather than `parameter Real` for a second reason: SetPort can turn
+# They are inputs rather than `parameter Real` for a second reason: SetPorts can turn
 # them on a LIVE link, so tx power is a knob, not a rebuild.
 #
 # ── The class wire is the one thing to check ────────────────────────────────────

@@ -17,7 +17,7 @@ projections of one composed USD design.
 | Actuator allocation | Generic projection + reusable Modelica allocator | USD actuator geometry is factorized once; `LunCo.Actuation.WrenchAllocator` evaluates normalized valve demands at runtime |
 | Applied force and torque | Avian projection | Each physical actuator applies force at its authored local mount and direction, so adding an actuator requires no vehicle-specific Rust code |
 | Flame and RCS visuals | USD render wiring | Flame throttle/activity is connected to the corresponding Modelica output; no script mirrors actuator state |
-| Mission sequencing | Rhai | Scenario orchestration and event policy only; no continuous controller and no `on_tick` control loop |
+| Mission sequencing | Rhai | Scenario orchestration and event policy; exceptional fixed-step `on_tick` may handle sampled/discrete policy, never continuous equations |
 
 Built-in network ownership is derived from typed USD roles. A collection whose
 members apply `LunCoProgramAPI` is an acausal Modelica network; a collection

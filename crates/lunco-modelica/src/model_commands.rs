@@ -2,16 +2,45 @@
 //! headless API server.
 //!
 //! These carry no egui — they read document/registry/runner state and mutate a
-//! `ModelicaModel` — but used to live under `ui::commands`. A headless Modelica
-//! compile/run server (`lunica --no-ui`, `lunco-usd-sim` on a server) needs
-//! `apply_set_model_input` (the `SetModelInput` API command) and the simulation-
-//! bounds resolution, so they belong in the core, not behind the `ui` feature.
-//! The egui command *structs*/observers that wrap them stay in `ui::commands`.
+//! `ModelicaModel`. The reflected `SetModelInput` command and its shared
+//! observer also live here, so every host uses the same API command path.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::DocumentId;
 
 use crate::state::ModelicaDocumentRegistry;
+
+/// Push a runtime input value into a compiled model's stepper.
+///
+/// This command is owned by the UI-free Modelica core, so the same reflected
+/// command is available to headless API hosts, the workbench, Rhai, and any
+/// future transport. Its observer queues the exclusive port/model write using
+/// the same helper as the canvas path.
+#[Command(default)]
+pub struct SetModelInput {
+    /// Document id; zero selects the documented active-document default.
+    pub doc: DocumentId,
+    /// Declared Modelica input name.
+    pub name: String,
+    /// Runtime input value.
+    pub value: f64,
+}
+
+#[on_command(SetModelInput)]
+fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
+    let cmd = trigger.event();
+    let doc = cmd.doc;
+    let name = cmd.name.clone();
+    let value = cmd.value;
+    commands.queue(move |world: &mut World| {
+        if let Err(error) = apply_set_model_input(world, doc, &name, value) {
+            bevy::log::warn!("[SetModelInput] {}", error.message());
+        }
+    });
+}
+
+register_commands!(on_set_model_input);
 
 // ─── SetModelInput ───────────────────────────────────────────────────────────
 

@@ -25,11 +25,12 @@ description: >
 # Authoring scenarios
 
 A **scenario** is a rhai program attached to an entity. Production scenarios are
-event-driven policy and must not add an `on_tick` polling loop. Continuous rover
+event-driven policy by default. An `on_tick` hook is supported in production as
+an exceptional fixed-step observer or discrete controller, but it must not own
+continuous equations or ordinary mission sequencing. Continuous rover
 dynamics remain in fixed-step physics/Modelica. Test scenarios under
-`assets/scenarios/tests/` are the deliberate exception: their `on_tick` may
-sample live telemetry and advance a bounded verdict because observing the
-running simulation is the test.
+`assets/scenarios/tests/` may use the same hook to sample live telemetry and
+advance a bounded verdict.
 
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it
@@ -80,7 +81,7 @@ fn mission(me)        { [objective("survey", #{})]; }       // optional
 fn on_start(me)       { this.i = 0; }                       // once, after (re)compile
 fn on_event(me, evt)  { if evt.name == "GO" { /* … */ } } // event-driven policy
 fn on_stop(me)        { brake(me); }                       // hot-reload / detach / despawn
-// Test-only observer, only under assets/scenarios/tests/:
+// Exceptional sampled/discrete observer (production or test):
 // fn on_tick(me) { this.samples.push(query("rover_status", #{id: me})); }
 ```
 
@@ -99,7 +100,7 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | Verb | Purpose |
 |---|---|
 | `cmd(name, #{params})` | **WRITE** — fire any `#[Command]` by name; returns `#{id,ok,data,error}` (`data` carries e.g. a spawned gid) |
-| `query(name, #{params})` | **READ** — any query provider (Raycast, Nearest, GroundHeight, …) |
+| `query(name, #{params})` | **READ** — any read-only query provider (Raycast, Nearest, GroundHeight, …) |
 | `get(id,"Comp.field")` / `set(id,"Comp.field",v)` | reflected component read / write |
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
 | `find(name)` / `name(id)` / `parent`/`children` | entity lookup + hierarchy |
@@ -220,7 +221,8 @@ Rust, and move authored mission or vehicle outcomes into a discovered
 
 ### Keep test hooks below Rhai's expression-complexity ceiling
 
-Test-only `on_tick` is a bounded observer, not a production mission driver:
+An exceptional `on_tick` is a bounded fixed-step hook, not a replacement for
+the task/event machinery:
 
 - one helper per phase;
 - one sampler and one accumulator;
@@ -406,7 +408,7 @@ libraries → `<twin>/tools/*.rhai`.
 
 1. Decide the shape: sequenced (`task`), objective-tracked (`mission`), or
    reactive (`on_event`). Use a Behavior Tree for reactive AI. Use `on_tick`
-   only for a bounded test observer in `assets/scenarios/tests/`; rover
+   only for a bounded sampled/discrete production or test hook; rover continuous
    control/dynamics belong to native fixed-step systems or Modelica.
 2. Return a task tree; pass task configuration into closures. Keep lifecycle
    state on `this` only where a hook genuinely needs it.

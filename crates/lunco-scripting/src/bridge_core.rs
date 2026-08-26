@@ -312,6 +312,8 @@ impl WorldScope {
     pub fn enter(world: &mut World) -> Self {
         WORLD_PTR.with(|p| p.set(world as *mut World));
         SCRIPT_AUTHORITY.with(|a| a.set(None));
+        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
+        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
         WorldScope
     }
 }
@@ -365,6 +367,10 @@ pub fn take_script_rejects() -> Vec<String> {
 /// These operations mutate ECS directly rather than dispatching a command, so
 /// they name their capability explicitly at the owning reflection seam.
 pub mod capability {
+    /// Write a live co-simulation input port. Unlike `SetPorts`, the generic
+    /// `set()` fallback is a raw write and does not create a persistent hold;
+    /// it is therefore still an owned mutation, not a read.
+    pub const PORT_MUTATE: &str = "ScriptPortMutate";
     /// Structurally mutate a target entity from a script (`add` / `remove` a
     /// component, `despawn`). Registered `OWNED_CONTROL` (see
     /// `commands::register_command_policies`) so a remote script may only
@@ -379,6 +385,27 @@ pub mod capability {
     /// Replace or remove an installed policy hook from a script. Hook changes
     /// alter authorization globally, so remote scripts need Operator authority.
     pub const POLICY_MUTATE: &str = "ScriptPolicyMutate";
+}
+
+/// Gate direct script mutations that do not pass through a reflected command.
+///
+/// A client-scoped script is allowed to issue an explicitly client-local
+/// command through `cmd()`, or an ownership-gated predictive command such as
+/// `SetPorts`. Direct reflection has no forwarding or
+/// prediction path, so they are denied for client-local execution. This keeps
+/// `set`, structural verbs, and raw port writes from silently changing
+/// only one peer.
+pub fn enforce_script_mutation(
+    world: &World,
+    capability: &str,
+    target_gid: Option<u64>,
+) -> Result<(), String> {
+    if script_is_client_local() {
+        return Err(format!(
+            "'{capability}' denied: direct script mutations are not available from a client-scoped script; use an allowed typed command"
+        ));
+    }
+    enforce_script_authority(world, capability, target_gid)
 }
 
 /// The §3.4 authority gate, shared by [`cmd`] and the structural verbs so every
@@ -653,7 +680,7 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B
 //
 // The co-sim **port registry** ([`lunco_core::ports::PortRegistry`]) is the one
 // surface every participant exchanges scalars through — the wire engine, the API
-// (`GetPort`/`SetPort`), the inspector, and (here) scripts. A script reaches
+// (`GetPort`/`SetPorts`), the inspector, and (here) scripts. A script reaches
 // Modelica variables, avian rigid-body state (`mass`, `inertia_*`, `com_*`,
 // `force_*`, `quat_*`, …), joint angles, and hardware ports by the SAME path the
 // simulation uses — language-neutral, so rhai and python share it.
@@ -670,11 +697,14 @@ pub fn read_port(gid: u64, name: &str) -> Option<f64> {
     .flatten()
 }
 
-/// Write a co-sim port input on entity `gid` — the same path `SetPort` and wires
+/// Write a co-sim port input on entity `gid` — the same path `SetPorts` and wires
 /// use. `true` if a writable input port of that name existed. Strict: never
 /// creates a port (an unknown name returns `false`).
 pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
     with_world(|world| {
+        if enforce_script_mutation(world, capability::PORT_MUTATE, Some(gid)).is_err() {
+            return false;
+        }
         let Some(entity) = resolve_entity(world, gid) else {
             return false;
         };
@@ -804,7 +834,7 @@ pub fn get_field<B: ValueBuilder>(b: &B, gid: u64, path: &str) -> Option<B::Valu
 }
 
 /// `param(gid, key)` — read a per-prim numeric script parameter from the
-/// entity's [`lunco_core::ScriptParams`] (authored in USD as `lunco:params`). A
+/// entity's [`lunco_core::ScriptParams`] (authored in USD as `lunco:param:<key>`). A
 /// HashMap lookup — the typed, fast way for a reusable script to get per-instance
 /// config, vs scanning `name(me)`. `None` if the entity/component/key is absent.
 pub fn script_param(gid: u64, key: &str) -> Option<f64> {
@@ -853,7 +883,8 @@ pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value
 /// `apply`, which writes the backend-native value straight in (`native → reflect`,
 /// no JSON) — symmetric with the `reflect → native` read path. The `reflect_mut`
 /// borrow trips Bevy change-detection, so the edit replicates / re-runs dependent
-/// systems normally. Host-authoritative by construction (scripts run host-only).
+/// systems normally. Host-side scripts may use it when authorized; client-scoped
+/// scripts are denied because this path has no prediction/forwarding contract.
 pub fn set_component_field(
     gid: u64,
     path: &str,
@@ -863,7 +894,7 @@ pub fn set_component_field(
 
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
-        enforce_script_authority(world, capability::FIELD_MUTATE, Some(gid))?;
+        enforce_script_mutation(world, capability::FIELD_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -901,7 +932,7 @@ pub fn set_resource_field(
     let (res, sub) = split_type_path(path);
 
     with_world(|world| -> Result<(), String> {
-        enforce_script_authority(world, capability::SETTING_MUTATE, None)?;
+        enforce_script_mutation(world, capability::SETTING_MUTATE, None)?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -944,8 +975,8 @@ pub fn set_resource_field(
 // ── Verbs: structural mutation ──────────────────────────────────────────────
 //
 // The C/D of CRUD: `set`/`get` are the R/U of *fields*; these change an entity's
-// *structure* — add/remove a component, despawn an entity. Host-authoritative
-// (scripts run host-only). Replication follows the same rule as `set`: a change
+// *structure* — add/remove a component, despawn an entity. Host-side scripts may
+// use it when authorized. Replication follows the same rule as `set`: a change
 // reaches clients only if the affected component is in the replicated set, so
 // `ApiVisibility` curates what is safe to expose. NOTE: there is deliberately no
 // generic `spawn(components)` — runtime spawns replicate by catalog `entry_id`
@@ -967,7 +998,7 @@ pub fn add_component(
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
         // §3.4: same authority gate as `cmd()` — a remote script may restructure
         // only entities its launching session owns (ungated for local launches).
-        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
+        enforce_script_mutation(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -994,7 +1025,7 @@ pub fn add_component(
 pub fn remove_component(gid: u64, comp: &str) -> Result<(), String> {
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
-        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
+        enforce_script_mutation(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg
@@ -1018,16 +1049,17 @@ pub fn remove_component(gid: u64, comp: &str) -> Result<(), String> {
 pub fn despawn_entity(gid: u64) -> Result<(), String> {
     with_world(|world| -> Result<(), String> {
         let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
-        enforce_script_authority(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
+        enforce_script_mutation(world, capability::STRUCTURAL_MUTATE, Some(gid))?;
         world.despawn(entity);
         Ok(())
     })
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
-/// `list_entities()` — `[{ id, name, type, pos, catalog_id }]` for every
-/// registered entity. `catalog_id` is empty for entities that were not created
-/// from the spawn catalog; it is never inferred from the display name.
+/// `list_entities()` — `[{ id, name, type, pos, catalog_id, usd_prim_path,
+/// control_bound, celestial_body }]` for every registered entity. `type` comes
+/// from the projected USD `kind`; it is never inferred from control or physics
+/// components. `catalog_id` is present only for catalog-spawned entities.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         let Some(pairs) = world
@@ -1045,6 +1077,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                 Has<lunco_core::ControlBinding>,
                 Option<&CelestialBody>,
                 Option<&lunco_core::CatalogEntryId>,
+                Option<&lunco_core::UsdPrimKind>,
             )>,
         )> = SystemState::new(world);
         let Some((poses, q_meta)) = state.get(world).ok() else {
@@ -1053,17 +1086,10 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, body, catalog_id) =
-                    q_meta.get(entity).unwrap_or((None, false, None, None));
-                // NOTE: the reported kind string is deliberately unchanged — a lander
-                // accepts commands and has always reported as "rover" here.
-                let kind = if accepts_commands {
-                    "rover"
-                } else if body.is_some() {
-                    "planet"
-                } else {
-                    "unknown"
-                };
+                let (name, accepts_commands, body, catalog_id, usd_kind) = q_meta
+                    .get(entity)
+                    .unwrap_or((None, false, None, None, None));
+                let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
                 let pos = poses
                     .position(entity)
                     .map(|v| vec3_value(b, v.0.x, v.0.y, v.0.z))
@@ -1075,6 +1101,8 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
                         b.string(name.map(|n| n.as_str()).unwrap_or("")),
                     ),
                     ("type".to_string(), b.string(kind)),
+                    ("control_bound".to_string(), b.bool(accepts_commands)),
+                    ("celestial_body".to_string(), b.bool(body.is_some())),
                     (
                         "catalog_id".to_string(),
                         b.string(catalog_id.map(|id| id.0.as_str()).unwrap_or("")),
@@ -1344,6 +1372,7 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 mod tests {
     use super::*;
     use bevy::math::DQuat;
+    use lunco_api::queries::ApiQueryProvider;
     use lunco_core::session::{AuthorityRole, CommandPolicy, UserSession};
 
     #[test]
@@ -1515,5 +1544,51 @@ mod tests {
         assert!(enforce_script_authority(&world, capability::STRUCTURAL_MUTATE, Some(1)).is_ok());
         // …but NOT an entity it does not own (gid 2).
         assert!(enforce_script_authority(&world, capability::STRUCTURAL_MUTATE, Some(2)).is_err());
+    }
+
+    #[test]
+    fn client_scoped_scripts_cannot_use_direct_mutation_paths() {
+        let mut world = World::new();
+        let _scope = WorldScope::enter(&mut world);
+        set_script_client_local(true);
+
+        for capability in [
+            capability::PORT_MUTATE,
+            capability::FIELD_MUTATE,
+            capability::STRUCTURAL_MUTATE,
+            capability::SETTING_MUTATE,
+        ] {
+            let error = enforce_script_mutation(&world, capability, Some(1))
+                .expect_err("client-scoped direct mutation must be rejected");
+            assert!(error.contains("client-scoped"), "{error}");
+        }
+
+        assert!(script_is_client_local());
+    }
+
+    #[test]
+    fn structured_queries_use_the_read_channel() {
+        struct ReadProvider;
+        impl ApiQueryProvider for ReadProvider {
+            fn name(&self) -> &'static str {
+                "ReadProbe"
+            }
+
+            fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+                ApiResponse::ok(serde_json::json!({ "value": 7 }))
+            }
+        }
+
+        let mut world = World::new();
+        let mut registry = ApiQueryRegistry::default();
+        registry.register(ReadProvider);
+        world.insert_resource(registry);
+        let _scope = WorldScope::enter(&mut world);
+
+        assert_eq!(
+            query_raw("ReadProbe", serde_json::json!({})).expect("read provider result")["value"],
+            7
+        );
+        assert!(query_raw("MissingProbe", serde_json::json!({})).is_none());
     }
 }

@@ -51,7 +51,7 @@ model CommsLink
   //
   // A `parameter Real` is invisible to that path and would be frozen at the value
   // below for every radio in every scene. Inputs are also live-tunable through
-  // SetPort, so tx power becomes a knob you can turn against a running link.
+  // SetPorts, so tx power becomes a knob you can turn against a running link.
   input Real tx_power_w = 10.0 "Transmitter output power, W";
   input Real gain_tx_db = 3.0 "Transmit antenna gain, dBi";
   input Real gain_rx_db = 30.0 "Receive antenna gain, dBi (a dish at the far end)";

@@ -4,7 +4,7 @@
 //! A *port* is a named scalar (`f64`) on a participant entity. Modelica variables,
 //! avian rigid-body state, joint angles, the SysML/hardware "nervous system"
 //! ports, and (in future) an imported FMU all present as ports, so that wires,
-//! the API (`ListPorts` / `GetPort` / `SetPort`), the UI inspector, and every
+//! the API (`ListPorts` / `GetPort` / `SetPorts`), the UI inspector, and every
 //! scripting runtime (rhai/python) treat them uniformly — the FMI/SSP contract.
 //!
 //! ## Why this lives in `lunco-core`

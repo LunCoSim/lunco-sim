@@ -3,7 +3,8 @@
 //! # On a struct: `#[Command]`
 //!
 //! Marks a struct as a typed simulation command.
-//! Replaces `Event + Reflect + Clone + Debug`.
+//! Replaces `Event + Reflect + Clone + Debug` and marks the reflected type as
+//! an API command for discovery.
 //!
 //! ```ignore
 //! #[Command]
@@ -56,6 +57,8 @@ use syn::{
 /// - `bevy::Event` — dispatchable on the Bevy command bus.
 /// - `bevy::Reflect` + `#[reflect(Event)]` — ad-hoc dispatch from the
 ///   HTTP API's reflection-based deserializer.
+/// - The reflected `ApiCommandMarker` type attribute — API discovery uses the
+///   same command abstraction for commands defined by external plugins.
 /// - `Clone, Debug`.
 /// - `serde::Serialize, serde::Deserialize` — typed roundtrip for
 ///   journals, network sync, CLI clients, AI-agent flows. Requires the
@@ -190,6 +193,7 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote!(#[reflect(Event)])
     };
+    let api_marker = quote!(#[reflect(@::lunco_core::ApiCommandMarker)]);
 
     // `#[serde(crate = "...")]` tells the serde derive where to find
     // the `serde` crate items it generates references to. Required
@@ -214,6 +218,7 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[allow(missing_docs)]
         #[derive(#(#derives),*)]
         #reflect
+        #api_marker
         #serde_crate_attr
         #serde_default_attr
         #vis struct #name #generics #where_clause {

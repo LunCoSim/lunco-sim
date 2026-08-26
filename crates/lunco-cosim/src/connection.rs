@@ -99,7 +99,7 @@ impl Default for SimConnection {
 ///
 /// Writing an input port directly works only while nothing else drives it. The
 /// moment that port is a wire's target, [`crate::systems::propagate::propagate_connections`]
-/// overwrites it on the next tick: the `SetPort` reported success, the value
+/// overwrites it on the next tick: a raw port write reported success, the value
 /// lasted under 16 ms, and from the caller's side that is indistinguishable from
 /// a port that does not exist. Every "I set the throttle and nothing happened"
 /// report has this shape.

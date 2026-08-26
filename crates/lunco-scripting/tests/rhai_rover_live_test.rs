@@ -1367,13 +1367,13 @@ fn scenario_params_readable_in_hooks() {
 // ── USD-embedded scenarios: scene-authored scenarios run on spawn ───────────
 
 /// An entity stamped with `EmbeddedScenarioSource` (what the USD loader does for
-/// a prim carrying `lunco:script`) is attached as a running scenario, and the
+/// a prim carrying `info:sourceCode`) is attached as a running scenario, and the
 /// marker is consumed.
 #[test]
 fn usd_embedded_scenario_attaches_and_runs() {
     let mut app = build_app();
     let rover = spawn_rover(&mut app);
-    // Simulate lunco-usd-bevy reading `lunco:script` off the prim.
+    // Simulate lunco-usd-bevy reading `info:sourceCode` off the prim.
     app.world_mut()
         .entity_mut(rover)
         .insert(lunco_core::EmbeddedScenarioSource(

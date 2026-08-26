@@ -1644,6 +1644,25 @@ pub struct ModelicaCorePlugin;
 impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
         build_modelica_core(app);
+        // Runtime model-input control is a core command, not a UI command.
+        // Register it here so headless and workbench hosts expose the same
+        // reflected command contract.
+        model_commands::register_all_commands(app);
+        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .register(
+                "SetModelInput",
+                lunco_core::session::CommandPolicy {
+                    min_role: lunco_core::session::AuthorityRole::Operator,
+                    ownership_gated: false,
+                },
+            );
+        // Modelica's structured API providers are domain capability, not UI
+        // capability. Register them in the shared core so headless production
+        // hosts expose the same authoring and simulation surface as the GUI.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(api_queries::ModelicaApiQueriesPlugin);
         // `Exit` — session lifecycle, not a UI command. Registered here so a
         // headless host can shut itself down; see `ui::commands::util`.
         #[cfg(all(feature = "ui", feature = "lunco-api"))]

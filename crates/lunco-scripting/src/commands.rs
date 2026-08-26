@@ -185,7 +185,7 @@ pub(crate) fn attach_rhai_scenario(
     source: String,
     params: String,
     // Canonical asset id this source was loaded from (`twin://ep1/main.rhai`), or
-    // `None` for a source that is not file-backed — an inline USD `lunco:script`,
+    // `None` for a source that is not file-backed — an inline USD `info:sourceCode`,
     // a `RunScenario` string off the wire, a generated timeline executor. `None`
     // is a real, expected state, not a missing value: such a script has no
     // location, so a RELATIVE `import` in it cannot be anchored and must fail
@@ -231,22 +231,14 @@ pub(crate) fn attach_rhai_scenario(
     // `ModuleResolver::resolve` as the importing script's location, which is the
     // anchor a relative `import "shot_camera"` resolves against.
     doc.asset_id = asset_id;
-    // USD-embedded persistence: the LOAD half is done — a prim's `lunco:script`
-    // is read by lunco-usd-bevy into `EmbeddedScenarioSource` and attached by
-    // `attach_embedded_scenarios` below, so scene-authored scenarios run on
-    // spawn.
-    //
-    // TODO(save) — BLOCKED on a USD bridge, not a scripting task: writing a
-    // live-edited scenario back onto its prim means `ApplyUsdOp` /
-    // `SetAttribute(path, "lunco:script", "string", <usd-escaped src>)`, which
-    // edits an EDITABLE document in `DocumentRegistry<UsdDocument>`. But a runtime entity's
-    // `UsdPrimPath` references a read-only `Handle<UsdStageAsset>` (a stage
-    // RECIPE, composed on demand) — there is no mapping from that stage asset to
-    // a savable source document/layer. That asset↔document bridge must be built
-    // in the USD subsystem first. Until then, durable scenarios live as Twin
-    // files (see `crate::timelines` for the same pattern applied to timelines) or
-    // are authored directly in the `.usda` source. Ref: project_tools_architecture
-    // Phase 2 incr #3.
+    // USD-embedded persistence: the LOAD half is done — a prim's
+    // `info:sourceCode` is read by lunco-usd-bevy into `EmbeddedScenarioSource`
+    // and attached by `attach_embedded_scenarios` below, so scene-authored
+    // scenarios run on spawn. The SAVE half belongs to the application USD
+    // command (`lunco-luncosim::SaveScenario`), which owns the stage-asset to
+    // editable-document mapping and authors `info:sourceCode` through
+    // `ApplyUsdOp`. Keeping that write in the USD-facing application seam avoids
+    // a scripting-to-USD dependency and preserves one authoring path.
     // The one insert funnel — attaches a journal recorder when the Twin journal
     // is wired, so this live edit (and every hot-reload SetSource) auto-records.
     registry.insert_document(DocumentId::new(doc_id_raw), doc);
@@ -274,7 +266,7 @@ pub(crate) fn attach_rhai_scenario(
 }
 
 /// LOAD half of USD-embedded scenario persistence: drain entities the USD loader
-/// stamped with [`lunco_core::EmbeddedScenarioSource`] (a `lunco:script`
+/// stamped with [`lunco_core::EmbeddedScenarioSource`] (an `info:sourceCode`
 /// attribute on their prim), attaching each as a running rhai scenario and
 /// removing the marker. Attaches by `Entity` directly — no gid round-trip — so it
 /// works the instant the prim spawns. The loader (`lunco-usd-bevy`) and this
@@ -299,7 +291,7 @@ pub fn attach_embedded_scenarios(
             entity,
             embedded.0.clone(),
             String::new(),
-            // Present only for the FILE-backed path below; an inline `lunco:script`
+            // Present only for the FILE-backed path below; inline `info:sourceCode`
             // authored straight into USD legitimately has no asset id.
             asset_id.map(|id| id.0.clone()),
             true,
@@ -325,7 +317,7 @@ pub fn attach_embedded_scenarios(
 /// for two reasons:
 ///
 /// 1. `EmbeddedScenarioSource` is also stamped by `lunco-usd-bevy` for INLINE
-///    `lunco:script` sources, which have no asset id at all. A second field would
+///    `info:sourceCode` sources, which have no asset id at all. A second field would
 ///    force that construction site (and the tests) to supply a value for
 ///    something that genuinely does not exist, and the natural filler — `""` —
 ///    is exactly the "empty anchor that silently resolves against another root"
@@ -338,7 +330,7 @@ pub fn attach_embedded_scenarios(
 pub struct ScenarioAssetId(pub String);
 
 /// LOAD half for FILE-backed scenarios: entities the USD loader stamped with
-/// [`lunco_core::EmbeddedScenarioPath`] (a `lunco:scriptPath` attribute). Loads
+/// [`lunco_core::EmbeddedScenarioPath`] (an `info:sourceAsset` attribute). Loads
 /// the `.rhai` asset through the `AssetServer` (wasm-safe — no `std::fs`) and,
 /// once ready, swaps the path marker for an [`lunco_core::EmbeddedScenarioSource`]
 /// so [`attach_embedded_scenarios`] runs the normal attach path next. Keeps the
@@ -373,7 +365,7 @@ pub fn resolve_embedded_scenario_paths(
             // scenario script syncs (whole-twin content plane) but fails to load on
             // the peer. Fix: author the ref as a USD `asset` attribute (`@…rhai@`)
             // read through the resolver's `canonicalize`, which anchors it to the
-            // scene's source (like a standard USD payload). Inline `lunco:script` /
+            // scene's source (like a standard USD payload). Inline `info:sourceCode` /
             // `LunCoPolicy` sources are unaffected (they ride the doc).
             info!(
                 "[scripting] loading scenario script `{}` as `{uri}`",
@@ -1020,6 +1012,10 @@ pub(crate) fn register_command_policies(app: &mut App) {
     );
     reg.register(
         crate::bridge_core::capability::FIELD_MUTATE,
+        CommandPolicy::OWNED_CONTROL,
+    );
+    reg.register(
+        crate::bridge_core::capability::PORT_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
     reg.register(

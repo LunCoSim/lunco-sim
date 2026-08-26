@@ -1,6 +1,6 @@
 //! Rhai **behaviour editor** — edit the Rhai script attached to the selected
 //! prim, save it (which hot-reloads the scenario and persists to the prim's
-//! `lunco:script`), and see compile diagnostics with click-to-jump.
+//! `info:sourceCode`), and see compile diagnostics with click-to-jump.
 //!
 //! This is the writable counterpart of the read-only [`CodePanel`](super::code_panel):
 //! it follows the same selection (`SelectedEntities`) and resolves the same
@@ -17,7 +17,7 @@
 //!   DocumentDiagnostics ────────┘                          └─> panel renders it
 //!
 //!   Save & Run ──> RunScenario { source }  (sets live source + hot-reloads)
-//!             └──> SaveScenario            (persists source onto lunco:script)
+//!             └──> SaveScenario            (persists source onto info:sourceCode)
 //! ```
 //!
 //! The buffer is only re-synced from the registry when the selected doc or its
@@ -158,7 +158,7 @@ impl Panel for RhaiEditorPanel {
                 ui.add_enabled_ui(vm.dirty, |ui| {
                     if ui
                         .button("Save & Run")
-                        .on_hover_text("Hot-reload the scenario with these edits and persist them to the prim's lunco:script")
+                        .on_hover_text("Hot-reload the scenario with these edits and persist them to the prim's info:sourceCode")
                         .clicked()
                     {
                         do_save = true;

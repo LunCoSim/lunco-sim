@@ -4,7 +4,7 @@
 //!
 //! Scripts could reach the *spawned result* of a USD prim (`find(path)` →
 //! entity → `world_pos`/`get`) but never the **authored, composed** values behind
-//! it. `param()` reads only the `lunco:params` namespace, so an arbitrary
+//! it. `param()` reads only the `lunco:param:<key>` namespace, so an arbitrary
 //! attribute — `radius`, `lunco:wallThickness`, `points`, `uKnots` — was
 //! unreadable from anything except Rust.
 //!

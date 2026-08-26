@@ -10,8 +10,8 @@
 //!
 //! - a tiny **pure core** ([`encode`] / [`decode`] / [`share_url`]) that
 //!   defines the wire format and is the single source of truth shared by
-//!   the clipboard command, the HTTP API (`CopyShareLink` query
-//!   provider), and the boot-time loader; and
+//!   the clipboard command, the HTTP API (`GetShareLink` query provider),
+//!   and the boot-time loader; and
 //! - the **Bevy integration** ([`ModelSharePlugin`]): an observer for the
 //!   `CopyShareLink` command (copies the link to the clipboard) and, on
 //!   wasm, a startup system that opens whatever model the URL carries.

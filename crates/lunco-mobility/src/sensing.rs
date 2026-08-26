@@ -32,6 +32,7 @@ impl ApiQueryProvider for RaycastProvider {
     fn name(&self) -> &'static str {
         "Raycast"
     }
+
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let (Some(origin), Some(dir_v)) = (parse_vec3(params, "origin"), parse_vec3(params, "dir"))
         else {
@@ -62,6 +63,7 @@ impl ApiQueryProvider for GroundHeightProvider {
     fn name(&self) -> &'static str {
         "GroundHeight"
     }
+
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let (Some(x), Some(z)) = (
             params.get("x").and_then(serde_json::Value::as_f64),

@@ -29,16 +29,17 @@
 //!                          ▼
 //! ┌────────────────────────────────────────────────────────────────┐
 //! │  ECS World                                                     │
-//! │  Typed commands (#[derive(Command)]) · Resources               │
+//! │  Typed commands (#[Command]) · Resources                        │
 //! └────────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! ## Key Design Principles
 //!
 //! - **No hardcoded commands**: Commands are discovered via `AppTypeRegistry`
-//!   reflection. Any `#[derive(Command)]` type is automatically available.
-//! - **No hardcoded entity types**: Schema discovery via `AppTypeRegistry` tells
-//!   clients what components and resources exist at runtime.
+//!   reflection. Any `#[Command]` type registered by a host is automatically
+//!   available.
+//! - **No hardcoded entity types**: entity identity comes from the runtime
+//!   registry; domain-specific reads expose their own typed query providers.
 //! - **Transport-independent**: HTTP is one optional transport (feature-gated).
 //!   The core types and executor know nothing about HTTP.
 //! - **Headless-compatible**: No rendering dependencies. Runs on server-only builds.

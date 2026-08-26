@@ -103,7 +103,7 @@ over collider-derived mass, so **no `NoAuto*` marker is needed**. (Writing `Comp
 directly is wrong: `lunco-usd-avian` inserts a `Mass` override from `physics:mass`,
 and avian recomputes `Computed*` from it each step, clobbering the direct write — this
 was found and fixed during verification.) Overrides are `f32`; principal (diagonal)
-inertia only — off-diagonal left to static USD authoring. Verified: `SetPort
+inertia only — off-diagonal left to static USD authoring. Verified: `SetPorts
 mass/inertia_xx/com_y` all stick on read-back while the lander keeps hovering.
 
 ### G2 (load-time inertia/COM)  **[DONE]**
@@ -273,7 +273,7 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).
   **Verified live** on the headless `luncosim-server`: (A) the USD load-time drive
   holds at `-1.5276` (target `-1.5`; ~0.027 m droop = spring-damper steady-state
-  under load); (B) `SetPort displacement -0.5` → `-0.5276`; (C) `+0.3` → `+0.2716`;
+  under load); (B) `SetPorts displacement -0.5` → `-0.5276`; (C) `+0.3` → `+0.2716`;
   (D) `-5.0` clamps at `-3.0000` (authored `limitLower`). Projection math
   unit-tested (`lunco-cosim` `joint::tests`).
 - **Gotcha (cost a debug loop):** UsdPhysics/Omniverse authors physics scalars as

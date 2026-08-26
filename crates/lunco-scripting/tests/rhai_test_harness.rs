@@ -182,7 +182,7 @@ fn t_report_surfaces_a_failure() {
 }
 
 #[test]
-fn rhai_lint_rejects_production_tick_but_allows_test_tick() {
+fn rhai_lint_warns_on_exceptional_production_tick_and_allows_test_tick() {
     let policy = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/scripting/policy/lint_rhai.rhai"),
@@ -206,6 +206,10 @@ fn rhai_lint_rejects_production_tick_but_allows_test_tick() {
     assert_eq!(
         finding["rule"].clone().into_string().unwrap(),
         "production-rhai-on-tick"
+    );
+    assert_eq!(
+        finding["severity"].clone().into_string().unwrap(),
+        "warning"
     );
 
     let test = r#"

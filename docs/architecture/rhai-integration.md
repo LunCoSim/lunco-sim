@@ -36,8 +36,11 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
 - **USD-embedded scenarios (load)** — a `LunCoProgramAPI` child prim naming a `.rhai`
   (`info:sourceAsset`, or `info:sourceCode` authored in place)
   auto-attaches + runs on spawn.
-- **Host-authoritative gate** — script systems run on Host / Standalone, never on
-  a networked Client (which receives behaviour via replication).
+- **Execution scope** — host/standalone scenarios run authoritatively. A
+  client-scoped scenario may run for local presentation and prediction, but its
+  `cmd()` calls are limited to registered client-local commands or
+  ownership-gated predictive controls; direct reflected writes, structural
+  edits, and policy changes are rejected.
 
 Python scenarios run via `PythonScenarioRuntime` implementing the same
 `ScenarioRuntime` trait; they do not use the retired dictionary bridge.
@@ -76,13 +79,16 @@ fn on_stop(me) { ... }         // optional teardown
 State rule (rhai-specific, important): script `fn`s are **pure** — an indirect
 task helper must receive its configuration as arguments. The native task kernel
 owns the cursor, dwell timing, and event waits; user policy does not maintain a
-second fixed-tick loop or cursor map.
+second fixed-tick loop or cursor map. An exceptional `on_tick` is still
+supported for sampled observation or discrete control and runs once per fixed
+step before the task/mission pass.
 
 ### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
 
 | verb | channel | purpose |
 |------|---------|---------|
 | `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
+| `query(name, #{params})` | read | invoke a read-only structured provider |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
 | `world_forward(id)` → `[x,y,z]` | read | world heading (only read rhai can't derive itself) |
 | `get(id, "Comp.field")` | read | generic reflected component-field read |
@@ -145,7 +151,8 @@ reflected struct and fires it with `ReflectEvent::trigger(world, &dyn Reflect, &
 HTTP and MCP are just two callers of this path.
 
 **Therefore "manipulate everything from rhai" ≠ 90 bindings. It = ONE generic
-bridge** (`cmd()` / `query()`) that reuses the reflect-dispatch path. rhai becomes
+bridge** (`cmd()` / `query()`) that reuses the reflect-dispatch and read-provider
+paths. rhai becomes
 a *third transport*. Every existing command — and every future one — is reachable
 for free, with the same RBAC/authz gate the API already enforces.
 
@@ -161,7 +168,7 @@ Representative commands already covering the user's surface:
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
-| Queries (return data) | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `ReadExposures`, `GetReadiness`, and domain providers (all use the tagged `ExecuteCommand` envelope where applicable) |
+| Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---
 
@@ -214,18 +221,19 @@ synchronously; writes mirror `executor.rs:134-161` (build the reflected event,
 then trigger it). The scenario driver is the single authoritative Rhai runtime;
 there is no separate one-shot backend or compatibility execution path.
 
-### 3.2 Exposed verbs (the entire vocabulary, ~6 functions)
+### 3.2 Exposed verbs (the generic runtime surface)
 ```rust
 cmd(name: &str, params: Map) -> Dynamic   // dispatch ANY command by name (reflect)
-query(name: &str, params: Map) -> Dynamic // discovered ApiQueryProvider names
+query(name: &str, params: Map) -> Dynamic // read-only provider names
 find(name: &str) -> i64                    // Name -> GlobalEntityId (sugar over ListEntities)
 entity(id) -> EntityHandle                 // position/rotation/components accessor
 sim_time() -> f64                          // SimTick * SECS_PER_TICK
 log(msg)                                    // already have print()
 ```
-That is the *whole* Rust-side surface. `cmd()` reaches all ~90 commands +
-every future command with no new glue. Twin/USD/Modelica/cosim are all just
-command names.
+That is the *whole* generic Rust-side surface. `cmd()` reaches all commands,
+`query()` reaches read providers; every future command is available with no new
+script binding.
+Twin/USD/Modelica/cosim are all just command or provider names.
 
 ### 3.3 Ergonomics live in a rhai *prelude*, not Rust
 Ship a standard `prelude.rhai` (script, not Rust) wrapping raw `cmd()` into
@@ -238,11 +246,14 @@ fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ target: id, key: k, value:
 ```
 
 ### 3.4 Security (must-have)
-`cmd()` MUST pass through the same authz/RBAC gate as the API
+`cmd()` and direct reflected writes MUST pass through the same
+authz/RBAC gate as the API
 (`#[authz_target]`, `SessionRegistry`, sender identity). A shared/untrusted
 scenario script then can't exceed its owner's authority. The luncosim caps
 (ops/depth/size) already bound runaway scripts. The exposed verb set = the
-entire capability surface — nothing reachable that isn't a vetted command.
+entire capability surface — query providers are read-only, while commands carry
+the mutation contract and policy. Client-scoped scripts cannot use direct
+mutation paths.
 
 ---
 
@@ -360,17 +371,18 @@ reflection bridge is exactly the unfinished `EntityProxy` — finish it properly
 against `AppTypeRegistry`/`ReflectComponent` (well-trodden; this is what
 `bevy_mod_scripting` does).
 
-**Default rule — reads direct, writes through commands:**
+**Default rule — reads direct, mutations explicit:**
 - READ arbitrary state → reflection bridge (fast, synchronous, local). `pos(r)`,
   `entity(r).Battery.level`, `cosim_var(m, "height")`.
 - WRITE that must replicate / be authoritative / undoable → `cmd()` (bus). Keeps
   determinism + networking intact: clients receive the authoritative command
   stream, they don't run scenario logic (§6).
-- Direct reflected *writes* allowed ONLY for explicitly local/non-replicated
-  scratch state (scenario-private vars, editor-only tweaks) — clearly flagged, to
-  avoid silently bypassing replication/authz.
+- Direct reflected writes and raw port writes are host-side tuning surfaces and
+  are authority-gated; a client-scoped script cannot use them because they have
+  no prediction/forwarding path. `SetPorts` is the persistent-hold control
+  command; `set()`'s port fallback is a raw write.
 
-This makes "manipulate *everything*" real: Channel 1 = every action verb;
+This makes "manipulate *everything*" real: Channel 1 = every typed command;
 Channel 2 = every readable field. Hot per-tick paths can later get typed
 accessors generated from reflection if profiling demands it.
 
@@ -555,7 +567,7 @@ MonoBehaviour) and scenario-script (orchestration, on a scenario/singleton entit
 
 **Inter-script interaction — through the World, never directly.** Each script is an
 **isolated VM (own AST+Scope); scripts never call each other's closures or share
-rhai memory.** They interact only via the three verbs — which is what preserves
+rhai memory.** They interact through the generic world channels — which preserves
 determinism, networking, hot-reload, and the ROS2 boundary:
 
 | Channel | A → B | Analogue |

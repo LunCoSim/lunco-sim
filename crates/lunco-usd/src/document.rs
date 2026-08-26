@@ -2473,7 +2473,7 @@ mod tests {
         doc.apply(UsdOp::SetAttribute {
             edit_target: LayerId::root(),
             path: "/Rover".into(),
-            name: "lunco:script".into(),
+            name: "info:sourceCode".into(),
             type_name: "string".into(),
             value: src.to_string(),
         })
@@ -2488,7 +2488,7 @@ mod tests {
         );
         let got = reparsed
             .data()
-            .prim_attribute_value::<String>(&SdfPath::new("/Rover").unwrap(), "lunco:script");
+            .prim_attribute_value::<String>(&SdfPath::new("/Rover").unwrap(), "info:sourceCode");
         assert_eq!(
             got.as_deref(),
             Some(src),
@@ -2511,7 +2511,7 @@ mod tests {
         let err = doc.apply(UsdOp::SetAttribute {
             edit_target: LayerId::root(),
             path: "/Rover".into(),
-            name: "lunco:script".into(),
+            name: "info:sourceCode".into(),
             type_name: "string".into(),
             value: "a \"\"\" b ''' c".into(),
         });
@@ -2521,7 +2521,7 @@ mod tests {
         );
         // And the document is untouched — the rejected op left no partial edit.
         assert!(
-            !doc.source().contains("lunco:script"),
+            !doc.source().contains("info:sourceCode"),
             "a rejected op must not partially author"
         );
     }
@@ -2536,7 +2536,7 @@ mod tests {
         host.apply(Mutation::local(UsdOp::SetAttribute {
             edit_target: LayerId::root(),
             path: "/Rover".into(),
-            name: "lunco:script".into(),
+            name: "info:sourceCode".into(),
             type_name: "string".into(),
             value: "fn on_tick(me) {}".into(),
         }))

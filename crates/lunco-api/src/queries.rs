@@ -1,5 +1,6 @@
 //! API query providers — extension point for domain crates to expose
-//! list / status endpoints without `lunco-api` taking direct deps on them.
+//! read endpoints without `lunco-api` taking direct dependencies on their
+//! domains.
 //!
 //! ## Why
 //!
@@ -14,21 +15,22 @@
 //! When an `ExecuteCommand` request arrives whose `command` matches a
 //! registered provider name, the executor calls the provider with
 //! `&mut World` access and returns its `ApiResponse` to the transport.
-//! Reflect-registered Event commands (the existing fire-and-forget
-//! pattern) are unaffected — they take the fallthrough path.
+//! Reflect-registered commands are the mutation and operation channel. Query
+//! providers are deliberately read-only; this keeps one authoritative command
+//! contract for every state change.
 //!
 //! ## Provider semantics
 //!
 //! - **Returns data**, unlike ordinary Reflect Event commands which return an
-//!   acknowledgement. Use this trait when the caller needs a
-//!   structured response.
+//!   acknowledgement. Use this trait when the caller needs a structured
+//!   response.
 //! - **Has `&mut World` access** — providers can read any resource and
 //!   run any query they need.
 //! - **Runs deferred** via `Commands::queue`, so providers execute on a
 //!   later command flush, not synchronously inside the observer. This
 //!   matches how `CaptureScreenshot` already works.
 //!
-//! ## Example (will land in P2)
+//! ## Example
 //!
 //! ```ignore
 //! struct ListBundledProvider;
@@ -53,7 +55,7 @@ use std::sync::Arc;
 use crate::registry::ApiEntityRegistry;
 use crate::schema::ApiResponse;
 
-/// One registered query — answers a typed request with structured data.
+/// One read-only structured provider — answers a typed request with data.
 ///
 /// See module docs for the design rationale.
 pub trait ApiQueryProvider: Send + Sync + 'static {
@@ -73,7 +75,7 @@ pub trait ApiQueryProvider: Send + Sync + 'static {
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse;
 }
 
-/// Registry of named query providers. Domain crates push impls here at
+/// Registry of named read-only providers. Domain crates push impls here at
 /// startup via [`Self::register`]; the executor consults it when an
 /// `ExecuteCommand` request arrives.
 ///
@@ -85,13 +87,17 @@ pub struct ApiQueryRegistry {
 }
 
 impl ApiQueryRegistry {
-    /// Register a provider. Last-writer-wins for duplicate names — the
-    /// previous registration is dropped silently. Domain crates own
-    /// their query namespaces so collisions in practice mean "you
-    /// registered the same plugin twice."
+    /// Register a read-only provider.
+    ///
+    /// Provider names are public API identifiers. A duplicate is a startup
+    /// configuration error, not an override point, so registration fails
+    /// visibly instead of depending on plugin order.
     pub fn register<P: ApiQueryProvider>(&mut self, provider: P) {
-        self.providers
-            .insert(provider.name().to_string(), Arc::new(provider));
+        let name = provider.name();
+        if self.providers.contains_key(name) {
+            panic!("duplicate API query provider registration: {name}");
+        }
+        self.providers.insert(name.to_string(), Arc::new(provider));
     }
 
     /// Look up a provider by name. Returns an `Arc` so the caller can
@@ -129,6 +135,7 @@ impl ApiQueryProvider for ReadPortsProvider {
     fn name(&self) -> &'static str {
         "ReadPorts"
     }
+
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(api_id) = params.get("api_id").and_then(|v| {
             v.as_u64()
@@ -191,6 +198,7 @@ impl ApiQueryProvider for ReadinessProvider {
     fn name(&self) -> &'static str {
         "GetReadiness"
     }
+
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         use lunco_readiness::{ReadinessRegistry, ReadinessState, Subject};
         let registry = world.get_resource::<ReadinessRegistry>();

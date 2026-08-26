@@ -11,7 +11,7 @@
 //!
 //! ## Pattern
 //!
-//! Every verb is a typed `#[Command]` per `AGENTS.md` § 4.2 — UI
+//! Every externally callable verb is a reflected typed command per `AGENTS.md` § 4.2 — UI
 //! clicks, menu items, keybinds, HTTP API calls, MCP tools, and AI
 //! agents dispatch the same shape. Empty-string path fields fire the
 //! native picker via [`crate::picker::PickHandle`]; non-empty paths skip the
@@ -83,9 +83,9 @@ use lunco_doc_bevy::{NewDocument, OpenFile};
 /// Like [`OpenFile`], this is a typed shell command whose behaviour is
 /// domain-specific and lives in the domain crate
 /// (`lunco-modelica` encodes the active model's source into a URL
-/// fragment). Over the HTTP API the same name is served by a *query*
-/// that **returns** the link in its `data` payload instead of touching a
-/// clipboard (a headless server has none); see the query registry.
+/// fragment). The headless HTTP API exposes the read-only `GetShareLink`
+/// query separately; it returns the URL in its `data` payload instead of
+/// touching a clipboard.
 #[Command(default)]
 pub struct CopyShareLink {}
 

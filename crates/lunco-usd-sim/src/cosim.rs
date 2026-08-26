@@ -3250,7 +3250,7 @@ pub(crate) fn seed_usd_input_defaults(
     }
 }
 
-// ── Uniform port commands (ListPorts / GetPort / SetPort) ───────────────────
+// ── Uniform port reads (ListPorts / GetPort) ────────────────────────────────
 //
 // The single API surface over the cosim **port table** (`lunco_cosim::ports`).
 // Every exposed value — Modelica var, Avian force/state, joint angle, env
@@ -3362,105 +3362,6 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
                 format!("no port `{}` on entity", name),
             ),
         }
-    }
-}
-
-/// `SetPort` — hold one input port at a setpoint.
-///
-/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2}}`
-/// `curl … {"type":"ExecuteCommand","command":"SetPort","params":{"api_id":N,"name":"angle","value":1.2,"hold_secs":30}}`
-///
-/// The write is a HOLD, not a poke: it outranks the wiring fabric for its
-/// duration ([`lunco_cosim::PortHolds`]). Writing the slot alone worked only on
-/// an UNWIRED port — on a wired one the next propagation tick overwrote it
-/// within 16 ms, so the call reported success and nothing moved, which reads
-/// exactly like a port that does not exist.
-///
-/// Holds are latest-wins per `(entity, port)` and expire ([`lunco_cosim::DEFAULT_HOLD_SECS`]
-/// unless `hold_secs` says otherwise), so a stream of setpoints keeps control
-/// while an abandoned one hands the port back to its wiring instead of leaving a
-/// vehicle stuck. `ReleasePort` ends one early.
-pub struct SetPortProvider;
-
-impl lunco_api::ApiQueryProvider for SetPortProvider {
-    fn name(&self) -> &'static str {
-        "SetPort"
-    }
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let Some(e) = resolve_param_entity(world, params) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::EntityNotFound,
-                "SetPort requires a resolvable `api_id`",
-            );
-        };
-        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
-                "SetPort requires a `name`",
-            );
-        };
-        let Some(value) = params.get("value").and_then(|v| v.as_f64()) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
-                "SetPort requires a numeric `value`",
-            );
-        };
-        let hold_secs = params
-            .get("hold_secs")
-            .and_then(|v| v.as_f64())
-            .filter(|secs| *secs > 0.0)
-            .unwrap_or(lunco_cosim::DEFAULT_HOLD_SECS);
-        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
-        if !ports_reg.write_port(world, e, name, value) {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
-                format!("no writable input port `{}` on entity", name),
-            );
-        }
-        let now = world
-            .get_resource::<Time<bevy::time::Real>>()
-            .map(|time| time.elapsed_secs_f64())
-            .unwrap_or(0.0);
-        if let Some(mut holds) = world.get_resource_mut::<lunco_cosim::PortHolds>() {
-            holds.hold(e, name, value, now + hold_secs);
-        }
-        lunco_api::ApiResponse::ok(
-            serde_json::json!({ "name": name, "value": value, "hold_secs": hold_secs }),
-        )
-    }
-}
-
-/// `ReleasePort` — end a [`SetPortProvider`] hold early, handing the port back to
-/// whatever drives it.
-///
-/// `curl … {"type":"ExecuteCommand","command":"ReleasePort","params":{"api_id":N,"name":"angle"}}`
-///
-/// Holds expire on their own, so this is for the caller who is DONE rather than
-/// the caller who crashed: releasing a throttle at the end of a manoeuvre returns
-/// the vessel to its autopilot on the next tick instead of after the timeout.
-pub struct ReleasePortProvider;
-
-impl lunco_api::ApiQueryProvider for ReleasePortProvider {
-    fn name(&self) -> &'static str {
-        "ReleasePort"
-    }
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let Some(e) = resolve_param_entity(world, params) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::EntityNotFound,
-                "ReleasePort requires a resolvable `api_id`",
-            );
-        };
-        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
-                "ReleasePort requires a `name`",
-            );
-        };
-        let released = world
-            .get_resource_mut::<lunco_cosim::PortHolds>()
-            .is_some_and(|mut holds| holds.release(e, name));
-        lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "released": released }))
     }
 }
 
@@ -5059,11 +4960,10 @@ pub(crate) fn install(app: &mut App) {
         Startup,
         |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
             if let Some(mut reg) = reg {
-                // Canonical uniform port verbs (over `lunco_cosim::ports`).
+                // Canonical uniform port reads (writes use the reflected
+                // `lunco_cosim::SetPorts` command).
                 reg.register(ListPortsProvider);
                 reg.register(GetPortProvider);
-                reg.register(SetPortProvider);
-                reg.register(ReleasePortProvider);
                 // Richer per-entity cosim introspection (not an alias of the above).
                 reg.register(CosimStatusProvider);
                 reg.register(BindingStatusProvider);

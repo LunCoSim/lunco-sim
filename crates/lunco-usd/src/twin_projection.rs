@@ -1018,7 +1018,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     return;
                 }
             }
-            // A `string` attribute is non-visual metadata/behavior (`lunco:script`,
+            // A `string` attribute is non-visual metadata/behavior (`info:sourceCode`,
             // descriptions, a policy's `info:sourceCode`) — no geometry/material
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
