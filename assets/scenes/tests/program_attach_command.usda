@@ -1,0 +1,37 @@
+#usda 1.0
+(
+    defaultPrim = "ProgramAttachTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "ProgramAttachTest"
+(
+    doc = "Production command-path fixture for attaching a source-backed program."
+)
+{
+    def Xform "Ball" (
+        prepend references = @lunco://props/ball_dynamic.usda@</BallDynamic>
+    )
+    {
+        double3 xformOp:translate = (0, 3, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # The body-side scalar surface is authored by this scene. The runtime
+        # Avian port backend is the producer/consumer behind these properties.
+        float inputs:force_y = 0.0
+        float outputs:position_y = 3.0
+        float outputs:velocity_y = 0.0
+    }
+
+    def DistantLight "Sun"
+    {
+    }
+
+    def Scope "ProgramAttachTest" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/program_attach_command.rhai@
+    }
+}
