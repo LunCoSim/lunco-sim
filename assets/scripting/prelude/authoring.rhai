@@ -83,6 +83,55 @@ fn usd_set_api_schemas(doc, path, schemas) {
     }})
 }
 
+/// Attach a source-backed simulation program through the authoritative USD
+/// command. `inputs` is an array of `program_input_*` maps and `outputs` is an
+/// array of `program_output` maps. Use `@root@` for authored scene content or
+/// `@runtime@` for a document-backed runtime overlay; choose explicitly.
+fn attach_program(doc, edit_target, host_path, name, source_asset, inputs, outputs, realtime_safe) {
+    if doc == () { return __missing_document("USD"); }
+    cmd("AttachProgram", #{
+        doc: doc,
+        spec: #{
+            edit_target: edit_target,
+            host_path: host_path,
+            name: name,
+            source_asset: source_asset,
+            inputs: inputs,
+            outputs: outputs,
+            realtime_safe: realtime_safe,
+        },
+    })
+}
+
+/// Declare a connected scalar program input.
+fn program_input_connection(name, source) {
+    #{
+        name: name,
+        type_name: "float",
+        default_value: (),
+        connection: source,
+    }
+}
+
+/// Declare a constant scalar program input.
+fn program_input_default(name, value) {
+    #{
+        name: name,
+        type_name: "float",
+        default_value: value,
+        connection: (),
+    }
+}
+
+/// Declare a scalar program output and its consuming USD input properties.
+fn program_output(name, connections) {
+    #{
+        name: name,
+        type_name: "float",
+        connections: connections,
+    }
+}
+
 fn usd_select_variant(doc, path, variant_set, variant) {
     usd_apply(doc, #{ SetVariantSelection: #{
         edit_target: "@root@",

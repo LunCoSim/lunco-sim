@@ -102,12 +102,12 @@ set, then projected from the composed stage. The editor never installs ECS
 behavior state as a shortcut.
 
 ```text
-ApplyUsdOps
-  ├─ transform-only edit       → update the live entity in place
+ApplyUsdOps / AttachProgram
+  ├─ transform-only edit        → update the live entity in place
   ├─ program source/metadata    → update the owning program projection in place
-  ├─ marker add/remove          → reconcile only that USD subtree
-  ├─ relationship/connection   → author incrementally, refresh dependents
-  └─ composition / physics API → rebuild the smallest affected physical scope
+  ├─ program ports/connections  → author atomically, refresh dependents
+  ├─ relationship/connection    → author incrementally, refresh dependents
+  └─ composition / physics API  → rebuild the smallest affected physical scope
 ```
 
 A full scene rebuild is reserved for changes whose composed meaning is
@@ -118,8 +118,8 @@ the source of truth; the ECS is disposable projection state.
 
 The important lifecycle rule is a fixed projection boundary: all operations in
 one user intent are applied before the live consumer reconciles them. This
-prevents a marker from appearing without its route, a program from being read
-before its schema exists, or a route source from being projected onto a vessel
+prevents a program from appearing without its authored port contract, a program
+from being read before its schema exists, or a route source from being projected onto a vessel
 that is simultaneously being rebuilt.
 
 ## Runtime lifecycle

@@ -11,11 +11,11 @@ description: >
   asset to the web build", or wants an entry point into `assets/` generally.
   Project-specific and non-obvious: a shipped asset MUST be referenced as
   `@lunco://…@` (a bare relative path resolves against the *anchoring document*,
-  so the same file breaks once a scene is Twin-mounted — and a failed
-  `info:sourceAsset` load is SILENT, the prim is just never driven),
+  so the same file breaks once a scene is Twin-mounted — and an unresolved
+  `info:sourceAsset` is surfaced through the program's runtime status),
   `lunco:spawnable` is only read on the stage `defaultPrim`, the palette
-  category is the IMMEDIATE parent folder Title-cased, a `.mo` with no
-  `inputs:`/`outputs:` ports is never stepped, rhai `import` must NOT use
+  category is the IMMEDIATE parent folder Title-cased, a source program with no
+  `inputs:`/`outputs:` ports is reported as source-only and is not stepped, rhai `import` must NOT use
   `lunco://`, and the web build needs `scripts/build_web.sh` re-run to
   regenerate `manifest.json`.
 ---
@@ -74,12 +74,12 @@ consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own
 output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
-(`SOURCE_EXTS`, `crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`,
-`.rhai`, `.mo`, `.btxml`**. `.mo` (Modelica) and `.btxml` (BT.CPP behaviour trees)
+(`crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
+`.py`, `.btxml`**. `.mo` (Modelica), `.py` (Python), and `.btxml` (BT.CPP behaviour trees)
 are catalogued both because a `.usda` names them and so they can be browsed
 directly — the Scenarios menu lists every registered source file, grouped by type.
-Non-source data (`.json`, `.toml`, `.py`) is not walked: it is read by a subsystem
-or evaluated ad hoc, not browsed as an authored asset.
+Non-source data (`.json`, `.toml`) is not walked: it is read by a subsystem or
+evaluated ad hoc, not browsed as an authored asset.
 
 ## The `lunco://` scheme
 
@@ -116,10 +116,12 @@ uniform asset info:sourceAsset = @scenarios/foo.rhai@
 prepend references = @../../components/mobility/wheel.usda@
 ```
 
-**The failure is silent for programs.** `crates/lunco-usd-sim/src/cosim.rs:249`
-reads `info:sourceAsset`; a `None` or an unresolvable asset is a bare
-`return` — no warning, the prim is simply never driven. "My model does nothing"
-is nearly always this. The guard test
+The active program contract is visible in the runtime status. A Modelica or
+Python source with no declared `inputs:`/`outputs:` is reported as source-only;
+it is not treated as a running participant. `AttachProgram` is the canonical
+way to add the source and its explicit scalar contract. "My model does nothing"
+should be diagnosed by checking `CosimStatus` and `GetBrokenConnections`, not by
+assuming a hidden fallback. The guard test
 `crates/lunco-usd/tests/program_sources_exist.rs` walks every `.usda` and asserts
 each `sourceAsset` file exists — but only [`validate-assets`](../validate-assets/SKILL.md)
 catches a broken `references` arc before you launch.

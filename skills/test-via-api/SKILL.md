@@ -277,6 +277,19 @@ may resolve before the first sample, but an absent value is not a valid zero.
 The complete boundary is in
 [`tutorial-autopilot-and-port-contracts`](../../docs/architecture/tutorial-autopilot-and-port-contracts.md).
 
+For source-backed program authoring, query `ListOpenDocuments` for the USD
+document, dispatch `AttachProgram`, then verify `ListPorts`, `CosimStatus`, and
+`GetBrokenConnections`. The production Rhai gate is:
+
+```bash
+target/debug/luncosim test \
+  --scene scenes/tests/program_attach_command.usda --max-ticks 3000
+```
+
+It proves both a declared Modelica participant and the visible error status for
+an attached source with no port contract. Do not treat a prim appearing in the
+scene tree or a fire-and-forget command acknowledgement as a running model.
+
 ## Diagnosing common failures
 
 - **"0 nodes 0 edges" after drill-in**: the target class resolved but

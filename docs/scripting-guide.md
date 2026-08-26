@@ -272,8 +272,9 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   common fields such as `subject`, `speed`, `radius`, `secs`, `params`, and
   `value` are validated against that operation at the command boundary.
 - **Script-first authoring:** explicit-document `usd_apply` / `usd_apply_ops` /
-  `usd_add_prim`, `attach_fixed` / `attach_revolute`, `modelica_apply`, and
-  typed Modelica op constructors in [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
+  `usd_add_prim`, `attach_fixed` / `attach_revolute`, `attach_program`, and
+  `modelica_apply`, plus typed Modelica op constructors in
+  [`prelude/authoring.rhai`](../assets/scripting/prelude/authoring.rhai).
   These are policy wrappers over the existing journaled command surfaces; USD
   remains the scene/topology authority and Modelica remains the equation/graph
   authority. Obtain document ids from `ListOpenDocuments` before authoring.

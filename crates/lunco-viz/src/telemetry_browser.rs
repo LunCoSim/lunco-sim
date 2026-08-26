@@ -125,6 +125,7 @@ impl SettingsSection for TelemetryDisplaySettings {
     const KEY: &'static str = "telemetry_display";
 }
 
+/// Select the telemetry browser's signal filter and focused signal.
 #[Command(default)]
 pub struct SetTelemetryBrowserView {
     pub filter: String,

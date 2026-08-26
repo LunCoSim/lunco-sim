@@ -71,6 +71,7 @@ required events, and command counts belong in Rhai runtime observers.
 | [01 — Lander → Rover mission](01-lander-rover-mission.md) | A reusable lander *vehicle* that flies itself down on a glowing engine plume, a scene that drops it into a mission, and an autopilot that drives the released rover through a waypoint course until you take over — with model-driven warnings, on-screen narration, and possession as the one source of control authority. |
 | [02 — Author your own controller](02-authoring-a-controller.md) | Build a self-flying vessel from scratch: the control law in Modelica, logic in rhai, sensors + wiring + the `piloted` authority signal in USD — and a pilot who can take over. The layering behind every LunCoSim GNC. |
 | [03 — Cosim: when a Model flies physics](03-cosim.md) | How a Modelica program and the physics engine exchange typed values at declared communication points, how USD connections become `SimConnection`s, and how to verify the live chain over the API. |
+| [04 — Attach a simulation program](04-attach-a-program.md) | Attach a Modelica or Python source from the Models palette, author an explicit USD port contract, and verify the projected cosimulation participant. |
 
 Each walkthrough pairs with an in-app lesson and the reference **[skills](../../skills/README.md)**:
 
@@ -79,6 +80,7 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 | 01 — Lander → Rover mission | *Lander & Rover Mission* (luncosim) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
 | 02 — Author your own controller | *Script a Rover* (luncosim) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
 | 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (luncosim) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
+| 04 — Attach a simulation program | *Build from Parts* / Object Builder | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [use-asset-library](../../skills/use-asset-library/SKILL.md) · [test-via-api](../../skills/test-via-api/SKILL.md) |
 
 The in-app **Build from Parts** lesson is a separate Object Builder track. It
 uses the existing USD socket/plug and typed-joint workflow; it is not a
