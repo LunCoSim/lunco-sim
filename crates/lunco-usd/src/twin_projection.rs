@@ -169,7 +169,7 @@ pub struct DocBackedTwinScenes {
 impl DocBackedTwinScenes {
     /// The registry document backing the twin scene at `twin://<name>/<rel>`, if
     /// any. Lets a twin-projected consumer (e.g. a DEM terrain, which carries no
-    /// `LiveDocScene`) recover its authoring document from its `twin://` stage
+    /// document-backed scene) recover its authoring document from its `twin://` stage
     /// asset path.
     pub fn doc_for(&self, name: &str, rel: &str) -> Option<DocumentId> {
         self.map

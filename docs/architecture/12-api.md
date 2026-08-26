@@ -293,7 +293,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
     "type": "ExecuteCommand",
     "command": "LoadScene",
     "params": {
-      "path": "scenes/luncosim/sandbox_scene.usda",
+      "path": "lunco://scenes/luncosim/sandbox_scene.usda",
       "root_prim": ""
     }
   }'

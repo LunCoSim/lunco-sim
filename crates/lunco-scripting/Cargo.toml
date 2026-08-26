@@ -18,9 +18,10 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 # auto-record into the canonical Twin journal — same "sync by default" bridge
 # Modelica/USD use. `attach_journal_recorder` (in lunco-doc-bevy) needs the trait.
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-# Script execution is exposed as typed `#[Command]`s (RunPython/RunLua) via
-# the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
-# discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
+# Optional Python one-shot execution is exposed as a typed `#[Command]`
+# (`RunPython`) via the macros + `Ack`/`OpId`/`CommandResults` substrate in
+# lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
+# lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
 # The Rhai tutorial bridge reads the controller-owned resolved keymap. Optional
 # so Python-only and script-free builds do not acquire the input projection.

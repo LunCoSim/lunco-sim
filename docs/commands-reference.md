@@ -811,9 +811,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Reload (or load) a USD scene at runtime via the API.
 
- `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+ `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"lunco://scenes/luncosim/sandbox_scene.usda"}}`
 
- - `path`: USD asset path relative to the asset root.
+ - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
  - `root_prim`: optional override for the SDF path of the prim to
    spawn. Empty (default) reads the stage's `defaultPrim` metadata;
    if absent, falls back to `/` (walk all top-level prims).
@@ -839,7 +839,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  USD asset path (relative to `assets/`). |
+| `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). |
 | `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header, falling back to  `/` when none is declared. |
 
 #### `RestartScene`

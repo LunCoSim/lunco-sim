@@ -27,7 +27,7 @@
 //! without any central edit.
 
 use crate::document::UsdDocument;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
@@ -52,7 +52,7 @@ use crate::document::{LayerId, UsdOp};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
-    clear_scene_entities, normalize_scene_asset_path, resolve_root_prim, spawn_scene_root_world,
+    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
 
@@ -316,8 +316,8 @@ impl Plugin for UsdCommandsPlugin {
 /// **reflect the opened Twin/folder**.
 /// — clear-and-replace, so a previously loaded scene never lingers:
 ///
-/// - **Has `[usd] default_scene`** → [`LoadScene`] it (path relative to
-///   the Twin root). `LoadScene` clears the old scene, then mounts this
+/// - **Has `[usd] default_scene`** → construct its `twin://` address and
+///   [`LoadScene`] it. `LoadScene` clears the old scene, then mounts this
 ///   one as the single active stage; [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin)
 ///   derives its native `connectionPaths` wiring from the composed prims.
 /// - **No starting scene** (Twin without `default_scene`, or a plain
@@ -529,7 +529,7 @@ fn update_viewport_placeholder(
 ///
 /// The observer lives HERE, not in `lunco-usd-sim`, because
 /// [`DocumentRegistry`] does — `lunco-usd-sim` sits one layer below and owns the
-/// mount mechanics this drives ([`normalize_scene_asset_path`], [`resolve_root_prim`],
+/// mount mechanics this drives ([`validate_scene_address`], [`resolve_root_prim`],
 /// [`clear_scene_entities`], [`spawn_scene_root_world`]).
 #[on_command(LoadScene)]
 fn on_load_scene(
@@ -542,30 +542,13 @@ fn on_load_scene(
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
 ) {
-    // Accept an absolute path (Twin manifests join `default_scene` to the Twin
-    // root) or an already-relative asset path; bail if an absolute path lies
-    // outside the assets dir.
     let (Some(_asset_server), Some(_stages)) = (asset_server, stages) else {
         return;
     };
-    let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
+    let Some(path) = validate_scene_address(&cmd.path) else {
         return;
     };
-    // Canonicalize to the document's own source. This also lets the no-op guard
-    // below recognise the active scene by asset id, so a redundant load is a true
-    // no-op instead of a destructive remount.
-    if let Some(backed) = backed.as_deref() {
-        if let Some(composed) = doc_backed_scene_source(&path, &registry, backed) {
-            info!(
-                "[load-scene] `{}` → `{}` (mounting the document's composed source)",
-                path, composed
-            );
-            path = composed;
-        }
-    }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
     let request = lunco_core::SceneTransitionRequest::load(path.clone(), root_prim);
@@ -694,36 +677,6 @@ fn execute_admitted_load_scene(
             });
         }
     });
-}
-
-/// The composed source of the document backing the scene at asset-relative
-/// `path`, if one backs it — `twin://<name>/<rel>`, whose overlay the twin source
-/// serves as `base ⊕ runtime`. `None` for an already-scheme'd path, or a plain
-/// file with no document (nothing composed to preserve — mount it from disk).
-fn doc_backed_scene_source(
-    path: &str,
-    registry: &DocumentRegistry<UsdDocument>,
-    backed: &crate::twin_projection::DocBackedTwinScenes,
-) -> Option<String> {
-    if lunco_assets::has_scheme(path) {
-        return None;
-    }
-    // Resolving asset-relative → absolute is the only environment-dependent step
-    // (it reads the process CWD); the lookup itself is pure, and split out so it
-    // can be exercised without one.
-    let abs = lunco_assets::engine_asset_local_path(path)?;
-    doc_backed_source_for_abs(&abs, registry, backed)
-}
-
-/// [`doc_backed_scene_source`] for an already-resolved absolute path.
-fn doc_backed_source_for_abs(
-    abs: &std::path::Path,
-    registry: &DocumentRegistry<UsdDocument>,
-    backed: &crate::twin_projection::DocBackedTwinScenes,
-) -> Option<String> {
-    let doc = registry.doc_for_file(abs)?;
-    let (name, rel) = backed.coords_of(doc)?;
-    Some(lunco_assets::twin_uri(name, rel))
 }
 
 register_commands!(
@@ -891,7 +844,13 @@ fn on_open_file(
         );
         return;
     };
-    let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+    let abs = match lunco_storage::canonicalize_file_path(Path::new(&path)) {
+        Ok(abs) => abs,
+        Err(error) => {
+            warn!("[OpenFile] cannot resolve USD filesystem scene `{path}`: {error}");
+            return;
+        }
+    };
     // A USD file already inside the active Twin is an additive document open;
     // the Twin browser uses this to inspect reusable layers without replacing
     // the running world. External scenes replace the workspace at the root.
@@ -915,8 +874,17 @@ fn on_open_file(
 /// This is the same root-relative scan used by the workbench previously, now
 /// owned by the USD scene domain so GUI and headless `OpenFile` requests cannot
 /// mount one file through competing paths.
-fn spawn_twin_from_scene(scene: &std::path::Path, pending: &mut PendingTwinOpens, log_tag: &str) {
-    let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
+fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: &str) {
+    let abs = match lunco_storage::canonicalize_file_path(scene) {
+        Ok(abs) => abs,
+        Err(error) => {
+            warn!(
+                "[{log_tag}] cannot resolve USD filesystem scene `{}`: {error}",
+                scene.display()
+            );
+            return;
+        }
+    };
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
         .strip_prefix(&root)
@@ -2010,96 +1978,6 @@ mod change_set_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `LoadScene` must mount a doc-backed scene through the document's own
-    /// `twin://` source — that source serves the composed `base ⊕ runtime`, so
-    /// mounting the raw file instead re-reads the base from disk and silently
-    /// drops every runtime edit (placed waypoints, runtime spawns, moved
-    /// transforms). The redirect is driven by the REGISTRY, so it must divert
-    /// exactly when a backing document exists — never on path shape alone.
-    #[test]
-    fn a_doc_backed_scene_mounts_its_document_source() {
-        use crate::twin_projection::DocBackedTwinScenes;
-
-        let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let mut backed = DocBackedTwinScenes::default();
-        let scene = std::path::Path::new("/twins/moonbase/scenes/luncosim.usda");
-
-        let (doc, _) = registry.open_file(scene.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(
-            doc,
-            "/twins/moonbase".into(),
-            "moonbase".into(),
-            "scenes/luncosim.usda".into(),
-        );
-
-        assert_eq!(
-            doc_backed_source_for_abs(scene, &registry, &backed).as_deref(),
-            Some("twin://moonbase/scenes/luncosim.usda"),
-            "a doc-backed scene routes through the source that composes its runtime overlay"
-        );
-    }
-
-    /// The two ways a scene is NOT doc-backed. A registered document that no twin
-    /// scene backs, and a file with no document at all, must both mount straight
-    /// from disk: there is no composed state to preserve, so diverting would be a
-    /// lie about where the bytes come from.
-    #[test]
-    fn an_unbacked_scene_is_not_diverted() {
-        use crate::twin_projection::DocBackedTwinScenes;
-
-        let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let mut backed = DocBackedTwinScenes::default();
-        let tracked = std::path::Path::new("/twins/moonbase/scenes/luncosim.usda");
-        let untracked = std::path::Path::new("/twins/moonbase/scenes/other.usda");
-
-        let (doc, _) = registry.open_file(tracked.to_path_buf(), "#usda 1.0\n".to_string());
-        backed.track(
-            doc,
-            "/twins/moonbase".into(),
-            "moonbase".into(),
-            "scenes/luncosim.usda".into(),
-        );
-        // A document exists for this file, but no twin scene is backed by it.
-        registry.open_file(untracked.to_path_buf(), "#usda 1.0\n".to_string());
-
-        assert_eq!(
-            doc_backed_source_for_abs(untracked, &registry, &backed),
-            None,
-            "a document with no twin backing has no composed source to mount"
-        );
-        assert_eq!(
-            doc_backed_source_for_abs(
-                std::path::Path::new("/twins/moonbase/scenes/never_opened.usda"),
-                &registry,
-                &backed
-            ),
-            None,
-            "a plain file with no document mounts from disk"
-        );
-    }
-
-    /// An already-scheme'd path is its own mount identity — `twin://` and
-    /// `lunco://` both name a source directly. Re-resolving one
-    /// against the assets dir would be nonsense, so the redirect must short-circuit
-    /// before it touches the registry.
-    #[test]
-    fn a_schemed_path_is_left_alone() {
-        use crate::twin_projection::DocBackedTwinScenes;
-
-        let registry = DocumentRegistry::<UsdDocument>::default();
-        let backed = DocBackedTwinScenes::default();
-        for path in [
-            "twin://moonbase/scenes/luncosim.usda",
-            "lunco://vessels/rovers/skid_rover.usda",
-        ] {
-            assert_eq!(
-                doc_backed_scene_source(path, &registry, &backed),
-                None,
-                "`{path}` already names its source"
-            );
-        }
-    }
 
     #[test]
     fn is_usd_path_recognises_extensions() {

@@ -136,17 +136,17 @@ Two commands, two different argument types, and mixing them up is a silent no-op
 | command | takes | notes |
 |---|---|---|
 | `OpenTwin` | a **folder** containing `twin.toml` | auto-loads `[usd] default_scene` |
-| `LoadScene` | a scheme address — `twin://<name>/<rel>`, `lunco://<rel>` — or a path under the assets root | for an arbitrary file on disk, use `OpenFile` |
+| `LoadScene` | a scheme address — `twin://<name>/<rel>` or `lunco://<rel>` | for any filesystem path, use `OpenFile` |
 | `OpenFile` | any `.usda` path on disk | resolves the owning root, registers the document, mounts through the overlay |
 
 Passing the `.usda` *file* to `OpenTwin` fails the `twin.toml` check and is
 refused with a `warn!`.
 
-`LoadScene` is not a general file opener. An absolute path **under the assets
-dir** is accepted and rewritten asset-relative; anything else is refused with
+`LoadScene` is not a general file opener. Bare and absolute filesystem paths
+are refused with
 
 ```
-[scene] `…` is a bare filesystem path — `LoadScene` takes scheme addresses
+[scene] `…` is not a root-qualified scene address — LoadScene takes `lunco://…` or `twin://…`
 ```
 
 and the load is a no-op — the previous scene stays up, so a screenshot taken

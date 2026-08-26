@@ -61,9 +61,9 @@
         // deploy: add/remove scenes or repoint `default` with no rebuild.
         // Absent (e.g. lunica, or a sandbox deploy that wants the built-in
         // scene) → 404 → this is a no-op. Shape:
-        //   { "default": "twins/moonbase/moonbase_scene.usda",
+        //   { "default": "lunco://twins/moonbase/moonbase_scene.usda",
         //     "scenes": [ { "name": "Moonbase",
-        //                   "path": "twins/moonbase/moonbase_scene.usda" } ] }
+        //                   "path": "lunco://twins/moonbase/moonbase_scene.usda" } ] }
         async function autoloadDefaultScene() {
             if (typeof window.lunco_api !== 'function') return;   // app w/o API bridge
             // A ?scene=<path> deep-link (or ?scene=none to opt out) wins over

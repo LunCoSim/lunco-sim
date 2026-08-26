@@ -205,8 +205,13 @@ impl TwinMode {
         }
 
         // Record this twin's canonical identity so any descendant that
-        // points back at it (directly or transitively) is recognised.
-        let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        // points back at it (directly or transitively) is recognised. A
+        // failed canonicalization is an invalid root, not a reason to fall
+        // back to a lexical path for an ownership/cycle decision.
+        let canonical_self = path.canonicalize().map_err(|source| TwinError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
         visited.insert(canonical_self.clone());
 
         let manifest_path = path.join(MANIFEST_FILENAME);
@@ -254,9 +259,11 @@ impl TwinMode {
                 // path already visited on this open (an ancestor or, for
                 // a diamond graph, an already-loaded twin). Catches
                 // multi-level cycles, not just direct self-reference.
-                let canonical_child = child_root
-                    .canonicalize()
-                    .unwrap_or_else(|_| child_root.clone());
+                let canonical_child =
+                    child_root.canonicalize().map_err(|source| TwinError::Io {
+                        path: child_root.clone(),
+                        source,
+                    })?;
                 if !canonical_child.starts_with(&canonical_self) {
                     return Err(TwinError::PathOutsideRoot {
                         path: child_root,

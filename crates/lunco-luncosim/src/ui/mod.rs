@@ -1341,7 +1341,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             };
                             if resp.clicked() {
                                 ctx.trigger(lunco_usd::LoadScene {
-                                    path: asset.asset_path.clone(),
+                                    path: lunco_assets::engine_asset_uri(&asset.asset_path),
                                     root_prim: String::new(),
                                 });
                                 ui.close();

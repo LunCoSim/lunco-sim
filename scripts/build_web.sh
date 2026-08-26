@@ -88,9 +88,9 @@ get_cargo_bin_name() {
 #   $4 dist  — dist root (…/dist/luncosim)
 #
 # Copies src → dist/assets/twins/<name>/ and prints a JSON object
-# {"name":…,"path":"twins/<name>/<scene>"} on stdout (empty on failure) so
-# stage_twins can assemble the scene list. LoadScene resolves `twins/…`
-# against the same-origin `assets/` tree, so the path is asset-relative.
+# {"name":…,"path":"lunco://twins/<name>/<scene>"} on stdout (empty on failure)
+# so stage_twins can assemble the scene list. `lunco://` addresses the staged
+# same-origin `assets/` tree without relying on an implicit asset root.
 stage_one_twin() {
     local src="$1" name="$2" scene="$3" dist="$4"
     if [ ! -d "$src" ]; then
@@ -111,7 +111,7 @@ stage_one_twin() {
         --exclude '.lunco/' --exclude 'history/' --exclude '*.tmp' --exclude '.cache/' \
         "$src/" "$dest/" >&2
     info "Packed twin '$name' ($(du -sh "$dest" | cut -f1)) → $dest" >&2
-    printf '{"name":"%s","path":"twins/%s/%s"}' "$name" "$name" "$scene"
+    printf '{"name":"%s","path":"lunco://twins/%s/%s"}' "$name" "$name" "$scene"
 }
 
 # Pack the luncosim's Twin(s) and write dist/scenes.json (read by the
@@ -143,7 +143,7 @@ stage_twins() {
         entry="$(stage_one_twin "$default_src" "$name" "$default_scene" "$dist")"
         if [ -n "$entry" ]; then
             entries="$entry"
-            default_path="twins/$name/$default_scene"
+            default_path="lunco://twins/$name/$default_scene"
         fi
     fi
 
@@ -163,7 +163,7 @@ stage_twins() {
     if [ -z "$entries" ]; then
         # No twin baked in → boot the lightweight demo scene (staged under
         # assets/scenes/luncosim/). The moonbase arrives from the server on connect.
-        printf '{"default":"scenes/luncosim/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
+        printf '{"default":"lunco://scenes/luncosim/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
         info "Wrote scenes.json (default: lightweight demo; moonbase via server)"
         return 0
     fi

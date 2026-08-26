@@ -3838,9 +3838,9 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
 
 /// Reload (or load) a USD scene at runtime via the API.
 ///
-/// `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda"}}`
+/// `curl … {"type":"ExecuteCommand","command":"LoadScene","params":{"path":"lunco://scenes/luncosim/sandbox_scene.usda"}}`
 ///
-/// - `path`: USD asset path relative to the asset root.
+/// - `path`: root-qualified USD address (`lunco://…` or `twin://…`).
 /// - `root_prim`: optional override for the SDF path of the prim to
 ///   spawn. Empty (default) reads the stage's `defaultPrim` metadata;
 ///   if absent, falls back to `/` (walk all top-level prims).
@@ -3876,7 +3876,7 @@ pub struct LoadScene {
 // requested path to its DOCUMENT first (a doc-backed scene must mount its
 // composed `base ⊕ runtime`, never the base file), and the document registry
 // lives one layer up. This crate owns the mount MECHANICS the observer drives —
-// [`normalize_scene_asset_path`], [`resolve_root_prim`], [`clear_scene_entities`],
+// [`validate_scene_address`], [`resolve_root_prim`], [`clear_scene_entities`],
 // [`spawn_scene_root_world`], [`SceneLoadInFlight`] — as its public mount API.
 
 /// Reload the CURRENTLY-ACTIVE scene from disk — the "restart" verb.
@@ -4372,62 +4372,26 @@ pub fn spawn_usd_child_with_translate(
     Some(entity)
 }
 
-/// Normalize a scene path to asset-server-relative form. Accepts an
-/// absolute path under the workspace `assets/` dir (Twin manifests store
-/// scenes as twin-root-relative; the caller joins them to an absolute
-/// path) or an already-relative asset path. Returns `None` (with a warn)
-/// if an absolute path lies outside the assets dir or a relative path repeats
-/// the asset-root `assets/` prefix.
-pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
-    // Already a scheme path (`abs://`, `lunco://`, …) — the AssetServer routes
-    // it to the named source as-is.
-    if lunco_assets::has_scheme(path_in) {
+/// Validate a scene's address before it enters the shared scene lifecycle.
+/// `LoadScene` accepts only the two registered, root-qualified asset schemes:
+/// `lunco://` for the shipped library and `twin://` for an opened Twin.
+/// Filesystem paths belong to `OpenFile` / startup root discovery and must not
+/// be reinterpreted here.
+pub fn validate_scene_address(path_in: &str) -> Option<String> {
+    let valid_lunco = lunco_assets::parse_lunco_uri(path_in)
+        .is_some_and(lunco_assets::asset_path::is_safe_relative_path);
+    let valid_twin = lunco_assets::parse_twin_uri(path_in).is_some_and(|(name, rel)| {
+        !name.is_empty() && lunco_assets::asset_path::is_safe_relative_path(rel)
+    });
+    if valid_lunco || valid_twin {
         return Some(path_in.to_string());
     }
-    let pb = std::path::PathBuf::from(path_in);
-    if pb.is_absolute() {
-        // Under the project `assets/` dir → asset-relative (default source).
-        // `lunco-assets` owns that mapping; this only decides what `LoadScene`
-        // does when it does NOT apply.
-        match lunco_assets::library_rel(&pb) {
-            Some(rel) => Some(rel),
-            None => {
-                // `LoadScene` takes SCHEME-QUALIFIED addresses (`lunco://`,
-                // `twin://`) — it loads an already-addressable asset and has no
-                // access to the workspace/Twin layer, so it cannot resolve a
-                // bare filesystem path to a root or mount it doc-first.
-                //
-                // `OpenFile` is the entry point that owns that step: it resolves
-                // the scene's root, registers it, and mounts through the document
-                // overlay. Routing a raw path here instead would mount a
-                // base-only stage and silently drop runtime edits.
-                warn!(
-                    "[scene] `{}` is a bare filesystem path — `LoadScene` takes \
-                     scheme addresses (`lunco://…`, `twin://…`). Use `OpenFile` \
-                     to open a scene by path; it resolves the owning root.",
-                    path_in
-                );
-                None
-            }
-        }
-    } else {
-        // `LoadScene` is asset-root-relative. Passing `assets/scenes/...`
-        // would make AssetServer resolve `assets/assets/scenes/...`; if the
-        // caller cleared the active scene first, that typo left the viewport
-        // scene-less and therefore unlit. Reject it before any scene lifecycle
-        // work instead of accepting a second spelling for the same asset.
-        let normalized = path_in.replace('\\', "/");
-        if normalized == "assets" || normalized.starts_with("assets/") {
-            warn!(
-                "[scene] `{}` repeats the asset root; LoadScene paths are relative to `assets/` \
-                 (use `scenes/...`, not `assets/scenes/...`)",
-                path_in
-            );
-            None
-        } else {
-            Some(path_in.to_string())
-        }
-    }
+
+    warn!(
+        "[scene] `{path_in}` is not a root-qualified scene address — LoadScene takes \
+         `lunco://…` or `twin://…`. Use OpenFile for a filesystem path."
+    );
+    None
 }
 
 /// Spawn a USD scene root directly under the canonical `WorldGrid` entity.
@@ -4441,10 +4405,7 @@ pub fn spawn_scene_root_world(
     path_in: &str,
     root_prim_in: &str,
 ) -> Option<Entity> {
-    // Normalize to asset-server-relative. The asset server prepends
-    // its configured `file_path` (the `assets/` root) to every load
-    // string, so absolute paths must have that prefix stripped.
-    let asset_path = normalize_scene_asset_path(path_in)?;
+    let asset_path = validate_scene_address(path_in)?;
     // File-backed source: the AssetServer reads + composes the on-disk
     // stage. lunco-usd's E1 projection takes the other door
     // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
@@ -5168,19 +5129,26 @@ mod tests {
     }
 
     #[test]
-    fn scene_path_repeating_asset_root_is_rejected_before_reload() {
+    fn scene_address_requires_a_registered_scheme_before_reload() {
         assert_eq!(
-            normalize_scene_asset_path("assets/scenes/luncosim/sandbox_scene.usda"),
+            validate_scene_address("lunco://scenes/luncosim/sandbox_scene.usda"),
+            Some("lunco://scenes/luncosim/sandbox_scene.usda".to_string())
+        );
+        assert_eq!(
+            validate_scene_address("twin://moonbase/scenes/sandbox_scene.usda"),
+            Some("twin://moonbase/scenes/sandbox_scene.usda".to_string())
+        );
+        assert_eq!(
+            validate_scene_address("scenes/luncosim/sandbox_scene.usda"),
             None
         );
         assert_eq!(
-            normalize_scene_asset_path("assets\\scenes\\sandbox\\sandbox_scene.usda"),
+            validate_scene_address("/workspace/assets/scenes/luncosim/sandbox_scene.usda"),
             None
         );
-        assert_eq!(
-            normalize_scene_asset_path("scenes/luncosim/sandbox_scene.usda"),
-            Some("scenes/luncosim/sandbox_scene.usda".to_string())
-        );
+        assert_eq!(validate_scene_address("lunco://"), None);
+        assert_eq!(validate_scene_address("lunco://../scene.usda"), None);
+        assert_eq!(validate_scene_address("twin:///scene.usda"), None);
     }
 
     // ── interface published at parse, not at solve ───────────────────

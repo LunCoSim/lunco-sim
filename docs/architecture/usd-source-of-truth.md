@@ -19,34 +19,32 @@ projection". Spawn / remove / reference are USD-first through this path.
 runtime layer. A drag therefore **survives a reload**, and Ctrl+Z goes through the
 Twin journal like every other edit.
 
-> **Why this is called out rather than assumed.** The correct path existed and was
-> only ever fired from tests: the gizmo wrote `Transform` directly and **every move
-> was silently lost on reload**. There was also no `UndoDocument` observer for USD
-> documents at all, so undo on a USD twin was a **silent no-op**, and a private
-> in-memory `undo.rs` history shadowed the journal. That second history is gone.
-> If you add a new direct-manipulation tool, wire it to the op — not to `Transform`.
+> **Current boundary.** The gizmo and scene-edit commands author USD operations;
+> they do not rely on a private in-memory undo history. If you add a new
+> direct-manipulation tool, wire it to the owning USD operation — not directly to
+> `Transform` — so the edit is journaled, projected, and reloadable.
 
-*Not built:* `SetObjectProperty` still mutates ECS in place — `Visibility`,
-`WheelRaycast`, and the appearance **intent** components `PbrLook` / `ShaderLook`
-(see [`render-decoupling.md`](render-decoupling.md); the
-crate names no material type, and `lunco-render-bevy` binds the intent to a real
-material). Its shadow-write excludes shader/visible/PBR/colour. And every type
-named in the plan below — `UsdPrimIndex`, `UsdAttrProjection`,
-`project_usd_attrs_to_components` — is **proposed, not written**: all three grep to
-zero hits repo-wide. Read §2–§5 as the design to implement, not as a map of what
-runs today.
-**Scope:** make editing flow *into* USD and *project out* to ECS, instead of the
-current ECS-first model where `SetObjectProperty` mutates components directly and
-only a partial, lossy shadow-write reaches USD.
+*Remaining design work:* `SetObjectProperty` still mutates some ECS intent in place —
+`Visibility`, `WheelRaycast`, and the appearance **intent** components `PbrLook` /
+`ShaderLook` (see [`render-decoupling.md`](render-decoupling.md); the crate names
+no material type, and `lunco-render-bevy` binds the intent to a real material).
+The current observers persist the property classes that already have a USD reader;
+the generic `UsdPrimIndex`, `UsdAttrProjection`, and
+`project_usd_attrs_to_components` registry proposed below are not yet implemented.
+Read §2–§5 as the design for the remaining consolidation, not as a list of
+retired runtime paths.
+**Scope:** make the remaining edits flow *into* USD and *project out* to ECS,
+without adding another per-domain persistence or resolution mechanism.
 
 ---
 
 ## 0. Problem statement
 
-Today an interactive edit (Inspector slider, `SetObjectProperty` API call) mutates
-**ECS components in place**. USD — the thing we treat as the authored scene — is
-either not written at all, or written by a *separate* fire-and-forget observer that
-only covers scalar shader params. The result:
+An interactive edit (Inspector slider, `SetObjectProperty` API call) currently
+updates **ECS intent in place** for immediate feedback. USD persistence is split
+between the command's PBR authoring path and separate observers for shader,
+visibility, and wheel properties; the split is the remaining consolidation target.
+For properties without a reader, the result is:
 
 - **Two stores that drift.** ECS holds the live truth; the `.usda` (and its runtime
   layer) holds a stale, partial copy.
@@ -62,10 +60,11 @@ of composed USD.
 
 ---
 
-## 1. The two worlds (key finding)
+## 1. The two projection modes (key finding)
 
-The codebase already contains *two* parallel scene pipelines. The good design exists
-in one of them and is missing from the other.
+The codebase has a document-backed projection mode and a direct asset-address mode.
+They share the same scene lifecycle and `LoadScene` admission boundary; only the
+document ownership available to the asset differs.
 
 ### Document world — workbench tabs, Twins (already correct)
 
@@ -75,48 +74,46 @@ in one of them and is missing from the other.
 - `UsdOp::SetAttribute` (`lunco-usd/src/document.rs:735`) mutates the in-memory layer
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
-- Projected into ECS by the **E1/E2 system** in `lunco-usd/src/live_projection.rs`:
-  - `project_pending_live_imports` (first mount, creates `LiveDocScene { doc, generation }`),
-  - `refresh_live_doc_scenes` (`live_projection.rs:217`) — on a `generation` bump it
-    `classify_changes_since(...)`, applies cheap `InfoOnly` transforms in place
-    (`apply_translates`, **no respawn**), and for structural changes refreshes
-    `asset.reader = Arc::new(reader)` (which fires `AssetEvent::<UsdStageAsset>::Modified`)
-    + `reconcile_structural` to spawn/despawn only changed subtrees.
+- Projected into ECS by `lunco-usd/src/twin_projection.rs` and
+  `lunco-usd/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
+  `base ⊕ runtime` source and applies incremental authored changes; the live
+  consumer drains the OpenUSD change sink and reconciles the ECS projection.
 
 **This is already "USD is source of truth → project to ECS."**
 
-### Asset world — luncosim `--scene` (where editing actually happens)
+### Direct asset-address mode — `LoadScene { path: "lunco://…" }`
 
-- `--scene` is loaded via `LoadScene` → `asset_server` → `spawn_scene_root_with_stage`
-  (`lunco-usd-sim/src/cosim.rs`). The scene becomes a **flattened `UsdStageAsset`**
-  (`UsdStageAsset { reader: Arc<UsdData> }`, `lunco-usd-bevy/src/lib.rs:137`;
-  `UsdData = openusd::sdf::Data`) with **no editable layers, no document, no generation,
-  no undo.**
-- `SetObjectProperty` lives here and mutates ECS directly.
-- The only re-projection is **hand-written per domain** (`refresh_layered_terrain_layers`,
-  `lunco-luncosim/src/lib.rs:621`) reacting to `AssetEvent::Modified`.
+- A direct `lunco://` load can mount a shipped asset without an editable document.
+  The `UsdStageAsset` is an asset-server projection with no document generation,
+  journal, or undo state.
+- Startup `--scene` is different: it accepts a filesystem input, resolves and
+  registers its owning root, and enters the document-first `twin://` path before
+  mounting. This keeps CLI startup and `OpenFile` on the same loading sequence.
+- A direct asset-address load is therefore suitable for read-only/demo content;
+  edits that must persist belong to an opened Twin/document.
 
-The two worlds never meet: `persist_property_to_runtime_layer`
-(`lunco-luncosim-edit/src/commands.rs:1656`) tries to bridge by authoring
-`UsdOp::SetAttribute` on `LayerId::runtime()`, **but** it only fires for scalar shader
-params on prims an **open document owns** — in the pure luncosim there is no document,
-so it is a no-op.
+`SetObjectProperty` and its persistence observers live in
+`lunco-scene-commands/src/commands.rs`; they author the properties for which a
+document-backed prim and a reader already exist, while render-only/transient
+properties remain live intent. There is no second scene loader or hidden
+base-only redirect.
 
 ---
 
 ## 2. What `SetObjectProperty` does today (review)
 
-`on_set_object_property` (`lunco-luncosim-edit/src/commands.rs:1933`) — resolves
+`on_set_object_property` (`lunco-scene-commands/src/commands.rs:2228`) — resolves
 `entity_id → Entity` via `ApiEntityRegistry`, then branches on `property`:
 
 | Property | Mutation | Authors USD? |
 |---|---|---|
 | `brake_torque`, `friction_mu`, `wheel_radius`, `moi`, `spring_k`, … | `WheelRaycast` fields through the canonical wheel-parameter registry | yes — persisted through the USD runtime overlay |
 | `shader` | swaps the `ShaderLook`'s shader | no |
-| `visible` | sets `Visibility` (Hidden/Visible) | no |
+| `visible` | sets `Visibility` (Hidden/Visible) | yes, when a document owns the prim |
 | `base_color`, `emissive`, `metallic`, `roughness`, `ior`, `alpha`, `double_sided` | the entity's `PbrLook` via `apply_pbr_look` | **yes** — as `UsdPreviewSurface` `inputs:*` (`double_sided` → `doubleSided` on the Gprim) |
 | `unlit` | the entity's `PbrLook` | no — render-only intent (overlay geometry); USD has no equivalent, by design |
-| *(fallback)* any shader param | the entity's `ShaderLook.dyn_params` (`lunco_materials`) + `to_snake_case` | no |
+| *(fallback)* scalar/color3 shader param | the entity's `ShaderLook` values (`lunco_materials`) + `to_snake_case` | yes, when a document owns the prim |
+| *(fallback)* other shader param | the entity's `ShaderLook` values | no — no USD reader yet |
 
 All five mutate **appearance intent**, never a material asset: `lunco-render-bevy`
 watches `Changed<PbrLook>` / `Changed<ShaderLook>` and rebinds. `SetObjectProperty`'s
@@ -126,14 +123,14 @@ crate names no material type at all.
 > so identical-looking prims **share one handle**. Reaching through the handle to
 > recolour "this rock" would recolour **every rock that looked like it**.
 
-Sibling observer `persist_property_to_runtime_layer` (`commands.rs:1656`):
+Sibling observer `persist_property_to_runtime_layer` (`lunco-scene-commands/src/commands.rs:1187`):
 - skips `shader`/`visible`; requires a **scalar float** value; requires an **active
   document** that **owns** the prim; requires a `ShaderLook` + `UsdPrimPath`.
 - emits `UsdOp::SetAttribute { edit_target: LayerId::runtime(), path:
   <UsdPrimPath.path>, name: "primvars:<snake>", type: "float", value }`.
 
-So: **ECS-first, with a partial, lossy, document-only shadow-write.** Colors, vectors,
-PBR, visibility and wheel params never reach USD at all.
+So: **ECS-immediate, with partial document-backed persistence.** The missing generic
+registry is why unsupported appearance properties can still be live-only.
 
 ### Supporting facts
 
@@ -173,15 +170,15 @@ USD.
                                                                    ECS components
 ```
 
-### Step 0 (foundational): make the scene a document
+### Step 0 (foundational): make the scene a document — completed for startup/Twins
 
-Route the luncosim `--scene` through `UsdDocumentRegistry` and mount it as a
-`LiveDocScene` (the `PendingLiveImports` path, registered in
-`lunco-usd/src/commands.rs:115`) instead of the raw-asset `spawn_scene_root_with_stage`.
-This gives the luncosim the editable base/runtime layers, `generation`, journal/undo, and
-the entire E1/E2 reprojection loop the workbench already has. **Everything below then
-works in both worlds.** This is the largest and riskiest change (it touches scene
-loading); Steps 1–4 are mechanical once it lands.
+Route the luncosim `--scene` through the owning Twin/document and mount it as the
+document-first `twin://` source. `OpenFile` uses the same root discovery and
+mounting sequence. Direct `lunco://` loads remain intentionally read-only asset
+mounts when no document owns them; they do not silently invent a document.
+
+The remaining steps concern broadening USD round-trip coverage for every
+`SetObjectProperty` field, not repairing a second startup loader.
 
 ### Step 1: `SetObjectProperty` authors USD
 
@@ -282,7 +279,7 @@ Built in order `0 → 4 → 2 → 1 → 3`, with **material params as the first 
 (they already had the `primvars:<snake>` convention and the `persist_*` precedent to
 fold in):
 
-1. **Step 0** — scene-as-document for `--scene` (foundational; gates everything).
+1. **Step 0** — scene-as-document for `--scene` (completed through Twin projection).
 2. **Step 4** — `UsdPrimIndex` resource + maintenance observers (small, independent).
 3. **Step 2** — `UsdAttrProjection` registry with the material-param projector only.
 4. **Step 1** — `SetObjectProperty` (material props) authors `SetAttribute`; deleted the
@@ -295,12 +292,13 @@ fold in):
 
 ## 7. Key references
 
-- `lunco-luncosim-edit/src/commands.rs` — `SetObjectProperty` struct
-- `lunco-luncosim-edit/src/commands.rs` — `on_set_object_property`
-- `lunco-luncosim-edit/src/commands.rs` — `persist_property_to_runtime_layer`
+- `lunco-scene-commands/src/commands.rs` — `SetObjectProperty` struct and observers
+- `lunco-scene-commands/src/commands.rs` — `on_set_object_property`
+- `lunco-scene-commands/src/commands.rs` — `persist_property_to_runtime_layer`
 - `lunco-usd/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
-- `lunco-usd/src/live_projection.rs` — `refresh_live_doc_scenes` (E1/E2 template)
-- `lunco-usd/src/commands.rs` — `PendingLiveImports` / projection registration
+- `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
+- `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
+- `lunco-usd/src/commands.rs` — scene command admission and document registration
 - `lunco-usd-bevy/src/lib.rs` — `UsdStageAsset`, `UsdPrimPath`
 - `lunco-usd-bevy/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index

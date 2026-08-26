@@ -103,7 +103,7 @@ names the producer, and nothing else changes.
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
   -H 'Content-Type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"LoadScene","params":{"path":"scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
+  -d '{"type":"ExecuteCommand","command":"LoadScene","params":{"path":"lunco://scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
 ```
 
 `LoadScene` despawns every entity carrying `UsdPrimPath` plus every

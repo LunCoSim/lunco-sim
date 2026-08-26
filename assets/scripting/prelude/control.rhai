@@ -28,6 +28,9 @@ fn brake(rover) {
 
 // ── Scene / world manipulation shortcuts (all generic cmd() under the hood) ──
 
+// `path` must already be a root-qualified address (`lunco://…` or `twin://…`).
+// Filesystem paths enter through `OpenFile`, which owns Twin discovery and
+// document-first mounting.
 fn load_scene(path)            { cmd("LoadScene", #{ path: path }) }
 fn clear_scene()               { cmd("ClearScene") }
 // Reload the CURRENTLY-active scene from disk (LoadScene no-ops on the live one).

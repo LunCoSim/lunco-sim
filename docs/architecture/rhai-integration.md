@@ -42,8 +42,10 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   ownership-gated predictive controls; direct reflected writes, structural
   edits, and policy changes are rejected.
 
-Python scenarios run via `PythonScenarioRuntime` implementing the same
-`ScenarioRuntime` trait; they do not use the retired dictionary bridge.
+Python currently supports only the optional one-shot `RunPython` command. It
+does not implement `ScenarioRuntime` or execute `ScriptedModel` lifecycle
+hooks; Python scenario lifecycle support remains explicitly planned in
+`lunco-scripting/src/scenario.rs`.
 
 ---
 
@@ -163,7 +165,7 @@ Representative commands already covering the user's surface:
 | Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); `DriveMix` allocates them to actuators (`lunco-cosim/src/lib.rs`, `lunco-mobility::apply_drive_mix`) |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
-| Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-luncosim-edit/src/commands.rs`) |
+| Scene editing | `SpawnEntity`, `MoveEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`) |
 | USD geometry editing | `SetUsdAttribute` (`lunco-scene-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
@@ -218,8 +220,10 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 Scenario and command scripts run in an **exclusive system** (`&mut World`) and
 expose the scoped world bridge for the evaluation duration. Reads run
 synchronously; writes mirror `executor.rs:134-161` (build the reflected event,
-then trigger it). The scenario driver is the single authoritative Rhai runtime;
-there is no separate one-shot backend or compatibility execution path.
+then trigger it). The scenario driver is the authoritative Rhai lifecycle
+runtime. `RunRhai` is a separate one-shot command that uses the same engine and
+bridge without attaching a persistent `ScriptedModel`; it is not a legacy
+compatibility path.
 
 ### 3.2 Exposed verbs (the generic runtime surface)
 ```rust
@@ -241,6 +245,8 @@ friendly verbs — so authoring stays nice without per-command Rust code:
 ```rhai
 fn drive(r, fwd, steer) { cmd("SetPorts", #{ target: r, writes: [["throttle", fwd], ["steer", steer]] }); }
 fn possess(r)           { cmd("PossessVessel", #{ target: r }); }
+// `path` is a root-qualified scene address (`lunco://…` or `twin://…`).
+// Use `OpenFile` for a filesystem path so the owning Twin is discovered first.
 fn load(path)           { cmd("LoadScene", #{ path: path, root_prim: "" }); }
 fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ target: id, key: k, value: v }); }
 ```
@@ -553,8 +559,9 @@ subset for UI (`SyncChannel::Local` vs `ControlStream`). No client-side divergen
 
 **Attach a script to an entity:** reuse `ScriptedModel` (`doc.rs:100`) — the
 per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Rhai
-scenarios use `RhaiScenarioRuntime`; Python `ScriptedModel`s use the separate
-cached Python executor. The script's `task(self)` identity IS the host entity.
+scenarios use `RhaiScenarioRuntime`; Python has no `ScriptedModel` lifecycle
+runtime yet and is currently limited to one-shot `RunPython` evaluation. The
+script's `task(self)` identity IS the host entity.
 
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source

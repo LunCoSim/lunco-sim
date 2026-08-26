@@ -14,7 +14,7 @@
 //! rhai> set_camera("OrbitView")
 //!
 //! # one-shot
-//! luncosim rhai --api 4101 -e 'load_scene("scenes/luncosim/lander_cinematic.usda"); pause()'
+//! luncosim rhai --api 4101 -e 'load_scene("lunco://scenes/luncosim/lander_cinematic.usda"); pause()'
 //!
 //! # pipe a whole script (sent as ONE snippet, so multi-line blocks work)
 //! cat cutscene.rhai | luncosim rhai --api 4101

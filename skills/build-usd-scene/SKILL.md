@@ -13,8 +13,8 @@ description: >
   `.usda` file, coordinate placement, or "why did the gizmo grab the wrong
   thing?".) Project-specific and non-obvious: USD is the SOURCE OF TRUTH
   (projected to ECS — you edit the world by authoring it), the engine frame is
-  fixed (Y-up, right-handed, −Z-forward, metres), `LoadScene` paths are relative
-  to the assets root, spawnable things come from a catalog (`list_bundled`), and
+  fixed (Y-up, right-handed, −Z-forward, metres), `LoadScene` paths are
+  root-qualified (`lunco://` or `twin://`), spawnable things come from a catalog (`list_bundled`), and
   live edits must NOT go through `SetDocumentSource`. For the vehicle's BEHAVIOUR
   use author-scenario; for its GNC use authoring-vessel-controllers.
 ---
@@ -40,7 +40,7 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 
 | Command | Params | Does |
 |---|---|---|
-| `LoadScene` | `{path, root_prim}` | Load a USD scene. `path` is **relative to the `assets/` root** (do NOT prefix `assets/`). `root_prim` empty = the stage's `defaultPrim`. |
+| `LoadScene` | `{path, root_prim}` | Load a USD scene. `path` is a root-qualified `lunco://…` or `twin://…` address. `root_prim` empty = the stage's `defaultPrim`. |
 | `ClearScene` | `{}` | Tear down the current scene. |
 | `RestartScene` | `{}` | Reload/reset the current scene. |
 | `SpawnEntity` | `{target, entry_id, position:[x,y,z], rotation?}` | Instance a catalogued prefab. `entry_id` comes from the **spawn catalog** (`list_bundled` / `ListBundled`). |
@@ -53,7 +53,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 
 ## Recipe
 
-1. **Base:** `LoadScene {path:"scenes/…/foo.usda", root_prim:""}` for an existing
+1. **Base:** `LoadScene {path:"lunco://scenes/…/foo.usda", root_prim:""}` for an existing
    scene, or start from the loaded default and add to it. `ClearScene` first if
    replacing.
 2. **What can I spawn?** `list_bundled` → pick an `entry_id`.
@@ -81,7 +81,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 - **A sphere you add for the Sun or Earth casts a shadow.** Sky bodies are real geometry sitting up-sun: they eclipse the DistantLight and sweep a hard shadow across the ground. Author `bool primvars:doNotCastShadows = true` (the starfield dome does; `big_space_setup.rs` stamps `NotShadowCaster` on the engine's own sun sphere). Better still, declare bodies with `LunCoCelestialBodyAPI` (`lunco:body = 399`) and let the ephemeris place them at true distance.
 - **Custom-shader inputs are snake_case** — the ShaderMaterial reflection binds the WGSL struct's field names (`star_density`, `point_size`, `brightness`). A camelCase `inputs:starDensity` is a dead wire: no error, no effect, and hours of "why does tuning the sky do nothing".
 - **Exposure and illuminance only mean something together.** The frame's brightness is `illuminance / 2^EV100`, so a scene that copies a `DistantLight` intensity from one file and an `exposureEv100` from another lands stops away from either. Author both on purpose: the sun prim's `inputs:intensity` and the `LunCoEnvironment` prim's `lunco:env:exposureEv100`.
-- **`LoadScene` path is relative to `assets/`** — `"scenes/luncosim/lander_ops.usda"`, never `"assets/scenes/…"`.
+- **`LoadScene` path must be root-qualified** — use `lunco://scenes/luncosim/lander_ops.usda` for a shipped asset or `twin://<name>/…` for an opened Twin. Use `OpenFile` for a filesystem path.
 - **Spawn `entry_id` must be in the catalog** — an unknown id logs `unknown entry '…'` and no-ops. List first with `list_bundled`.
 - **Empty spawn path / root_prim → the `defaultPrim` sentinel**: an empty path means "the stage's default prim", not an error.
 - **Spawns land ON the terrain surface.** Placement samples the terrain **height oracle** (analytic, so it works even before a streamed/CDLOD collider tile bakes) — a spawn over un-baked terrain rests on the ground instead of free-falling. The GUI click path terrain-fits the footprint (slope-aligned, `max(oracle, raycast)` so an obstacle rock under the chassis lifts it); the API `SpawnEntity` path snaps `y` to the surface (+ the asset's `lunco:spawnLift`) **only when DEM terrain covers `(x,z)`** — over a flat scene, or when you intend an altitude, the `position` you pass is used exactly. So pass a real Y; don't assume it's ignored.
@@ -93,7 +93,7 @@ Discover the live set with `DiscoverSchema`; discover spawnables with `list_bund
 
 ## Anti-patterns
 
-- ❌ Prefixing `LoadScene` paths with `assets/`.
+- ❌ Passing a bare or absolute filesystem path to `LoadScene`.
 - ❌ Guessing an `entry_id` instead of `list_bundled`.
 - ❌ `SetDocumentSource` to build a scene incrementally — use per-object ops.
 - ❌ Branching placement math on up-axis/units — the frame is fixed; convert only at the importer.

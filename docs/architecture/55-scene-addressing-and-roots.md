@@ -2,8 +2,7 @@
 
 > Status: Active · Audience: contributors on scene loading, twins, and path resolution
 >
-> Supersedes the ad-hoc "promote an out-of-assets path"
-patching in `normalize_scene_asset_path`.
+> Supersedes the former ad-hoc "promote an out-of-assets path" loader.
 
 ## The former failure mode
 
@@ -18,14 +17,15 @@ The runtime now resolves the owning root before loading and reports an invalid
 root visibly. The rest of this document is the current contract; the historical
 failure is retained only to explain why the boundary exists.
 
-## Diagnosis: three identities for one thing
+## Address identities and the boundary
 
-A scene's location is currently expressed three ways, with conversions
-scattered across at least four sites:
+A scene enters the runtime in one of two address forms. A filesystem path is an
+input to an open command only; it is converted to a rooted address before the
+scene lifecycle starts:
 
 | Identity | Rooted at | Who produces it |
 |---|---|---|
-| bare relative (`scenes/x.usda`) | *implicitly* `assets/` | in-tree content, default `AssetSource` |
+| bare relative (`scenes/x.usda`) | *implicitly* `assets/` | authoring/CLI input only; never a `LoadScene` address |
 | `lunco://<rel>` | the engine asset library | shipped/portable refs |
 | `twin://<name>/<rel>` | a registered Twin root | the Twin-open flow |
 | absolute fs path | nothing | **every user-facing picker** |
@@ -39,12 +39,12 @@ default source" — but once a Twin root is open, the same string resolves again
 scene. Two spellings of the same intent with different, context-dependent
 meanings is not a convenience; it is a correctness hazard.
 
-Each conversion site implements its own partial rules:
+The current entry points are deliberately split by ownership:
 
-- `normalize_scene_asset_path` (`lunco-usd-sim/src/cosim.rs`) — absolute →
-  asset-relative, **refuses** anything outside `assets/`.
-- `twin_source_for_workspace_scene` (same file) — asset-relative → `twin://`,
-  but only for roots already registered.
+- `validate_scene_address` (`lunco-usd-sim/src/cosim.rs`) — accepts only
+  registered scene schemes and rejects bare or filesystem paths.
+- `lunco_assets::engine_asset_uri` — converts an in-tree library reference to
+  its canonical `lunco://` address at command boundaries.
 - `load_startup_scene` (`lunco-luncosim/src/lib.rs`) and the USD `on_open_file`
   observer (`lunco-usd/src/commands.rs`) both resolve the owning root, register
   it, and enter the same doc-first `LoadScene` path.
@@ -178,6 +178,9 @@ call `OpenFile`, which is already API-accessible. Still no new commands.
 - `TwinRoots` returns the assigned authority and never repoints a live name.
 - Open flows register the root, mount the document overlay, and only then load
   the `twin://` scene.
+- Filesystem scene paths are canonicalized through `lunco-storage` before root
+  discovery and containment checks. If canonicalization fails, `OpenFile`
+  reports the error and stops; it never falls back to a lexical path.
 - `LoadScene` accepts already-addressable scheme paths; filesystem paths go
   through `OpenFile`, which owns root discovery and document mounting.
 - Invalid roots and registry failures are reported at their owner. They are not

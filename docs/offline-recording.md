@@ -352,7 +352,7 @@ Relevant CLI flags (the full surface is in the [applications index](apps/README.
 
 | Flag | Effect |
 |---|---|
-| `--scene <path>` | Load a USD stage at startup — a path relative to the `assets/` root, **or an absolute path anywhere on disk**, in which case `load_startup_scene` mounts the containing directory as a twin root. |
+| `--scene <path>` | Load a USD stage at startup — a relative or absolute filesystem path. `load_startup_scene` resolves the containing directory as a Twin root, then mounts the canonical `twin://` address. |
 | `--vertical` | `540x960` viewport, for vertical/mobile output. |
 | `--no-ui` | Drop the egui overlay panels, leaving only the 3D viewport. |
 | `--api <port>` | REST control listener. Not needed for a scene-driven capture. |

@@ -50,7 +50,7 @@ These are honored by the windowed apps that embed the HTTP API bridge
 |---|---|
 | `--api [PORT]` | Enable the HTTP automation API. Omit `PORT` to use the default **4101** (`lunco_core::session::DEFAULT_API_PORT`). Without `--api`, no network surface is exposed. |
 | `--no-ui` | Run headless — skip the winit window / egui chrome, run the shared sim/physics loop only. |
-| `--scene <path>` | (`luncosim`) Load a USD scene on boot. Path is relative to the `assets/` source root — do **not** prefix with `assets/`. |
+| `--scene <path>` | (`luncosim`) Load a USD scene on boot. This CLI flag accepts a filesystem path (relative or absolute); startup resolves its owning root and emits the canonical `twin://` scene address before mounting. |
 
 ## Talking to a running app — HTTP API & MCP
 
