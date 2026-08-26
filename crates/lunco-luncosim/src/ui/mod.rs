@@ -228,7 +228,8 @@ impl Plugin for SandboxUiPlugin {
                 use lunco_workbench::WorkbenchAppExt;
                 app.register_settings_section::<lunco_settings::DownloadSettings>();
                 app.add_observer(on_runtime_ui_action)
-                    .add_observer(on_dismiss_terrain_overlay);
+                    .add_observer(on_dismiss_terrain_overlay)
+                    .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
                 app.add_systems(
                     Update,
                     runtime_exposure::register_runtime_ui_input_regions
@@ -877,6 +878,30 @@ fn register_downloadable_assets_settings(world: &mut World) {
             });
             ui.add_space(8.0);
         }
+        if let Some((root, suppressed)) = dataset_provisioning::active_project_prompt_setting(
+            ctx.resource::<lunco_workspace::WorkspaceResource>(),
+        ) {
+            let mut suppressed = suppressed;
+            if ui
+                .checkbox(
+                    &mut suppressed,
+                    "Don't show missing-asset prompt at startup for this project",
+                )
+                .changed()
+            {
+                ctx.trigger(dataset_provisioning::SetMissingAssetPromptSuppressed {
+                    root,
+                    suppressed,
+                });
+            }
+        } else {
+            ui.label(
+                egui::RichText::new("Open a project to configure its missing-asset prompt")
+                    .weak()
+                    .italics(),
+            );
+        }
+        ui.add_space(8.0);
         if settings != original_settings {
             ctx.set_resource(settings);
         }

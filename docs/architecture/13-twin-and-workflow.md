@@ -271,6 +271,11 @@ mode = "hybrid"                   # "path" | "uuid" | "hybrid" (default)
 
 [workspace]
 default = "build"                 # which workspace opens by default
+
+[downloads]
+# Suppress the missing-declared-assets consent window for this project.
+# Omitted/false shows the window when assets are missing.
+suppress_missing_prompt = false
 ```
 
 Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are

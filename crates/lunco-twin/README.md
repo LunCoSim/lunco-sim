@@ -44,7 +44,7 @@ remote-twin milestone.
 |------|------|
 | [`TwinMode`] | `Orphan(PathBuf)` / `Folder(Twin)` / `Twin(Twin)` — the three ways to open content |
 | [`Twin`] | Loaded folder: `root` + optional `manifest` + file index + sub-twins |
-| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children`) |
+| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children` + project settings) |
 | [`TwinChildRef`] | One `[[children]]` entry — `name` + (`path` or `url`) |
 | [`FileEntry`] | One discovered file: `relative_path` + `kind` |
 | [`FileKind`] | `Document(DocumentKindId)` / `FileReference` / `Unknown` |
@@ -106,6 +106,12 @@ match TwinMode::open(Path::new("./my_base"))? {
    `Vec<Document>`. Documents live in
    [`lunco-workspace`](../lunco-workspace/README.md); Twin just
    answers membership questions.
+
+Project-owned presentation preferences belong in `twin.toml`, not the
+user-global `~/.lunco/settings.json`. The `[downloads]` section currently
+contains `suppress_missing_prompt`; it defaults to `false`, so a project with
+missing declared datasets shows the consent window when opened. The Workbench
+Settings menu and the popup checkbox both update this same manifest field.
 
 ## What this crate does NOT do (yet)
 

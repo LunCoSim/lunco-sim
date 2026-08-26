@@ -74,8 +74,8 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
-    glob_matches, JournalManifest, TwinChildRef, TwinManifest, UsdManifest, DEFAULT_SCENE_GLOBS,
-    MANIFEST_FILENAME,
+    glob_matches, DownloadManifest, JournalManifest, TwinChildRef, TwinManifest, UsdManifest,
+    DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -382,6 +382,7 @@ impl Twin {
                         scenes: None,
                     }),
                     journal: None,
+                    downloads: None,
                 });
             }
         }
@@ -671,6 +672,7 @@ version = "0.1.0"
             children: vec![],
             usd: None,
             journal: None,
+            downloads: None,
         };
         twin.promote_to_twin(manifest).unwrap();
         assert!(twin.has_manifest());

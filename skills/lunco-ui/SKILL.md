@@ -32,6 +32,12 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`, the in-house replacement for the old external `bevy_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
+Project-owned settings are not user-global settings: read the active Twin's
+manifest through the workspace resource and emit a typed event for changes.
+For the missing-asset consent flow, the popup's unchecked negative checkbox
+means "show next time" and persists through `twin.toml [downloads]`; do not
+add a second global settings key for it.
+
 ## Runtime-authored HTML/CSS surfaces
 
 For a Twin-facing HUD, telemetry card, progress overlay, or simple runtime
