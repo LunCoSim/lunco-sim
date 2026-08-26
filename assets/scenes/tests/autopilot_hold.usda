@@ -5,10 +5,14 @@
     metersPerUnit = 1
 )
 
-# An engaged autopilot with NO waypoints must HOLD, not drive.
+# An engaged autopilot with NO waypoints must HOLD, not drive. After that hold
+# window the same rover receives a longer patrol while it is already running;
+# the authored production scenario checks that the live update resumes its
+# current leg instead of U-turning to the first waypoint.
 #
 # Two rovers, identical, on flat ground:
 #   Idle    — autopilot engaged with no route at all. Must not move.
+#             then reused for the patrol hot-swap check.
 #   Routed  — autopilot engaged on a patrol. Must reach its waypoint.
 #
 # The pair is the point. "The rover didn't move" passes just as well when the
@@ -21,7 +25,7 @@
 def Xform "AutopilotHoldTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Two rovers under autopilot: one with no waypoints, one with a route. Checks that an autopilot with nowhere to go holds still instead of driving off, while a routed one still drives."
+    doc = "Two rovers under autopilot: one with no waypoints, then a live patrol update, and one control route. Checks that an autopilot with nowhere to go holds still, and that a mid-route update continues the current leg."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {

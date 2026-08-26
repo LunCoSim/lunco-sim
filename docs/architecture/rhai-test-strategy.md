@@ -36,6 +36,16 @@ belong in Rust. The mobility allocation split in `allocation_spec.rhai` is the
 model for future moves: exact unobservable kernel arithmetic stays Rust, while
 its live consequence moves to an authored control fixture.
 
+The second review also removed the Rust integration copy of
+`appending_waypoints_while_running_resumes_route_and_drives_the_new_legs` from
+`crates/lunco-autopilot/tests/waypoint_lifecycle_test.rs`. The existing
+`autopilot_hold` production scene now holds a real rover with no route, then uses
+the public Rhai `patrol(...)` update while that rover is part-way through a real
+route. Its forward-motion assertion catches a reset-to-leg-zero U-turn, while
+the same scene's routed rover remains the anti-trivial drive control. The
+retained Rust tests cover exact cursor arithmetic and scene teardown; neither
+is replaced by a weaker string-level check.
+
 ## Test tiers
 
 1. **No-build asset graph preflight.**
@@ -125,6 +135,9 @@ exist:
 - `lunco-cosim` and `lunco-modelica` tests that construct participants directly;
   these protect generic coupling, parser and solver mechanisms, not authored
   mission policy;
+- avatar teleport/grid tests, render-to-physics writeback tests, and USD
+  projection tests whose public surfaces do not expose the exact frame or
+  lifecycle fact they assert;
 - orphan or externally-targeted scenario assets, such as
   `assets/scenarios/tests/wheel_sinking_parity.rhai`, until a matching authored
   scene exists. They are not silently counted as production gates.

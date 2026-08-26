@@ -14,12 +14,18 @@
 // is about the setpoint and nothing else; the brake is what makes the same
 // answer hold on real terrain.
 //
+// After the hold window, the same production fixture hot-swaps a patrol onto
+// that engaged rover while it is part-way through the first route. It must
+// continue toward the current leg rather than U-turn to leg 0. This is the
+// public observable replacement for the old Rust-only cursor test; exact cursor
+// arithmetic remains a Rust mechanism contract.
+//
 // ── WHY TWO ROVERS ──────────────────────────────────────────────────────────
 //
 // "It didn't move" is exactly what a dead drive path, an unloaded rover or a
 // frozen physics tick also produce. `Routed` is the CONTROL: the same rover,
-// the same engage verb, one waypoint 12 m ahead. It must arrive. Without it the
-// headline check passes on a broken build.
+// the same engage verb, one waypoint 12 m ahead. It must traverse its leg.
+// Without it the hold and hot-swap assertions pass on a broken build.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -40,6 +46,18 @@ const HOLD_TOL_M = 1.0;
 // cornering fit it turns too slowly to reach any lateral waypoint in the window.)
 const LEG_M = 12.0;
 
+// The hot-swap route reaches its first point, then samples the second leg
+// part-way through it. A reset-to-zero implementation has to reverse toward
+// HOT_FIRST_M; a resumed implementation continues toward HOT_SECOND_M.
+const HOT_FIRST_M = 6.0;
+const HOT_SECOND_M = 18.0;
+const HOT_THIRD_M = 30.0;
+const HOT_FOURTH_M = 42.0;
+const HOT_FIFTH_M = 54.0;
+const HOT_SECOND_ENTRY_M = 9.0;
+const HOT_OBSERVE_S = 8.0;
+const HOT_TIMEOUT_S = 42.0;
+
 /// Distance between two samples, or `()` if either is missing. NOT `seg` from
 /// the prelude: that returns 0.0 on a missing sample, which is exactly the value
 /// that makes "it held still" pass when the rover has actually despawned.
@@ -51,7 +69,7 @@ fn dist(a, b) {
 fn on_start(me) {
     this.t = 0.0;
     this.settle_s = 3.0;    // land + let the kinematic → dynamic handover finish
-    this.drive_s = 20.0;    // long enough for the control to cover 12 m
+    this.hold_s = 10.0;     // prove the no-route hold before reusing that rover
     this.phase = "settle";
     this.engaged = false;
 
@@ -63,10 +81,19 @@ fn on_start(me) {
     this.idle_max = 0.0;    // worst drift seen at ANY sample, not just the end —
                             // a rover that drives off and is stopped by something
                             // must not be able to come back and pass.
+    this.hot_p0 = ();
+    this.hot_wp0 = ();
+    this.hot_wp1 = ();
+    this.hot_wp2 = ();
+    this.hot_swap_p0 = ();
+    this.hot_end = ();
+    this.hot_first_reached = false;
+    this.hot_swap_issued = false;
+    this.hot_swap_t = ();
 
     print("[hold] ── an autopilot with no waypoints holds ──────────────────");
     print("[hold] idle=" + this.idle + " routed=" + this.routed);
-    print("[hold] tolerance " + HOLD_TOL_M + " m over a " + this.drive_s + "s run");
+    print("[hold] tolerance " + HOLD_TOL_M + " m over a " + this.hold_s + "s hold window");
 }
 
 fn on_tick(me) {
@@ -101,7 +128,7 @@ fn on_tick(me) {
             engage_patrol(this.routed, [wp]);
 
             this.engaged = true;
-            this.phase = "drive";
+            this.phase = "hold";
             print("[hold] engaged: idle with NO route, routed toward " +
                   r2(wp[0]) + "," + r2(wp[2]));
         }
@@ -110,18 +137,81 @@ fn on_tick(me) {
 
     // No `drive()` calls from here on — whatever moves these rovers is the
     // autopilot, which is the whole question.
-    let d = dist(world_pos(this.idle), this.idle_p0);
-    if d != () && d > this.idle_max { this.idle_max = d; }
+    if this.phase == "hold" {
+        let d = dist(world_pos(this.idle), this.idle_p0);
+        if d != () && d > this.idle_max { this.idle_max = d; }
 
-    if this.t >= this.settle_s + this.drive_s {
-        this.phase = "done";
-        verdict(#{
-            idle: this.idle,
-            routed: this.routed,
-            idle_p0: this.idle_p0,
-            routed_p0: this.routed_p0,
-            idle_max: this.idle_max,
-        });
+        if this.t >= this.settle_s + this.hold_s {
+            // Reuse the same engaged vessel for the production hot-swap check.
+            // `patrol` is the public live update path; no Rust-only test hook is
+            // involved.
+            this.hot_p0 = world_pos(this.idle);
+            this.hot_wp0 = [this.hot_p0[0], this.hot_p0[1], this.hot_p0[2] - HOT_FIRST_M];
+            this.hot_wp1 = [this.hot_p0[0], this.hot_p0[1], this.hot_p0[2] - HOT_SECOND_M];
+            this.hot_wp2 = [this.hot_p0[0], this.hot_p0[1], this.hot_p0[2] - HOT_THIRD_M];
+            patrol(this.idle, [this.hot_wp0, this.hot_wp1, this.hot_wp2]);
+            this.phase = "hot_swap";
+            print("[hold] hold passed; live patrol starts at " + r2(this.hot_p0[2]) +
+                  " and targets " + r2(this.hot_wp0[2]) + "," + r2(this.hot_wp1[2]));
+        }
+        return;
+    }
+
+    if this.phase == "hot_swap" {
+        let hp = world_pos(this.idle);
+        if hp == () { return; }
+
+        // First prove the route is progressing. Then wait until the rover is
+        // part-way through leg 1, not sitting at the first waypoint.
+        if !this.hot_first_reached {
+            let d0 = dist(hp, this.hot_wp0);
+            if d0 != () && d0 < 3.0 { this.hot_first_reached = true; }
+        } else if !this.hot_swap_issued {
+            let d1 = dist(hp, this.hot_wp1);
+            if d1 != () && d1 < HOT_SECOND_ENTRY_M {
+                this.hot_swap_p0 = hp;
+                let wp3 = [this.hot_p0[0], this.hot_p0[1], this.hot_p0[2] - HOT_FOURTH_M];
+                let wp4 = [this.hot_p0[0], this.hot_p0[1], this.hot_p0[2] - HOT_FIFTH_M];
+                patrol(this.idle, [this.hot_wp0, this.hot_wp1, this.hot_wp2, wp3, wp4]);
+                this.hot_swap_issued = true;
+                this.hot_swap_t = this.t;
+                print("[hold] hot-swap at z=" + r2(hp[2]) +
+                      " while approaching leg 1; appended legs continue to " +
+                      r2(wp4[2]));
+            }
+        } else if this.t >= this.hot_swap_t + HOT_OBSERVE_S {
+            this.hot_end = hp;
+            this.phase = "done";
+            verdict(#{
+                idle: this.idle,
+                routed: this.routed,
+                idle_p0: this.idle_p0,
+                routed_p0: this.routed_p0,
+                idle_max: this.idle_max,
+                hot_p0: this.hot_p0,
+                hot_swap_p0: this.hot_swap_p0,
+                hot_end: this.hot_end,
+                hot_first_reached: this.hot_first_reached,
+                hot_swap_issued: this.hot_swap_issued,
+            });
+            return;
+        }
+
+        if this.t > this.settle_s + this.hold_s + HOT_TIMEOUT_S {
+            this.phase = "done";
+            verdict(#{
+                idle: this.idle,
+                routed: this.routed,
+                idle_p0: this.idle_p0,
+                routed_p0: this.routed_p0,
+                idle_max: this.idle_max,
+                hot_p0: this.hot_p0,
+                hot_swap_p0: this.hot_swap_p0,
+                hot_end: this.hot_end,
+                hot_first_reached: this.hot_first_reached,
+                hot_swap_issued: this.hot_swap_issued,
+            });
+        }
     }
 }
 
@@ -132,6 +222,9 @@ fn on_tick(me) {
 //   control     the routed rover covered most of its leg — proof the engage
 //               verb, the drive path and physics all work in this run, so
 //               "held" means held rather than "nothing was driving anything".
+//   hot swap    after the same rover receives a longer patrol mid-leg, its z
+//               coordinate continues toward the next waypoint. Positive z
+//               progress would mean the rebuild reset to the first leg.
 fn verdict(s) {
     let f = [];
 
@@ -156,10 +249,26 @@ fn verdict(s) {
         "routed rover did not drive — the engage/drive path is dead, so the " +
         "hold check above proves nothing (m)"));
 
+    let hot_progress = ();
+    if s.hot_swap_p0 != () && s.hot_end != () {
+        hot_progress = s.hot_swap_p0[2] - s.hot_end[2];
+    }
+    f.push(t_true(s.hot_first_reached,
+        "the hot-swap rover never reached its first waypoint; the update was not tested mid-route"));
+    f.push(t_true(s.hot_swap_issued,
+        "the live patrol update was never issued before the production timeout"));
+    f.push(t_present(hot_progress,
+        "the hot-swap rover has no post-update position sample"));
+    f.push(t_true(hot_progress > 0.5,
+        "the rover reversed toward leg 0 after a mid-route update: forward z progress was " +
+        hot_progress + " m; the current leg must be resumed"));
+
     print("[hold] ── results ──────────────────────────────────────────────");
     print("[hold]   idle    peak=" + r2(s.idle_max) + " m  end=" + r2(idle_end) +
           " m  (limit " + HOLD_TOL_M + ")");
     print("[hold]   routed  end=" + r2(routed_end) + " m  (leg " + LEG_M + ")");
+    print("[hold]   hot-swap first=" + s.hot_first_reached + " issued=" +
+          s.hot_swap_issued + " forward_z=" + hot_progress + " m");
 
     report_verdict(f, "AUTOPILOT HOLD", "AUTOPILOT_HOLD");
 }
