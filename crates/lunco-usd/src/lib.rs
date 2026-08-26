@@ -37,6 +37,7 @@ pub mod live_consume;
 /// none of them can reinvent the non-standard "shader inputs on a geom prim"
 /// spelling.
 pub mod material;
+pub mod program;
 pub mod registry;
 pub mod runtime_persistence;
 pub mod schema;
@@ -44,8 +45,9 @@ pub mod twin_projection;
 #[cfg(feature = "ui")]
 pub mod ui;
 
-pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
+pub use commands::{ApplyUsdOp, ApplyUsdOps, AttachProgram, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
+pub use program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
 // Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
 pub use lunco_usd_avian::{
     BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter,

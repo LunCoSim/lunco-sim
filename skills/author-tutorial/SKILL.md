@@ -212,6 +212,15 @@ compiles and that the shared hook seam does not panic. It must stay content
 agnostic. Do not add a new Rust test just to encode a lesson's steps, action
 requirements, or expected command sequence.
 
+For a lesson that teaches model attachment, use the production Rhai gate
+`assets/scenes/tests/program_attach_command.usda` plus
+`assets/scenarios/tests/program_attach_command.rhai` as the pattern. It issues
+`AttachProgram`, waits for the USD child, checks `ListPorts`, and requires the
+participant in `CosimStatus`. Keep this in Rhai so lesson and source-contract
+edits do not require recompiling Rust. Use semantic `input_binding(...)` and
+`input_hint(...)` for interactive follow-up; never bake physical key names into
+the lesson.
+
 ## Onboarding (first-run)
 
 - `first_start: true` marks the once-only entry. The `boot.entry` rhai policy

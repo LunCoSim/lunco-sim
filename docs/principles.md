@@ -8,10 +8,19 @@ Every feature, from high-level flight software to low-level physics propagators,
 ### II. TDD-First (Non-Negotiable)
 Test-Driven Development is our baseline. No feature code is written until a corresponding test exists and fails. This ensures our digital twin remains verifiable as complexity scales from a lunar base to the entire solar system.
 
-### III. SysML v2 as the Source of Truth for System Structure
-We use SysML v2 to define system architecture, requirements, and verifications. Within a project, `.sysml` files are the authoritative description of **what the system IS** — its parts, ports, connections, and traceable requirements.
+### III. USD as the Current Executable Source of Truth
+For the simulation that runs today, the composed USD document is authoritative for
+the executable scene structure: prim identity and hierarchy, physical schemas,
+program prims, ports, connections, and authored parameters. A Twin is a folder
+that contains USD, Modelica, Rhai, and configuration files, each in its native
+format; USD composition is the projection boundary that turns those artifacts
+into one running system.
 
-Other domains own other concerns: **Modelica** owns behavior (equations, dynamics), **USD** owns geometry (meshes, scenes), **LunCoSim's tool manifest** (`twin.toml`) owns configuration (paths, settings). A Twin is a folder that contains files from all of these domains, each in its native standard format for maximum interoperability.
+SysML v2 remains the planned federation and requirements domain. Its structural
+model is not currently read by the runtime and must not be described as an
+executable source of truth until the SysML-to-USD projection exists. **Modelica**
+owns continuous equations and state, **Rhai** owns scenario policy and event
+orchestration, and **twin.toml** owns Twin configuration (paths and settings).
 
 **Interop principle:** Each domain file MUST use only that domain's standard syntax, with no LunCoSim-specific extensions. This guarantees that a SysML engineer can open our `.sysml` files in Cameo, a controls engineer can open our `.mo` files in Dymola, and a USD artist can open our `.usda` files in Omniverse — without lossy round-trips. Tool-specific configuration lives in separate tool-manifest files (`twin.toml`) that external tools are not expected to understand.
 
@@ -25,7 +34,9 @@ We leverage multiple physics engines (e.g., Avian3D for local interaction, custo
 Despite the technical depth, the user experience is paramount. Our UI must be intuitive, high-performance, and designed for clarity in managing vast amounts of telemetry and system data.
 
 ### VII. Extensibility & Open Standards
-The simulator is built to be extended. We prioritize open standards (SysML, Modelica) to allow researchers and engineers to plug in their own models and missions.
+The simulator is built to be extended. We prioritize open standards (USD,
+Modelica, and the planned SysML federation) so researchers and engineers can
+plug in their own models and missions without a Rust rebuild for authored policy.
 
 ### VIII. Headless-First Architecture (Non-Negotiable)
 The simulation core MUST be runnable in a headless environment (no GPU, no windowing). Rendering and windowing systems must be strictly decoupled from the physical simulation. This enables high-speed automated validation, Monte Carlo analysis, and oracle-based TDD across thousands of nodes without graphical overhead.
@@ -50,8 +61,10 @@ Undocumented code is considered technical debt. All modules, functions, structs,
 - **Plugins** are the primary unit of modularity.
 
 ### State Persistence
-- All persistent state must be representable in SysML v2.
-- Serialization/Deserialization between Bevy entities and SysML v2 must be automated and verified.
+- Persistent executable state must be representable in the Twin's USD layers,
+  Modelica sources, Rhai sources, and manifest-owned settings. Future SysML
+  federation will add a structural interchange projection rather than silently
+  replacing the current USD authoring contract.
 
 ### Quality Gates
 - 100% test coverage for math and logic modules.

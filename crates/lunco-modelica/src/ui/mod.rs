@@ -259,96 +259,6 @@ fn close_drilled_tabs_on_class_removed(
 // read-side resolver (`class_metadata::resolve_metadata`) consults
 // the pre-baked MSL library + the live per-doc index directly.
 
-fn sync_workspace_on_doc_opened(
-    trigger: On<lunco_doc_bevy::DocumentOpened>,
-    registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
-    mut source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
-) {
-    let id = trigger.event().doc;
-    // Dedupe — `DocumentOpened` can fire multiple times per id during
-    // the race between allocate/install_prebuilt and later reconcile
-    // passes. Treat a second Opened as a no-op so the Workspace
-    // document list stays a set, not a multiset.
-    let Some(host) = registry.host(id) else {
-        return;
-    };
-    let doc = host.document();
-    let origin = doc.origin().clone();
-    // Register every top-level class the opened doc declares so the
-    // pre-Compile gate treats them as Ready (engine_resource syncs
-    // doc ASTs into the rumoca session on install, so the types
-    // resolve without a worker round-trip).
-    if let Some(roots) = source_roots.as_deref_mut() {
-        let path = match &origin {
-            lunco_doc::DocumentOrigin::File { path, .. } => Some(path.clone()),
-            _ => None,
-        };
-        for class in doc.index().classes.values() {
-            // Top-level classes only: qualified name with no `.`.
-            if !class.name.contains('.') {
-                roots.register_open_doc_root(class.name.clone(), path.clone());
-            }
-        }
-    }
-    if ws.document(id).is_some() {
-        return;
-    }
-    let title = origin.display_name();
-    ws.add_document(lunco_workspace::DocumentEntry {
-        id,
-        kind: lunco_workspace::DocumentKindId::new("modelica"),
-        origin,
-        // Default to `None`; when the UI supports "New Model from
-        // active Twin" the caller will set this explicitly before the
-        // add_document fires.
-        context_twin: None,
-        title,
-    });
-}
-
-/// Shadow-sync observer: Modelica doc closed → drop entry from Workspace.
-fn sync_workspace_on_doc_closed(
-    trigger: On<lunco_doc_bevy::DocumentClosed>,
-    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
-) {
-    ws.close_document(trigger.event().doc);
-}
-
-/// Shadow-sync observer: a save (regular or Save-As) can change a
-/// document's origin (Untitled → File on Save-As). Re-read the
-/// document and update the Workspace entry's `origin` + `title`.
-///
-/// `DocumentSaved` fires for every save, not only Save-As; the update
-/// is idempotent for regular Save (origin unchanged, title unchanged)
-/// so no gate is needed.
-fn sync_workspace_on_doc_saved(
-    trigger: On<lunco_doc_bevy::DocumentSaved>,
-    registry: Res<ModelicaDocumentRegistry>,
-    mut ws: ResMut<lunco_workspace::WorkspaceResource>,
-) {
-    let id = trigger.event().doc;
-    let Some(host) = registry.host(id) else {
-        return;
-    };
-    let doc = host.document();
-    let new_origin = doc.origin().clone();
-    let new_title = new_origin.display_name();
-    // Push to recents on every File-saved event. `push_loose` dedupes
-    // to the front, so re-saving an existing file simply hoists it to
-    // the top — matches VS Code behaviour and is what makes Save-As
-    // of an Untitled draft show up in "Open Recent File" next session
-    // (the rebind from Untitled → File doesn't otherwise re-trigger
-    // `add_document`, which is the only other recents push site).
-    if let Some(p) = new_origin.canonical_path() {
-        ws.recents.push_loose(p.to_path_buf());
-    }
-    if let Some(entry) = ws.document_mut(id) {
-        entry.origin = new_origin;
-        entry.title = new_title;
-    }
-}
-
 /// Derive `WorkspaceResource.DocumentEntry.title` from the AST's
 /// first top-level class name. Modelica's class-first identity model
 /// (Dymola / OMEdit) means the tab label should follow the class, not
@@ -800,11 +710,6 @@ impl Plugin for ModelicaUiPlugin {
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved
             // to `ModelicaCorePlugin` (so headless journals too).
             .add_systems(Update, commands::drain_open_file_results)
-            // Workspace shadow-sync: keep `WorkspaceResource` populated
-            // from the existing document-registry lifecycle.
-            .add_observer(sync_workspace_on_doc_opened)
-            .add_observer(sync_workspace_on_doc_closed)
-            .add_observer(sync_workspace_on_doc_saved)
             // Coarse cache invalidation: any doc edit can shift
             // cross-file inheritance chains, so every source-derived
             // memo flushes wholesale. Re-fills lazily on next paint

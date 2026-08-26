@@ -8,7 +8,11 @@ description = "LunCoSim's own workbench shell — activity bar, side browsers, c
 [features]
 default = []
 # Screenshot capture. Enabled by any binary that serves the API (lunco-luncosim, lunica).
-api = ["dep:lunco-api", "dep:image"]  # `web-time` is already an unconditional dep
+api = [
+    "dep:lunco-api",
+    "dep:image",
+    "dep:lunco-workspace-api",
+] # `web-time` is already an unconditional dep
 
 # `screenshot.rs` (and hence `CaptureFromCamera`) is `#[cfg(feature = "api")]`, so its test
 # only compiles with that feature on. Without this the test target would fail to resolve the
@@ -66,6 +70,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # `OpenFilter` / `SaveHint` / `StorageHandle` for the file-picker
 # event API. Storage stays bevy-free; the workbench's picker fires
 # rfd dialogs on native and (eventually) File-System-Access on wasm.

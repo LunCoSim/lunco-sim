@@ -7302,7 +7302,6 @@ dependencies = [
  "lunco-environment",
  "lunco-modelica",
  "lunco-physics",
- "lunco-scene-commands",
  "lunco-scripting",
 ]
 
@@ -7601,6 +7600,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-worker-transport",
  "lunco-workspace",
+ "lunco-workspace-api",
  "lyon_geom",
  "lyon_path",
  "lyon_tessellation",
@@ -8250,6 +8250,7 @@ dependencies = [
  "lunco-tools-bevy",
  "lunco-twin",
  "lunco-workspace",
+ "lunco-workspace-api",
  "rfd",
  "serde",
  "serde_json",
@@ -8283,6 +8284,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-workspace-api"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-doc",
+ "lunco-twin",
+ "lunco-workspace",
+ "serde_json",
 ]
 
 [[package]]

@@ -409,10 +409,12 @@ impl ApiLinePattern {
 
 // ─── Batch Applicator ───────────────────────────────────────────────────────
 
-/// Apply a batch of document ops in one shot — the API's bulk editing verb.
-/// Use it instead of a stream of single-op commands when several edits belong
-/// together: they land as one undo group, and the document is only re-parsed
-/// once at the end.
+/// Apply a batch of Modelica document operations in one shot.
+///
+/// Use this command instead of a stream of single-op commands when several
+/// edits belong together: they land as one undo group, and the document is
+/// only re-parsed once at the end. This is the structural authoring surface
+/// for the Modelica document; it does not attach a simulation program to USD.
 #[Command(default)]
 pub struct ApplyModelicaOps {
     /// Document to edit; unassigned (`0` over the API) = active.

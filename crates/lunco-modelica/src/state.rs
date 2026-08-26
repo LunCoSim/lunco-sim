@@ -308,7 +308,7 @@ pub fn display_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option
 /// [`lunco_doc::DocumentId`].
 ///
 /// **The single source of truth for Modelica source text.** Every spawn
-/// path (CodeEditor Compile, Diagram auto-compile, `balloon_setup`, the
+/// path (CodeEditor Compile, Diagram auto-compile, USD program projection, the
 /// workbench binaries) allocates a document here and stores its id in
 /// [`crate::ModelicaModel::document`]. The entity becomes a runtime
 /// *reference* to the document, not its owner — a document can exist

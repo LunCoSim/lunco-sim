@@ -82,6 +82,27 @@ free to drift, and nothing in the log says which one you are looking at.
 kept in step by a sync system, and `Changed<T>` over an unfiltered system. Never
 per-tick work in rhai — except in a rhai *test*, where stepping is the point.
 
+## Attach a program through the shared contract
+
+Use `AttachProgram { doc, spec }` for a new Modelica or Python participant.
+The command validates the source path and explicit scalar interface, then
+authors the `LunCoProgramAPI` child, defaults, and native USD connections as one
+journal/undo change set. The Models palette and Rhai prelude call this same
+command; do not add a marker component or a source-specific Rust path.
+
+```rhai
+attach_program(doc, "@root@", "/Lander", "Guidance",
+    "lunco://models/DescentGuidance.mo",
+    [program_input_connection("altitude", "/Lander.outputs:position_y")],
+    [program_output("force_y", ["/Lander.inputs:force_y"])], true);
+```
+
+Every input has one authored default or one USD connection. Every output names
+its consuming USD input properties. An empty contract is source-only and must
+be completed before `ListPorts`, `CosimStatus`, or force exchange can prove a
+running participant. Use `@root@` for persistent scene content and
+`@runtime@` only when a live overlay is the explicit intent.
+
 This skill is the *assembly* layer over the single-domain skills:
 [`build-usd-scene`](../build-usd-scene/SKILL.md) (author the scene),
 [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) (a vessel's GNC),

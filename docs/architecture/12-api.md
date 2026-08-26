@@ -90,6 +90,12 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 
+`ListOpenDocuments`, `ListRecentFiles`, and `ListTwin` are owned by
+`lunco-workspace`, so they are available in windowed, headless, and offscreen
+hosts whenever the API and Workspace plugins are enabled. Modelica registers
+only Modelica-specific queries; a USD document does not depend on the Modelica
+UI to appear in `ListOpenDocuments`.
+
 ---
 
 ## Authoring a typed command
@@ -209,8 +215,10 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `FollowTarget` | Chase-camera a target. |
 | | `FocusTarget` | Orbit-camera a target. |
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
-| **USD** | `LoadScene` | Reload a USD stage from disk. |
+| **USD** | `LoadScene` | Mount or reload a USD stage from a root-qualified `lunco://` or `twin://` address. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
+| | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |
+| | `AttachProgram` | Attach a source-backed program with explicit scalar ports, defaults, and USD connections. |
 | **Time** | `ControlAnimation` | Play/pause/scrub/rate the USD animation preview (independent of the physics clock). |
 | **Modelica** | `CompileModel` | Compile a specific class in a document. |
 | | `SetModelInput` | Inject one discrete input value through the shared Modelica input path. |
@@ -347,8 +355,9 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 ### Example: Live cosim status
 
 `CosimStatus` returns one row per USD-driven cosim entity
-(`UsdSourcedCosim`) with position, velocity, Modelica timing, and
-propagated wire values:
+(`UsdSourcedCosim`) with position, velocity, Modelica timing, status, and
+propagated wire values. `status` exposes `Unbound`, `Compiling`, `Running`,
+`Paused`, or an `Error: …` reason for source-only and failed participants:
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \

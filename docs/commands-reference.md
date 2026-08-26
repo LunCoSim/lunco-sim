@@ -5,7 +5,7 @@
 
 # Command Reference
 
-Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one
+Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one
 bus, reachable from the **HTTP API** (`POST /api/commands`, `{"command":"…","params":{…}}`),
 **MCP**, and **rhai** (`cmd("CommandName", #{ … })`). This page is generated from the
 **runtime schema** the app itself advertises, so every command below is one you can
@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**189 commands** across **26** crates. 1 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**190 commands** across **26** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -28,7 +28,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (4 commands)
+- [`lunco-usd`](#lunco-usd) (5 commands)
 - [`lunco-usd-bevy`](#lunco-usd-bevy) (5 commands)
 - [`lunco-usd-sim`](#lunco-usd-sim) (3 commands)
 
@@ -96,7 +96,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-luncosim`](#lunco-luncosim) (2 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workspace`](#lunco-workspace) (4 commands)
+- [`lunco-workspace`](#lunco-workspace) (5 commands)
 
 ---
 
@@ -677,6 +677,26 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: AttachSpec` |  The attachment to perform. |
 
+#### `AttachProgram`
+
+ Attach one source-backed simulation program to an existing USD prim.
+
+ The command lowers the complete `LunCoProgramAPI` contract — source asset,
+ declared scalar ports, constants, connections, and realtime-safety promise —
+ to one journaled USD change set. The Models palette, Rhai, HTTP, and future
+ editor surfaces all use this command; none inserts ECS marker components.
+
+ An empty `inputs`/`outputs` contract is valid for an effects-only program,
+ but it is not a running scalar co-simulation participant. Add explicit ports
+ and connections when the source must exchange values with Rust or Modelica.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  Target USD document. |
+| `spec` | `crate :: program :: ProgramAttachSpec` |  Complete program attachment intent. |
+
 #### `SetDomeLight`
 
  Author the scene's HDRI environment: a `UsdLuxDomeLight` carrying
@@ -913,10 +933,12 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ApplyModelicaOps`
 
- Apply a batch of document ops in one shot — the API's bulk editing verb.
- Use it instead of a stream of single-op commands when several edits belong
- together: they land as one undo group, and the document is only re-parsed
- once at the end.
+ Apply a batch of Modelica document operations in one shot.
+
+ Use this command instead of a stream of single-op commands when several
+ edits belong together: they land as one undo group, and the document is
+ only re-parsed once at the end. This is the structural authoring surface
+ for the Modelica document; it does not attach a simulation program to USD.
 
 - *defined in:* `crates/lunco-modelica/src/api/mod.rs`
 
@@ -2027,10 +2049,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Documents with a writable canonical path are written via their
  owning domain's [`SaveDocument`](lunco_doc_bevy::SaveDocument)
- observer. Drafts (Untitled documents) need user input for their
- destination — when a Twin is open they are written into that Twin using
- their workspace titles; otherwise the owning domain opens its normal
- Save-As picker.
+ observer. Untitled documents are written into the active Twin using
+ their workspace title; with no active Twin their domain's normal Save-As
+ picker is used.
 
 - *defined in:* `crates/lunco-workbench/src/file_ops.rs`
 - *fields:* none — call with `SaveAll` (no params)
@@ -2039,8 +2060,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Promote the current session into a Twin at `folder`.
 
- Writes `twin.toml`, saves every open document into the chosen folder,
- and declares the first open USD document as the default scene. Empty
+ Writes `twin.toml`, saves every open document into the new root, and
+ declares the first open USD document as the default scene. Empty
  `folder` triggers a folder picker.
 
 - *defined in:* `crates/lunco-workbench/src/file_ops.rs`
@@ -2048,20 +2069,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `folder` | `String` |  Target folder for the new Twin's `twin.toml`. Empty triggers  the picker. |
-
-#### `CreateTwin`
-
- Create a new Twin folder and manifest. Missing parent folders are created
- by the storage-backed manifest writer. Empty `path` triggers the folder
- picker; an existing `twin.toml` is never overwritten.
-
-- *defined in:* `crates/lunco-workspace/src/open.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` | Target Twin folder. Empty triggers the picker. |
-| `name` | `String` | Display name; empty uses the folder name. |
-| `default_scene` | `String` | Optional Twin-relative USD stage. |
 
 #### `SaveSourceText`
 
@@ -3135,7 +3142,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetTelemetryBrowserView`
 
-*(no description — add a `///` doc on the struct)*
+ Select the telemetry browser's signal filter and focused signal.
 
 - *defined in:* `crates/lunco-viz/src/telemetry_browser.rs`
 
@@ -3172,6 +3179,19 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `path` | `String` |  Filesystem path of the Twin root (must contain `twin.toml`).  Empty asks for a picker. |
 
+#### `CreateTwin`
+
+ Create a new Twin folder and asynchronously add it to the workspace.
+ Empty `path` means "ask the windowed workbench for a folder".
+
+- *defined in:* `crates/lunco-workspace/src/open.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Target Twin folder. The manifest is created here; missing ancestors are  created by the storage-backed manifest writer. |
+| `name` | `String` |  Human-readable name. Empty uses the target folder name. |
+| `default_scene` | `String` |  Optional Twin-relative USD stage opened when the Twin is admitted. |
+
 #### `OpenFolder`
 
  Open a folder as the workspace root — a Twin if it has a `twin.toml`,
@@ -3207,7 +3227,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 189 commands from the runtime schema; scanned 672 .rs files for docs (0 parse failure(s) skipped).
+<!-- 190 commands from the runtime schema; scanned 672 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: JoinServer, LeaveServer, PromoteScenario, RecoverVessel, RunPython, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

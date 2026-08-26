@@ -82,6 +82,17 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 ### Structured package lookup
 
+### Attach a Modelica source to a USD body
+
+For a multi-domain run, use the shared `AttachProgram { doc, spec }` command
+instead of writing marker components or maintaining a separate binding table.
+The spec authors the `LunCoProgramAPI` child, explicit scalar inputs and
+outputs, and native USD connections in one journaled change set. In Rhai the
+same surface is `attach_program(...)` with `program_input_connection(...)`,
+`program_input_default(...)`, and `program_output(...)` helpers. Verify the
+result with `ListPorts`, `CosimStatus`, and `GetBrokenConnections`; a source
+without declared ports is reported as source-only and does not step.
+
 Modelica packages under `assets/models/<Root>/` use the standard
 `package.mo`/`package.order` layout and members' `within` declarations. A
 qualified reference such as `LunCo.Electrical.Battery` is resolved by its root

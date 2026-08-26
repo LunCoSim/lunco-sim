@@ -129,4 +129,5 @@ stable documentation surface.
 - [**USD Domain Architecture**](../../architecture/21-domain-usd.md) — how scenes are loaded and mapped to physics.
 - [**Co-Simulation Domain**](../../architecture/22-domain-cosim.md) — how Modelica models and physics share a timestep.
 - [**Cosim walkthrough**](../../tutorials/03-cosim.md) — build and observe a Modelica↔physics vessel.
+- [**Attach a simulation program**](../../tutorials/04-attach-a-program.md) — use the Models palette or Rhai to author a source-backed USD program contract and verify its live ports.
 - [**View & Intent Architecture**](../../architecture/17-view-and-intent.md) — how camera control and possession work.

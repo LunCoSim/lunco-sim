@@ -32,6 +32,7 @@
 //! (e.g., mass=0.0 in SpringMass) causes a solver panic, the error is caught and
 //! reported as "Solver Error" in the logs rather than crashing the application.
 
+use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use lunco_assets::msl_dir;
@@ -1617,8 +1618,8 @@ pub struct SimSampleBatch {
 
 /// System sets for Modelica stepping in [`FixedUpdate`].
 ///
-/// These sets let downstream code (e.g., balloon_setup) order its sync systems
-/// relative to the Modelica worker communication.
+/// These sets let downstream code (for example, USD program projection) order
+/// its sync systems relative to the Modelica worker communication.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelicaSet {
     /// Receive async results from the worker thread.
@@ -1667,6 +1668,78 @@ impl Plugin for ModelicaCorePlugin {
         // headless host can shut itself down; see `ui::commands::util`.
         #[cfg(all(feature = "ui", feature = "lunco-api"))]
         ui::commands::util::register_all_commands(app);
+    }
+}
+
+/// Keep Modelica documents in the shared Workspace from every host mode.
+/// Generated documents projected from USD must be discoverable by the same
+/// session query as file-backed editor documents in headless and offscreen runs.
+fn sync_workspace_on_doc_opened(
+    trigger: On<lunco_doc_bevy::DocumentOpened>,
+    registry: Res<ModelicaDocumentRegistry>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    mut source_roots: Option<ResMut<source_roots::SourceRootRegistry>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let id = trigger.event().doc;
+    let Some(host) = registry.host(id) else {
+        return;
+    };
+    let document = host.document();
+    let origin = document.origin().clone();
+    if let Some(roots) = source_roots.as_deref_mut() {
+        let path = match &origin {
+            lunco_doc::DocumentOrigin::File { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        for class in document.index().classes.values() {
+            if !class.name.contains('.') {
+                roots.register_open_doc_root(class.name.clone(), path.clone());
+            }
+        }
+    }
+    if workspace.document(id).is_some() {
+        return;
+    }
+    workspace.add_document(lunco_workspace::DocumentEntry {
+        id,
+        kind: lunco_workspace::DocumentKindId::new("modelica"),
+        origin: origin.clone(),
+        context_twin: None,
+        title: origin.display_name(),
+    });
+}
+
+fn sync_workspace_on_doc_closed(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+) {
+    if let Some(mut workspace) = workspace {
+        workspace.close_document(trigger.event().doc);
+    }
+}
+
+fn sync_workspace_on_doc_saved(
+    trigger: On<lunco_doc_bevy::DocumentSaved>,
+    registry: Res<ModelicaDocumentRegistry>,
+    workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let id = trigger.event().doc;
+    let Some(host) = registry.host(id) else {
+        return;
+    };
+    let origin = host.document().origin().clone();
+    if let Some(path) = origin.canonical_path() {
+        workspace.recents.push_loose(path.to_path_buf());
+    }
+    if let Some(entry) = workspace.document_mut(id) {
+        entry.title = origin.display_name();
+        entry.origin = origin;
     }
 }
 
@@ -1917,6 +1990,9 @@ fn build_modelica_core(app: &mut App) {
         crate::doc_ops::wire_modelica_journal_handle
             .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
     );
+    app.add_observer(sync_workspace_on_doc_opened);
+    app.add_observer(sync_workspace_on_doc_closed);
+    app.add_observer(sync_workspace_on_doc_saved);
 
     // In-app rhai scripting runtime: `RunScenario` (attach + hot-reload a
     // scenario to an entity), the `cmd()`/prelude world-bridge, and the REPL.

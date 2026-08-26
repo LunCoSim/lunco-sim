@@ -41,7 +41,8 @@ fn test_balloon_force_propagation() {
         ))
         .id();
 
-    // Create connections (exactly as balloon_setup does)
+    // Create the same generic connections that USD projection derives from an
+    // authored program contract.
     app.world_mut().spawn((
         SimConnection {
             start_element: balloon,

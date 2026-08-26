@@ -53,6 +53,7 @@ members = [
     "crates/lunco-theme",
     "crates/lunco-storage",
     "crates/lunco-workspace",
+    "crates/lunco-workspace-api",
     "crates/lunco-settings",
     "crates/lunco-experiments",
     "crates/lunco-render",

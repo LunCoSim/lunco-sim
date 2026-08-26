@@ -129,6 +129,77 @@ fn claim_user_document_on_opened(
     }
 }
 
+/// Keep the shared Workspace document list in step with the USD registry.
+///
+/// This belongs to the headless-safe command/lifecycle plugin rather than the
+/// editor UI: startup Twin scenes are opened by this plugin even when the
+/// simulator runs without `UsdUiPlugin`, and API/Rhai document discovery must
+/// see the same USD documents as the desktop shell.
+fn sync_workspace_on_doc_opened(
+    trigger: On<DocumentOpened>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let doc = trigger.event().doc;
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    if workspace.document(doc).is_some() {
+        workspace.active_document = Some(doc);
+        return;
+    }
+    let origin = host.document().origin().clone();
+    let context_twin = origin
+        .is_untitled()
+        .then_some(workspace.active_twin)
+        .flatten();
+    workspace.add_document(lunco_workspace::DocumentEntry {
+        id: doc,
+        kind: DocumentKindId::new(USD_DOCUMENT_KIND),
+        title: origin.display_name(),
+        origin,
+        context_twin,
+    });
+    workspace.active_document = Some(doc);
+}
+
+/// Reflect USD Save and Save-As origin changes into the shared Workspace.
+fn sync_workspace_on_doc_saved(
+    trigger: On<lunco_doc_bevy::DocumentSaved>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    let doc = trigger.event().doc;
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    let origin = host.document().origin().clone();
+    if let Some(path) = origin.canonical_path() {
+        workspace.recents.push_loose(path.to_path_buf());
+    }
+    if let Some(entry) = workspace.document_mut(doc) {
+        entry.title = origin.display_name();
+        entry.origin = origin;
+    }
+}
+
+/// Remove the shared Workspace entry when a USD registry document closes.
+fn sync_workspace_on_doc_closed(
+    trigger: On<DocumentClosed>,
+    workspace: Option<ResMut<WorkspaceResource>>,
+) {
+    let Some(mut workspace) = workspace else {
+        return;
+    };
+    workspace.close_document(trigger.event().doc);
+}
+
 /// Registry closure is the final lifetime edge for projection bookkeeping.
 /// Remove both scene coordinates and user claims so a closed document cannot
 /// be rediscovered by a later stage-path lookup.
@@ -203,6 +274,9 @@ impl Plugin for UsdCommandsPlugin {
         app.add_systems(Update, drain_pending_usd_file_loads);
 
         app.add_systems(Update, drain_usd_pending_events);
+        app.add_observer(sync_workspace_on_doc_opened);
+        app.add_observer(sync_workspace_on_doc_saved);
+        app.add_observer(sync_workspace_on_doc_closed);
         // A3 auto-bridge: when the journal appears, hand it to the registry
         // once (reactive — `resource_added`, not per-frame). Headless builds
         // without a journal never run it.
@@ -688,6 +762,7 @@ register_commands!(
     on_undo_usd_document,
     on_redo_usd_document,
     on_attach_component,
+    on_attach_program,
     on_set_dome_light,
     on_new_document,
     on_open_file,
@@ -1549,6 +1624,64 @@ fn on_attach_component(trigger: On<AttachComponent>, mut commands: Commands) {
             spec.name,
             spec.host_path
         );
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// AttachProgram — source-backed simulation program authoring
+// ─────────────────────────────────────────────────────────────────────
+
+/// Attach one source-backed simulation program to an existing USD prim.
+///
+/// The command lowers the complete `LunCoProgramAPI` contract — source asset,
+/// declared scalar ports, constants, connections, and realtime-safety promise —
+/// to one journaled USD change set. The Models palette, Rhai, HTTP, and future
+/// editor surfaces all use this command; none inserts ECS marker components.
+///
+/// An empty `inputs`/`outputs` contract is valid for an effects-only program,
+/// but it is not a running scalar co-simulation participant. Add explicit ports
+/// and connections when the source must exchange values with Rust or Modelica.
+#[Command(default)]
+pub struct AttachProgram {
+    /// Target USD document.
+    pub doc: DocumentId,
+    /// Complete program attachment intent.
+    pub spec: crate::program::ProgramAttachSpec,
+}
+
+#[on_command(AttachProgram)]
+fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
+    let command = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let ops = match crate::program::program_attach_ops(&command.spec) {
+            Ok(ops) => ops,
+            Err(error) => {
+                bevy::log::warn!(
+                    "[AttachProgram] {} rejected before authoring: {}",
+                    command.doc,
+                    error
+                );
+                return;
+            }
+        };
+        let label = format!(
+            "Attach program {} to {}",
+            command.spec.name, command.spec.host_path
+        );
+        let (applied, total) = apply_ops_as_change_set(world, command.doc, label, ops);
+        if applied == total {
+            bevy::log::info!(
+                "[AttachProgram] {}: attached `{}` to `{}` ({total} ops, one change set)",
+                command.doc,
+                command.spec.name,
+                command.spec.host_path
+            );
+        } else {
+            bevy::log::warn!(
+                "[AttachProgram] {} rejected during authoring: {applied}/{total} ops applied",
+                command.doc
+            );
+        }
     });
 }
 

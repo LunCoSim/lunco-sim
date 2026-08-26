@@ -796,7 +796,12 @@ impl Plugin for WorkbenchPlugin {
         // what makes `CaptureScreenshot` reject cleanly there instead of deferring a
         // response that nothing would ever send.
         #[cfg(feature = "api")]
-        app.add_plugins(screenshot::ScreenshotPlugin);
+        {
+            app.add_plugins(screenshot::ScreenshotPlugin);
+            if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
+                app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+            }
+        }
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin {
                 // egui owns the workbench chrome and its transient surfaces:

@@ -36,7 +36,7 @@ ui = [
 # server comes from `lunco-api/transport-http` (added to `default` above);
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-lunco-api = ["dep:lunco-api"]
+lunco-api = ["dep:lunco-api", "dep:lunco-workspace-api"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
 # bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
 # server captures no screenshots) and no winit/egui.
@@ -104,6 +104,7 @@ lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 lunco-storage = { path = "../lunco-storage" }
 egui_plot = { workspace = true, optional = true }
 # base64url encode/decode for shareable model links (see `model_share.rs`).

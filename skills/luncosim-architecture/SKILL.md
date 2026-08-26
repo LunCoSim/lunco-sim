@@ -17,6 +17,31 @@ representation:
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration by default; exceptional fixed-step `on_tick` only for sampled/discrete policy |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+## Plugin and crate layering
+
+Use a domain `CorePlugin` for headless-safe state, lifecycle, commands, and
+runtime mechanisms, then add a separate UI plugin only for panels and visual
+presentation. Do not create a UI plugin merely to host API queries. If a
+provider belongs to a core domain but importing the API crate would create a
+dependency cycle, put the provider in a small `*-api` adapter crate and have
+each API-capable composition root install it explicitly. Keep the data/core
+crate independent of transport and presentation layers.
+
+## Source-backed program attachment
+
+`AttachProgram` is the one authoring boundary for binding a `.mo`, `.py`,
+`.rhai`, or behaviour-tree source to an existing USD prim. Rust owns the
+generic command and lowers a complete `ProgramAttachSpec` into one journalled
+USD change set. The spec carries the source asset, explicit scalar inputs and
+outputs, defaults, native USD connections, and the explicit `realtimeSafe`
+promise.
+
+The Models palette, Rhai `attach_program(...)`, HTTP callers, and future editor
+surfaces all use this command. None may insert an ECS marker or maintain a
+second program registry. An empty port contract is a valid source-only
+attachment, but it is not a running scalar cosim participant; the author must
+declare the interface before wiring or stepping it.
+
 For derived 3D annotations such as a waypoint route, keep one change-gated
 projection snapshot between authored/runtime facts and presentation consumers.
 Resolve authored identities through the authoritative binding map, express all

@@ -58,8 +58,11 @@ enum UsdOp {
 
 `AddReference`/`AddPayload` are folded into `AddPrim { reference }` +
 `author_reference`. Programmatic and UI edits go through the
-**`ApplyUsdOp { doc, op }`** command (`commands.rs`, observer `on_apply_usd_op`),
-which returns a generation-ack; direct source mutation is out. `UsdOp` implements
+**`ApplyUsdOp { doc, op }`** or **`ApplyUsdOps { doc, label, ops }`** command
+(`commands.rs`), which returns a generation-ack; direct source mutation is out.
+Multi-op intents use one change set. `AttachProgram` is the typed source-backed
+program authoring intent and lowers its complete source/port/wire contract to
+that same USD operation path. `UsdOp` implements
 both `DocumentOp` and `lunco_twin_journal::OpPayload` — so **authoring an edit *is*
 journaling it *is* syncing it** (see the [networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
 
@@ -232,6 +235,7 @@ section.
 | **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
 | **Add object / import** | author into the current stage: `ApplyUsdOp { active_stage, AddReference{…} }` (primitives: `AddPrim`); recompose into Grid; saved into the Twin by `SaveDocument` | existing `ApplyUsdOp` + one new `UsdOp` |
+| **Attach a simulation program** | `AttachProgram { doc, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd::program` + normal USD projection |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |
 | **Run / server** | `TwinCommand`s | existing `--api` surface (spec 14 "Headless + remote") |
 

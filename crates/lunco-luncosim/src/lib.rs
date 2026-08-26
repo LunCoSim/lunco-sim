@@ -3943,6 +3943,8 @@ impl Plugin for SandboxOffscreenPlugin {
         // `SandboxHeadlessPlugin`): the Modelica compile channels and the
         // spawn-command registry both normally arrive via UI plugins.
         app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(lunco_modelica::api_queries::ModelicaApiQueriesPlugin);
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
 
         // The workspace session (WorkspaceResource + journal persistence) —
@@ -4519,6 +4521,12 @@ impl Plugin for SandboxHeadlessPlugin {
         // missing `Res<ModelicaChannels>`. The server runs Modelica cosim models
         // authoritatively, so it needs the real compile path, not a stub.
         app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        // Headless authored Rhai scenarios still need the cross-domain document
+        // queries used by the authoring path (`ListOpenDocuments`, `ListTwin`,
+        // and compile status). The GUI gets these from the workbench's Modelica
+        // plugin; the headless owner registers the same providers directly.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(lunco_modelica::api_queries::ModelicaApiQueriesPlugin);
 
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with

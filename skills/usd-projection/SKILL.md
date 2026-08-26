@@ -77,6 +77,14 @@ Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).
 If a user would expect it to survive save-and-reload, it belongs in USD.
 
+`AttachProgram { doc, spec }` is the canonical multi-op authoring intent for a
+source-backed Modelica, Python, Rhai, or behaviour-tree program. It lowers the
+complete `LunCoProgramAPI` child, source asset, scalar ports, defaults, and
+connections through this same change-set path. A palette or script must call
+that command; it must not create an ECS marker or write a parallel registry.
+An empty contract is source-only and remains visibly distinct from a running
+cosim participant.
+
 ## Law 2 — ask the scene root, never guess
 
 To author a new top-level prim you need the target document *and* the parent

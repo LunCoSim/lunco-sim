@@ -440,9 +440,38 @@ Two lessons generalise beyond Modelica:
   silenced the genuine report for that name for the rest of the process. It now
   clears whenever the fabric rewires.
 
-A **Python** program still declares no ports (`SimComponent.inputs` is empty and
-`ScriptDocument.inputs` is hardcoded), so dangling-wire reports against one are
-genuine — that gap is real, not this race.
+A **Python** program has the same explicit USD interface contract as a Modelica
+program. `lunco-usd-sim` derives the declared scalar ports from the program prim
+and the Python runtime consumes those values when the Python feature is enabled.
+An asset with no authored `inputs:`/`outputs:` is source-only: it can be attached
+and inspected, but it is not a runnable cosim participant and a wire to it must
+be rejected as an undeclared port. The author adds the contract through
+`AttachProgram` or an authored USD edit; the engine never guesses ports from
+Python source.
+
+### Attach a source-backed program
+
+`AttachProgram` is the shared authoring command for Modelica, Python, Rhai, and
+behaviour-tree source assets. It validates one explicit `ProgramAttachSpec`,
+lowers it to one USD change set, journals it, and lets normal USD projection
+create the runtime participant. Its source extension selects the runtime
+adapter; its declared inputs and outputs remain USD facts.
+
+Rhai authors can use the prelude without constructing the map by hand:
+
+```rhai
+attach_program(doc, "@runtime@", "/Vessel", "Guidance",
+    "lunco://models/Guidance.mo",
+    [program_input_connection("altitude", "/Vessel.outputs:position_y"),
+     program_input_default("gravity", 1.62)],
+    [program_output("thrust", ["/Vessel.inputs:force_y"])], true);
+```
+
+The palette uses the same command and only offers document-backed scene
+primitives. A raw scene has no editable USD document layer, so it must be
+promoted to a Twin before authoring. Program edits stay in USD; continuous
+control math stays in Modelica or the owning Rust mechanism; Rhai remains
+orchestration and test policy.
 
 ## Runtime scene control
 
