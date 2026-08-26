@@ -470,6 +470,53 @@ mod runtime_safety_tests {
 }
 
 #[cfg(test)]
+mod authored_sun_tests {
+    use super::*;
+
+    #[test]
+    fn authored_sun_state_reads_the_propagated_world_rotation() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
+        app.init_resource::<lunco_environment::SunState>();
+
+        let frame = app
+            .world_mut()
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+
+        let authored_rotation = Quat::from_euler(
+            EulerRot::XYZ,
+            -35.0_f32.to_radians(),
+            40.0_f32.to_radians(),
+            0.0,
+        );
+        app.world_mut().spawn((
+            Transform::from_rotation(authored_rotation),
+            GlobalTransform::default(),
+            bevy::light::DirectionalLight::default(),
+            lunco_usd_bevy::UsdAuthoredLight,
+            ChildOf(frame),
+        ));
+
+        install_authored_sun_state_seed(&mut app);
+        app.update();
+
+        let expected = -(authored_rotation * Vec3::NEG_Z);
+        let actual = app
+            .world()
+            .resource::<lunco_environment::SunState>()
+            .direction_to_sun
+            .expect("the authored light must seed semantic sun state");
+        assert!(actual.abs_diff_eq(expected.normalize(), 1.0e-5));
+        assert!(
+            actual.y > 0.25,
+            "the authored sun must be above the ground: {actual:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod wheel_wiring_tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
@@ -626,7 +673,6 @@ impl Plugin for UsdSimPlugin {
             .add_systems(
                 Update,
                 (
-                    seed_authored_sun_state.after(lunco_usd_bevy::sync_usd_visuals),
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
                         .after(lunco_usd_bevy::sync_usd_visuals),
@@ -676,6 +722,13 @@ impl Plugin for UsdSimPlugin {
             PostUpdate,
             marker::scale_screen_constant_markers.before(TransformSystems::Propagate),
         );
+        // The authored light's `Transform` is installed during Update, while
+        // its composed world rotation is produced by Bevy/big_space transform
+        // propagation. Read that world fact only after propagation; sampling it
+        // in Update sees the default identity GlobalTransform for a newly
+        // admitted light and would publish a horizontal semantic sun on the
+        // following frame.
+        install_authored_sun_state_seed(app);
         // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
         cosim::install(app);
         // `GET /api/diagnostics` read side — exposes the cosim dangling-wire report.
@@ -3981,6 +4034,13 @@ fn any_unprojected_celestial(
     q: Query<(), (With<UsdPrimPath>, Without<CelestialProjected>)>,
 ) -> bool {
     !q.is_empty()
+}
+
+fn install_authored_sun_state_seed(app: &mut App) {
+    app.add_systems(
+        PostUpdate,
+        seed_authored_sun_state.after(TransformSystems::Propagate),
+    );
 }
 
 /// Seed the semantic sun provider from an authored USD `DistantLight` in

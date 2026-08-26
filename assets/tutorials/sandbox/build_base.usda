@@ -60,7 +60,9 @@ def Xform "BuildBase" (
     }
 
     # Raking polar sun — low on the horizon, the lighting a real polar base
-    # lives under (and the reason the solar tower's panel is vertical).
+    # lives under (and the reason the solar tower's panel is vertical). This
+    # lesson intentionally has no LunCoEpochAPI or SolarSystem: the direction
+    # is fixed authored scene content, not an orbital-time driver.
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )

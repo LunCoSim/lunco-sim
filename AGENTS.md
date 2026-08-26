@@ -82,7 +82,10 @@ it with this one.
   `assets/scenarios/tests/`. A green gate needs a negative fixture and a real
   verdict. Tutorial behavior tests belong in authored Rhai scenarios; Rust tests
   remain generic to the scripting/lifecycle seam so tutorial edits do not require
-  a core rebuild.
+  a core rebuild. When the public Rhai read surface can observe a behavior or
+  runtime contract, write the acceptance/regression assertion in the authored
+  Rhai observer and run it through the production scene-test binary; keep Rust
+  tests for generic engine mechanisms or seams that Rhai cannot observe.
 - Build and invoke only the production binary `target/debug/luncosim` for scene
   tests and visual validation. Do not use an old `sandbox` executable or hide a
   rebuild behind `cargo run`. `--validate` proves preflight only, not runtime

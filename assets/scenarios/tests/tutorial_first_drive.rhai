@@ -11,6 +11,7 @@ fn on_start(me) {
     this.port_writes = 0;
     this.verdict_done = false;
     this.elapsed = 0.0;
+    this.sun = find("/FirstDrive/Sun");
 }
 
 fn verdict(pass, reason) {
@@ -37,7 +38,12 @@ fn on_event(me, evt) {
         let flag = find("/FirstDrive/Flag");
         let at_flag = rover >= 0 && flag >= 0 && distance(rover, flag) < 6.0;
         let controls_used = this.possess_count > 0 && this.port_writes > 0;
-        if !controls_used {
+        let sun_forward = world_forward(this.sun);
+        let light_is_downward = this.sun >= 0 && sun_forward != () && sun_forward[1] < -0.25;
+        if !light_is_downward {
+            this.verdict_done = true;
+            verdict(false, "the authored scene sun is not emitting down onto the surface");
+        } else if !controls_used {
             this.verdict_done = true;
             verdict(false, "autopilot did not use PossessVessel followed by SetPorts");
         } else if !at_flag {

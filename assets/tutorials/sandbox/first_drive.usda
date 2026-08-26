@@ -65,6 +65,8 @@ def Xform "FirstDrive" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # This onboarding world intentionally has no LunCoEpochAPI or SolarSystem:
+    # its sun is fixed authored scene content, not an orbital-time driver.
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )

@@ -138,6 +138,14 @@ drive it. Controllers such as `SunTracker` consume the environment-probe
 outputs and drive their actuators. This keeps physical environment production,
 render presentation, and vehicle control as separate graph domains.
 
+For a scene without a celestial site, the composed USD `DistantLight` is still
+the authored source of its fixed sun direction. `lunco-usd-sim` seeds that
+semantic sample only after Bevy/BigSpace transform propagation has produced the
+light's composed world rotation; the next environment pass projects the sample
+back to the same light. Reading `GlobalTransform` during the USD `Update` pass
+would see the identity value for a newly admitted light and turn a valid
+downward sun into a horizontal light.
+
 The render boundary also owns the visible contract failures. `RuntimeDiagnostics` reports
 `environment-sun/sun-contract` when the active scene has zero or multiple unscoped suns,
 `sun-state` when the semantic sample is absent or invalid, `physics-frame` when the bound

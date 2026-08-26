@@ -191,7 +191,10 @@ public `cmd:*`, `MISSION_COMPLETE`, `MISSION_FAILED`, and live state, then calls
 the shared `report_verdict(...)` helper. It must not drive the lesson with a
 second autopilot or accept `MISSION_COMPLETE` without checking the mechanism
 that was supposed to teach something. A timeout is allowed only as test
-liveness handling; it is not lesson policy.
+liveness handling; it is not lesson policy. If the public Rhai read surface can
+observe the regression, put the assertion in this authored observer and run the
+production scene-test binary. Keep Rust coverage for generic engine mechanisms
+or seams that Rhai cannot read.
 
 For example, a First Drive observer should count `cmd:PossessVessel` and
 `cmd:SetPorts`, then verify the rover reached the flag. Run it with the
