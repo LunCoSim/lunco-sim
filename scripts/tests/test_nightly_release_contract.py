@@ -85,6 +85,23 @@ class NightlyReleaseContractTests(unittest.TestCase):
         self.assertIn("LunCoSim-macOS-Apple-Silicon.pkg", app_guide)
         self.assertIn("LunCoSim-macOS-Intel.pkg", app_guide)
 
+    def test_native_package_passes_the_platform_icon_to_velopack(self) -> None:
+        package_builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
+        icon_builder = (ROOT / "crates/lunco-luncosim/build.rs").read_text(encoding="utf-8")
+
+        self.assertIn('LUNCOSIM_ICON_OUTPUT_DIR="$ICON_OUTPUT_DIR"', package_builder)
+        self.assertIn("cargo build", package_builder)
+        self.assertIn('LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP"', package_builder)
+        self.assertIn("prepare_package_icon", package_builder)
+        self.assertIn('VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")', package_builder)
+        self.assertIn('iconutil -c icns', package_builder)
+        self.assertIn("write_windows_ico", icon_builder)
+        self.assertIn("embed_windows_icon", icon_builder)
+        self.assertIn("write_macos_iconset", icon_builder)
+        self.assertIn("write_linux_icons", icon_builder)
+        self.assertIn("LUNCOSIM_ICON_OUTPUT_DIR", icon_builder)
+        self.assertIn("LUNCOSIM_ICON_OUTPUT_STAMP", icon_builder)
+
 
 if __name__ == "__main__":
     unittest.main()

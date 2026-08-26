@@ -15,9 +15,9 @@ name = "lunco_luncosim"
 path = "src/lib.rs"
 
 [build-dependencies]
-# The native window icon is rasterized from the tracked SVG source during the
-# build. Keeping this in Rust makes release builds independent of host shell
-# tools (notably unavailable on the Windows CI runner).
+# The native window and package icons are rasterized from the tracked SVG source
+# during the build. Keeping this in Rust makes release builds independent of
+# host shell tools (notably unavailable on the Windows CI runner).
 resvg = { workspace = true }
 usvg = { workspace = true }
 image = { workspace = true, features = ["ico"] }
