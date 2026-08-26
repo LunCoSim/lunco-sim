@@ -36,10 +36,16 @@ to pick up a starfield or material edit.
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
 tested through its production scene gate in `assets/scenes/tests/` with the
 observer in `assets/scenarios/tests/`. After editing either Rhai file, rerun
-`target/debug/luncosim test --scene ...`; do not rebuild the Rust core for a
-script-only change. The observer must verify public `cmd:*` events plus the
-resulting live state and emit a real verdict. Parsing or `--validate` is only
-preflight evidence.
+`./scripts/run_scene_tests.sh --no-build <scene-substring>`; do not rebuild the
+Rust core for a script-only change. The observer must verify public `cmd:*`
+events plus the resulting live state and emit a real verdict. Parsing or
+`--validate` is only preflight evidence.
+
+For a one-shot assertion that needs the currently loaded USD stage, use
+`./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
+the test libraries and calls `RunRhai` on the existing production session, so
+editing and rerunning the test does not restart the app. Use `run_scenario.sh`
+when the assertion should remain attached as a persistent observer.
 
 For an interactive tour, keep one production session and use `StartTutorial`
 through `/api/commands`, then inspect the HUD and event stream. `RunScenario`

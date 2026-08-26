@@ -119,6 +119,29 @@ scene-authored file-backed program, use
 `uniform asset info:sourceAsset = @lunco://scenarios/my_rover_mission.rhai@` instead;
 the asset pipeline owns loading and hot replacement.
 
+### Run authored tests without rebuilding
+
+Behavior and mission outcomes belong in the production scene gate, not in a
+Rust test that supplies a fake rover or spy command. After the first Rust build,
+rerun authored scene tests with the existing binary:
+
+```bash
+./scripts/run_scene_tests.sh --no-build autopilot
+```
+
+For a standalone Rhai assertion that needs a live USD world, keep one API
+session open and run the source through `RunRhai`:
+
+```bash
+./scripts/api/run_rhai_test.sh 4101 \
+  assets/scripting/tests/test_usd_query.rhai /SandboxScene/Box
+```
+
+Both paths avoid a Rust rebuild. The live wrapper can be invoked repeatedly
+after editing the `.rhai` file; it does not restart the simulator. Use
+`RunScenario`/`run_scenario.sh` for a persistent per-entity observer and
+`run_rhai_test.sh` for a one-shot verdict.
+
 ### Inspect & debug
 
 - `print(...)` lands in the console.

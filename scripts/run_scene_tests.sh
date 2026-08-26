@@ -13,6 +13,8 @@
 #
 #   ./scripts/run_scene_tests.sh              # all scenes
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
+#   ./scripts/run_scene_tests.sh --no-build   # reuse target/debug/luncosim
+#   ./scripts/run_scene_tests.sh --bin /path/to/luncosim --no-build
 #   ./scripts/run_scene_tests.sh --stress     # + optional diagnostic second pass
 #
 # Exits non-zero if ANY scene fails, produces no verdict, or hangs past
@@ -52,6 +54,8 @@ STRESS=0
 STRESS_THREADS=0     # 0 = leave bevy's default multi-threaded pool alone
 STRESS_JITTER=0.4    # +/- 40% dt, i.e. frame times from 10 ms to 23 ms at 60 Hz
 STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
+BUILD=1
+BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 
 # ── Per-scene wall-clock bound ──────────────────────────────────────────────
 #
@@ -62,6 +66,59 @@ STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 SCENE_TIMEOUT="${SCENE_TIMEOUT:-420}"
 SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 
+# ── Arguments ───────────────────────────────────────────────────────────────
+#
+# The default is convenient for a clean checkout. `--no-build` is the important
+# authoring path: after a Rust build has produced the production binary, edits
+# to USD/Rhai rerun against that exact binary and do not compile or restart the
+# core. A binary override is explicit so a caller cannot accidentally validate
+# a stale executable from another worktree.
+FILTER=""
+while (($# > 0)); do
+    case "$1" in
+        --stress)
+            STRESS=1
+            shift
+            ;;
+        --no-build)
+            BUILD=0
+            shift
+            ;;
+        --build)
+            BUILD=1
+            shift
+            ;;
+        --bin)
+            if (($# < 2)); then
+                echo "--bin needs an executable path" >&2
+                exit 2
+            fi
+            BIN="$2"
+            shift 2
+            ;;
+        --bin=*)
+            BIN="${1#--bin=}"
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        --*)
+            echo "unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "$FILTER" ]]; then
+                echo "only one scene substring filter is supported" >&2
+                exit 2
+            fi
+            FILTER="$1"
+            shift
+            ;;
+    esac
+done
+
 # ── The scene list ──────────────────────────────────────────────────────────
 #
 # Paths are relative to `assets/`, exactly as `--scene` wants them.
@@ -71,44 +128,31 @@ SCENE_MAX_TICKS="${SCENE_MAX_TICKS:-36000}"
 # eleven scenes with real scenarios sat outside the old list, passing when run by
 # hand and gating nothing.
 #
-# The directory IS the declaration. A scene is a test because of where it lives,
 # not because its name ends in `_test`, and `lunco-assets`'s `is_test_asset` reads
 # the same fact to keep them out of the UI's Scene menu.
 #
-# Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
-# positional is the substring filter.
-FILTER=""
-for arg in "$@"; do
-    case "$arg" in
-        --stress) STRESS=1 ;;
-        -h|--help)
-            sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-            exit 0
-            ;;
-        *) [[ -z "$FILTER" ]] && FILTER="$arg" ;;
-    esac
-done
-
-# ── Build ONCE ──────────────────────────────────────────────────────────────
+# The production binary owns composed-USD and Rhai discovery. The shell runner
+# consumes that result instead of maintaining a second scene classifier.
 #
-# Use the repository target/ and regular sccache; this is
-# the ONLY cargo invocation in the script — the runs below execute the built
-# binary directly. Two concurrent cargo processes would contend for the same
-# target-dir lock and serialise anyway, so the scene runs are sequential too.
-BIN="target/debug/luncosim"
-echo "==> building luncosim test runner (one cargo invocation, -j 4)"
-if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
-    echo "BUILD FAILED — no scenes run" >&2
-    exit 2
+# With BUILD=1 this is the ONLY cargo invocation in the script; the runs below
+# execute the built binary directly. With BUILD=0 there is no Cargo access at
+# all, which is the fast script/scene iteration path.
+if ((BUILD)); then
+    echo "==> building luncosim test runner (one cargo invocation, -j 4)"
+    if ! RUSTC_WRAPPER=sccache cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
+        echo "BUILD FAILED — no scenes run" >&2
+        exit 2
+    fi
+else
+    echo "==> reusing production luncosim binary (--no-build): $BIN"
 fi
 if [[ ! -x "$BIN" ]]; then
-    echo "build reported success but $BIN is missing" >&2
+    echo "production binary is missing or not executable: $BIN" >&2
     exit 2
 fi
 
-# The production binary owns the same composed-USD + Rhai discovery used by
-# the static test. This keeps the shell gate from parsing USD or maintaining a
-# second graphics exception list.
+# Classify through the production binary's composed-USD + Rhai discovery. This
+# is the only source of truth for headless versus graphics execution.
 LIST_OUTPUT="$("$BIN" test --list)" || {
     echo "scene test discovery failed" >&2
     exit 2
@@ -271,7 +315,7 @@ if [[ $STRESS -eq 1 ]]; then
     echo "============================================================"
     echo "stress logs: $LOG_DIR/*.stress.log"
     echo "reproduce any stress failure verbatim:"
-    echo "  $BIN --scene <SCENE> --threads $STRESS_THREADS --jitter $STRESS_JITTER --seed $STRESS_SEED"
+    echo "  $BIN test --scene <SCENE> --threads $STRESS_THREADS --jitter $STRESS_JITTER --seed $STRESS_SEED"
     echo "(note: --threads $STRESS_THREADS is multi-threaded and therefore NOT bit-reproducible;"
     echo " re-run with --threads 1 --jitter $STRESS_JITTER to isolate dt-sensitivity alone.)"
 fi

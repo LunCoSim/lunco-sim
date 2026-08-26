@@ -197,8 +197,25 @@ target/debug/luncosim test \
     --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
-Build `target/debug/luncosim` in the current worktree before running gates. Test
-commands consume that exact build; they do not use `cargo run`.
+Build `target/debug/luncosim` in the current worktree before the first gate.
+Test commands consume that exact production build; they do not use `cargo run`.
+For USD/Rhai-only iteration, reuse it without rebuilding:
+
+```bash
+./scripts/run_scene_tests.sh --no-build <scene-substring>
+```
+
+For a standalone assertion against a running scene, use the live no-restart
+wrapper:
+
+```bash
+./scripts/api/run_rhai_test.sh 4101 assets/scripting/tests/test_usd_query.rhai /SandboxScene/Box
+```
+
+The wrapper sends the test through `RunRhai`; edit the `.rhai` file and run it
+again in the same API session. Keep generic command/lifecycle/cache tests in
+Rust, and move authored mission or vehicle outcomes into a discovered
+`scenes/tests` + `scenarios/tests` pair.
 
 ### Keep test hooks below Rhai's expression-complexity ceiling
 
