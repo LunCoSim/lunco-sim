@@ -33,10 +33,8 @@ it with this one.
   dependency interpretation and assembly (sublayers, references, payloads,
   variants), re-exported by `lunco-usd`.
 - Modelica owns continuous equations/state; behavior trees own sequencing; Rhai
-  owns scenario glue/policy; Rust owns engine mechanisms. Production Rhai may
-  use `on_tick` only as an exceptional fixed-step observer or discrete
-  controller; it is not the default mission/continuous-control path. Prefer
-  events and task trees for sequencing.
+  owns scenario glue/policy; Rust owns engine mechanisms. Production Rhai must
+  not use `on_tick` except for test verdicts. Prefer events to polling.
 - A movable mounted part needs both a rigid body and a joint; hierarchy is not
   attachment. The `nested-body-no-joint` lint guards this.
 - Edit schema sources and regenerate with `scripts/gen_schema.py`; update

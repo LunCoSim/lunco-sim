@@ -74,14 +74,22 @@ fn on_tick(me) {
     if this.sent && this.plant >= 0 {
         let ports = query("ListPorts", #{ entity: this.plant });
         let status = query("CosimStatus");
+        // Entity registration and port projection are separate lifecycle edges.
+        // A missing provider payload is a wait, not a pass and not an iterable
+        // value; do not let a transient unit result turn the authored verdict
+        // into evidence after an on_tick error.
+        if ports == () || status == () { return; }
+        let port_rows = ports.ports;
+        let status_rows = status.entities;
+        if port_rows == () || status_rows == () { return; }
         let has_height = false;
         let has_net_force = false;
-        for p in ports.ports {
+        for p in port_rows {
             if p.name == "height" { has_height = true; }
             if p.name == "netForce" { has_net_force = true; }
         }
         let running = false;
-        for row in status.entities {
+        for row in status_rows {
             if row.name == "/ProgramAttachTest/Ball/Plant" && row.has_simcomponent {
                 running = true;
             }
@@ -105,7 +113,7 @@ fn on_tick(me) {
             return;
         }
         if this.source_only_sent {
-            for row in status.entities {
+            for row in status_rows {
                 if row.name == "/ProgramAttachTest/Ball/SourceOnly"
                     && row.status.starts_with("Error:")
                 {

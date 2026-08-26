@@ -5,7 +5,7 @@
 
 # Command Reference
 
-Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one
+Every externally callable mutation in LunCoSim is a reflected typed command — an event dispatched through one
 bus, reachable from the **HTTP API** (`POST /api/commands`, `{"command":"…","params":{…}}`),
 **MCP**, and **rhai** (`cmd("CommandName", #{ … })`). This page is generated from the
 **runtime schema** the app itself advertises, so every command below is one you can
@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**190 commands** across **26** crates. All documented.
+**191 commands** across **26** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -859,7 +859,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). |
+| `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). Filesystem paths  are opened through `OpenFile`, not this scene-mount command. |
 | `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header, falling back to  `/` when none is declared. |
 
 #### `RestartScene`
@@ -2015,8 +2015,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  1. Validates inputs (new_name non-empty, no path separators, source
     exists, target doesn't already exist).
- 2. Performs the move through `lunco-storage` on the backend handles for the
-    absolute paths; the workbench does not call `std::fs`.
+ 2. Asks [`lunco_storage`] to rename backend handles for the absolute paths.
  3. Re-scans the affected Twin via [`Twin::reload`] so the file
     index reflects disk.
  4. Patches every open Document whose `DocumentOrigin::File { path }`
@@ -3004,12 +3003,11 @@ actually call, with the fields the deserializer actually accepts. See the
  whole editor closure (→ modelica → workspace → doc-bevy) into every networking
  build for exactly two symbols (review A6).
 
- `reflect_default` semantics (hand-written here — `#[Command]` cannot expand
- inside `lunco-core` itself, since it emits absolute `::lunco_core::…` paths):
- API/rhai callers may omit optional fields — a missing `rotation` defaults to
- `None` (→ identity). Position is always expressed in the current semantic
- [`crate::ActivePhysicsFrame`]; callers never pass a Bevy grid entity or perform
- BigSpace hierarchy conversion themselves.
+ `reflect_default` semantics: API/rhai callers may omit optional fields — a
+ missing `rotation` defaults to `None` (→ identity). Position is always
+ expressed in the current semantic [`crate::ActivePhysicsFrame`]; callers
+ never pass a Bevy grid entity or perform BigSpace hierarchy conversion
+ themselves.
 
 - *defined in:* `crates/lunco-core/src/commands.rs`
 
@@ -3227,7 +3225,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 190 commands from the runtime schema; scanned 672 .rs files for docs (0 parse failure(s) skipped).
+<!-- 191 commands from the runtime schema; scanned 674 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: JoinServer, LeaveServer, PromoteScenario, RecoverVessel, RunPython, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, SetActiveUsdViewport, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

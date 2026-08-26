@@ -5,8 +5,8 @@
 //! always present (pure-Rust, wasm-clean). `RunPython` is `#[cfg]`-gated on the
 //! `python` feature, so it only appears in the API schema when the runtime is
 //! actually compiled in. This is the fix for the original gap: the old
-//! `ExecuteScript` was always advertised but silently no-op'd when no scripting
-//! plugin handled it.
+//! The command is advertised only when its corresponding runtime handler is
+//! available, so an accepted command cannot silently do nothing.
 //!
 //! The handler returns `Result<Ack, String>`. API callers receive the completed
 //! stdout or error on the same deferred request; in-process `cmd()` callers
