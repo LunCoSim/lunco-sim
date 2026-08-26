@@ -60,6 +60,11 @@ pub mod runtime_waypoint;
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
 pub mod spawn_meta;
+/// Static discovery of authored scene tests and their headless/graphics kind.
+/// The scene supplies the USD program binding; the Rhai test source supplies
+/// the execution domain.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod test_discovery;
 /// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
 /// stage, for asset invariants that scripts (not just Rust) can check.
 pub mod usd_prim_query;

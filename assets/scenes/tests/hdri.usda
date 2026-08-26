@@ -23,11 +23,14 @@ def Xform "HdriTest" (
     doc = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
 )
 {
-    # NOT headless-testable, and this is where that is DECLARED — one fact, read
-    # by both `scripts/run_scene_tests.sh` (which skips it) and by
-    # `every_test_scene_carries_a_scenario` (which stops demanding a verdict of
-    # it). Two separate exception lists would disagree the day one was edited.
-    custom string lunco:notHeadlessTestable = "a render check: the thing under test is the image, and scene_test has no GPU"
+    # The test observer declares its execution domain in Rhai. USD only binds
+    # that observer to the scene through the standard program API.
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/hdri.rhai@
+    }
 
 
 
@@ -77,8 +80,9 @@ def Xform "HdriTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true
@@ -86,6 +90,17 @@ def Xform "HdriTest" (
         double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
         double3 xformOp:translate = (0.0, 2.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The initial presentation is authored explicitly. Avatar presence alone
+    # must never choose the window or offscreen camera.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
     }
 
     # Materials, authored the way USD actually specifies them: `inputs:*` is the

@@ -345,7 +345,10 @@ fn usage() -> String {
 USAGE:
     luncosim test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
                [--threads N] [--jitter FRAC] [--seed U64]
+    luncosim test --list
 
+    --list                   Print `headless`/`graphics` and every discovered test scene,
+                             using the test Rhai program's literal TEST_KIND declaration.
     --scene PATH             REQUIRED. USD scene path. It may be relative to
                              assets/, relative to the current directory, or an
                              absolute path into a custom Twin.
@@ -665,6 +668,10 @@ fn log_participant_readiness_blockers(world: &mut World) {
 }
 
 pub fn run() -> u8 {
+    if std::env::args().any(|argument| argument == "--list") {
+        return list_scene_tests();
+    }
+
     // BEFORE the `App` exists, because building it registers settings sections and
     // that is what loads (and installs the flush for) `settings.json`.
     //
@@ -1161,4 +1168,29 @@ pub fn run() -> u8 {
             2
         }
     }
+}
+
+/// Print the authoritative scene-test catalog without constructing Bevy or a
+/// renderer. The shell gates consume this as `KIND<TAB>assets-relative-scene`.
+fn list_scene_tests() -> u8 {
+    let scenes_dir = lunco_assets::assets_dir_abs().join("scenes/tests");
+    let assets_root = lunco_assets::assets_dir_abs();
+    let tests = match lunco_scene_commands::test_discovery::discover_scene_tests(&scenes_dir) {
+        Ok(tests) => tests,
+        Err(error) => {
+            eprintln!("scene test discovery failed: {error}");
+            return 2;
+        }
+    };
+
+    for test in tests {
+        let scene = test
+            .scene_path
+            .strip_prefix(&assets_root)
+            .expect("discovered scene is below assets root")
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        println!("{}\t{scene}", test.kind.as_str());
+    }
+    0
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Run the GPU-backed scene tests that cannot produce a headless Rhai verdict.
+# Run the GPU-backed scene tests whose Rhai observer declares `TEST_KIND =
+# "graphics"`.
 # The production luncosim binary is still the test subject: this script only
 # supplies the offscreen capture contract and checks the authored render
 # expectations against the frames and diagnostics it produced.
@@ -59,10 +60,15 @@ if ! command -v identify >/dev/null 2>&1 || ! command -v convert >/dev/null 2>&1
 fi
 
 FILTER="${1:-}"
-mapfile -t SCENES < <(
-    grep -l "lunco:notHeadlessTestable" assets/scenes/tests/*.usda |
-        sed 's|^assets/||' | sort
-)
+LIST_OUTPUT="$("$BIN" test --list)" || {
+    echo "render scene gate: scene test discovery failed" >&2
+    exit 2
+}
+SCENES=()
+while IFS=$'\t' read -r kind scene; do
+    [[ "$kind" == "graphics" && -n "${scene:-}" ]] || continue
+    SCENES+=("$scene")
+done <<< "$LIST_OUTPUT"
 if [[ -n "$FILTER" ]]; then
     filtered=()
     for scene in "${SCENES[@]}"; do
@@ -71,7 +77,7 @@ if [[ -n "$FILTER" ]]; then
     SCENES=("${filtered[@]}")
 fi
 if [[ ${#SCENES[@]} -eq 0 ]]; then
-    echo "render scene gate: no notHeadlessTestable scene matches '${FILTER:-all}'" >&2
+    echo "render scene gate: no graphics scene matches '${FILTER:-all}'" >&2
     exit 2
 fi
 

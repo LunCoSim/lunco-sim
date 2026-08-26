@@ -58,6 +58,13 @@ After the authored camera contract is present, offscreen recording holds virtual
 for a one-second cold-GPU render warm-up before numbering frame 0. This fence lets
 pipelines finish compiling without emitting a clear-color first frame.
 
+Scene test observers use the same separation: a Rhai test under
+`assets/scenarios/tests/` is headless unless it declares
+`const TEST_KIND = "graphics";`. The composed USD scene only binds that
+observer through `LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list`
+uses the declaration to route headless tests to the deterministic CPU runner
+and graphics tests to the offscreen renderer.
+
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
 explicit active presentation camera, an authored `LocalAvatar` presentation camera,
 or an authored camera track with a valid camera binding. The recorder consumes that
@@ -121,9 +128,9 @@ per captured frame**, and the count varies with machine speed. See §5.
 `ffmpeg` (libx264, one file, ~2 MB per 10 s at 720p instead of ~1.2 GB of PNGs); anything
 else is a directory receiving a `frame_%06d.png` sequence. `ffmpeg` is probed at start —
 missing, the recorder **warns loudly and demotes to a PNG sequence** in `<name>.frames/`;
-it never crashes the take. A dedicated writer thread owns frame ordering (video is the
-one strictly-sequential sink in the pipeline) and finalizes the container when the
-recording drains.
+it never crashes the take. The recorder writes each delivered frame synchronously to
+the selected sink, so ffmpeg pipe back-pressure holds the deterministic clock just
+like a slow PNG write; no writer thread or reorder buffer can change frame order.
 
 ---
 

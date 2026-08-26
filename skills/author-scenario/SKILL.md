@@ -216,6 +216,23 @@ accept an explicit state map, return the updated map, and let the test observer
 copy the returned keys into `this`. This both controls parser complexity and
 makes phase logic independently testable.
 
+### Choose the test runner from Rhai
+
+The test observer owns its execution domain. Existing observers are headless by
+default; a test whose assertion is rendered pixels, UI state, or a graphics
+diagnostic declares the GPU-backed path with a top-level literal:
+
+```rhai
+const TEST_KIND = "graphics";
+```
+
+The scene still binds the observer through `LunCoProgramAPI` and
+`info:sourceAsset`. The runner discovers that composed binding and reads the
+literal without executing the script, so USD does not carry a second test-mode
+field and the shell gate does not maintain an exception list. Valid values are
+`"headless"` and `"graphics"`; omit the declaration for the deterministic
+headless default.
+
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
 
 A comparative assertion is only as good as its ability to fail. Two traps, both

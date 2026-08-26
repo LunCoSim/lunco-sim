@@ -15,9 +15,13 @@ def Xform "ShaderFallbackTest" (
     doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
 )
 {
-    # NOT headless-testable — see `lunco:notHeadlessTestable` in `hdri.usda` for
-    # why the reason lives in the scene rather than in two exception lists.
-    custom string lunco:notHeadlessTestable = "a render check: asserts what a material looks like when its shader is missing"
+    # The test observer declares that the assertion needs the graphics stack.
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/shader_fallback.rhai@
+    }
 
 
     over "Sun"
@@ -26,8 +30,9 @@ def Xform "ShaderFallbackTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true
@@ -35,6 +40,17 @@ def Xform "ShaderFallbackTest" (
         double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
         double3 xformOp:translate = (4.0, 3.0, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The initial presentation is authored explicitly. Avatar presence alone
+    # must never choose the window or offscreen camera.
+    def Scope "CameraTrack" (
+        prepend apiSchemas = ["LunCoCameraTrackAPI"]
+    )
+    {
+        token lunco:activeCamera.timeSamples = {
+            0: "Avatar",
+        }
     }
 
     def Scope "Looks"
