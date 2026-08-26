@@ -190,11 +190,37 @@ fn dyn_f64s(v: &Dynamic, n: usize) -> Result<Vec<f64>, String> {
 /// concrete type drives the coercion (scalars widen/truncate as needed; arrays
 /// become glam vectors/quats), so `native → reflect` happens in one hop with no
 /// JSON. Unsupported field types return an error the script verb surfaces.
+pub(crate) fn dynamic_write_supported(type_path: &str) -> bool {
+    matches!(
+        type_path.rsplit("::").next().unwrap_or(type_path),
+        "f64"
+            | "f32"
+            | "i64"
+            | "i32"
+            | "u64"
+            | "u32"
+            | "usize"
+            | "bool"
+            | "String"
+            | "Vec2"
+            | "Vec3"
+            | "Quat"
+            | "DVec2"
+            | "DVec3"
+    )
+}
+
 fn apply_dynamic(
     field: &mut dyn bevy::reflect::PartialReflect,
     value: &Dynamic,
 ) -> Result<(), String> {
     use bevy::math::{DVec2, DVec3, Quat, Vec2, Vec3};
+    if !dynamic_write_supported(field.reflect_type_path()) {
+        return Err(format!(
+            "set: unsupported field type '{}'",
+            field.reflect_type_path()
+        ));
+    }
     let any = field
         .try_as_reflect_mut()
         .ok_or_else(|| "field is not concretely reflectable".to_string())?
@@ -811,8 +837,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         if let Some(v) = bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()) {
             return v;
         }
-        // Reflection missed — fall back to the co-sim port registry (Modelica
-        // vars, avian state, joint angles, hardware ports). Same surface the
+        // Reflection missed — use the co-sim port registry (Modelica vars,
+        // avian state, joint angles, hardware ports). Same surface the
         // wire engine and the API read, so a script sees what the sim exchanges.
         match bridge_core::read_port(id as u64, path.as_str()) {
             Some(p) => Dynamic::from_float(p),
@@ -820,18 +846,17 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         }
     });
 
-    // set(id, "Component.field", value) -> bool — the WRITE twin of get(). Applies
-    // `value` straight onto the reflected field (native → reflect, no JSON), the
-    // mirror of the read path. Coerces by the field's type (scalars widen, arrays
-    // → glam vec/quat). Host-side scripts may use it when authorized; the change
-    // replicates via normal component sync. Returns false (and logs why) on a bad
-    // entity/path/type — so a scenario can branch on the result.
+    // set(id, "Component.field", value) -> bool — a host-side tuning write, not
+    // the authoritative command bus. Applies `value` straight onto a supported
+    // reflected field (native → reflect, no JSON) and is authority-gated. Use
+    // cmd() for changes that must be replicated, undoable, or owned by a domain
+    // command. Returns false (and logs why) on a bad entity/path/type.
     engine.register_fn("set", |id: i64, path: ImmutableString, value: Dynamic| -> bool {
         match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
             Ok(()) => true,
             Err(e) => {
-                // Reflection missed — fall back to the co-sim port registry (the
-                // same path wires and `SetPorts` use). Ports are scalar, so coerce
+                // Reflection missed — use the co-sim port registry (the same path
+                // wires and `SetPorts` use). Ports are scalar, so coerce
                 // the value to f64; a non-numeric set genuinely failed.
                 let scalar = value.as_float().ok().or_else(|| value.as_int().ok().map(|i| i as f64));
                 if let Some(v) = scalar {
@@ -1276,7 +1301,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // CosimStatus, …) and get its data back as rhai values. Spatial/physics
     // providers live in their owning crates (e.g. avian-backed Raycast in
     // lunco-mobility); scripting reaches them generically here without taking a
-    // physics dependency. Returns () if the provider is missing or errors.
+    // physics dependency. Successful no-data is (); failures return an explicit
+    // `#{ok:false,error}` value.
     engine.register_fn("query", |name: ImmutableString, params: Map| -> Dynamic {
         bridge_core::query(&RhaiBuilder, name.as_str(), map_to_json(params))
     });

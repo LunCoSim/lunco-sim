@@ -35,20 +35,22 @@ fn on_event(me, evt) { /* a TelemetryEvent arrived */ }
 fn on_stop(me)       { brake(me); }                          // teardown
 ```
 
-New mission scripts should normally use the task tree and events. Production
-`on_tick` is supported as an exceptional fixed-step hook for sampled observers
-or discrete controllers; it must not become a continuous equation bridge or
-replace ordinary task sequencing. The task tree supplies deterministic
-fixed-tick progression without putting the cursor, event delivery, or dwell
-timing in user policy.
+New mission scripts must use the task tree and events. `on_tick` is reserved for
+authored test scenarios to sample state and publish a bounded verdict; it is
+not a production mission or controller hook. The task tree supplies
+deterministic fixed-tick progression without putting the cursor, event delivery,
+or dwell timing in user policy.
 
 Every task node has an explicit `kind` discriminator; missing/unknown kinds and
 fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).
 
-The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
-`world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /
-`list_entities` / `emit` / `sim_tick` / `dt` / `elapsed_seconds`. Everything
-ergonomic (navigation, sensing, sequencing, selection) is **policy** authored in
+The host exposes a minimal generic bridge — `cmd` / `query` / `get` / `set` /
+`get_setting` / `set_setting` / `world_pos` / `world_forward` / `find` / `name` /
+`parent` / `children` / `list_entities` / `emit` / `sim_tick` / `dt` /
+`elapsed_seconds`. Reflection and the canonical co-simulation port registry
+provide the generic state surface; `ScriptingCatalog` reports the live command,
+query, reflection, prelude, hook, and tool contracts. Everything ergonomic
+(navigation, sensing, sequencing, selection) is **policy** authored in
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 

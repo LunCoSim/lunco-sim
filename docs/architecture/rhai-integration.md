@@ -81,19 +81,21 @@ fn on_stop(me) { ... }         // optional teardown
 State rule (rhai-specific, important): script `fn`s are **pure** — an indirect
 task helper must receive its configuration as arguments. The native task kernel
 owns the cursor, dwell timing, and event waits; user policy does not maintain a
-second fixed-tick loop or cursor map. An exceptional `on_tick` is still
-supported for sampled observation or discrete control and runs once per fixed
-step before the task/mission pass.
+second fixed-tick loop or cursor map. The `on_tick` hook is reserved for
+authored test scenarios that sample state and publish a bounded verdict; it is
+not part of the production mission contract.
 
 ### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
 
 | verb | channel | purpose |
 |------|---------|---------|
 | `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
-| `query(name, #{params})` | read | invoke a read-only structured provider |
+| `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
 | `world_forward(id)` → `[x,y,z]` | read | world heading (only read rhai can't derive itself) |
 | `get(id, "Comp.field")` | read | generic reflected component-field read |
+| `set(id, "Comp.field", value)` | local write | host-side tuning of a supported reflected field or canonical scalar co-simulation port; not a command-bus hold |
+| `get_setting("Res.field")` / `set_setting("Res.field", value)` | read / local write | reflected resource access for host settings/configuration |
 | `find(name)` / `list_entities()` | read | entity lookup by `Name` / enumerate |
 | `sim_tick()` | read | current FixedUpdate tick |
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
@@ -219,24 +221,29 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 ### 3.1 Giving rhai access to the World
 Scenario and command scripts run in an **exclusive system** (`&mut World`) and
 expose the scoped world bridge for the evaluation duration. Reads run
-synchronously; writes mirror `executor.rs:134-161` (build the reflected event,
-then trigger it). The scenario driver is the authoritative Rhai lifecycle
-runtime. `RunRhai` is a separate one-shot command that uses the same engine and
-bridge without attaching a persistent `ScriptedModel`; it is not a legacy
-compatibility path.
+synchronously; command writes use the shared reflected command dispatcher, while
+host-local tuning writes use the reflected component/resource and port seams.
+The scenario driver is the authoritative Rhai lifecycle runtime. `RunRhai` uses
+the same engine and bridge for one-shot evaluation without attaching a
+persistent `ScriptedModel`; it is a separate execution mode, not a second
+lifecycle or compatibility implementation.
 
 ### 3.2 Exposed verbs (the generic runtime surface)
 ```rust
-cmd(name: &str, params: Map) -> Dynamic   // dispatch ANY command by name (reflect)
-query(name: &str, params: Map) -> Dynamic // read-only provider names
-find(name: &str) -> i64                    // Name -> GlobalEntityId (sugar over ListEntities)
-entity(id) -> EntityHandle                 // position/rotation/components accessor
-sim_time() -> f64                          // SimTick * SECS_PER_TICK
-log(msg)                                    // already have print()
+cmd(name: &str, params: Map) -> Dynamic       // any registered #[Command]
+query(name: &str, params: Map) -> Dynamic     // registered read-only provider
+get(id, path) / set(id, path, value)           // reflected fields / scalar ports
+get_setting(path) / set_setting(path, value)  // reflected resource fields
+find(name) / name(id) / parent(id) / children(id)
+list_entities() / world_pos(id) / world_forward(id) / world_rotation(id)
+sim_tick() / dt() / elapsed_seconds()
+emit(name, value?) / subscribe(name) / subscribe_prefix(prefix)
 ```
-That is the *whole* generic Rust-side surface. `cmd()` reaches all commands,
-`query()` reaches read providers; every future command is available with no new
-script binding.
+These are the generic Rust-side operations. `cmd()` reaches every registered
+public command and `query()` reaches every registered provider; future domain
+commands and queries become available through their owning registrations without
+new script bindings. `ScriptingCatalog` is the live authoring description of
+this surface.
 Twin/USD/Modelica/cosim are all just command or provider names.
 
 ### 3.3 Ergonomics live in a rhai *prelude*, not Rust
@@ -357,25 +364,27 @@ replicated, RBAC-gated, undoable, and audited**. It is the wrong channel for
 Commands that need a result use the original deferred response
 (`executor.rs`); read providers own their result shape and coordinate-frame
 semantics — no generic component dump, no guessed render-frame position, and no
-implicit compatibility blob. Reflect-dispatch JSON-(de)serializes per call. And the
-intended read bridge (`python/reflect.rs` `EntityProxy`) is a **stub** — it
-touches no ECS (`reflect.rs:28-37`).
+implicit compatibility blob. Reflect-dispatch JSON-(de)serializes per call. The
+Rhai read bridge is implemented against the live ECS; the Python
+`EntityProxy` remains a separate one-shot binding concern.
 
 So tighter integration IS needed, as a **second, complementary channel**:
 
 | | Channel 1 — Commands (write/action) | Channel 2 — Reflection bridge (data plane) |
 |---|---|---|
 | Direction | writes | reads (+ scoped local writes) |
-| Mechanism | `cmd()` → `ReflectEvent::trigger` | `AppTypeRegistry` + `ReflectComponent` get/set |
-| Use for | SetPorts, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, arbitrary `#[reflect]` fields, entity iteration |
+| Mechanism | `cmd()` → `ReflectEvent::trigger` | `AppTypeRegistry` + `ReflectComponent`/`ReflectResource` plus `PortRegistry` |
+| Use for | SetPorts, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, reflected fields/resources, entity iteration |
 | Latency | request/response or deferred result | **synchronous** during eval |
 | Replicated? | yes (CommandBus SyncChannel) | no (local read) |
 | Cost | JSON+reflect+observer per call | direct reflected field access (no JSON) |
 
 **Both run inside the same World-bound exclusive-system context** (§3.1). The
-reflection bridge is exactly the unfinished `EntityProxy` — finish it properly
-against `AppTypeRegistry`/`ReflectComponent` (well-trodden; this is what
-`bevy_mod_scripting` does).
+Rhai reflection bridge is implemented against `AppTypeRegistry`,
+`ReflectComponent`, and `ReflectResource`; its authoring surface is also
+reported by `ScriptingCatalog`, including which reflected fields the native
+converter can write. The Python `EntityProxy` remains a separate one-shot
+binding concern and is not part of the Rhai runtime contract.
 
 **Default rule — reads direct, mutations explicit:**
 - READ arbitrary state → reflection bridge (fast, synchronous, local). `pos(r)`,
@@ -383,10 +392,10 @@ against `AppTypeRegistry`/`ReflectComponent` (well-trodden; this is what
 - WRITE that must replicate / be authoritative / undoable → `cmd()` (bus). Keeps
   determinism + networking intact: clients receive the authoritative command
   stream, they don't run scenario logic (§6).
-- Direct reflected writes and raw port writes are host-side tuning surfaces and
-  are authority-gated; a client-scoped script cannot use them because they have
-  no prediction/forwarding path. `SetPorts` is the persistent-hold control
-  command; `set()`'s port fallback is a raw write.
+- Direct reflected writes and canonical port writes are host-side tuning
+  surfaces and are authority-gated; a client-scoped script cannot use them
+  because they have no prediction/forwarding path. `SetPorts` is the
+  persistent-hold control command; `set()` is a raw write.
 
 This makes "manipulate *everything*" real: Channel 1 = every typed command;
 Channel 2 = every readable field. Hot per-tick paths can later get typed
@@ -429,7 +438,7 @@ policy out of the Rust engine core:
 ══════════════ CORE BOUNDARY (mechanism only) ══════════════════════════
   Scenario VM (AST+Scope, hot-reload) · task/mission/on_start/on_event
   Ch.1 cmd() → reflect+RBAC · Ch.2 reflection reads · world_pos()
-  Event bus (emit + deliver; ROS2 bridge seam) · sim_time() · log
+  Event bus (emit + deliver; ROS2 bridge seam) · sim_tick()/dt()/elapsed_seconds()
   Events/Triggers from Avian sensors (volumes, not distance polling)
   USD scene/prefab (static authoring)
 ```
@@ -449,15 +458,19 @@ planned. Resulting split:
 **Core exposes only (irreducible mechanism):**
 - Persistent scenario VM — `rhai::AST` + `Scope` per scenario, recompiled on
   `ScriptDocument` source change (hot-reload).
-- Host→script hooks: native `task(me)`/`mission(me)` drivers, `on_start()`, and
-  `on_event(evt)` (sim-time, transport-gated via `TimeTransport`).
+- Host→script hooks: native `task(me)`/`mission(me)` drivers, `on_start()`,
+  `on_event(evt)` for production scenarios; authored test scenarios may also
+  use `on_tick(me)` for bounded verdict observation (all sim-time,
+  transport-gated via `TimeTransport`).
 - Ch.1 write — `cmd(name, #{…})` → `ReflectEvent::trigger`, behind RBAC.
-- Ch.2 read — reflection bridge (`get(entity,"Comp.field")`, `query()`, `list`,
-  `find`) + `world_pos(entity)` (float-origin/big_space correct — the ONE nav read
-  that must be native).
+- Ch.2 read/local tuning — reflection and the canonical port bridge
+  (`get`/`set`, `get_setting`/`set_setting`, `query()`, `list`, `find`) +
+  `world_pos(entity)` (float-origin/big_space correct — the ONE nav read that
+  must be native).
 - Event bus — `emit(name, data)` + delivery of physics/sensor/timer/**external**
   events to `on_event`. This bus is the ROS2 bridge seam.
-- `sim_time()`, seeded-RNG-off, `log`.
+- `sim_tick()`, `dt()`, `elapsed_seconds()`, and deterministic seeded `rand()` /
+  `rand_range()` / `rand_int()`.
 - A serializable **goal/action envelope** `{id, params, status, feedback, result,
   cancel}` mirroring ROS2 action semantics (the only concession for interop).
 

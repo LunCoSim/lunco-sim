@@ -14,7 +14,7 @@ representation:
 | Scene structure, identity, topology, frames, connections, component parameters | USD | Rust projects the composed stage; it does not invent missing topology |
 | Continuous equations, state, control laws, filters, physical networks | Modelica | Rumoca compiles and steps the model |
 | Rigid-body collision, contacts, forces, torques, joints | Avian through USD-authored physics | Rust exposes the engine's generic mechanics and executes them |
-| Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration by default; exceptional fixed-step `on_tick` only for sampled/discrete policy |
+| Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
 ## Plugin and crate layering

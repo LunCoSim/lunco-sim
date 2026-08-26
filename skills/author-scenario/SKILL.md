@@ -24,13 +24,11 @@ description: >
 
 # Authoring scenarios
 
-A **scenario** is a rhai program attached to an entity. Production scenarios are
-event-driven policy by default. An `on_tick` hook is supported in production as
-an exceptional fixed-step observer or discrete controller, but it must not own
-continuous equations or ordinary mission sequencing. Continuous rover
-dynamics remain in fixed-step physics/Modelica. Test scenarios under
-`assets/scenarios/tests/` may use the same hook to sample live telemetry and
-advance a bounded verdict.
+A **scenario** is a rhai program attached to an entity. Production scenarios
+are task/event-driven policy. They must not define `on_tick`; that hook is
+reserved for authored tests under `assets/scenarios/tests/` to sample live
+telemetry and publish a bounded verdict. Continuous rover dynamics remain in
+fixed-step physics/Modelica.
 
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it
@@ -221,8 +219,8 @@ Rust, and move authored mission or vehicle outcomes into a discovered
 
 ### Keep test hooks below Rhai's expression-complexity ceiling
 
-An exceptional `on_tick` is a bounded fixed-step hook, not a replacement for
-the task/event machinery:
+An authored test `on_tick` is a bounded fixed-step verdict hook, not a
+replacement for the task/event machinery:
 
 - one helper per phase;
 - one sampler and one accumulator;
@@ -408,8 +406,8 @@ libraries → `<twin>/tools/*.rhai`.
 
 1. Decide the shape: sequenced (`task`), objective-tracked (`mission`), or
    reactive (`on_event`). Use a Behavior Tree for reactive AI. Use `on_tick`
-   only for a bounded sampled/discrete production or test hook; rover continuous
-   control/dynamics belong to native fixed-step systems or Modelica.
+   only in authored tests for bounded state sampling and verdicts; rover
+   continuous control/dynamics belong to native fixed-step systems or Modelica.
 2. Return a task tree; pass task configuration into closures. Keep lifecycle
    state on `this` only where a hook genuinely needs it.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).

@@ -107,8 +107,9 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> Res
 
     let envelope = ApiResponseEnvelope::from(response);
     // Honour the TYPED error code. Every error used to be a 500, which threw
-    // away `CommandNotFound` (400), `EntityNotFound` (404) and
-    // `DeserializationError` (422) — codes `ApiErrorCode` has always carried.
+    // away `CommandNotFound` (400), `EntityNotFound` (404),
+    // `CommandRejected` (409), and `DeserializationError` (422) — codes
+    // `ApiErrorCode` carries.
     let status = match envelope.error_code {
         Some(code) => StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         None => StatusCode::OK,

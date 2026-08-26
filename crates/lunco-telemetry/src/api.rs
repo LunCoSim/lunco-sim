@@ -102,7 +102,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
         "ListTelemetryChannels"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let signals = world.resource::<SignalRegistry>();
 
         let mut channels: Vec<serde_json::Value> = signals
@@ -176,7 +176,7 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         "QueryTelemetryHistory"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(key) = params.get("key").and_then(|v| v.as_str()) else {
             return ApiResponse::error(ApiErrorCode::DeserializationError, "missing field 'key'");
         };
@@ -283,7 +283,7 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
         "ExportTelemetryRecording"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let start = params
             .get("start")
             .and_then(|v| v.as_f64())

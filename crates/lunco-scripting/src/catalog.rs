@@ -14,7 +14,8 @@
 //!   - `tools`   — registered `name::fn` tool libraries (incl. file-loaded ones).
 //!   - `commands`— every reflected API command (the `cmd("…")` targets) + fields.
 //!   - `queries` — every registered read-only provider.
-//!   - `reflection` — reflected component/resource types and their fields.
+//!   - `reflection` — reflected component/resource types and their fields, with
+//!     writable flags derived from the same converter used by `set()`.
 //!
 //! `ScriptComplete { prefix, limit? }` is the lightweight completion query over
 //! this same surface. UI/LSP clients can consume it without reimplementing the
@@ -54,7 +55,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "set",
         "set(id, \"Component.field\", value)",
         "bool",
-        "WRITE. The mirror of get(): write a value straight onto a reflected component field (native → reflect, no JSON). Coerces by field type (int→float, [x,y,z]→Vec3). Host-side and authority-gated; replicates via component sync. false on bad path/type.",
+        "LOCAL WRITE. The mirror of get(): write a supported value straight onto a reflected component field (native → reflect, no JSON). This is host-side tuning, not the authoritative/replicated/undoable command bus; it is authority-gated and false on bad path/type.",
     ),
     (
         "get_setting",
@@ -72,13 +73,13 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "set_setting",
         "set_setting(\"Resource.field\", value)",
         "bool",
-        "WRITE. The resource twin of set(): tune any reflect-registered Resource field from a scenario, no per-setting command. false on bad path/type.",
+        "LOCAL WRITE. The resource twin of set(): tune a supported reflect-registered Resource field from a host-authoritative scenario. Use cmd() for authoritative, replicated, or undoable changes. false on bad path/type.",
     ),
     (
         "query",
         "query(name, #{params})",
         "value | ()",
-        "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). The read twin of cmd(). () if missing/errored.",
+        "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). Successful data is returned directly; no-data is (); failures return #{ok:false,error}.",
     ),
     (
         "vadd",
@@ -334,23 +335,37 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
             if !is_component && !is_resource {
                 return None;
             }
-            let fields = match registration.type_info() {
-                TypeInfo::Struct(info) => info
-                    .iter()
-                    .map(|field| {
-                        serde_json::json!({
-                            "name": field.name(),
-                            "type": field.type_path(),
+            let short_type = registration.type_info().type_path_table().short_path();
+            if registry.get_with_short_type_path(short_type).is_none() {
+                return None;
+            }
+            let (fields, writable_field) = match registration.type_info() {
+                TypeInfo::Struct(info) => {
+                    let mut writable = false;
+                    let fields = info
+                        .iter()
+                        .map(|field| {
+                            let field_writable =
+                                crate::world_bridge::dynamic_write_supported(field.type_path());
+                            writable |= field_writable;
+                            serde_json::json!({
+                                "name": field.name(),
+                                "type": field.type_path(),
+                                "readable": true,
+                                "writable": field_writable,
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
+                        .collect::<Vec<_>>();
+                    (fields, writable)
+                }
+                _ => (Vec::new(), false),
             };
+            let type_writable = crate::world_bridge::dynamic_write_supported(short_type);
             Some(serde_json::json!({
-                "type": registration.type_info().type_path_table().short_path(),
+                "type": short_type,
                 "kind": if is_resource { "resource" } else { "component" },
                 "readable": true,
-                "writable": is_component || is_resource,
+                "writable": (is_component || is_resource) && (type_writable || writable_field),
                 "fields": fields,
             }))
         })
@@ -404,7 +419,7 @@ impl ApiQueryProvider for ScriptCompleteProvider {
         "ScriptComplete"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let prefix = params
             .get("prefix")
             .and_then(|value| value.as_str())
@@ -508,7 +523,7 @@ const HOOKS: &[(&str, &str)] = &[
     ),
     (
         "on_tick",
-        "fn on_tick(self) — exceptional fixed-step hook; use for sampled observers or discrete controllers, not continuous equations or ordinary mission sequencing.",
+        "fn on_tick(self) — test-only fixed-step observer for sampling state and publishing a bounded verdict; production missions use task/events.",
     ),
     (
         "on_stop",
@@ -528,7 +543,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         "ScriptingCatalog"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         // Built-in verbs + hooks (static).
         let verbs: Vec<serde_json::Value> = VERBS
             .iter()
@@ -658,5 +673,41 @@ mod tests {
         assert!(data["commands"].is_array());
         assert!(data["queries"].is_array());
         assert!(data["reflection"].is_array());
+    }
+
+    #[test]
+    fn reflection_catalog_matches_the_dynamic_write_converter() {
+        #[derive(Component, Reflect)]
+        #[reflect(Component)]
+        struct CatalogProbe {
+            supported: Vec3,
+            unsupported: u8,
+        }
+
+        let mut app = App::new();
+        app.init_resource::<AppTypeRegistry>();
+        app.register_type::<CatalogProbe>();
+
+        let entries = reflected_surface(app.world());
+        let probe = entries
+            .iter()
+            .find(|entry| entry["type"] == "CatalogProbe")
+            .expect("registered component is discoverable");
+        assert_eq!(probe["writable"], serde_json::json!(true));
+        let fields = probe["fields"].as_array().expect("field catalog");
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field["name"] == "supported")
+                .expect("supported field")["writable"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field["name"] == "unsupported")
+                .expect("unsupported field")["writable"],
+            serde_json::json!(false)
+        );
     }
 }

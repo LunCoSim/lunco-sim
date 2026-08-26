@@ -43,6 +43,7 @@
 //! much cheaper on a prim carrying big arrays (a trimmed `NurbsPatch` holds
 //! thousands of control points), so a hot loop should name them.
 
+use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
@@ -149,7 +150,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         "QueryUsdPrim"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(path) = params.get("path").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -175,11 +176,17 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         // Which stage? Prefer the one the prim actually spawned from — a session
         // can hold several (a twin plus referenced assets), and picking the wrong
         // one silently answers about a different prim of the same path.
-        let spawned: Option<(Entity, bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>)> = world
-            .query::<(Entity, &UsdPrimPath)>()
-            .iter(world)
-            .find(|(_, p)| p.path == path)
-            .map(|(e, p)| (e, p.stage_handle.id()));
+        let Some(mut spawned_query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: USD entity query is unavailable",
+            );
+        };
+        let spawned: Option<(Entity, bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>)> =
+            spawned_query
+                .iter(world)
+                .find(|(_, p)| p.path == path)
+                .map(|(e, p)| (e, p.stage_handle.id()));
 
         // Read everything under ONE short borrow: `CanonicalStages` is `!Send`
         // and aliases the world, so it must be dropped before we touch entities.
@@ -234,16 +241,13 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         });
 
         if let Some((entity, _)) = spawned {
-            use bevy::ecs::system::SystemState;
-            let mut state: SystemState<lunco_physics::SimulationPoseQuery> =
-                SystemState::new(world);
-            let Ok(poses) = state.get(world) else {
+            let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {
                 return ApiResponse::error(
                     ApiErrorCode::InternalError,
                     "QueryUsdPrim: active physics frame is unavailable".to_string(),
                 );
             };
-            let Some(pos) = poses.position(entity) else {
+            let Some(pos) = poses.position(world, entity) else {
                 return ApiResponse::error(
                     ApiErrorCode::InternalError,
                     format!(

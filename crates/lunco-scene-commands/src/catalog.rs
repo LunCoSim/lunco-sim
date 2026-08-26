@@ -58,7 +58,7 @@ impl ApiQueryProvider for SpawnCatalogProvider {
         "ListSpawnCatalog"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let Some(catalog) = world.get_resource::<SpawnCatalog>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,

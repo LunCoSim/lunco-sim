@@ -8,6 +8,7 @@
 //! so a link-availability or sun-exposure rule is authored in rhai over
 //! `query("Occultation", …)` / `query("Links", …)` with no comms or solar Rust.
 
+use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -54,7 +55,7 @@ impl ApiQueryProvider for OccultationProvider {
         "Occultation"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let (Some(o), Some(t)) = (
             parse_point(params.get("origin")),
             parse_point(params.get("target")),
@@ -102,7 +103,7 @@ impl ApiQueryProvider for BodyPositionProvider {
         "BodyPosition"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(naif) = params.get("body").and_then(serde_json::Value::as_i64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -161,7 +162,7 @@ impl ApiQueryProvider for SolarPoseProvider {
         "SolarPose"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(gid) = params.get("entity").and_then(serde_json::Value::as_i64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -247,7 +248,7 @@ impl ApiQueryProvider for LinksProvider {
         "Links"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let mut nodes: Vec<serde_json::Value> = Vec::new();
         let mut adj = serde_json::Map::new();
         let mut edges: Vec<serde_json::Value> = Vec::new();
@@ -258,13 +259,18 @@ impl ApiQueryProvider for LinksProvider {
         // sweep, from the entities collected below.
         let mut owners: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
         let mut node_entities: Vec<(Entity, u64)> = Vec::new();
-        let mut q = world.query::<(
+        let Some(mut q) = QueryState::<(
             Entity,
             Option<&Name>,
             &LinkNode,
             &LinkState,
             &GlobalEntityId,
-        )>();
+        )>::try_new(world) else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "Links: ECS query is unavailable".to_string(),
+            );
+        };
         for (e, name, node, state, gid) in q.iter(world) {
             let id = gid.get();
             node_entities.push((e, id));
@@ -324,11 +330,18 @@ impl ApiQueryProvider for WifiLinksProvider {
         "WifiLinks"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
         let mut nodes = Vec::new();
         let mut adj = serde_json::Map::new();
         let mut edges = Vec::new();
-        let mut q = world.query::<(&GlobalEntityId, &WifiNode, &WifiState, Option<&Name>)>();
+        let Some(mut q) =
+            QueryState::<(&GlobalEntityId, &WifiNode, &WifiState, Option<&Name>)>::try_new(world)
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "WifiLinks: ECS query is unavailable".to_string(),
+            );
+        };
         for (gid, wifi, state, name) in q.iter(world) {
             let id = gid.get();
             let peers: Vec<u64> = state

@@ -28,13 +28,13 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 
 ## Key Design
 
-- **No hardcoded commands**: Any `#[Command]` type is automatically discoverable via `AppTypeRegistry` reflection.
+- **No hardcoded commands**: Any registered `#[Command]` type is automatically discoverable via `AppTypeRegistry` reflection; arbitrary internal reflected events are excluded.
 - **Transport-independent**: HTTP is one optional transport. The core types know nothing about HTTP.
 - **Headless-compatible**: Runs without GPU/graphics. Perfect for server deployments.
 
 ## Commands
 
-Commands are discovered automatically. The API scans `AppTypeRegistry` for types that implement `Event + Reflect`. Every `#[Command]` struct in the workspace is available.
+Commands are discovered automatically. The API scans `AppTypeRegistry` for reflected events carrying the marker emitted by `#[Command]`. A command must still be registered by its owning plugin so its observer and reflected type exist in the running host.
 
 ### HTTP Endpoint
 

@@ -209,11 +209,9 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
                 )
                 .with_state(bridge);
 
-            // TODO(multiplayer): deferred — singleplayer focus for now, RBAC
-            // disabled for ease of debugging. Loopback-only bind, but the command
-            // API has zero local auth — any local process/user can drive the full
-            // command surface. Revisit before multiplayer hardening
-            // (REVIEW-2026-07-19.md API-1).
+            // This is a trusted local boundary: it binds loopback only and has
+            // no local user-authentication layer. Networked peers use the
+            // authenticated session/RBAC path and must not be routed here.
             let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await
             {
                 Ok(l) => l,

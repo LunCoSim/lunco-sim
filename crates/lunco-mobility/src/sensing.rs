@@ -6,7 +6,6 @@
 //! provider seam (the read-side twin of the `#[Command]` bus).
 
 use avian3d::prelude::*;
-use bevy::ecs::system::SystemState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -33,7 +32,7 @@ impl ApiQueryProvider for RaycastProvider {
         "Raycast"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let (Some(origin), Some(dir_v)) = (parse_vec3(params, "origin"), parse_vec3(params, "dir"))
         else {
             return ApiResponse::error(
@@ -64,7 +63,7 @@ impl ApiQueryProvider for GroundHeightProvider {
         "GroundHeight"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let (Some(x), Some(z)) = (
             params.get("x").and_then(serde_json::Value::as_f64),
             params.get("z").and_then(serde_json::Value::as_f64),
@@ -114,13 +113,20 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// API callers never provide a camera-relative render point: that frame moves
 /// whenever BigSpace recentres and is therefore not stable user or simulation
 /// state. The returned point stays in the same active frame.
-fn cast_ray_response(world: &mut World, origin: GridPos, dir: Dir3, max: f64) -> ApiResponse {
-    let mut state: SystemState<(lunco_physics::GridSpatialQuery, Res<ApiEntityRegistry>)> =
-        SystemState::new(world);
-    let (spatial, registry) = state
-        .get(world)
-        .expect("SpatialQuery + registry always validate");
-    match spatial.cast_ray_grid(origin, dir, max, true, &SpatialQueryFilter::default()) {
+fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> ApiResponse {
+    let query_state = world.resource::<lunco_physics::GridSpatialQueryState>();
+    let result = query_state.with_query(world, |spatial| {
+        let registry = world.resource::<ApiEntityRegistry>();
+        let hit = spatial.cast_ray_grid(origin, dir, max, true, &SpatialQueryFilter::default());
+        (hit, registry)
+    });
+    let Ok((hit, registry)) = result else {
+        return ApiResponse::error(
+            ApiErrorCode::InternalError,
+            "Raycast: spatial query is unavailable".to_string(),
+        );
+    };
+    match hit {
         Some(hit) => {
             let point = origin.0 + (*dir).as_dvec3() * hit.distance;
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());
@@ -141,9 +147,19 @@ fn cast_ray_response(world: &mut World, origin: GridPos, dir: Dir3, max: f64) ->
 /// matter.
 pub(crate) fn register_physics_queries(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
+    app.init_resource::<lunco_physics::GridSpatialQueryState>();
+    app.add_systems(Startup, initialize_grid_spatial_query_state);
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(RaycastProvider);
     reg.register(GroundHeightProvider);
+}
+
+fn initialize_grid_spatial_query_state(world: &mut World) {
+    let state = world
+        .remove_resource::<lunco_physics::GridSpatialQueryState>()
+        .expect("GridSpatialQueryState resource initialized");
+    state.initialize(world);
+    world.insert_resource(state);
 }
 
 // ── Collision / trigger-volume events → the telemetry bus ───────────────────

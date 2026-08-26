@@ -185,10 +185,8 @@ fn on_stop(me)       { brake(me); }                      // teardown: hot-reload
 
 - Define any subset. `on_stop` is where you stop actuators / release claims.
 - Use `task` for ordinary fixed-tick behavior and `on_event` for external
-  events. Production `on_tick` is supported for exceptional sampled observers
-  and discrete controllers; it runs once per fixed step before task/mission
-  evaluation and must not replace continuous Modelica equations or normal
-  mission sequencing.
+  events. Production scenarios must not define `on_tick`; authored test
+  scenarios may use it to sample state and publish a bounded verdict.
 
 ## 4. The everyday verbs
 
@@ -199,9 +197,9 @@ You'll use these constantly (the complete table is in
 | Verb | Purpose |
 |---|---|
 | `cmd(name, #{params})` | **WRITE** — fire any command by name (spawn, possess, set input…). Returns `#{ id, ok, data, error }`. |
-| `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight…). |
+| `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, and source for assets accepted by `cmd("SpawnEntity", ...)`. |
-| `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`). |
+| `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` next tick). |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
@@ -250,12 +248,12 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | Verb | Returns | Purpose |
 |---|---|---|
 | `cmd(name, #{params})` | `#{ id, ok, data, error }` | **WRITE** — fire any `#[Command]` by name (synchronous; `data` carries assigned values like a spawned gid). The full list is the [command reference](./commands-reference.md). |
-| `query(name, #{params})` | value \| `()` | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …) |
+| `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
 | `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id` |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
-| `set(id, "Comp.field", value)` | bool | reflected component **write** — the mirror of `get`; coerces by field type (int→float, `[x,y,z]`→Vec3); `false` on bad path/type |
+| `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
-| `set_setting("Res.field", value)` | bool | reflected **resource write** — tune any registered setting; `false` on bad path/type |
+| `set_setting("Res.field", value)` | bool | host-side **tuning write** to a supported reflected resource field; not replicated or undoable; `false` on bad path/type |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
 | `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
 | `find(name)` | id (`-1` if none) | entity id by `Name` |
@@ -280,11 +278,11 @@ contract). Both directions are native: `get`/`get_setting` build rhai values
 straight from reflect, and `set`/`set_setting` write rhai values straight back —
 no JSON round-trip on the read or write path.
 
-> **`set` vs `cmd`.** Use `set`/`set_setting` to tune a reflected value.
-> A scalar-port fallback is a raw write, not a persistent hold; use
+> **`set` vs `cmd`.** Use `set`/`set_setting` for host-side tuning through the
+> reflected field surface or the canonical scalar co-simulation port surface.
+> This is a raw write, not a persistent hold; use
 > `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a hold. Direct
-> writes are host-authoritative and
-> unavailable to client-scoped scripts. Use `cmd` for
+> writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
 > material, anything an observer must react to). Settings are only reachable if
 > their type is `register_type`'d with `#[reflect(Component)]` / `#[reflect(Resource)]`.

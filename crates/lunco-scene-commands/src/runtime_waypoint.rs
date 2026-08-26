@@ -6,6 +6,7 @@
 //! path so the editor and the headless production runner exercise identical code.
 
 use avian3d::prelude::{CollisionStart, Sensor};
+use bevy::ecs::query::QueryState;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -254,7 +255,7 @@ impl ApiQueryProvider for RuntimeWaypointStatusProvider {
         "RuntimeWaypointStatus"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(raw) = params.get("vessel").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 lunco_api::schema::ApiErrorCode::DeserializationError,
@@ -273,7 +274,12 @@ impl ApiQueryProvider for RuntimeWaypointStatusProvider {
         };
 
         let marker_count = {
-            let mut q = world.query::<&RuntimeWaypointBinding>();
+            let Some(mut q) = QueryState::<&RuntimeWaypointBinding>::try_new(world) else {
+                return ApiResponse::error(
+                    lunco_api::schema::ApiErrorCode::InternalError,
+                    "RuntimeWaypointStatus: ECS query is unavailable",
+                );
+            };
             q.iter(world)
                 .filter(|binding| binding.vessel == vessel)
                 .count()

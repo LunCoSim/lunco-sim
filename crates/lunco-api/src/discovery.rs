@@ -3,7 +3,36 @@
 use crate::queries::{ApiQueryRegistry, ApiVisibility};
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 use bevy::prelude::*;
+use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
+use std::collections::HashMap;
+
+/// Why a command name could not be resolved to one public typed command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiCommandLookupError {
+    /// No reflected type has this short name.
+    NotFound,
+    /// More than one reflected type has this short name.
+    Ambiguous,
+    /// A reflected type has this name, but it is not a `#[Command]` event.
+    NotApiCommand,
+    /// A valid command exists, but the current API visibility policy hides it.
+    Hidden,
+}
+
+impl ApiCommandLookupError {
+    /// Stable client-facing text for all name-resolution failures.
+    pub fn message(self, name: &str) -> String {
+        match self {
+            Self::Ambiguous => {
+                format!("Command '{name}' is ambiguous: more than one reflected type has this name")
+            }
+            Self::NotFound | Self::NotApiCommand | Self::Hidden => {
+                format!("Command '{name}' not found or not API-accessible")
+            }
+        }
+    }
+}
 
 /// True when a type registration is an externally callable LunCo command.
 ///
@@ -30,6 +59,38 @@ pub fn is_api_command(registration: &TypeRegistration, visibility: Option<&ApiVi
     !visibility.is_some_and(|v| v.is_hidden(short_name))
 }
 
+/// Resolve one short command name through the same reflected API boundary used
+/// by discovery and transports.
+///
+/// `TypeRegistry::get_with_short_type_path` intentionally returns `None` for an
+/// ambiguous short name. Walking the registrations here lets us distinguish a
+/// missing command from a plugin collision and prevents a schema from silently
+/// choosing whichever registration happened to be visited first.
+pub fn find_api_command<'a>(
+    type_registry: &'a TypeRegistry,
+    name: &str,
+    visibility: Option<&ApiVisibility>,
+) -> Result<&'a TypeRegistration, ApiCommandLookupError> {
+    let matches: Vec<&TypeRegistration> = type_registry
+        .iter()
+        .filter(|registration| registration.type_info().type_path_table().short_path() == name)
+        .collect();
+
+    let registration = match matches.as_slice() {
+        [] => return Err(ApiCommandLookupError::NotFound),
+        [registration] => *registration,
+        _ => return Err(ApiCommandLookupError::Ambiguous),
+    };
+
+    if !is_api_command(registration, None) {
+        return Err(ApiCommandLookupError::NotApiCommand);
+    }
+    if visibility.is_some_and(|policy| policy.is_hidden(name)) {
+        return Err(ApiCommandLookupError::Hidden);
+    }
+    Ok(registration)
+}
+
 /// Discover LunCo commands from the type registry.
 /// Filters to only types emitted by the `#[Command]` macro that have
 /// `ReflectEvent`.
@@ -42,18 +103,38 @@ pub fn discover_commands(
     type_registry: &TypeRegistry,
     visibility: Option<&ApiVisibility>,
 ) -> Vec<CommandSchema> {
-    let mut commands: Vec<CommandSchema> = type_registry
+    let mut short_name_counts = HashMap::<String, usize>::new();
+    for registration in type_registry.iter() {
+        *short_name_counts
+            .entry(
+                registration
+                    .type_info()
+                    .type_path_table()
+                    .short_path()
+                    .to_owned(),
+            )
+            .or_default() += 1;
+    }
+
+    let commands: Vec<CommandSchema> = type_registry
         .iter()
         .filter_map(|reg| {
             let info = reg.type_info();
             if !is_api_command(reg, visibility) {
                 return None;
             }
+            let short_name = info.type_path_table().short_path();
+            if short_name_counts.get(short_name) != Some(&1) {
+                warn!(
+                    "[lunco-api] omitting ambiguous API command '{}' from discovery",
+                    short_name
+                );
+                return None;
+            }
             let struct_info = match info {
                 TypeInfo::Struct(s) => s,
                 _ => return None,
             };
-            let short_name = info.type_path_table().short_path().to_string();
             let fields: Vec<FieldSchema> = struct_info
                 .iter()
                 .map(|f: &bevy::reflect::NamedField| FieldSchema {
@@ -62,11 +143,13 @@ pub fn discover_commands(
                 })
                 .collect();
             Some(CommandSchema {
-                name: short_name,
+                name: short_name.to_string(),
+                defaulted: reg.data::<ReflectDefault>().is_some(),
                 fields,
             })
         })
         .collect();
+    let mut commands = commands;
     commands.sort_unstable_by(|a, b| a.name.cmp(&b.name));
     commands
 }
@@ -138,5 +221,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["PluginCommand"]
         );
+    }
+
+    #[test]
+    fn ambiguous_short_names_are_not_discoverable_or_routable() {
+        mod left {
+            use bevy::ecs::reflect::ReflectEvent;
+
+            #[lunco_core::Command]
+            pub struct Collision {
+                pub value: u32,
+            }
+        }
+        mod right {
+            use bevy::ecs::reflect::ReflectEvent;
+
+            #[lunco_core::Command]
+            pub struct Collision {
+                pub value: u32,
+            }
+        }
+
+        let mut registry = TypeRegistry::new();
+        registry.register::<left::Collision>();
+        registry.register::<right::Collision>();
+
+        assert!(discover_commands(&registry, None).is_empty());
+        assert!(matches!(
+            find_api_command(&registry, "Collision", None),
+            Err(ApiCommandLookupError::Ambiguous)
+        ));
     }
 }

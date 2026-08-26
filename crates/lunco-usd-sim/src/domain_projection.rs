@@ -2673,12 +2673,20 @@ impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
         "GeneratedModelicaSource"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let wanted = params
             .get("network_root")
             .and_then(|value| value.as_str())
             .map(str::to_string);
-        let mut q = world.query::<(&GeneratedModelicaSource, Option<&ModelicaModel>)>();
+        let Some(mut q) = bevy::ecs::query::QueryState::<(
+            &GeneratedModelicaSource,
+            Option<&ModelicaModel>,
+        )>::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "GeneratedModelicaSource: ECS query is unavailable",
+            );
+        };
         let networks: Vec<serde_json::Value> = q
             .iter(world)
             .filter(|(generated, _)| {

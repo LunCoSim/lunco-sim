@@ -36,8 +36,8 @@
 //! ## Key Design Principles
 //!
 //! - **No hardcoded commands**: Commands are discovered via `AppTypeRegistry`
-//!   reflection. Any `#[Command]` type registered by a host is automatically
-//!   available.
+//!   reflection. A host-registered `#[Command]` type is automatically available;
+//!   arbitrary reflected internal events are not.
 //! - **No hardcoded entity types**: entity identity comes from the runtime
 //!   registry; domain-specific reads expose their own typed query providers.
 //! - **Transport-independent**: HTTP is one optional transport (feature-gated).

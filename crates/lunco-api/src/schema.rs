@@ -4,9 +4,9 @@
 //! must map to. The API layer knows nothing about HTTP — it only understands `ApiRequest`
 //! and produces `ApiResponse`.
 //!
-//! Commands are discovered via reflection. The API scans `AppTypeRegistry` for types
-//! that implement `Event + Reflect`. This means any `#[Command]` struct is automatically
-//! available as an API endpoint — zero hardcoding.
+//! Commands are discovered via reflection. The API scans `AppTypeRegistry` for
+//! reflected events carrying the `ApiCommandMarker` emitted by `#[Command]`.
+//! This keeps arbitrary internal reflected events off the public API surface.
 
 pub use lunco_core::GlobalEntityId as ApiEntityId;
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,8 @@ pub enum ApiRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApiErrorCode {
     EntityNotFound = 404,
+    /// The command is valid, but the current simulation state rejects it.
+    CommandRejected = 409,
     CommandNotFound = 400,
     DeserializationError = 422,
     InternalError = 500,
@@ -184,6 +186,9 @@ pub struct ApiSchema {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSchema {
     pub name: String,
+    /// Whether the reflected command registered `ReflectDefault`, so omitted
+    /// fields can be filled from the Rust type's actual `Default` contract.
+    pub defaulted: bool,
     pub fields: Vec<FieldSchema>,
 }
 

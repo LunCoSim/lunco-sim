@@ -22,6 +22,7 @@
 //! authoritative path for USD-defined cosim entities.
 
 use avian3d::prelude::PhysicsTime;
+use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::telemetry::{ChannelSource, Parameter};
@@ -3305,7 +3306,7 @@ fn port_to_json(p: &lunco_core::ports::PortRef) -> serde_json::Value {
 /// Resolve the optional `api_id` / `entity` field of a params object to an ECS
 /// `Entity` via the `ApiEntityRegistry`. Returns `None` when absent (the
 /// caller lists all) or when the id doesn't resolve.
-fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option<Entity> {
+fn resolve_param_entity(world: &World, params: &serde_json::Value) -> Option<Entity> {
     let raw = params
         .get("api_id")
         .or_else(|| params.get("entity"))
@@ -3324,7 +3325,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
     fn name(&self) -> &'static str {
         "ListPorts"
     }
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
         // Single-entity form.
         if let Some(e) = resolve_param_entity(world, params) {
@@ -3366,7 +3367,7 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
     fn name(&self) -> &'static str {
         "GetPort"
     }
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let Some(e) = resolve_param_entity(world, params) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::EntityNotFound,
@@ -3404,14 +3405,22 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     fn name(&self) -> &'static str {
         "CosimStatus"
     }
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let mut q = world.query_filtered::<(
-            &Name,
-            &Transform,
-            Option<&SimComponent>,
-            Option<&ModelicaModel>,
-            Option<&avian3d::prelude::LinearVelocity>,
-        ), With<UsdSourcedCosim>>();
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(mut q) = QueryState::<
+            (
+                &Name,
+                &Transform,
+                Option<&SimComponent>,
+                Option<&ModelicaModel>,
+                Option<&avian3d::prelude::LinearVelocity>,
+            ),
+            With<UsdSourcedCosim>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "CosimStatus: ECS query is unavailable",
+            );
+        };
 
         let entities: Vec<serde_json::Value> = q
             .iter(world)
@@ -3500,10 +3509,15 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let causal_sink_count = world
-            .query_filtered::<(), With<lunco_core::CausalStateSink>>()
-            .iter(world)
-            .count();
+        let Some(mut causal_sinks) =
+            QueryState::<(), With<lunco_core::CausalStateSink>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "CosimStatus: causal sink query is unavailable",
+            );
+        };
+        let causal_sink_count = causal_sinks.iter(world).count();
         lunco_api::ApiResponse::ok(serde_json::json!({
             "entities": entities,
             "synchronization": {
@@ -3532,21 +3546,36 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         "BindingStatus"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let awaiting = world
-            .query_filtered::<&UsdPrimPath, With<UsdAwaitingStage>>()
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(mut awaiting_query) =
+            QueryState::<&UsdPrimPath, With<UsdAwaitingStage>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: awaiting-stage query is unavailable",
+            );
+        };
+        let awaiting = awaiting_query
             .iter(world)
             .map(|path| path.path.clone())
             .collect::<Vec<_>>();
-        let pending_joints = world
-            .query_filtered::<(
+        let Some(mut pending_joints_query) = QueryState::<
+            (
                 Entity,
                 &UsdPrimPath,
                 &lunco_usd_avian::PendingUsdJoint,
                 Option<&lunco_core::Provenance>,
                 Option<&lunco_core::GlobalEntityId>,
                 Has<UsdInstanceRoot>,
-            ), With<lunco_usd_avian::PendingUsdJoint>>()
+            ),
+            With<lunco_usd_avian::PendingUsdJoint>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending-joint query is unavailable",
+            );
+        };
+        let pending_joints = pending_joints_query
             .iter(world)
             .map(|(entity, path, joint, provenance, gid, is_instance_root)| {
                 serde_json::json!({
@@ -3562,13 +3591,27 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
-        let pending_wheels = world
-            .query_filtered::<&UsdPrimPath, With<crate::PendingWheelWiring>>()
+        let Some(mut pending_wheels_query) =
+            QueryState::<&UsdPrimPath, With<crate::PendingWheelWiring>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending-wheel query is unavailable",
+            );
+        };
+        let pending_wheels = pending_wheels_query
             .iter(world)
             .map(|path| path.path.clone())
             .collect::<Vec<_>>();
-        let pending_differentials = world
-            .query_filtered::<&UsdPrimPath, With<crate::PendingDifferential>>()
+        let Some(mut pending_differentials_query) =
+            QueryState::<&UsdPrimPath, With<crate::PendingDifferential>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending-differential query is unavailable",
+            );
+        };
+        let pending_differentials = pending_differentials_query
             .iter(world)
             .map(|path| path.path.clone())
             .collect::<Vec<_>>();
@@ -3584,7 +3627,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             })
             .flatten()
             .collect::<std::collections::BTreeSet<_>>();
-        let mut bodies = world.query::<(
+        let Some(mut bodies_query) = QueryState::<(
             Entity,
             &UsdPrimPath,
             Option<&avian3d::prelude::RigidBody>,
@@ -3594,8 +3637,13 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             Option<&lunco_core::Provenance>,
             Option<&lunco_core::GlobalEntityId>,
             Has<UsdInstanceRoot>,
-        )>();
-        let bodies = bodies
+        )>::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: body query is unavailable",
+            );
+        };
+        let bodies = bodies_query
             .iter(world)
             .filter(|(_, path, _, _, _, _, _, _, _)| pending_body_paths.contains(&path.path))
             .map(
@@ -3627,11 +3675,15 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .collect::<Vec<_>>();
 
         let mut non_terminal_models = Vec::new();
-        let mut models = world.query_filtered::<(
-            &Name,
-            Option<&ModelicaModel>,
-            Option<&SimComponent>,
-        ), With<UsdSourcedCosim>>();
+        let Some(mut models) = QueryState::<
+            (&Name, Option<&ModelicaModel>, Option<&SimComponent>),
+            With<UsdSourcedCosim>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: model query is unavailable",
+            );
+        };
         for (name, model, component) in models.iter(world) {
             if !modelica_models_terminal(std::iter::once((model, component))) {
                 non_terminal_models.push(serde_json::json!({
@@ -3643,22 +3695,35 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             }
         }
 
-        let connection_count = world
-            .query_filtered::<(), With<SimConnection>>()
-            .iter(world)
-            .count();
+        let Some(mut connections_count_query) =
+            QueryState::<(), With<SimConnection>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: connection query is unavailable",
+            );
+        };
+        let connection_count = connections_count_query.iter(world).count();
         // `connection_count` alone cannot distinguish a correctly derived wire
         // from a wire that is still pending or bound to the wrong endpoint. Keep
         // the complete, generic edge inventory behind the same read-only API so
         // callers can diagnose authored USD topology without log scraping or
         // campaign-specific probes.
-        let connection_specs = world
-            .query_filtered::<(
+        let Some(mut connection_specs_query) = QueryState::<
+            (
                 Entity,
                 &SimConnection,
                 Option<&lunco_cosim::ConnectionBinding>,
                 Has<lunco_cosim::BoundConnection>,
-            ), With<SimConnection>>()
+            ),
+            With<SimConnection>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: connection detail query is unavailable",
+            );
+        };
+        let connection_specs = connection_specs_query
             .iter(world)
             .map(|(edge, spec, binding, bound)| {
                 let endpoint = |entity: Entity| {
@@ -3684,26 +3749,52 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
+        let Some(mut pending_revolute_query) = QueryState::<
+            (),
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending revolute-joint query is unavailable",
+            );
+        };
+        let Some(mut pending_prismatic_query) = QueryState::<
+            (),
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending prismatic-joint query is unavailable",
+            );
+        };
+        let Some(mut pending_fixed_query) = QueryState::<
+            (),
+            With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: pending fixed-joint query is unavailable",
+            );
+        };
         let pending_avian_joints = serde_json::json!({
-            "revolute": world
-                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>>()
-                .iter(world)
-                .count(),
-            "prismatic": world
-                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>>()
-                .iter(world)
-                .count(),
-            "fixed": world
-                .query_filtered::<(), With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>>()
-                .iter(world)
-                .count(),
+            "revolute": pending_revolute_query.iter(world).count(),
+            "prismatic": pending_prismatic_query.iter(world).count(),
+            "fixed": pending_fixed_query.iter(world).count(),
         });
-        let pending_admission_details = world
-            .query_filtered::<(
+        let Some(mut pending_admission_query) = QueryState::<
+            (
                 Entity,
                 &lunco_usd_avian::PendingJointAdmission,
                 Option<&UsdPrimPath>,
-            ), With<lunco_usd_avian::PendingJointAdmission>>()
+            ),
+            With<lunco_usd_avian::PendingJointAdmission>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: joint-admission query is unavailable",
+            );
+        };
+        let pending_admission_details = pending_admission_query
             .iter(world)
             .map(|(joint_entity, pending, path)| {
                 let body = |entity: Entity| {
@@ -3735,19 +3826,34 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
+        let Some(mut admitted_revolute_query) =
+            QueryState::<(), With<avian3d::prelude::RevoluteJoint>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: admitted revolute-joint query is unavailable",
+            );
+        };
+        let Some(mut admitted_prismatic_query) =
+            QueryState::<(), With<avian3d::prelude::PrismaticJoint>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: admitted prismatic-joint query is unavailable",
+            );
+        };
+        let Some(mut admitted_fixed_query) =
+            QueryState::<(), With<avian3d::prelude::FixedJoint>>::try_new(world)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "BindingStatus: admitted fixed-joint query is unavailable",
+            );
+        };
         let admitted_avian_joints = serde_json::json!({
-            "revolute": world
-                .query_filtered::<(), With<avian3d::prelude::RevoluteJoint>>()
-                .iter(world)
-                .count(),
-            "prismatic": world
-                .query_filtered::<(), With<avian3d::prelude::PrismaticJoint>>()
-                .iter(world)
-                .count(),
-            "fixed": world
-                .query_filtered::<(), With<avian3d::prelude::FixedJoint>>()
-                .iter(world)
-                .count(),
+            "revolute": admitted_revolute_query.iter(world).count(),
+            "prismatic": admitted_prismatic_query.iter(world).count(),
+            "fixed": admitted_fixed_query.iter(world).count(),
         });
         let wait_open = world.get_resource::<BindingEpochWait>().is_some();
         let dirty = world
@@ -3809,18 +3915,26 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
         "SceneCameraAudit"
     }
 
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let mut query = world.query_filtered::<(
-            Entity,
-            Option<&Name>,
-            Option<&UsdPrimPath>,
-            Option<&bevy::camera::Camera>,
-            Option<&bevy::camera::RenderTarget>,
-            Has<SceneCamera>,
-            Has<lunco_usd_bevy::camera_mount::MountedCamera>,
-            Has<Avatar>,
-            Has<LocalAvatar>,
-        ), With<SceneCamera>>();
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(mut query) = QueryState::<
+            (
+                Entity,
+                Option<&Name>,
+                Option<&UsdPrimPath>,
+                Option<&bevy::camera::Camera>,
+                Option<&bevy::camera::RenderTarget>,
+                Has<SceneCamera>,
+                Has<lunco_usd_bevy::camera_mount::MountedCamera>,
+                Has<Avatar>,
+                Has<LocalAvatar>,
+            ),
+            With<SceneCamera>,
+        >::try_new(world) else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "SceneCameraAudit: ECS query is unavailable",
+            );
+        };
         let mut candidates: Vec<_> = query
             .iter(world)
             .map(

@@ -67,7 +67,7 @@ impl ApiQueryProvider for ListBundledProvider {
         "ListBundled"
     }
 
-    fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
         let items: Vec<serde_json::Value> = bundled_models()
             .into_iter()
             .map(|m| {
@@ -109,7 +109,7 @@ impl ApiQueryProvider for ListSolversProvider {
         "ListSolvers"
     }
 
-    fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
         // The builtin backends register on first use rather than at plugin
         // build, so a query that arrives before any run would otherwise see an
         // empty registry and report "no solvers exist".
@@ -151,7 +151,7 @@ impl ApiQueryProvider for ListMslProvider {
         "ListMsl"
     }
 
-    fn execute(&self, _world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
         // Pagination + filter params. All optional. `cursor` is an
         // opaque decimal string carrying the offset to start from
         // (returned by the previous page); v1 does not validate that
@@ -259,7 +259,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
         "ListCompileCandidates"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -314,7 +314,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
         "QueryExperimentBounds"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -424,7 +424,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         "CompileStatus"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -555,7 +555,7 @@ impl ApiQueryProvider for RunStatusProvider {
         "RunStatus"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(id) = parse_experiment_id(params, "experiment_id") else {
             return err_missing_field("experiment_id");
         };
@@ -585,7 +585,7 @@ impl ApiQueryProvider for ListRunsProvider {
         "ListRuns"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         // Optional `doc` filter — when absent, list every run in the
         // registry (across docs/twins).
         let filter_doc = parse_doc_id(params, "doc");
@@ -779,7 +779,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
         "GetExperimentResult"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         // Resolve target run: explicit id wins, else latest for `doc`.
         let id = match parse_experiment_id(params, "experiment_id") {
             Some(id) => id,
@@ -907,7 +907,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         "GetDocumentSource"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -990,7 +990,7 @@ impl ApiQueryProvider for GetShareLinkProvider {
         "GetShareLink"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let doc_id = parse_doc_id(params, "doc")
             .or_else(|| world.resource::<WorkspaceResource>().active_document);
         let Some(doc_id) = doc_id else {
@@ -1029,7 +1029,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         "DescribeModel"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -1204,7 +1204,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
         "SnapshotVariables"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -1304,7 +1304,7 @@ impl ApiQueryProvider for FindModelProvider {
         "FindModel"
     }
 
-    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let query = params
             .get("query")
             .and_then(|v| v.as_str())
