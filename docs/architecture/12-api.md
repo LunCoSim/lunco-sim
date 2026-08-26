@@ -220,7 +220,8 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | **Workspace** | `OpenFile` | Open a file (USD, Modelica, etc.) into a new tab. |
 | | `SaveAll` | Save all dirty documents to disk. |
 | | `NewDocument` | Create a new untitled document. |
-| | `AddTwin` | Create a new Twin folder and manifest. |
+| | `CreateTwin` | Create a new Twin folder and manifest. |
+| | `AddTwin` | Add an existing Twin folder to the workspace. |
 | **System** | `SetTheme` | Switch between Dark and Light modes. |
 | | `TogglePerfHud` | Show/hide the performance overlay. |
 | | `RunPython` | Execute a Python script snippet. |

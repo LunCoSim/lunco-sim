@@ -3709,6 +3709,14 @@ fn render_layout(
                 // entry fires `NewDocument { kind }`; the matching
                 // domain observer creates the doc. Ctrl+N fires the
                 // default-resolution path through `EditorIntent`.
+                if ui.button("New Twin…").clicked() {
+                    world.trigger(file_ops::CreateTwin {
+                        path: String::new(),
+                        name: String::new(),
+                        default_scene: String::new(),
+                    });
+                    ui.close();
+                }
                 ui.menu_button("New", |ui| {
                     let registry = world
                         .resource::<lunco_twin::DocumentKindRegistry>();

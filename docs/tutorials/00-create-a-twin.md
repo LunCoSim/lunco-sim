@@ -29,7 +29,11 @@ The formats keep their normal responsibilities:
 
 ## 1. Create the Twin
 
-Create the directory and its manifest:
+In the desktop workbench choose **File → New Twin…**, then select or create
+the target folder. The command creates `twin.toml` and opens the new Twin.
+Headless/API callers can dispatch `CreateTwin { path, name, default_scene }`.
+
+The resulting manifest has this shape:
 
 ```toml
 name = "my-rover-twin"
@@ -120,19 +124,16 @@ fn on_start(me) {
     print("Drive Twin started");
 }
 
-fn on_tick(me) {
-    this.elapsed += dt();
-    if this.elapsed > 5.0 {
+fn on_event(me, evt) {
+    if evt.name == "DriveComplete" {
         print("Drive observation complete");
         this.done = true;
     }
 }
 ```
 
-For a production scenario, replace the final timer with an observation of an
-authoritative port or event and emit an authored verdict. Timers are useful in
-this introductory sketch, but they are not a substitute for a physical
-acceptance condition.
+Production scenarios observe an authoritative port or event and emit an
+authored verdict. A timer is not a physical acceptance condition.
 
 ## 5. Run and inspect the Twin
 

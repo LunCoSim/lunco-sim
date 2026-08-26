@@ -20,7 +20,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_core::{
     on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
-use lunco_twin::{TwinError, TwinMode};
+use lunco_twin::{TwinError, TwinManifest, TwinMode, UsdManifest};
 
 use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 
@@ -52,6 +52,98 @@ fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
         severity: Severity::Error,
         data: TelemetryValue::String(detail.into()),
         timestamp: 0.0,
+    }
+}
+
+/// Write a new Twin manifest at `path` without indexing the folder.
+///
+/// The write is deliberately separate from [`create_twin`]: command callers
+/// can persist the tiny manifest synchronously and hand the potentially large
+/// folder scan to [`spawn_twin_from_path`], keeping the UI responsive. The
+/// manifest is the commit point; an existing manifest is never overwritten.
+fn write_new_twin_manifest(
+    path: &std::path::Path,
+    name: &str,
+    default_scene: &str,
+) -> Result<(), TwinError> {
+    if path.as_os_str().is_empty() {
+        return Err(TwinError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Twin path must not be empty",
+            ),
+        });
+    }
+    let manifest_path = path.join(lunco_twin::MANIFEST_FILENAME);
+    if manifest_path.is_file() {
+        return Err(TwinError::AlreadyExists(path.to_path_buf()));
+    }
+    if path.exists() && !path.is_dir() {
+        return Err(TwinError::NotAFileOrFolder(path.to_path_buf()));
+    }
+    let fallback = path
+        .file_name()
+        .and_then(|part| part.to_str())
+        .filter(|part| !part.trim().is_empty())
+        .unwrap_or("Untitled Twin");
+    let display_name = if name.trim().is_empty() {
+        fallback
+    } else {
+        name.trim()
+    };
+    let mut manifest = TwinManifest::new(display_name);
+    if !default_scene.trim().is_empty() {
+        manifest.usd = Some(UsdManifest {
+            default_scene: Some(default_scene.trim().to_string()),
+            scenes: None,
+        });
+    }
+    manifest.write(&manifest_path)
+}
+
+/// Create a new on-disk Twin and return its freshly indexed representation.
+///
+/// This pure helper is used by tests and headless callers. The command-side
+/// observer uses the manifest-only half above before starting the asynchronous
+/// workspace scan.
+pub fn create_twin(path: &std::path::Path, name: &str) -> Result<TwinMode, TwinError> {
+    write_new_twin_manifest(path, name, "")?;
+    TwinMode::open(path)
+}
+
+/// Create a new Twin folder and asynchronously add it to the workspace.
+/// Empty `path` means "ask the windowed workbench for a folder".
+#[derive(Clone, Debug)]
+#[Command(default)]
+pub struct CreateTwin {
+    /// Target Twin folder. The manifest is created here; missing ancestors are
+    /// created by the storage-backed manifest writer.
+    pub path: String,
+    /// Human-readable name. Empty uses the target folder name.
+    pub name: String,
+    /// Optional Twin-relative USD stage opened when the Twin is admitted.
+    pub default_scene: String,
+}
+
+#[on_command(CreateTwin)]
+fn on_create_twin(
+    trigger: On<CreateTwin>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
+) {
+    let event = trigger.event();
+    if event.path.is_empty() {
+        return;
+    }
+    let path = std::path::PathBuf::from(&event.path);
+    match write_new_twin_manifest(&path, &event.name, &event.default_scene) {
+        Ok(()) => spawn_twin_from_path(&path, &mut pending, "CreateTwin", TwinOpenMode::Replace),
+        Err(error) => {
+            let detail = format!("CreateTwin failed at `{}`: {error}", path.display());
+            warn!("{detail}");
+            commands.trigger(twin_open_failed(detail));
+        }
     }
 }
 
@@ -398,6 +490,7 @@ pub(crate) fn build(app: &mut App) {
 }
 
 register_commands!(
+    on_create_twin,
     on_open_twin,
     on_open_folder,
     on_add_folder_to_workspace,
@@ -407,6 +500,72 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_twin_writes_manifest_and_can_be_reopened() {
+        let tmp = tempfile::tempdir().expect("parent directory");
+        let root = tmp.path().join("created-twin");
+
+        let mode = create_twin(&root, "Created Twin").expect("create Twin");
+        let TwinMode::Twin(twin) = mode else {
+            panic!("created Twin must open in Twin mode");
+        };
+        assert_eq!(twin.manifest.as_ref().unwrap().name, "Created Twin");
+        assert!(root.join(lunco_twin::MANIFEST_FILENAME).is_file());
+
+        let reopened = TwinMode::open(&root).expect("reopen created Twin");
+        assert!(matches!(reopened, TwinMode::Twin(_)));
+    }
+
+    #[test]
+    fn create_twin_does_not_overwrite_existing_manifest() {
+        let tmp = tempfile::tempdir().expect("parent directory");
+        let root = tmp.path().join("existing-twin");
+        std::fs::create_dir_all(&root).expect("Twin directory");
+        std::fs::write(
+            root.join(lunco_twin::MANIFEST_FILENAME),
+            "name = \"original\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("existing manifest");
+
+        let error = create_twin(&root, "replacement").expect_err("existing Twin must reject");
+        assert!(error.to_string().contains("already contains"));
+        assert!(
+            std::fs::read_to_string(root.join(lunco_twin::MANIFEST_FILENAME))
+                .unwrap()
+                .contains("original")
+        );
+    }
+
+    #[test]
+    fn create_twin_command_adds_the_new_root_to_workspace() {
+        let tmp = tempfile::tempdir().expect("parent directory");
+        let root = tmp.path().join("command-twin");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(crate::session::WorkspacePlugin);
+        app.update();
+
+        app.world_mut().trigger(CreateTwin {
+            path: root.display().to_string(),
+            name: "Command Twin".into(),
+            default_scene: String::new(),
+        });
+        for _ in 0..60 {
+            app.update();
+            if app.world().resource::<WorkspaceResource>().twins().count() == 1 {
+                break;
+            }
+        }
+
+        let workspace = app.world().resource::<WorkspaceResource>();
+        let twin = workspace
+            .twins()
+            .next()
+            .expect("created Twin is registered");
+        assert_eq!(twin.1.root, root);
+        assert_eq!(twin.1.manifest.as_ref().unwrap().name, "Command Twin");
+    }
 
     #[test]
     fn failed_replacement_scan_keeps_the_active_twin() {
