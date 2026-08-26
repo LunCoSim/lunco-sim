@@ -36,17 +36,20 @@
 //! - **[`OpenFile`] observer** handles scene files here (via
 //!   `spawn_twin_from_scene`) and otherwise defers to domain crates; it will
 //!   become a generic classifier-and-dispatch when a second domain contributes.
-//! - **[`SaveAll`] / [`SaveAsTwin`]** observers are stubs.
+//! - [`SaveAll`] dispatches the domain-owned save commands for every open
+//!   document, promoting drafts into the active Twin when one exists.
+//! - [`SaveAsTwin`] uses the workspace-owned [`CreateTwin`] command and then
+//!   asks each domain to serialize its open documents into the new root.
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc_bevy::SaveAsDocument;
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
-use crate::picker::{PickFollowUp, PickResolved};
+use crate::picker::{PickFollowUp, PickHandle, PickMode, PickResolved};
 use lunco_workspace::open::{
-    drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace, AddTwin, OpenFolder, OpenTwin,
-    PendingTwinOpens, TwinOpenMode,
+    drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace, AddTwin, CreateTwin,
+    OpenFolder, OpenTwin, PendingTwinOpens, TwinOpenMode,
 };
 use lunco_workspace::{FileRenamed, WorkspaceResource};
 
@@ -141,23 +144,21 @@ pub struct RenameTwinEntry {
     pub new_name: String,
 }
 
-/// Save every dirty document in the current session.
+/// Save every open document in the current session.
 ///
 /// Documents with a writable canonical path are written via their
 /// owning domain's [`SaveDocument`](lunco_doc_bevy::SaveDocument)
-/// observer. Drafts (Untitled documents) need user input for their
-/// destination — when a Twin is open they can be batch-promoted via
-/// the Save-All-into-Twin dialog (see `13-twin-and-workflow.md` § 7a);
-/// otherwise the user is offered a Save-as-Twin promotion.
+/// observer. Untitled documents are written into the active Twin using
+/// their workspace title; with no active Twin their domain's normal Save-As
+/// picker is used.
 #[Command(default)]
 pub struct SaveAll {}
 
 /// Promote the current session into a Twin at `folder`.
 ///
-/// Writes a minimal `twin.toml` to the chosen folder, registers all
-/// open documents under it, and rewrites cross-references from draft
-/// `mem://` URIs to their new on-disk paths. Empty `folder` triggers
-/// a folder picker.
+/// Writes `twin.toml`, saves every open document into the new root, and
+/// declares the first open USD document as the default scene. Empty
+/// `folder` triggers a folder picker.
 #[Command(default)]
 pub struct SaveAsTwin {
     /// Target folder for the new Twin's `twin.toml`. Empty triggers
@@ -166,7 +167,7 @@ pub struct SaveAsTwin {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stub observers — flesh out in follow-up commits
+// Save coordination
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[on_command(NewDocument)]
@@ -238,6 +239,24 @@ fn on_show_open_folder_picker(_trigger: On<ShowOpenFolderPicker>, mut commands: 
         mode: PickMode::OpenFolder,
         on_resolved: PickFollowUp::OpenFolder,
     });
+}
+
+/// Empty path means "ask the windowed workbench for a folder". A non-empty
+/// path is handled by the workspace-owned creation observer.
+#[on_command(CreateTwin)]
+fn on_create_twin_pick(trigger: On<CreateTwin>, mut commands: Commands) {
+    let event = trigger.event();
+    if event.path.is_empty() {
+        let name = event.name.clone();
+        let default_scene = event.default_scene.clone();
+        commands.trigger(PickHandle {
+            mode: PickMode::OpenFolder,
+            on_resolved: PickFollowUp::CreateTwin {
+                name,
+                default_scene,
+            },
+        });
+    }
 }
 
 #[on_command(OpenFile)]
@@ -557,12 +576,47 @@ fn on_rename_twin_entry(
 }
 
 #[on_command(SaveAll)]
-fn on_save_all(_trigger: On<SaveAll>) {
-    info!("[SaveAll] handler stubbed — iterating dirty docs lands in follow-up");
+fn on_save_all(
+    _trigger: On<SaveAll>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    let Some(workspace) = workspace else {
+        warn!("[SaveAll] no workspace is installed");
+        return;
+    };
+    let active_root = workspace
+        .active_twin
+        .and_then(|id| workspace.twin(id))
+        .map(|twin| twin.root.clone());
+    let entries = workspace.documents().to_vec();
+    let mut used = std::collections::HashSet::new();
+    for entry in entries {
+        if entry.origin.is_untitled() {
+            if let Some(root) = &active_root {
+                let path = promoted_document_path(root, &entry, &mut used);
+                commands.trigger(SaveAsDocument {
+                    doc: entry.id,
+                    path: path.display().to_string(),
+                });
+            } else {
+                // The domain SaveDocument observer opens its normal Save-As
+                // picker. This keeps Save All useful for a loose draft while
+                // leaving path selection with the document owner.
+                commands.trigger(lunco_doc_bevy::SaveDocument { doc: entry.id });
+            }
+        } else {
+            commands.trigger(lunco_doc_bevy::SaveDocument { doc: entry.id });
+        }
+    }
 }
 
 #[on_command(SaveAsTwin)]
-fn on_save_as_twin(trigger: On<SaveAsTwin>, mut commands: Commands) {
+fn on_save_as_twin(
+    trigger: On<SaveAsTwin>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut commands: Commands,
+) {
     use crate::picker::{PickHandle, PickMode};
     let folder = trigger.event().folder.clone();
     if folder.is_empty() {
@@ -572,7 +626,135 @@ fn on_save_as_twin(trigger: On<SaveAsTwin>, mut commands: Commands) {
         });
         return;
     }
-    info!("[SaveAsTwin] folder={} (handler stubbed)", folder);
+    let root = std::path::PathBuf::from(&folder);
+    if root.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+        warn!(
+            "[SaveAsTwin] `{}` already contains {} — choose a new Twin folder",
+            root.display(),
+            lunco_twin::MANIFEST_FILENAME
+        );
+        return;
+    }
+    if root.exists() && !root.is_dir() {
+        warn!("[SaveAsTwin] `{}` is not a folder", root.display());
+        return;
+    }
+    let Some(workspace) = workspace else {
+        warn!("[SaveAsTwin] no workspace is installed");
+        return;
+    };
+    let entries = workspace.documents().to_vec();
+    let mut used = std::collections::HashSet::new();
+    let mut default_scene = String::new();
+    let mut saves = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = promoted_document_path(&root, &entry, &mut used);
+        if default_scene.is_empty() && entry.kind.as_str() == "usd" {
+            default_scene = path
+                .strip_prefix(&root)
+                .unwrap_or(path.as_path())
+                .to_string_lossy()
+                .into_owned();
+        }
+        saves.push((entry.id, path));
+    }
+
+    // CreateTwin is the sole manifest-writing owner. Save-As commands can run
+    // in the same command flush: the storage writer creates the target folder
+    // before the asynchronous workspace scan admits it.
+    commands.trigger(CreateTwin {
+        path: folder,
+        name: String::new(),
+        default_scene,
+    });
+    for (doc, path) in saves {
+        commands.trigger(SaveAsDocument {
+            doc,
+            path: path.display().to_string(),
+        });
+    }
+}
+
+/// Choose a safe, stable filename for an open document being promoted into a
+/// new Twin. Document domains still own serialization; the workbench only
+/// supplies a collision-free destination based on their workspace title.
+fn promoted_document_path(
+    root: &std::path::Path,
+    entry: &lunco_workspace::DocumentEntry,
+    used: &mut std::collections::HashSet<String>,
+) -> std::path::PathBuf {
+    let raw = std::path::Path::new(&entry.title)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .trim();
+    let mut base: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if base.is_empty() || base == "." || base == ".." {
+        base = format!("document-{}", entry.id.raw());
+    }
+    if !base.contains('.') {
+        base.push_str(match entry.kind.as_str() {
+            "usd" => ".usda",
+            "modelica" => ".mo",
+            _ => ".txt",
+        });
+    }
+    let original = base.clone();
+    let mut suffix = 2;
+    while !used.insert(base.to_ascii_lowercase()) {
+        let path = std::path::Path::new(&original);
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&original);
+        let extension = path.extension().and_then(|s| s.to_str());
+        base = match extension {
+            Some(ext) => format!("{stem}-{suffix}.{ext}"),
+            None => format!("{stem}-{suffix}"),
+        };
+        suffix += 1;
+    }
+    root.join(base)
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn promoted_document_names_are_safe_and_unique() {
+        let root = std::path::Path::new("/tmp/new-twin");
+        let mut used = std::collections::HashSet::new();
+        let first = lunco_workspace::DocumentEntry {
+            id: lunco_doc::DocumentId::new(1),
+            kind: lunco_workspace::DocumentKindId::new("modelica"),
+            origin: lunco_doc::DocumentOrigin::untitled("scratch"),
+            context_twin: None,
+            title: "Engine Model".into(),
+        };
+        let second = lunco_workspace::DocumentEntry {
+            id: lunco_doc::DocumentId::new(2),
+            title: first.title.clone(),
+            ..first.clone()
+        };
+        assert_eq!(
+            promoted_document_path(root, &first, &mut used),
+            root.join("Engine_Model.mo")
+        );
+        assert_eq!(
+            promoted_document_path(root, &second, &mut used),
+            root.join("Engine_Model-2.mo")
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -615,6 +797,16 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
         PickFollowUp::SaveAsTwin => {
             commands.trigger(SaveAsTwin { folder: path });
         }
+        PickFollowUp::CreateTwin {
+            name,
+            default_scene,
+        } => {
+            commands.trigger(CreateTwin {
+                path,
+                name: name.clone(),
+                default_scene: default_scene.clone(),
+            });
+        }
     }
 }
 
@@ -631,6 +823,7 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
 register_commands!(
     on_add_folder_to_workspace_pick,
     on_add_twin_pick,
+    on_create_twin_pick,
     on_new_document,
     on_open_twin_pick,
     on_rename_open_document,

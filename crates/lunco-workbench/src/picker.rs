@@ -153,6 +153,14 @@ pub enum PickFollowUp {
     /// Resolve → trigger `SaveAsTwin { folder }` to promote the
     /// current session into a Twin at the chosen folder.
     SaveAsTwin,
+    /// Resolve → trigger `CreateTwin { path, name, default_scene }` for a new
+    /// Twin folder.
+    CreateTwin {
+        /// Optional display name for the new Twin.
+        name: String,
+        /// Optional Twin-relative default USD scene.
+        default_scene: String,
+    },
 }
 
 /// Request to show a system file dialog.

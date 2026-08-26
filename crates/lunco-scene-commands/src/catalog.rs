@@ -345,7 +345,27 @@ impl CatalogScan {
 /// asset would end up in the palette.
 pub async fn read_asset_meta(asset: &AssetFile) -> SpawnMeta {
     match lunco_assets::asset_read::read_asset_text(asset).await {
-        Ok(src) => parse_spawn_meta(&src),
+        Ok(src) => {
+            let mut meta = parse_spawn_meta(&src);
+            #[cfg(not(target_arch = "wasm32"))]
+            if meta.spawnable {
+                // The metadata parser answers "did this file opt into the
+                // palette?". Native pre-flight answers the next, user-facing
+                // question: "will the same file survive the runtime loader?"
+                // Keep invalid content out of the palette instead of making a
+                // user discover the failure only after dropping it into a sim.
+                let report = crate::validate::validate_asset(&asset.abs_path.to_string_lossy());
+                if !report.ok {
+                    warn!(
+                        "CATALOG: {} is marked spawnable but failed load preflight; hiding it from SpawnCatalog: {}",
+                        asset.rel,
+                        report.errors.join("; ")
+                    );
+                    meta.spawnable = false;
+                }
+            }
+            meta
+        }
         Err(e) => {
             warn!(
                 "CATALOG: {} unreadable, treating as not-spawnable: {e}",
@@ -760,5 +780,35 @@ mod tests {
         assert!(!scan.dispatched.insert("a.usda".into()));
         scan.forget();
         assert!(scan.dispatched.insert("a.usda".into()));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_asset_meta_hides_spawnable_assets_that_fail_load_preflight() {
+        let dir = std::env::temp_dir().join("lunco-spawn-catalog-preflight");
+        std::fs::create_dir_all(&dir).expect("temporary preflight directory");
+        let path = dir.join("broken_wheel.usda");
+        std::fs::write(
+            &path,
+            "#usda 1.0\n( defaultPrim = \"BrokenWheel\" )\n\
+def Xform \"BrokenWheel\" (\n\
+    prepend apiSchemas = [\"LunCoCatalogAPI\", \"PhysxVehicleWheelAPI\"]\n\
+)\n{\n    uniform bool lunco:spawnable = true\n}\n",
+        )
+        .expect("write malformed spawnable fixture");
+
+        let asset = AssetFile {
+            asset_path: path.to_string_lossy().into_owned(),
+            stem: "broken_wheel".into(),
+            rel: "broken_wheel.usda".into(),
+            abs_path: path,
+            twin: None,
+        };
+        let meta = futures_lite::future::block_on(read_asset_meta(&asset));
+
+        assert!(
+            !meta.spawnable,
+            "an asset that the runtime loader rejects must not reach SpawnCatalog"
+        );
     }
 }

@@ -88,7 +88,7 @@ def Scope "Sandbox" (
         string lunco:tutorial:blurb = "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
-        rel lunco:tutorial:next = </Sandbox/BuildBase>
+        rel lunco:tutorial:next = </ObjectBuilder/MountComponents>
     }
 
     def Scope "BuildBase" (
@@ -124,7 +124,7 @@ def Scope "Sandbox" (
     {
         uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rhai_repl.rhai@
         string lunco:tutorial:title = "Rhai Editor & REPL"
-        string lunco:tutorial:blurb = "Learn how to write scripts in the in-app editor, run commands in the live REPL, and use parameter hints."
+        string lunco:tutorial:blurb = "Learn how to write scripts in the in-app editor, run typed commands in the live REPL, and use the command reference."
         uniform token lunco:tutorial:difficulty = "beginner"
         uniform token lunco:tutorial:format = "tour"
         rel lunco:tutorial:next = </Sandbox/InspectSim>

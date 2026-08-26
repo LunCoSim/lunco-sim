@@ -4,7 +4,7 @@
 //!   - `lunco_modelica::ui::ModelicaDocumentRegistry` for `.mo` source
 //!     attached to a `ModelicaModel` entity (e.g. the Red Balloon).
 //!   - `lunco_scripting::ScriptRegistry` + `ScriptedModel` component for
-//!     Python source (e.g. the Green Balloon).
+//!     scripted source (e.g. the Green Balloon).
 //!
 //! Read-only for now — Phase 1 of the interactive-modeling story.
 //! Edit-and-recompile lands when the Document System exposes
@@ -15,7 +15,7 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_scene_commands::SelectedEntities;
-use lunco_scripting::doc::ScriptedModel;
+use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -73,10 +73,14 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let script_source = ctx.resource::<ScriptRegistry>().and_then(|r| {
             r.documents
                 .get(&DocumentId::new(doc_id))
-                .map(|h| h.document().source.clone())
+                .map(|h| (h.document().language, h.document().source.clone()))
         });
-        if let Some(source) = script_source {
-            ui.label(egui::RichText::new("Python").small().weak());
+        if let Some((language, source)) = script_source {
+            let label = match language {
+                ScriptLanguage::Python => "Python",
+                ScriptLanguage::Rhai => "Rhai",
+            };
+            ui.label(egui::RichText::new(label).small().weak());
             ui.separator();
             render_source(ui, &source);
             return;
@@ -85,9 +89,13 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     ui.label("This entity has no attached model.");
     ui.label(
-        egui::RichText::new("Drag a .mo or .py from the Models palette onto it. (TODO)")
-            .weak()
-            .small(),
+        egui::RichText::new(
+            "This panel displays models already attached by the authored USD component. "
+                .to_owned()
+                + "Arbitrary .mo/.py attachment is not available from this panel yet.",
+        )
+        .weak()
+        .small(),
     );
 }
 

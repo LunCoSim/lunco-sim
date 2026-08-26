@@ -35,7 +35,7 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
-    SaveDocument, UndoDocument,
+    SaveAsDocument, SaveDocument, UndoDocument,
 };
 use lunco_settings::AppSettingsExt;
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
@@ -739,6 +739,7 @@ register_commands!(
     on_open_file,
     on_open_file_for_usd,
     on_save_document,
+    on_save_as_document,
 );
 
 /// Refresh the active doc-backed Twin from its source file before the shared
@@ -1136,6 +1137,110 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
         }
         bevy::log::info!("[SaveUsd] {} saved to {}", doc_id, path.display());
     });
+}
+
+/// Persist a USD document to a new path and rebind its canonical origin.
+///
+/// Untitled stages are real documents, so Save-As is the promotion edge that
+/// makes their edits visible to the ordinary file/Twin workflow. The domain
+/// owns the bytes and origin update; the workbench only supplies a path when a
+/// dialog is needed.
+#[on_command(SaveAsDocument)]
+fn on_save_as_document(
+    trigger: On<SaveAsDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    #[cfg(feature = "ui")] workspace: Option<Res<WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    let doc_id = trigger.event().doc;
+    let target_path = trigger.event().path.clone();
+    let Some(host) = registry.host(doc_id) else {
+        bevy::log::warn!("[SaveAsUsd] unknown document {doc_id}");
+        return;
+    };
+    let document = host.document();
+    let source = document.source().to_string();
+    let suggested_name = {
+        let name = document.origin().display_name();
+        if name.to_ascii_lowercase().ends_with(".usda")
+            || name.to_ascii_lowercase().ends_with(".usdc")
+            || name.to_ascii_lowercase().ends_with(".usd")
+        {
+            name
+        } else {
+            format!("{name}.usda")
+        }
+    };
+
+    if target_path.is_empty() {
+        #[cfg(feature = "ui")]
+        {
+            let start_dir = workspace
+                .as_deref()
+                .and_then(|ws| ws.active_twin)
+                .and_then(|id| workspace.as_deref()?.twin(id))
+                .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
+            commands.trigger(lunco_workbench::picker::PickHandle {
+                mode: lunco_workbench::picker::PickMode::SaveFile(
+                    lunco_workbench::picker::SaveHint {
+                        suggested_name: Some(suggested_name),
+                        start_dir,
+                        filters: vec![lunco_workbench::picker::OpenFilter::new(
+                            "USD stages",
+                            &["usda", "usdc", "usd"],
+                        )],
+                    },
+                ),
+                on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc_id),
+            });
+        }
+        #[cfg(not(feature = "ui"))]
+        bevy::log::warn!(
+            "[SaveAsUsd] {doc_id} has no target path; a headless caller must provide one"
+        );
+        return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[cfg(feature = "ui")]
+        {
+            if let Err(error) = lunco_workbench::picker::download_file(&suggested_name, &source) {
+                bevy::log::error!("[SaveAsUsd] {doc_id} download failed: {error:?}");
+                return;
+            }
+            if let Some(host) = registry.host_mut(doc_id) {
+                host.document_mut().mark_saved();
+            }
+            commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
+        }
+        #[cfg(not(feature = "ui"))]
+        bevy::log::warn!("[SaveAsUsd] {doc_id} cannot save without the browser UI backend");
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = std::path::PathBuf::from(target_path);
+        let storage = lunco_storage::FileStorage::new();
+        let handle = lunco_storage::StorageHandle::File(path.clone());
+        if let Err(error) = storage.write_sync(&handle, source.as_bytes()) {
+            bevy::log::error!(
+                "[SaveAsUsd] {doc_id} write to {} failed: {error}",
+                path.display()
+            );
+            return;
+        }
+        if let Some(host) = registry.host_mut(doc_id) {
+            host.document_mut().set_origin(DocumentOrigin::File {
+                path: path.clone(),
+                writable: true,
+            });
+            host.document_mut().mark_saved();
+        }
+        bevy::log::info!("[SaveAsUsd] {doc_id} saved to {}", path.display());
+        commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2446,6 +2551,63 @@ mod tests {
         assert_eq!(reg.ids().count(), 1);
         let id = reg.ids().next().unwrap();
         assert!(reg.host(id).unwrap().document().origin().is_untitled());
+    }
+
+    #[test]
+    fn save_as_untitled_usd_writes_source_and_rebinds_origin() {
+        let tmp = tempfile::tempdir().expect("save destination");
+        let target = tmp.path().join("scene.usda");
+        let source = "#usda 1.0\ndef Xform \"World\" {}\n";
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        let doc = {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            registry.allocate(
+                source.to_string(),
+                lunco_doc::PathlessOrigin::untitled("UntitledStage.usda"),
+            )
+        };
+        app.world_mut().trigger(lunco_doc_bevy::SaveAsDocument {
+            doc,
+            path: target.display().to_string(),
+        });
+        app.update();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), source);
+        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
+        assert_eq!(
+            registry.host(doc).unwrap().document().canonical_path(),
+            Some(target.as_path())
+        );
+        assert!(!registry.host(doc).unwrap().document().is_dirty());
+    }
+
+    #[test]
+    fn new_usd_document_is_registered_as_the_active_workspace_document() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_workspace::WorkspaceResource>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.add_plugins(crate::ui::UsdUiPlugin);
+        app.update();
+
+        app.world_mut().trigger(NewDocument {
+            kind: USD_DOCUMENT_KIND.to_string(),
+        });
+        app.update();
+        app.update();
+
+        let workspace = app.world().resource::<lunco_workspace::WorkspaceResource>();
+        let doc = workspace.active_document.expect("new USD doc is active");
+        let entry = workspace.document(doc).expect("new USD doc is registered");
+        assert_eq!(entry.kind.as_str(), USD_DOCUMENT_KIND);
+        assert!(entry.origin.is_untitled());
     }
 
     /// A scene present on screen beats every empty-state message — even a

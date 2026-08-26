@@ -1751,14 +1751,14 @@ type and literal, journals the edit, and re-composes the live stage.
 
 #### `SaveAll`
 
- Save every dirty document in the current session.
+ Save every open document in the current session.
 
  Documents with a writable canonical path are written via their
  owning domain's [`SaveDocument`](lunco_doc_bevy::SaveDocument)
  observer. Drafts (Untitled documents) need user input for their
- destination — when a Twin is open they can be batch-promoted via
- the Save-All-into-Twin dialog (see `13-twin-and-workflow.md` § 7a);
- otherwise the user is offered a Save-as-Twin promotion.
+ destination — when a Twin is open they are written into that Twin using
+ their workspace titles; otherwise the owning domain opens its normal
+ Save-As picker.
 
 - *defined in:* `crates/lunco-workbench/src/file_ops.rs`
 - *fields:* none — call with `SaveAll` (no params)
@@ -1767,16 +1767,29 @@ type and literal, journals the edit, and re-composes the live stage.
 
  Promote the current session into a Twin at `folder`.
 
- Writes a minimal `twin.toml` to the chosen folder, registers all
- open documents under it, and rewrites cross-references from draft
- `mem://` URIs to their new on-disk paths. Empty `folder` triggers
- a folder picker.
+ Writes `twin.toml`, saves every open document into the chosen folder,
+ and declares the first open USD document as the default scene. Empty
+ `folder` triggers a folder picker.
 
 - *defined in:* `crates/lunco-workbench/src/file_ops.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `folder` | `String` |  Target folder for the new Twin's `twin.toml`. Empty triggers  the picker. |
+
+#### `CreateTwin`
+
+ Create a new Twin folder and manifest. Missing parent folders are created
+ by the storage-backed manifest writer. Empty `path` triggers the folder
+ picker; an existing `twin.toml` is never overwritten.
+
+- *defined in:* `crates/lunco-workspace/src/open.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` | Target Twin folder. Empty triggers the picker. |
+| `name` | `String` | Display name; empty uses the folder name. |
+| `default_scene` | `String` | Optional Twin-relative USD stage. |
 
 #### `SaveSourceText`
 

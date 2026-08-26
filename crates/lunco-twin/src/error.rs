@@ -41,6 +41,10 @@ pub enum TwinError {
     #[error("Twin has no manifest (call promote_to_twin first)")]
     NoManifest,
 
+    /// Attempted to create a Twin where a manifest already exists.
+    #[error("cannot create Twin at {0}: the folder already contains twin.toml")]
+    AlreadyExists(PathBuf),
+
     /// `twin.toml` failed to parse as TOML.
     #[error("failed to parse twin.toml: {0}")]
     ManifestParse(#[from] toml::de::Error),

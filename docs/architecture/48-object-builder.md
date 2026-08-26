@@ -1,11 +1,17 @@
 # 48 — Object Builder
 
-> Status: Design · Audience: contributors on the Object Builder and reusable components
+> Status: Implemented substrate; production workflow validation pending · Audience:
+> contributors on the Object Builder and reusable components
 
 The Object Builder is the authoring surface for assembling and editing a
 simulation object. It projects USD prims and connections into the existing
 canvas, prim-tree, inspector, and viewport surfaces. It does not create a second
 scene model or a vehicle-specific assembly API.
+
+The workbench exposes this surface through the `Object Builder` perspective.
+The `Terrain` perspective exposes the existing terrain tools and keeps sculpting
+separate from object assembly. Both perspectives are composed from the panels
+listed below; they do not introduce a second authoring model.
 
 ## Ownership and persistence
 
