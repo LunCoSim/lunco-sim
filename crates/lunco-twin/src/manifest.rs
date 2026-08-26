@@ -86,6 +86,12 @@ pub struct TwinManifest {
     /// writes nothing to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<JournalManifest>,
+
+    /// Project-owned asset download presentation settings (`[downloads]`).
+    /// Absent means the default consent behaviour: show the missing-asset
+    /// prompt when this project is opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<DownloadManifest>,
 }
 
 /// The `[journal]` section of `twin.toml`.
@@ -108,6 +114,16 @@ pub struct JournalManifest {
     /// would show a history that silently stops growing.)
     #[serde(default)]
     pub persist: bool,
+}
+
+/// The `[downloads]` section of `twin.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadManifest {
+    /// Suppress the consent prompt when declared project assets are missing.
+    /// The default is `false`, so a newly opened project offers the prompt.
+    #[serde(default)]
+    pub suppress_missing_prompt: bool,
 }
 
 /// The `[usd]` section of `twin.toml`.
@@ -232,7 +248,16 @@ impl TwinManifest {
             children: Vec::new(),
             usd: None,
             journal: None,
+            downloads: None,
         }
+    }
+
+    /// Whether this project has opted out of the missing-asset consent prompt.
+    /// An absent `[downloads]` section retains the default of showing it.
+    pub fn suppress_missing_asset_prompt(&self) -> bool {
+        self.downloads
+            .as_ref()
+            .is_some_and(|settings| settings.suppress_missing_prompt)
     }
 
     /// Return this manifest's stable id, minting one in place if absent.
@@ -288,6 +313,7 @@ mod tests {
             children: vec![],
             usd: None,
             journal: None,
+            downloads: None,
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -319,6 +345,9 @@ mod tests {
                 scenes: Some(vec!["scenes/**".into()]),
             }),
             journal: Some(JournalManifest { persist: true }),
+            downloads: Some(DownloadManifest {
+                suppress_missing_prompt: true,
+            }),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -337,6 +366,7 @@ mod tests {
             children: vec![],
             usd: None,
             journal: None,
+            downloads: None,
         };
         let path =
             std::env::temp_dir().join(format!("lunco_twin_manifest_{}.toml", std::process::id()));
@@ -369,6 +399,7 @@ version = "0.1.0"
         assert!(parsed.children.is_empty());
         assert_eq!(parsed.usd, None);
         assert_eq!(parsed.uuid, None);
+        assert_eq!(parsed.downloads, None);
 
         // Re-serializing should not add the optional keys with null/empty values.
         let out = toml::to_string_pretty(&parsed).unwrap();
@@ -377,6 +408,23 @@ version = "0.1.0"
         assert!(!out.contains("children"));
         assert!(!out.contains("usd"));
         assert!(!out.contains("uuid"));
+        assert!(!out.contains("downloads"));
+    }
+
+    #[test]
+    fn missing_asset_prompt_defaults_to_showing() {
+        let manifest = TwinManifest::new("x");
+        assert!(!manifest.suppress_missing_asset_prompt());
+
+        let text = r#"
+name = "x"
+version = "0.1.0"
+
+[downloads]
+suppress_missing_prompt = true
+"#;
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        assert!(parsed.suppress_missing_asset_prompt());
     }
 
     #[test]
@@ -438,6 +486,7 @@ uuid = "{id}"
             children: vec![],
             usd: None,
             journal: None,
+            downloads: None,
         };
         let minted = bare.ensure_uuid();
         assert!(bare.uuid == Some(minted));

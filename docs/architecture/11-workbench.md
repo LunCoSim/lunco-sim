@@ -529,11 +529,20 @@ crates):
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
 
-#### 9b.3 Per-Twin overrides (planned)
+#### 9b.3 Per-Twin overrides
 
-User-global `~/.lunco/settings.json` is the baseline. A per-Twin
-`<twin>/.lunco/settings.json` layered on top would let projects
-enforce conventions (e.g. a library Twin might pin
+User-global `~/.lunco/settings.json` remains the baseline for user
+preferences. Project-owned configuration lives in the Twin manifest, where
+the project can enforce behavior that should travel with the project. The
+missing-declared-assets prompt is the first implemented example:
+`twin.toml [downloads] suppress_missing_prompt = true` hides the startup
+consent window for that project. Omitted/false preserves the default of
+showing it. The popup checkbox and Settings ▸ Data & libraries edit this same
+manifest-owned value.
+
+Additional per-Twin overrides may later use a layered project settings file.
+The original layered-settings design would let projects enforce conventions
+(e.g. a library Twin might pin
 `modelica.naming.rename_class_renames_file = "Always"` while a
 luncosim Twin keeps `"Never"`). Resolution order:
 
@@ -542,8 +551,9 @@ defaults  ←  ~/.lunco/settings.json  ←  <active_twin>/.lunco/settings.json
 ```
 
 The active-Twin layer would be writable from the UI's "Workspace
-settings" toggle (VS Code's pattern). Until implemented, only the
-user-global file exists.
+settings" toggle (VS Code's pattern). Until more per-Twin overrides are
+implemented, only the manifest-owned download prompt and user-global
+settings are active.
 
 #### 9b.4 Settings UI gap
 
